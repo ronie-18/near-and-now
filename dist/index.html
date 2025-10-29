@@ -7,8 +7,31 @@
     <meta name="description" content="Near & Now - Digital Dukan, Local Dil Se. Order fresh groceries online with fast delivery, best prices, and quality products!" />
     <title>Near & Now - Digital Dukan, Local Dil Se</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
-    <script type="module" crossorigin src="./assets/index-CCHoZQZf.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-C2LnEGoB.css">
+    <script>
+      // Debug logging
+      console.log('🌐 HTML loaded successfully');
+      console.log('📍 Page URL:', window.location.href);
+      
+      // Show loading indicator
+      window.addEventListener('DOMContentLoaded', function() {
+        console.log('📄 DOM Content Loaded');
+        var root = document.getElementById('root');
+        if (root && !root.hasChildNodes()) {
+          root.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;"><div style="text-align:center;"><h2 style="color:#16a34a;">Loading Near & Now...</h2><p style="color:#666;">Digital Dukan, Local Dil Se</p></div></div>';
+        }
+      });
+      
+      // Global error handler
+      window.addEventListener('error', function(e) {
+        console.error('❌ Global error:', e.error || e.message);
+      });
+      
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('❌ Unhandled promise rejection:', e.reason);
+      });
+    </script>
+    <script type="module" crossorigin src="./assets/index-DKi8Y4Ak.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DaD42KF-.css">
   </head>
   <body>
     <div id="root"></div>

@@ -5,6 +5,7 @@ import { CartProvider } from './context/CartContext';
 import { NotificationProvider, useNotification } from './context/NotificationContext';
 import Layout from './components/layout/Layout';
 import AdminLoginPage from './pages/admin/AdminLoginPage';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Import actual page components
 import HomePage from './pages/HomePage';
@@ -33,6 +34,30 @@ import AdminRoutes from './routes/AdminRoutes';
 // AppContent component to access context values
 const AppContent: React.FC = () => {
   const { notifications, removeNotification } = useNotification();
+  const [isReady, setIsReady] = React.useState(false);
+
+  React.useEffect(() => {
+    // Small delay to ensure everything is loaded
+    console.log('📦 Loading app content...');
+    setIsReady(true);
+  }, []);
+
+  if (!isReady) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        fontFamily: 'Arial, sans-serif'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <h2 style={{ color: '#16a34a' }}>Loading Near & Now...</h2>
+          <p style={{ color: '#666' }}>Digital Dukan, Local Dil Se</p>
+        </div>
+      </div>
+    );
+  }
   
   return (
     <Routes>
@@ -70,16 +95,25 @@ const AppContent: React.FC = () => {
 };
 
 function App() {
+  // Log app initialization for debugging
+  React.useEffect(() => {
+    console.log('🚀 Near & Now App initialized');
+    console.log('📍 Current URL:', window.location.href);
+    console.log('🌍 Environment:', import.meta.env.MODE);
+  }, []);
+
   return (
-    <Router>
-      <AuthProvider>
-        <CartProvider>
-          <NotificationProvider>
-            <AppContent />
-          </NotificationProvider>
-        </CartProvider>
-      </AuthProvider>
-    </Router>
+    <ErrorBoundary>
+      <Router basename="/">
+        <AuthProvider>
+          <CartProvider>
+            <NotificationProvider>
+              <AppContent />
+            </NotificationProvider>
+          </CartProvider>
+        </AuthProvider>
+      </Router>
+    </ErrorBoundary>
   );
 }
 
