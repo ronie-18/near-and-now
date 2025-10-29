@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test - Near & Now</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <h1>Near & Now - Deployment Test</h1>
+    <p class="success">✓ If you can see this page, HTML files are loading correctly.</p>
+    
+    <h2>Diagnostics:</h2>
+    <ul>
+        <li><strong>Current URL:</strong> <span id="url"></span></li>
+        <li><strong>Protocol:</strong> <span id="protocol"></span></li>
+        <li><strong>Hostname:</strong> <span id="hostname"></span></li>
+    </ul>
+    
+    <h2>Next Steps:</h2>
+    <ol>
+        <li>Check if <code>index.html</code> exists in the same directory</li>
+        <li>Check if <code>assets/</code> folder exists with JS and CSS files</li>
+        <li>Check browser console for errors (F12 → Console)</li>
+        <li>Clear browser cache and refresh</li>
+    </ol>
+    
+    <script>
+        document.getElementById('url').textContent = window.location.href;
+        document.getElementById('protocol').textContent = window.location.protocol;
+        document.getElementById('hostname').textContent = window.location.hostname;
+    </script>
+</body>
+</html>
+
