@@ -21,6 +21,7 @@ import OrdersPage from './pages/OrdersPage';
 import AddressesPage from './pages/AddressesPage';
 import CartPage from './pages/CartPage';
 import AboutPage from './pages/AboutPage';
+import TestPage from './pages/TestPage';
 
 // Policy pages
 import TermsOfServicePage from './pages/policies/TermsOfServicePage';
@@ -34,36 +35,19 @@ import AdminRoutes from './routes/AdminRoutes';
 // AppContent component to access context values
 const AppContent: React.FC = () => {
   const { notifications, removeNotification } = useNotification();
-  const [isReady, setIsReady] = React.useState(false);
 
   React.useEffect(() => {
-    // Small delay to ensure everything is loaded
-    console.log('📦 Loading app content...');
-    setIsReady(true);
+    console.log('📦 App content loaded successfully');
   }, []);
-
-  if (!isReady) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        fontFamily: 'Arial, sans-serif'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <h2 style={{ color: '#16a34a' }}>Loading Near & Now...</h2>
-          <p style={{ color: '#666' }}>Digital Dukan, Local Dil Se</p>
-        </div>
-      </div>
-    );
-  }
   
   return (
     <Routes>
       {/* Admin Routes - Outside of main Layout */}
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin/*" element={<AdminRoutes />} />
+      
+      {/* Test Route - No Layout */}
+      <Route path="/test" element={<TestPage />} />
       
       {/* Frontend Routes - With Layout */}
       <Route path="/*" element={

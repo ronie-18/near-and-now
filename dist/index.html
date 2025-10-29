@@ -12,25 +12,20 @@
       console.log('🌐 HTML loaded successfully');
       console.log('📍 Page URL:', window.location.href);
       
-      // Show loading indicator
-      window.addEventListener('DOMContentLoaded', function() {
-        console.log('📄 DOM Content Loaded');
-        var root = document.getElementById('root');
-        if (root && !root.hasChildNodes()) {
-          root.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;"><div style="text-align:center;"><h2 style="color:#16a34a;">Loading Near & Now...</h2><p style="color:#666;">Digital Dukan, Local Dil Se</p></div></div>';
-        }
-      });
-      
       // Global error handler
       window.addEventListener('error', function(e) {
         console.error('❌ Global error:', e.error || e.message);
+        var root = document.getElementById('root');
+        if (root) {
+          root.innerHTML = '<div style="padding:40px;text-align:center;font-family:Arial,sans-serif;"><h1 style="color:#e74c3c;">Error Loading App</h1><p>' + (e.message || 'Unknown error') + '</p><button onclick="window.location.reload()" style="padding:12px 24px;background:#3498db;color:white;border:none;border-radius:4px;cursor:pointer;margin-top:20px;">Reload Page</button></div>';
+        }
       });
       
       window.addEventListener('unhandledrejection', function(e) {
         console.error('❌ Unhandled promise rejection:', e.reason);
       });
     </script>
-    <script type="module" crossorigin src="./assets/index-DKi8Y4Ak.js"></script>
+    <script type="module" crossorigin src="./assets/index-Cet_s2DO.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-DaD42KF-.css">
   </head>
   <body>
