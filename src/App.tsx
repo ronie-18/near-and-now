@@ -79,11 +79,12 @@ const AppContent: React.FC = () => {
 };
 
 function App() {
-  // Log app initialization for debugging
+  console.log('✅ [APP.TSX] App component rendering');
+  
   React.useEffect(() => {
-    console.log('🚀 Near & Now App initialized');
-    console.log('📍 Current URL:', window.location.href);
-    console.log('🌍 Environment:', import.meta.env.MODE);
+    console.log('✅ [APP.TSX] App mounted successfully');
+    console.log('📍 URL:', window.location.href);
+    console.log('🌍 Mode:', import.meta.env.MODE);
   }, []);
 
   return (
