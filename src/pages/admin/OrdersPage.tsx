@@ -34,14 +34,14 @@ const OrdersPage = () => {
   }, []);
 
   // Handle order status update
-  const handleUpdateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
+  const handleUpdateOrderStatus = async (orderId: string, newStatus: Order['order_status']) => {
     try {
       setUpdatingOrderId(orderId);
       const updatedOrder = await updateOrderStatus(orderId, newStatus);
       if (updatedOrder) {
         // Update the order in the local state
         setOrders(orders.map(order => 
-          order.id === orderId ? { ...order, status: newStatus } : order
+          order.id === orderId ? { ...order, order_status: newStatus } : order
         ));
       } else {
         setError('Failed to update order status. Please try again.');
@@ -58,7 +58,7 @@ const OrdersPage = () => {
   const filteredOrders = orders.filter(order => {
     const matchesSearch = order.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
                          order.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = selectedStatus === 'All' || order.status === selectedStatus;
+    const matchesStatus = selectedStatus === 'All' || order.order_status === selectedStatus;
     return matchesSearch && matchesStatus;
   });
 
@@ -69,14 +69,14 @@ const OrdersPage = () => {
   const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
 
   // Get unique statuses
-  const statuses = ['All', ...new Set(orders.map(order => order.status))];
+  const statuses = ['All', ...new Set(orders.map(order => order.order_status))];
 
   // Calculate order statistics
   const orderStats = {
-    processing: orders.filter(order => order.status === 'Processing').length,
-    shipped: orders.filter(order => order.status === 'Shipped').length,
-    delivered: orders.filter(order => order.status === 'Delivered').length,
-    cancelled: orders.filter(order => order.status === 'Cancelled').length
+    processing: orders.filter(order => order.order_status === 'processing' || order.order_status === 'placed').length,
+    shipped: orders.filter(order => order.order_status === 'shipped').length,
+    delivered: orders.filter(order => order.order_status === 'delivered').length,
+    cancelled: orders.filter(order => order.order_status === 'cancelled').length
   };
 
 
@@ -225,19 +225,20 @@ const OrdersPage = () => {
                     <td className="px-6 py-4">
                       <div className="relative">
                         <select
-                          value={order.status}
-                          onChange={(e) => handleUpdateOrderStatus(order.id, e.target.value as Order['status'])}
+                          value={order.order_status}
+                          onChange={(e) => handleUpdateOrderStatus(order.id, e.target.value as Order['order_status'])}
                           disabled={updatingOrderId === order.id}
                           className={`appearance-none inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                            ${order.status === 'Delivered' ? 'bg-green-100 text-green-800' : 
-                              order.status === 'Processing' ? 'bg-blue-100 text-blue-800' : 
-                              order.status === 'Shipped' ? 'bg-orange-100 text-orange-800' :
+                            ${order.order_status === 'delivered' ? 'bg-green-100 text-green-800' : 
+                              order.order_status === 'processing' || order.order_status === 'placed' ? 'bg-blue-100 text-blue-800' : 
+                              order.order_status === 'shipped' ? 'bg-orange-100 text-orange-800' :
                               'bg-red-100 text-red-800'} pr-6 cursor-pointer`}
                         >
-                          <option value="Processing">Processing</option>
-                          <option value="Shipped">Shipped</option>
-                          <option value="Delivered">Delivered</option>
-                          <option value="Cancelled">Cancelled</option>
+                          <option value="placed">Placed</option>
+                          <option value="processing">Processing</option>
+                          <option value="shipped">Shipped</option>
+                          <option value="delivered">Delivered</option>
+                          <option value="cancelled">Cancelled</option>
                         </select>
                         {updatingOrderId === order.id ? (
                           <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
@@ -251,14 +252,14 @@ const OrdersPage = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">{order.items_count}</td>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-800">₹{order.total_amount}</td>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-800">₹{order.order_total}</td>
                     <td className="px-6 py-4">
                       <div>
                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium
-                          ${order.payment_status === 'Paid' ? 'bg-green-100 text-green-800' : 
-                            order.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-800' : 
+                          ${order.payment_status === 'paid' ? 'bg-green-100 text-green-800' : 
+                            order.payment_status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 
                             'bg-red-100 text-red-800'}`}>
-                          {order.payment_status}
+                          {order.payment_status.charAt(0).toUpperCase() + order.payment_status.slice(1)}
                         </span>
                         <span className="text-xs text-gray-500 block mt-1">{order.payment_method}</span>
                       </div>

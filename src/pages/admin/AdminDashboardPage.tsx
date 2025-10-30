@@ -185,17 +185,18 @@ const AdminDashboardPage = () => {
                           <td className="py-3 text-sm text-gray-600">{new Date(order.created_at).toLocaleDateString()}</td>
                           <td className="py-3">
                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                              ${order.status === 'Delivered' ? 'bg-green-100 text-green-800' :
-                                order.status === 'Processing' ? 'bg-blue-100 text-blue-800' :
-                                order.status === 'Shipped' ? 'bg-yellow-100 text-yellow-800' :
+                              ${order.order_status === 'delivered' ? 'bg-green-100 text-green-800' :
+                                order.order_status === 'processing' || order.order_status === 'placed' ? 'bg-blue-100 text-blue-800' :
+                                order.order_status === 'shipped' ? 'bg-yellow-100 text-yellow-800' :
                                 'bg-red-100 text-red-800'}`}>
-                              {order.status === 'Delivered' && <CheckCircle className="w-3 h-3 mr-1" />}
-                              {order.status === 'Processing' && <Clock className="w-3 h-3 mr-1" />}
-                              {order.status === 'Cancelled' && <XCircle className="w-3 h-3 mr-1" />}
-                              {order.status}
+                              {order.order_status === 'delivered' && <CheckCircle className="w-3 h-3 mr-1" />}
+                              {(order.order_status === 'processing' || order.order_status === 'placed') && <Clock className="w-3 h-3 mr-1" />}
+                              {order.order_status === 'cancelled' && <XCircle className="w-3 h-3 mr-1" />}
+                              {order.order_status === 'shipped' && <Truck className="w-3 h-3 mr-1" />}
+                              {order.order_status.charAt(0).toUpperCase() + order.order_status.slice(1)}
                             </span>
                           </td>
-                          <td className="py-3 text-sm text-gray-600 text-right">₹{order.total_amount}</td>
+                          <td className="py-3 text-sm text-gray-600 text-right">₹{order.order_total}</td>
                         </tr>
                       ))}
                     </tbody>
