@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { Search, Plus, Edit, Trash2, ChevronLeft, ChevronRight, Layers, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getCategories, deleteCategory } from '../../services/adminService';
+import { getCategories, deleteCategory, getProductCountsByCategory } from '../../services/adminService';
 import { Category } from '../../services/adminService';
 
 
@@ -24,11 +24,13 @@ const CategoriesPage = () => {
         const data = await getCategories();
         setCategories(data);
         
-        // Get product counts for each category (in a real app, this would be a separate API call or included in the category data)
-        // For now, we'll simulate it with random numbers
+        // Get actual product counts for each category from database
+        const countsByCategory = await getProductCountsByCategory();
+        
+        // Map category IDs to category names
         const counts: Record<string, number> = {};
         data.forEach(category => {
-          counts[category.id] = Math.floor(Math.random() * 30) + 5; // Random number between 5 and 35
+          counts[category.id] = countsByCategory[category.name] || 0;
         });
         setProductCounts(counts);
       } catch (err) {
@@ -50,6 +52,13 @@ const CategoriesPage = () => {
         const success = await deleteCategory(id);
         if (success) {
           setCategories(categories.filter(category => category.id !== id));
+          // Refresh product counts after deletion
+          const countsByCategory = await getProductCountsByCategory();
+          const counts: Record<string, number> = {};
+          categories.filter(cat => cat.id !== id).forEach(category => {
+            counts[category.id] = countsByCategory[category.name] || 0;
+          });
+          setProductCounts(counts);
         } else {
           setError('Failed to delete category. Please try again.');
         }

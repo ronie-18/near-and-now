@@ -4,8 +4,21 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = 'https://mpbszymyubxavjoxhzfm.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wYnN6eW15dWJ4YXZqb3hoemZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQyOTc5OTQsImV4cCI6MjA2OTg3Mzk5NH0.NnHFwGCkNpTWorV8O6vgn6uuqYPRek1QK4Sk_rcqLOg';
 
-// Create Supabase client
+// Service role key for admin operations (bypasses RLS)
+// Get this from: Supabase Dashboard → Settings → API → service_role key
+const SUPABASE_SERVICE_ROLE_KEY = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || '';
+
+// Create Supabase client for public operations
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Create Supabase admin client for admin operations (bypasses RLS)
+// ⚠️ IMPORTANT: This key has full access to the database. Use ONLY for admin operations.
+export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
 
 // Product types
 export interface Product {

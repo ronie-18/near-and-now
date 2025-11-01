@@ -12,7 +12,13 @@ const AddProductPage = () => {
   const [success, setSuccess] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
   const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryData, setNewCategoryData] = useState({
+    name: '',
+    description: '',
+    image_url: '',
+    color: '',
+    display_order: '',
+  });
 
   const [formData, setFormData] = useState({
     name: '',
@@ -33,9 +39,6 @@ const AddProductPage = () => {
         const data = await getCategories();
         const categoryNames = data.map(cat => cat.name);
         setCategories(categoryNames);
-        if (categoryNames.length > 0) {
-          setFormData(prev => ({ ...prev, category: categoryNames[0] }));
-        }
       } catch (err) {
         console.error('Error fetching categories:', err);
       }
@@ -61,9 +64,20 @@ const AddProductPage = () => {
       setFormData(prev => ({ ...prev, category: '' }));
     } else {
       setShowNewCategoryInput(false);
-      setNewCategoryName('');
+      setNewCategoryData({
+        name: '',
+        description: '',
+        image_url: '',
+        color: '',
+        display_order: '',
+      });
       setFormData(prev => ({ ...prev, category: value }));
     }
+  };
+
+  const handleNewCategoryChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setNewCategoryData(prev => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,7 +98,7 @@ const AddProductPage = () => {
       setError('Category is required');
       return;
     }
-    if (showNewCategoryInput && !newCategoryName.trim()) {
+    if (showNewCategoryInput && !newCategoryData.name.trim()) {
       setError('New category name is required');
       return;
     }
@@ -94,11 +108,16 @@ const AddProductPage = () => {
 
       // Create new category if needed
       let categoryToUse = formData.category;
-      if (showNewCategoryInput && newCategoryName.trim()) {
-        const newCategory = await createCategory({
-          name: newCategoryName.trim(),
-          description: `Category for ${newCategoryName.trim()}`,
-        });
+      if (showNewCategoryInput && newCategoryData.name.trim()) {
+        const categoryPayload = {
+          name: newCategoryData.name.trim(),
+          description: newCategoryData.description.trim() || undefined,
+          image_url: newCategoryData.image_url.trim() || undefined,
+          color: newCategoryData.color.trim() || undefined,
+          display_order: newCategoryData.display_order ? parseInt(newCategoryData.display_order) : undefined,
+        };
+        
+        const newCategory = await createCategory(categoryPayload);
         
         if (!newCategory) {
           setError('Failed to create new category. Please try again.');
@@ -219,20 +238,101 @@ const AddProductPage = () => {
                 ))}
               </select>
               
-              {/* New Category Input */}
+              {/* New Category Form */}
               {showNewCategoryInput && (
-                <div className="mt-3">
-                  <input
-                    type="text"
-                    id="newCategoryName"
-                    name="newCategoryName"
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
-                    placeholder="Enter new category name"
-                    required
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">This category will be created and added to the system</p>
+                <div className="mt-4 p-4 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">New Category Details</h3>
+                  <div className="space-y-4">
+                    {/* Category Name */}
+                    <div>
+                      <label htmlFor="newCategoryName" className="block text-sm font-medium text-gray-700 mb-1">
+                        Category Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        id="newCategoryName"
+                        name="name"
+                        value={newCategoryData.name}
+                        onChange={handleNewCategoryChange}
+                        placeholder="e.g., Vegetables, Fruits, Dairy"
+                        required
+                        className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                      />
+                    </div>
+
+                    {/* Color and Display Order in a row */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="newCategoryColor" className="block text-sm font-medium text-gray-700 mb-1">
+                          Color/Theme <span className="text-gray-400 text-xs">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          id="newCategoryColor"
+                          name="color"
+                          value={newCategoryData.color}
+                          onChange={handleNewCategoryChange}
+                          placeholder="e.g., from-green-100 to-green-200"
+                          className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">Tailwind gradient classes</p>
+                      </div>
+
+                      <div>
+                        <label htmlFor="newCategoryDisplayOrder" className="block text-sm font-medium text-gray-700 mb-1">
+                          Display Order <span className="text-gray-400 text-xs">(Optional)</span>
+                        </label>
+                        <input
+                          type="number"
+                          id="newCategoryDisplayOrder"
+                          name="display_order"
+                          value={newCategoryData.display_order}
+                          onChange={handleNewCategoryChange}
+                          min="0"
+                          placeholder="e.g., 1, 2, 3..."
+                          className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">Lower numbers appear first</p>
+                      </div>
+                    </div>
+
+                    {/* Image URL */}
+                    <div>
+                      <label htmlFor="newCategoryImageUrl" className="block text-sm font-medium text-gray-700 mb-1">
+                        Image URL <span className="text-gray-400 text-xs">(Optional)</span>
+                      </label>
+                      <input
+                        type="url"
+                        id="newCategoryImageUrl"
+                        name="image_url"
+                        value={newCategoryData.image_url}
+                        onChange={handleNewCategoryChange}
+                        placeholder="https://example.com/category-image.jpg"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">Enter a URL for the category image</p>
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <label htmlFor="newCategoryDescription" className="block text-sm font-medium text-gray-700 mb-1">
+                        Description <span className="text-gray-400 text-xs">(Optional)</span>
+                      </label>
+                      <textarea
+                        id="newCategoryDescription"
+                        name="description"
+                        value={newCategoryData.description}
+                        onChange={handleNewCategoryChange}
+                        rows={3}
+                        placeholder="Enter category description..."
+                        className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                      />
+                    </div>
+
+                    <p className="text-xs text-gray-600 italic">
+                      This category will be created and added to the system when you submit the product.
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

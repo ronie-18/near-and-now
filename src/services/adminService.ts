@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabaseAdmin } from './supabase';
 import { Product } from './supabase';
 
 // Admin Types
@@ -95,7 +95,7 @@ export async function getProductById(id: string): Promise<Product | null> {
 
 export async function createProduct(product: Omit<Product, 'id'>): Promise<Product | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('products')
       .insert([product])
       .select()
@@ -115,7 +115,7 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
 
 export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('products')
       .update(updates)
       .eq('id', id)
@@ -136,7 +136,7 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
 
 export async function deleteProduct(id: string): Promise<boolean> {
   try {
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('products')
       .delete()
       .eq('id', id);
@@ -195,7 +195,7 @@ export async function getCategoryById(id: string): Promise<Category | null> {
 
 export async function createCategory(category: Omit<Category, 'id'>): Promise<Category | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('categories')
       .insert([category])
       .select()
@@ -215,7 +215,7 @@ export async function createCategory(category: Omit<Category, 'id'>): Promise<Ca
 
 export async function updateCategory(id: string, updates: Partial<Category>): Promise<Category | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('categories')
       .update(updates)
       .eq('id', id)
@@ -236,7 +236,7 @@ export async function updateCategory(id: string, updates: Partial<Category>): Pr
 
 export async function deleteCategory(id: string): Promise<boolean> {
   try {
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('categories')
       .delete()
       .eq('id', id);
@@ -250,6 +250,32 @@ export async function deleteCategory(id: string): Promise<boolean> {
   } catch (error) {
     console.error('Error in deleteCategory:', error);
     return false;
+  }
+}
+
+// Get product counts for each category
+export async function getProductCountsByCategory(): Promise<Record<string, number>> {
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .select('category');
+
+    if (error) {
+      console.error('Error fetching product counts:', error);
+      throw error;
+    }
+
+    // Count products by category
+    const counts: Record<string, number> = {};
+    data?.forEach(product => {
+      const category = product.category;
+      counts[category] = (counts[category] || 0) + 1;
+    });
+
+    return counts;
+  } catch (error) {
+    console.error('Error in getProductCountsByCategory:', error);
+    return {};
   }
 }
 
@@ -304,7 +330,7 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
   try {
     console.log(`Updating order ${id} to status: ${status}`);
     
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('orders')
       .update({ order_status: status, updated_at: new Date().toISOString() })
       .eq('id', id)
