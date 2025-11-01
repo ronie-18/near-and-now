@@ -6,10 +6,11 @@ export interface Category {
   id: string;
   name: string;
   description?: string;
-  image?: string;
-  status: 'Active' | 'Inactive';
-  featured: boolean;
+  image_url?: string;
+  color?: string;
+  display_order?: number;
   created_at?: string;
+  updated_at?: string;
 }
 
 export interface Order {
@@ -18,7 +19,7 @@ export interface Order {
   customer_name: string;
   customer_email?: string;
   customer_phone?: string;
-  order_status: 'placed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
+  order_status: 'placed' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
   payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
   payment_method: string;
   order_total: number;
@@ -301,6 +302,8 @@ export async function getOrderById(id: string): Promise<Order | null> {
 
 export async function updateOrderStatus(id: string, status: Order['order_status']): Promise<Order | null> {
   try {
+    console.log(`Updating order ${id} to status: ${status}`);
+    
     const { data, error } = await supabase
       .from('orders')
       .update({ order_status: status, updated_at: new Date().toISOString() })
@@ -309,12 +312,17 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
       .single();
 
     if (error) {
-      console.error('Error updating order status:', error);
-      throw error;
+      console.error('Supabase error updating order status:', error);
+      // Provide more specific error messages
+      if (error.message.includes('invalid input value')) {
+        throw new Error(`Status "${status}" is not valid in the database. Please update the database schema to include this status.`);
+      }
+      throw new Error(error.message || 'Failed to update order status');
     }
 
+    console.log('Order status updated successfully:', data);
     return data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in updateOrderStatus:', error);
     throw error;
   }
@@ -443,19 +451,19 @@ export async function getDashboardStats() {
     const totalCustomers = uniqueCustomers.size;
     const totalSales = orders?.reduce((sum, order) => sum + (order.order_total || 0), 0) || 0;
     
-    // Order status counts (using actual status values from database)
-    const processingOrders = orders?.filter(order => order.order_status === 'processing').length || 0;
+    // Order status counts (using actual allowed status values from database)
+    const placedOrders = orders?.filter(order => order.order_status === 'placed').length || 0;
+    const confirmedOrders = orders?.filter(order => order.order_status === 'confirmed').length || 0;
     const shippedOrders = orders?.filter(order => order.order_status === 'shipped').length || 0;
     const deliveredOrders = orders?.filter(order => order.order_status === 'delivered').length || 0;
     const cancelledOrders = orders?.filter(order => order.order_status === 'cancelled').length || 0;
-    const placedOrders = orders?.filter(order => order.order_status === 'placed').length || 0;
     
     return {
       totalProducts,
       totalOrders,
       totalCustomers,
       totalSales,
-      processingOrders: processingOrders + placedOrders, // Combine placed and processing
+      processingOrders: placedOrders + confirmedOrders, // Combine placed and confirmed for "processing" display
       shippedOrders,
       deliveredOrders,
       cancelledOrders

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { Search, Plus, Filter, Edit, Trash2, ChevronLeft, ChevronRight, Layers, AlertCircle } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, ChevronLeft, ChevronRight, Layers, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getCategories, deleteCategory } from '../../services/adminService';
 import { Category } from '../../services/adminService';
@@ -12,7 +12,6 @@ const CategoriesPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [selectedStatus, setSelectedStatus] = useState('All');
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [productCounts, setProductCounts] = useState<Record<string, number>>({});
   const itemsPerPage = 8;
@@ -63,13 +62,12 @@ const CategoriesPage = () => {
     }
   };
 
-  // Filter categories based on search term and status
+  // Filter categories based on search term
   const filteredCategories = categories.filter(category => {
     const matchesSearch = category.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                          (category.description?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
                          category.id.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = selectedStatus === 'All' || category.status === selectedStatus;
-    return matchesSearch && matchesStatus;
+    return matchesSearch;
   });
 
   // Pagination
@@ -78,8 +76,7 @@ const CategoriesPage = () => {
   const currentCategories = filteredCategories.slice(indexOfFirstCategory, indexOfLastCategory);
   const totalPages = Math.ceil(filteredCategories.length / itemsPerPage);
 
-  // Get unique statuses
-  const statuses = ['All', ...new Set(categories.map(category => category.status))];
+  // Removed status filter as it doesn't exist in the database
 
   return (
     <AdminLayout>
@@ -117,7 +114,7 @@ const CategoriesPage = () => {
       )}
 
       {/* Category Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div className="bg-white rounded-lg shadow-md p-6">
           <div className="flex items-center">
             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-4">
@@ -135,22 +132,9 @@ const CategoriesPage = () => {
               <Layers className="w-6 h-6 text-green-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Active Categories</p>
+              <p className="text-sm text-gray-600">Total Products</p>
               <p className="text-xl font-bold text-gray-800">
-                {categories.filter(category => category.status === 'Active').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mr-4">
-              <Layers className="w-6 h-6 text-purple-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Featured Categories</p>
-              <p className="text-xl font-bold text-gray-800">
-                {categories.filter(category => category.featured).length}
+                {Object.values(productCounts).reduce((sum, count) => sum + count, 0)}
               </p>
             </div>
           </div>
@@ -171,19 +155,6 @@ const CategoriesPage = () => {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 pr-4 py-2 w-full rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
             />
-          </div>
-          
-          <div className="flex items-center">
-            <Filter size={18} className="text-gray-400 mr-2" />
-            <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="py-2 px-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-            >
-              {statuses.map(status => (
-                <option key={status} value={status}>{status}</option>
-              ))}
-            </select>
           </div>
         </div>
       </div>
@@ -207,8 +178,7 @@ const CategoriesPage = () => {
                   <th className="px-6 py-3">Category</th>
                   <th className="px-6 py-3">Description</th>
                   <th className="px-6 py-3">Products</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Featured</th>
+                  <th className="px-6 py-3">Display Order</th>
                   <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
               </thead>
@@ -218,9 +188,9 @@ const CategoriesPage = () => {
                     <td className="px-6 py-4 text-sm font-medium text-gray-800">{category.id.substring(0, 8)}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center">
-                        {category.image ? (
+                        {category.image_url ? (
                           <img 
-                            src={category.image} 
+                            src={category.image_url} 
                             alt={category.name} 
                             className="w-10 h-10 object-cover rounded-md mr-3" 
                           />
@@ -234,18 +204,7 @@ const CategoriesPage = () => {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">{category.description || 'No description'}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{productCounts[category.id] || 0}</td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                        ${category.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                        {category.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                        ${category.featured ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'}`}>
-                        {category.featured ? 'Yes' : 'No'}
-                      </span>
-                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{category.display_order || '-'}</td>
                     <td className="px-6 py-4 text-right text-sm font-medium">
                       <div className="flex justify-end space-x-2">
                         <Link to={`/admin/categories/edit/${category.id}`} className="text-blue-600 hover:text-blue-900">

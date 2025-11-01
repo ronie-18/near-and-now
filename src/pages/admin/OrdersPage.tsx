@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { Search, Filter, Eye, ChevronLeft, ChevronRight, CheckCircle, Clock, XCircle, Truck, AlertCircle, ChevronDown } from 'lucide-react';
+import { Search, Filter, Eye, ChevronLeft, ChevronRight, CheckCircle, Clock, XCircle, Truck, AlertCircle, ChevronDown, Package, ShoppingBag } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getOrders, updateOrderStatus, Order } from '../../services/adminService';
 
@@ -37,18 +37,21 @@ const OrdersPage = () => {
   const handleUpdateOrderStatus = async (orderId: string, newStatus: Order['order_status']) => {
     try {
       setUpdatingOrderId(orderId);
+      setError(null); // Clear any previous errors
       const updatedOrder = await updateOrderStatus(orderId, newStatus);
       if (updatedOrder) {
         // Update the order in the local state
-        setOrders(orders.map(order => 
+        setOrders(orders.map(order =>
           order.id === orderId ? { ...order, order_status: newStatus } : order
         ));
       } else {
         setError('Failed to update order status. Please try again.');
       }
-    } catch (err) {
-      setError('An error occurred while updating the order status.');
+    } catch (err: any) {
       console.error('Error updating order status:', err);
+      // Show more specific error message
+      const errorMessage = err?.message || 'An error occurred while updating the order status.';
+      setError(`Failed to update status: ${errorMessage}`);
     } finally {
       setUpdatingOrderId(null);
     }
@@ -56,8 +59,8 @@ const OrdersPage = () => {
 
   // Filter orders based on search term and status
   const filteredOrders = orders.filter(order => {
-    const matchesSearch = order.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         order.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = selectedStatus === 'All' || order.order_status === selectedStatus;
     return matchesSearch && matchesStatus;
   });
@@ -73,7 +76,9 @@ const OrdersPage = () => {
 
   // Calculate order statistics
   const orderStats = {
-    processing: orders.filter(order => order.order_status === 'processing' || order.order_status === 'placed').length,
+    total: orders.length,
+    placed: orders.filter(order => order.order_status === 'placed').length,
+    processing: orders.filter(order => order.order_status === 'confirmed').length,
     shipped: orders.filter(order => order.order_status === 'shipped').length,
     delivered: orders.filter(order => order.order_status === 'delivered').length,
     cancelled: orders.filter(order => order.order_status === 'cancelled').length
@@ -82,9 +87,25 @@ const OrdersPage = () => {
 
   return (
     <AdminLayout>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Orders</h1>
-        <p className="text-gray-600">Manage customer orders</p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">Orders</h1>
+          <p className="text-gray-600">Manage customer orders</p>
+        </div>
+        {/* Total Orders Counter */}
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex items-center">
+            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mr-4">
+              <ShoppingBag className="w-6 h-6 text-purple-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Total Orders</p>
+              <p className="text-xl font-bold text-gray-800">
+                {orderStats.total}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Error Message */}
@@ -92,8 +113,8 @@ const OrdersPage = () => {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center">
           <AlertCircle className="w-5 h-5 mr-2" />
           <span>{error}</span>
-          <button 
-            onClick={() => setError(null)} 
+          <button
+            onClick={() => setError(null)}
             className="ml-auto text-red-700 hover:text-red-900"
           >
             <span className="sr-only">Dismiss</span>
@@ -105,14 +126,27 @@ const OrdersPage = () => {
       )}
 
       {/* Order Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-6">
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex items-center">
+            <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mr-4">
+              <Package className="w-6 h-6 text-indigo-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Placed</p>
+              <p className="text-xl font-bold text-gray-800">
+                {orderStats.placed}
+              </p>
+            </div>
+          </div>
+        </div>
         <div className="bg-white rounded-lg shadow-md p-6">
           <div className="flex items-center">
             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-4">
               <Clock className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Processing</p>
+              <p className="text-sm text-gray-600">Confirmed</p>
               <p className="text-xl font-bold text-gray-800">
                 {orderStats.processing}
               </p>
@@ -175,7 +209,7 @@ const OrdersPage = () => {
               className="pl-10 pr-4 py-2 w-full rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
             />
           </div>
-          
+
           <div className="flex items-center">
             <Filter size={18} className="text-gray-400 mr-2" />
             <select
@@ -229,13 +263,14 @@ const OrdersPage = () => {
                           onChange={(e) => handleUpdateOrderStatus(order.id, e.target.value as Order['order_status'])}
                           disabled={updatingOrderId === order.id}
                           className={`appearance-none inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                            ${order.order_status === 'delivered' ? 'bg-green-100 text-green-800' : 
-                              order.order_status === 'processing' || order.order_status === 'placed' ? 'bg-blue-100 text-blue-800' : 
-                              order.order_status === 'shipped' ? 'bg-orange-100 text-orange-800' :
-                              'bg-red-100 text-red-800'} pr-6 cursor-pointer`}
+                            ${order.order_status === 'delivered' ? 'bg-green-100 text-green-800' :
+                              order.order_status === 'placed' ? 'bg-blue-100 text-blue-800' :
+                                order.order_status === 'confirmed' ? 'bg-orange-100 text-orange-800' :
+                                  order.order_status === 'shipped' ? 'bg-yellow-100 text-yellow-800' :
+                                    'bg-red-100 text-red-800'} pr-6 cursor-pointer`}
                         >
                           <option value="placed">Placed</option>
-                          <option value="processing">Processing</option>
+                          <option value="confirmed">Confirmed</option>
                           <option value="shipped">Shipped</option>
                           <option value="delivered">Delivered</option>
                           <option value="cancelled">Cancelled</option>
@@ -256,9 +291,9 @@ const OrdersPage = () => {
                     <td className="px-6 py-4">
                       <div>
                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium
-                          ${order.payment_status === 'paid' ? 'bg-green-100 text-green-800' : 
-                            order.payment_status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 
-                            'bg-red-100 text-red-800'}`}>
+                          ${order.payment_status === 'paid' ? 'bg-green-100 text-green-800' :
+                            order.payment_status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                              'bg-red-100 text-red-800'}`}>
                           {order.payment_status.charAt(0).toUpperCase() + order.payment_status.slice(1)}
                         </span>
                         <span className="text-xs text-gray-500 block mt-1">{order.payment_method}</span>

@@ -1,9 +1,11 @@
 import { Route, Routes, Navigate } from 'react-router-dom';
 import AdminDashboardPage from '../pages/admin/AdminDashboardPage';
 import ProductsPage from '../pages/admin/ProductsPage';
+import AddProductPage from '../pages/admin/AddProductPage';
 import OrdersPage from '../pages/admin/OrdersPage';
 import CustomersPage from '../pages/admin/CustomersPage';
 import CategoriesPage from '../pages/admin/CategoriesPage';
+import AddCategoryPage from '../pages/admin/AddCategoryPage';
 
 // Admin authentication guard
 const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
@@ -38,6 +40,14 @@ const AdminRoutes = () => {
         }
       />
       <Route
+        path="/products/add"
+        element={
+          <AdminAuthGuard>
+            <AddProductPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
         path="/orders"
         element={
           <AdminAuthGuard>
@@ -58,6 +68,14 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <CategoriesPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/categories/add"
+        element={
+          <AdminAuthGuard>
+            <AddCategoryPage />
           </AdminAuthGuard>
         }
       />
