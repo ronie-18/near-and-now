@@ -43,12 +43,12 @@ const Footer = () => {
     { name: 'FAQ', path: '/faq' },
   ];
 
-  const categories = [
-    { name: 'Staples', path: '/category/staples' },
-    { name: 'Spices', path: '/category/spices' },
-    { name: 'Oils', path: '/category/oils' },
-    { name: 'Bakery', path: '/category/bakery' },
-    { name: 'Dairy Products', path: '/category/dairy-products' },
+  const customerService = [
+    { name: 'Help Center', path: '/help' },
+    { name: 'Track Order', path: '/track-order' },
+    { name: 'Returns & Refunds', path: '/returns' },
+    { name: 'Payment Options', path: '/payment-options' },
+    { name: 'Delivery Info', path: '/delivery-info' },
   ];
 
   const socialLinks = [
@@ -155,24 +155,24 @@ const Footer = () => {
             </ul>
           </div>
 
-          {/* Categories */}
+          {/* Customer Service */}
           <div>
-            <h3 className="text-lg font-bold mb-4 text-white">Categories</h3>
+            <h3 className="text-lg font-bold mb-4 text-white">Customer Service</h3>
             <ul className="space-y-2.5">
-              {categories.map((category) => (
-                <li key={category.path}>
+              {customerService.map((link) => (
+                <li key={link.path}>
                   <Link
-                    to={category.path}
+                    to={link.path}
                     className={`text-sm transition-all duration-200 inline-flex items-center group ${
-                      isActiveLink(category.path)
+                      isActiveLink(link.path)
                         ? 'text-primary font-medium'
                         : 'text-gray-300 hover:text-white hover:translate-x-1'
                     }`}
                   >
                     <span className={`w-0 h-0.5 bg-primary transition-all duration-200 mr-0 ${
-                      isActiveLink(category.path) ? 'w-4 mr-2' : 'group-hover:w-4 group-hover:mr-2'
+                      isActiveLink(link.path) ? 'w-4 mr-2' : 'group-hover:w-4 group-hover:mr-2'
                     }`}></span>
-                    {category.name}
+                    {link.name}
                   </Link>
                 </li>
               ))}

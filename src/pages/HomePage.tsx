@@ -183,7 +183,7 @@ const HomePage = () => {
   const scrollLeft = () => {
     if (categoryScrollRef.current) {
       setIsScrolling(true);
-      const cardWidth = categoryScrollRef.current.offsetWidth / 7; // Width of one card when 7 are visible
+      const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
       categoryScrollRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
       
       // Reset scrolling state after animation completes
@@ -195,7 +195,7 @@ const HomePage = () => {
   const scrollRight = () => {
     if (categoryScrollRef.current) {
       setIsScrolling(true);
-      const cardWidth = categoryScrollRef.current.offsetWidth / 7; // Width of one card when 7 are visible
+      const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
       categoryScrollRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
       
       // Reset scrolling state after animation completes
@@ -240,29 +240,29 @@ const HomePage = () => {
               </button>
             )}
 
-            {/* Scrollable Categories Container - Shows 7 cards at a time */}
+            {/* Scrollable Categories Container - Shows 5 cards at a time */}
             <div
               ref={categoryScrollRef}
-              className="flex-1 flex gap-3 md:gap-4 overflow-x-hidden scrollbar-hide"
+              className="flex-1 flex gap-4 md:gap-6 overflow-x-hidden scrollbar-hide"
               style={{ 
                 scrollbarWidth: 'none', 
                 msOverflowStyle: 'none'
               }}
             >
               {loading ? (
-                // Category Skeleton Loaders - 7 cards
-                Array.from({ length: 7 }).map((_, index) => (
+                // Category Skeleton Loaders - 5 cards
+                Array.from({ length: 5 }).map((_, index) => (
                   <div
                     key={`skeleton-cat-${index}`}
-                    className="flex-shrink-0 bg-white rounded-xl p-4 animate-pulse shadow-sm"
+                    className="flex-shrink-0 bg-white rounded-2xl p-5 animate-pulse shadow-md"
                     style={{ 
-                      width: 'calc((100% - 6 * 1rem) / 7)',
-                      minWidth: 'calc((100% - 6 * 1rem) / 7)'
+                      width: 'calc((100% - 4 * 1.5rem) / 5)',
+                      minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
                     }}
                   >
-                    <div className="w-full h-32 bg-gray-200 rounded-lg mb-3"></div>
-                    <div className="h-4 bg-gray-200 rounded mb-2"></div>
-                    <div className="h-3 bg-gray-200 rounded w-3/4"></div>
+                    <div className="w-full h-40 bg-gray-200 rounded-xl mb-4"></div>
+                    <div className="h-5 bg-gray-200 rounded mb-2"></div>
+                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
                   </div>
                 ))
               ) : (
@@ -270,19 +270,19 @@ const HomePage = () => {
                   <Link
                     key={`${category.id}-${index}`}
                     to={`/category/${encodeURIComponent(category.name)}`}
-                    className="flex-shrink-0 group bg-white rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1"
+                    className="flex-shrink-0 group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
                     style={{ 
-                      width: 'calc((100% - 6 * 1rem) / 7)',
-                      minWidth: 'calc((100% - 6 * 1rem) / 7)'
+                      width: 'calc((100% - 4 * 1.5rem) / 5)',
+                      minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
                     }}
                   >
-                    <div className={`${category.color || getCategoryBgColor(index)} p-3`}>
-                      <div className="overflow-hidden rounded-lg">
+                    <div className={`${category.color || getCategoryBgColor(index)} p-4`}>
+                      <div className="overflow-hidden rounded-xl">
                         <img
                           src={category.image_url || `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`}
                           alt={category.name}
                           loading="lazy"
-                          className="w-full h-32 object-cover transform group-hover:scale-110 transition-transform duration-300"
+                          className="w-full h-40 object-cover transform group-hover:scale-110 transition-transform duration-300"
                           onError={(e) => {
                             const target = e.target as HTMLImageElement;
                             target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
@@ -290,11 +290,11 @@ const HomePage = () => {
                         />
                       </div>
                     </div>
-                    <div className="p-3 text-center">
-                      <h3 className="font-semibold text-gray-800 text-sm mb-1 group-hover:text-green-600 transition-colors">
+                    <div className="p-4 text-center">
+                      <h3 className="font-bold text-gray-800 text-base mb-1.5 group-hover:text-green-600 transition-colors">
                         {formatCategoryName(category.name)}
                       </h3>
-                      <p className="text-xs text-gray-500 line-clamp-2">
+                      <p className="text-sm text-gray-500 line-clamp-2">
                         {category.description || 'Browse products'}
                       </p>
                     </div>
