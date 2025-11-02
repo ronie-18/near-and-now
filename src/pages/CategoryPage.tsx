@@ -19,7 +19,9 @@ const CategoryPage = () => {
       
       try {
         setLoading(true);
+        console.log('🔍 CategoryPage - Fetching products for category:', categoryId);
         const categoryProducts = await getProductsByCategory(categoryId);
+        console.log('📦 CategoryPage - Products found:', categoryProducts.length, categoryProducts);
         setProducts(categoryProducts);
       } catch (error) {
         console.error('Error fetching products:', error);

@@ -3,38 +3,49 @@ import { Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
+import { getCategories, Category } from '../services/adminService';
 import { useNotification } from '../context/NotificationContext';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { formatCategoryName } from '../utils/formatCategoryName';
 
 type SortOption = 'default' | 'price-low' | 'price-high' | 'name-asc' | 'name-desc' | 'newest';
 
 const HomePage = () => {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>('default');
   const [itemsToShow, setItemsToShow] = useState(12);
   const { showNotification } = useNotification();
   const observerTarget = useRef<HTMLDivElement>(null);
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
+  const [isScrolling, setIsScrolling] = useState(false);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const ITEMS_PER_LOAD = 12;
 
-  // Fetch all products on mount
+  // Fetch all products and categories on mount
   useEffect(() => {
-    const fetchProducts = async () => {
+    const fetchData = async () => {
       try {
         setLoading(true);
-        const products = await getAllProducts();
+        const [products, categoriesData] = await Promise.all([
+          getAllProducts(),
+          getCategories()
+        ]);
         setAllProducts(products);
+        setCategories(categoriesData);
       } catch (error) {
-        console.error('Error fetching products:', error);
-        showNotification('Failed to load products. Please try again.', 'error');
+        console.error('Error fetching data:', error);
+        showNotification('Failed to load data. Please try again.', 'error');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchProducts();
+    fetchData();
   }, [showNotification]);
 
   // Sort products based on selected option
@@ -105,69 +116,102 @@ const HomePage = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-
-  const categories = [
-    {
-  name: 'Staples',
-  image: 'https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=300&h=200&fit=crop',
-  description: 'Rice, Dal & Atta',
-  bgColor: 'bg-amber-50'
-},
-{
-  name: 'Spices',
-  image: 'https://deliciousfoods.in/cdn/shop/articles/spices_1100x.jpg?v=1742457010',
-  description: 'Fresh & Aromatic',
-  bgColor: 'bg-red-50'
-},
-{
-  name: 'Oils',
-  image: 'https://images.healthshots.com/healthshots/en/uploads/2024/11/04115103/Best-cooking-oils-1.jpg',
-  description: 'Cooking & Essential Oils',
-  bgColor: 'bg-yellow-50'
-},
-{
-  name: 'Pasta, Noodles & Vermicelli',
-  image: 'https://images.unsplash.com/photo-1551892374-ecf8754cf8b0?w=300&h=200&fit=crop',
-  description: 'Fresh & Instant',
-  bgColor: 'bg-orange-50'
-},
-{
-  name: 'Bakery',
-  image: 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=300&h=200&fit=crop',
-  description: 'Fresh Bread & Pastries',
-  bgColor: 'bg-pink-50'
-},
-{
-  name: 'Salt and Sugar',
-  image: 'https://images.unsplash.com/photo-1518843875459-f738682238a6?w=300&h=200&fit=crop',
-  description: 'Essential Ingredients',
-  bgColor: 'bg-slate-50'
-},
-{
-  name: 'Dairy Products',
-  image: 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=300&h=200&fit=crop',
-  description: 'Milk, Paneer & More',
-  bgColor: 'bg-blue-50'
-},
-{
-  name: 'Vegetables',
-  image: 'https://images.unsplash.com/photo-1610348725531-843dff563e2c?w=300&h=200&fit=crop',
-  description: 'Fresh & Organic',
-  bgColor: 'bg-green-50'
-},
-{
-  name: 'Snacks',
-  image: 'https://images.unsplash.com/photo-1599490659213-e2b9527bd087?w=300&h=200&fit=crop',
-  description: 'Healthy & Tasty',
-  bgColor: 'bg-purple-50'
-},
-{
-  name: 'Beverages',
-  image: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=300&h=200&fit=crop',
-  description: 'Tea & Drinks',
-  bgColor: 'bg-teal-50'
-},
+  // Create infinite loop of categories (5 copies for seamless looping)
+  const infiniteCategories = [
+    ...categories,
+    ...categories,
+    ...categories,
+    ...categories,
+    ...categories
   ];
+
+  // Check for infinite scroll loop and reset position
+  const checkInfiniteScroll = useCallback(() => {
+    if (!categoryScrollRef.current || categories.length === 0) return;
+
+    const container = categoryScrollRef.current;
+    const scrollLeft = container.scrollLeft;
+    const scrollWidth = container.scrollWidth;
+    const singleSetWidth = scrollWidth / 5; // Width of one complete set of categories
+
+    // Reset to center set (index 2) when at boundaries
+    // If scrolled past the 3rd set, jump back to 2nd set
+    if (scrollLeft >= singleSetWidth * 3) {
+      container.scrollLeft = scrollLeft - singleSetWidth;
+    }
+    // If scrolled before the 2nd set, jump forward to 2nd set
+    else if (scrollLeft < singleSetWidth) {
+      container.scrollLeft = scrollLeft + singleSetWidth;
+    }
+  }, [categories.length]);
+
+  // Setup scroll event listener for infinite loop
+  useEffect(() => {
+    const container = categoryScrollRef.current;
+    if (!container || categories.length === 0) return;
+
+    // Initialize scroll position to middle set (2nd set out of 5)
+    const initializeScroll = setTimeout(() => {
+      if (container.scrollWidth > 0) {
+        const singleSetWidth = container.scrollWidth / 5;
+        container.scrollLeft = singleSetWidth * 2; // Start at 2nd set
+      }
+    }, 100);
+
+    // Use passive listener for better performance
+    const handleScroll = () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+      scrollTimeoutRef.current = setTimeout(() => {
+        checkInfiniteScroll();
+      }, 50);
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    
+    return () => {
+      clearTimeout(initializeScroll);
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [categories, checkInfiniteScroll]);
+
+  // Scroll categories left (one card width)
+  const scrollLeft = () => {
+    if (categoryScrollRef.current) {
+      setIsScrolling(true);
+      const cardWidth = categoryScrollRef.current.offsetWidth / 7; // Width of one card when 7 are visible
+      categoryScrollRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
+      
+      // Reset scrolling state after animation completes
+      setTimeout(() => setIsScrolling(false), 500);
+    }
+  };
+
+  // Scroll categories right (one card width)
+  const scrollRight = () => {
+    if (categoryScrollRef.current) {
+      setIsScrolling(true);
+      const cardWidth = categoryScrollRef.current.offsetWidth / 7; // Width of one card when 7 are visible
+      categoryScrollRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
+      
+      // Reset scrolling state after animation completes
+      setTimeout(() => setIsScrolling(false), 500);
+    }
+  };
+
+  // Generate background color for categories
+  const getCategoryBgColor = (index: number) => {
+    const colors = [
+      'bg-green-50', 'bg-red-50', 'bg-yellow-50', 'bg-orange-50',
+      'bg-pink-50', 'bg-slate-50', 'bg-blue-50', 'bg-purple-50',
+      'bg-teal-50', 'bg-indigo-50'
+    ];
+    return colors[index % colors.length];
+  };
 
   return (
     <>
@@ -183,49 +227,100 @@ const HomePage = () => {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
-            {loading ? (
-              // Category Skeleton Loaders
-              Array.from({ length: 10 }).map((_, index) => (
-                <div key={`skeleton-cat-${index}`} className="bg-white rounded-xl p-4 animate-pulse shadow-sm">
-                  <div className="w-full h-32 bg-gray-200 rounded-lg mb-3"></div>
-                  <div className="h-4 bg-gray-200 rounded mb-2"></div>
-                  <div className="h-3 bg-gray-200 rounded w-3/4"></div>
-                </div>
-              ))
-            ) : (
-              categories.map((category) => (
-                <Link
-                  key={category.name}
-                  to={`/category/${encodeURIComponent(category.name.toLowerCase().replace(/\s+/g, '-'))}`}
-                  className="group bg-white rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1"
-                >
-                  <div className={`${category.bgColor} p-3`}>
-                    <div className="overflow-hidden rounded-lg">
-                      <img
-                        src={category.image}
-                        alt={category.name}
-                        loading="lazy"
-                        className="w-full h-32 object-cover transform group-hover:scale-110 transition-transform duration-300"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement;
-                          target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
-                        }}
-                      />
+          {/* Categories Carousel with Arrow Buttons */}
+          <div className="flex items-center justify-center gap-3 md:gap-4">
+            {/* Left Arrow */}
+            {!loading && categories.length > 0 && (
+              <button
+                onClick={scrollLeft}
+                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
+                aria-label="Scroll left"
+              >
+                <ChevronLeft className="w-5 h-5 md:w-6 md:h-6 text-gray-700" />
+              </button>
+            )}
+
+            {/* Scrollable Categories Container - Shows 7 cards at a time */}
+            <div
+              ref={categoryScrollRef}
+              className="flex-1 flex gap-3 md:gap-4 overflow-x-hidden scrollbar-hide"
+              style={{ 
+                scrollbarWidth: 'none', 
+                msOverflowStyle: 'none'
+              }}
+            >
+              {loading ? (
+                // Category Skeleton Loaders - 7 cards
+                Array.from({ length: 7 }).map((_, index) => (
+                  <div
+                    key={`skeleton-cat-${index}`}
+                    className="flex-shrink-0 bg-white rounded-xl p-4 animate-pulse shadow-sm"
+                    style={{ 
+                      width: 'calc((100% - 6 * 1rem) / 7)',
+                      minWidth: 'calc((100% - 6 * 1rem) / 7)'
+                    }}
+                  >
+                    <div className="w-full h-32 bg-gray-200 rounded-lg mb-3"></div>
+                    <div className="h-4 bg-gray-200 rounded mb-2"></div>
+                    <div className="h-3 bg-gray-200 rounded w-3/4"></div>
+                  </div>
+                ))
+              ) : (
+                infiniteCategories.map((category, index) => (
+                  <Link
+                    key={`${category.id}-${index}`}
+                    to={`/category/${encodeURIComponent(category.name)}`}
+                    className="flex-shrink-0 group bg-white rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1"
+                    style={{ 
+                      width: 'calc((100% - 6 * 1rem) / 7)',
+                      minWidth: 'calc((100% - 6 * 1rem) / 7)'
+                    }}
+                  >
+                    <div className={`${category.color || getCategoryBgColor(index)} p-3`}>
+                      <div className="overflow-hidden rounded-lg">
+                        <img
+                          src={category.image_url || `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`}
+                          alt={category.name}
+                          loading="lazy"
+                          className="w-full h-32 object-cover transform group-hover:scale-110 transition-transform duration-300"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
+                          }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div className="p-3 text-center">
-                    <h3 className="font-semibold text-gray-800 text-sm mb-1 group-hover:text-green-600 transition-colors">
-                      {category.name}
-                    </h3>
-                    <p className="text-xs text-gray-500">
-                      {category.description}
-                    </p>
-                  </div>
-                </Link>
-              ))
+                    <div className="p-3 text-center">
+                      <h3 className="font-semibold text-gray-800 text-sm mb-1 group-hover:text-green-600 transition-colors">
+                        {formatCategoryName(category.name)}
+                      </h3>
+                      <p className="text-xs text-gray-500 line-clamp-2">
+                        {category.description || 'Browse products'}
+                      </p>
+                    </div>
+                  </Link>
+                ))
+              )}
+            </div>
+
+            {/* Right Arrow */}
+            {!loading && categories.length > 0 && (
+              <button
+                onClick={scrollRight}
+                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
+                aria-label="Scroll right"
+              >
+                <ChevronRight className="w-5 h-5 md:w-6 md:h-6 text-gray-700" />
+              </button>
             )}
           </div>
+
+          {/* Empty State */}
+          {!loading && categories.length === 0 && (
+            <div className="text-center py-12">
+              <p className="text-gray-500">No categories available at the moment.</p>
+            </div>
+          )}
         </div>
       </section>
 

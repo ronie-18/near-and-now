@@ -66,6 +66,7 @@ export async function getAllProducts(): Promise<Product[]> {
 // Get products by category
 export async function getProductsByCategory(categoryName: string): Promise<Product[]> {
   try {
+    console.log('🔎 getProductsByCategory - Querying for category:', categoryName);
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -74,11 +75,14 @@ export async function getProductsByCategory(categoryName: string): Promise<Produ
       .order('rating', { ascending: false });
 
     if (error) {
-      console.error('Error fetching products by category:', error);
+      console.error('❌ Error fetching products by category:', error);
       return [];
     }
 
-    return transformSupabaseProducts(data || []);
+    console.log('✅ getProductsByCategory - Raw data from DB:', data?.length || 0, 'products', data);
+    const transformed = transformSupabaseProducts(data || []);
+    console.log('✅ getProductsByCategory - Transformed products:', transformed.length);
+    return transformed;
   } catch (error) {
     console.error('Error in getProductsByCategory:', error);
     return [];
