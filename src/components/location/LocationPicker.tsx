@@ -171,8 +171,23 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
       });
     }
 
+    // Clean the address by replacing all types of newlines with spaces
+    let cleanAddress = place.formatted_address || '';
+    
+    // Replace literal backslash-n (stored as string)
+    cleanAddress = cleanAddress.split('\\n').join(' ');
+    cleanAddress = cleanAddress.split('\\r').join(' ');
+    
+    // Replace actual newline characters
+    cleanAddress = cleanAddress.replace(/\n/g, ' ');
+    cleanAddress = cleanAddress.replace(/\r/g, ' ');
+    cleanAddress = cleanAddress.replace(/\t/g, ' ');
+    
+    // Replace multiple spaces with single space
+    cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
+
     const location: Location = {
-      address: place.formatted_address || '',
+      address: cleanAddress,
       city: city || 'Unknown',
       pincode: pincode || '000000',
       lat: lat || place.geometry?.location?.lat() || 0,

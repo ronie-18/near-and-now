@@ -110,13 +110,37 @@ const Header = () => {
 
   // Format address to show first 2 lines
   const formatAddressLines = (address: string): { line1: string; line2: string } => {
-    const parts = address.split(',').map(part => part.trim());
+    if (!address) return { line1: '', line2: '' };
+    
+    // Replace all types of newlines and line breaks with spaces
+    // Handle both literal string "\n" and actual newline characters
+    let cleanAddress = address;
+    
+    // Replace literal backslash-n (stored as string)
+    cleanAddress = cleanAddress.split('\\n').join(' ');
+    cleanAddress = cleanAddress.split('\\r').join(' ');
+    
+    // Replace actual newline characters
+    cleanAddress = cleanAddress.replace(/\n/g, ' ');
+    cleanAddress = cleanAddress.replace(/\r/g, ' ');
+    cleanAddress = cleanAddress.replace(/\t/g, ' ');
+    
+    // Replace multiple spaces with single space
+    cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
+    
+    const parts = cleanAddress.split(',').map(part => part.trim());
+    
     if (parts.length <= 2) {
       return { line1: parts[0] || '', line2: parts[1] || '' };
     }
-    // First line: first part, Second line: next 1-2 parts
-    const line1 = parts[0];
-    const line2 = parts.slice(1, 3).join(', ');
+    
+    // First line: first part (max 40 chars with ellipsis)
+    const line1 = parts[0].length > 40 ? parts[0].substring(0, 37) + '...' : parts[0];
+    
+    // Second line: next 1-2 parts (max 50 chars with ellipsis)
+    const line2Full = parts.slice(1, 3).join(', ');
+    const line2 = line2Full.length > 50 ? line2Full.substring(0, 47) + '...' : line2Full;
+    
     return { line1, line2 };
   };
 
@@ -163,10 +187,10 @@ const Header = () => {
                     <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide mb-1">Deliver to</p>
                     {currentLocation ? (
                       <>
-                        <p className="text-sm font-bold text-gray-800 truncate leading-tight">
+                        <p className="text-sm font-bold text-gray-800 truncate leading-tight whitespace-nowrap">
                           {formatAddressLines(currentLocation.address).line1}
                         </p>
-                        <p className="text-xs text-gray-600 truncate leading-tight mt-0.5">
+                        <p className="text-xs text-gray-600 truncate leading-tight mt-0.5 whitespace-nowrap">
                           {formatAddressLines(currentLocation.address).line2}
                         </p>
                       </>
@@ -494,10 +518,10 @@ const Header = () => {
                     <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Deliver to</p>
                     {currentLocation ? (
                       <>
-                        <p className="text-sm font-bold text-gray-800 line-clamp-1 leading-tight">
+                        <p className="text-sm font-bold text-gray-800 line-clamp-1 leading-tight whitespace-nowrap">
                           {formatAddressLines(currentLocation.address).line1}
                         </p>
-                        <p className="text-xs text-gray-600 line-clamp-1 leading-tight mt-1">
+                        <p className="text-xs text-gray-600 line-clamp-1 leading-tight mt-1 whitespace-nowrap">
                           {formatAddressLines(currentLocation.address).line2}
                         </p>
                       </>
