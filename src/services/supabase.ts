@@ -42,21 +42,39 @@ export interface Product {
 export async function getAllProducts(): Promise<Product[]> {
   try {
     console.log('🔄 Fetching products from Supabase...');
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('in_stock', true)
-      .order('created_at', { ascending: false });
+    
+    // Fetch all products in batches to bypass Supabase's 1000 row limit
+    let allProducts: any[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('❌ Supabase error:', error);
-      throw new Error(`Database error: ${error.message}`);
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('in_stock', true)
+        .order('created_at', { ascending: false })
+        .range(from, from + batchSize - 1);
+
+      if (error) {
+        console.error('❌ Supabase error:', error);
+        throw new Error(`Database error: ${error.message}`);
+      }
+
+      if (data && data.length > 0) {
+        allProducts = [...allProducts, ...data];
+        from += batchSize;
+        hasMore = data.length === batchSize; // Continue if we got a full batch
+      } else {
+        hasMore = false;
+      }
     }
 
-    console.log(`✅ Successfully fetched ${data?.length || 0} products`);
+    console.log(`✅ Successfully fetched ${allProducts.length} products`);
     
     // Transform products to match frontend expectations
-    return transformSupabaseProducts(data || []);
+    return transformSupabaseProducts(allProducts);
   } catch (error) {
     console.error('❌ Error in getAllProducts:', error);
     throw error; // Re-throw so calling code can handle it
@@ -67,20 +85,38 @@ export async function getAllProducts(): Promise<Product[]> {
 export async function getProductsByCategory(categoryName: string): Promise<Product[]> {
   try {
     console.log('🔎 getProductsByCategory - Querying for category:', categoryName);
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('category', categoryName)
-      .eq('in_stock', true)
-      .order('rating', { ascending: false });
+    
+    // Fetch all products in batches to bypass Supabase's 1000 row limit
+    let allProducts: any[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('❌ Error fetching products by category:', error);
-      return [];
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('category', categoryName)
+        .eq('in_stock', true)
+        .order('rating', { ascending: false })
+        .range(from, from + batchSize - 1);
+
+      if (error) {
+        console.error('❌ Error fetching products by category:', error);
+        return [];
+      }
+
+      if (data && data.length > 0) {
+        allProducts = [...allProducts, ...data];
+        from += batchSize;
+        hasMore = data.length === batchSize; // Continue if we got a full batch
+      } else {
+        hasMore = false;
+      }
     }
 
-    console.log('✅ getProductsByCategory - Raw data from DB:', data?.length || 0, 'products', data);
-    const transformed = transformSupabaseProducts(data || []);
+    console.log('✅ getProductsByCategory - Raw data from DB:', allProducts.length, 'products');
+    const transformed = transformSupabaseProducts(allProducts);
     console.log('✅ getProductsByCategory - Transformed products:', transformed.length);
     return transformed;
   } catch (error) {

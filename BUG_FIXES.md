@@ -488,6 +488,460 @@ update or delete on table "categories" violates foreign key constraint "products
 
 ---
 
+### ✅ Bulk Insert Flours & Grains Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 31 products from `Flours & Grains.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Staples" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Flours & Grains.xlsx
+2. **Created Python Script**: Built `extract_flours.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_flours_grains.sql` with:
+   - ID auto-generation setup
+   - 31 product insertions into existing 'Staples' category
+
+**Data Mapping:**
+- Excel Column I (title) → `name`
+- Excel Column F (price) → `price`
+- Excel Column E (original price) → `original_price`
+- Excel Column G (size/weight) → `size`
+- Excel Column J (image URL) → `image_url`
+- Category: `'Staples'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_flours_grains.sql` - SQL script with 31 INSERT statements (102 lines)
+- Includes ID setup (no category creation needed as Staples already exists)
+
+**Sample Products:**
+- Diggam Premium Chakki Fresh Atta - 5 Kg (₹179, was ₹254)
+- Agro Fresh Atta - 5 Kg (₹200, was ₹270)
+- Agro Fresh Atta - 10 Kg (₹399, was ₹525)
+- Ganesh Maida - 1 Kg (₹53, was ₹64)
+- Ganesh Chana Sattu - 500 Gm (₹85, was ₹94)
+- Sampoorti Besan (Gram Flour) varieties
+- Various atta, maida, besan, suji, and sattu products
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_flours_grains.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Staples';`
+5. Check Staples category page to see all products (including previous Dals & Pulses + new Flours & Grains)
+
+**Result:** Successfully extracted and prepared 31 flours & grains products for insertion into the existing "Staples" category. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Fruit Juices Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 46 products from `Fruit Juices.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Soft Drinks" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Fruit Juices.xlsx
+2. **Created Python Script**: Built `extract_juices.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_fruit_juices.sql` with:
+   - ID auto-generation setup
+   - 46 product insertions into existing 'Soft Drinks' category
+
+**Data Mapping:**
+- Excel Column J (title) → `name`
+- Excel Column H (price) → `price`
+- Excel Column G (original price) → `original_price`
+- Excel Column I (size/volume) → `size`
+- Excel Column C (image URL) → `image_url`
+- Category: `'Soft Drinks'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_fruit_juices.sql` - SQL script with 46 INSERT statements (147 lines)
+- Includes ID setup (no category creation needed as Soft Drinks already exists)
+
+**Sample Products:**
+- Slice Mango Drink - 1.75 Ltr (₹67, was ₹99)
+- Storia Coconut Water (Bottle) - 1 Ltr (₹89, was ₹178)
+- Maaza Mango Drink Bottle - 1.75 Ltr (₹89, was ₹99)
+- B Natural Litchi Juice - 1 Ltr (₹70, was ₹140)
+- Freshgold Pomegranate Juice (Tetra) - 1 Ltr (₹73, was ₹130)
+- Tropicana varieties (Mixed Fruit, Slice Mango, Cranberry)
+- Real Fruit Power varieties (Litchi, Guava, Mixed Fruit)
+- Mogu Mogu varieties (Strawberry, Lychee, Orange with Nata De Coco)
+- Various mango, guava, orange, and mixed fruit juices
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_fruit_juices.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Soft Drinks';`
+5. Check Soft Drinks category page to see all products
+
+**Result:** Successfully extracted and prepared 46 fruit juices products for insertion into the existing "Soft Drinks" category. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Ghee & Vanaspati Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 11 products from `Ghee & Vanaspati.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Dairy" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Ghee & Vanaspati.xlsx
+2. **Created Python Script**: Built `extract_ghee.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_ghee_vanaspati.sql` with:
+   - ID auto-generation setup
+   - 11 product insertions into existing 'Dairy' category
+
+**Data Mapping:**
+- Excel Column I (title) → `name`
+- Excel Column F (price) → `price`
+- Excel Column E (original price) → `original_price`
+- Excel Column G (size/volume) → `size`
+- Excel Column J (image URL) → `image_url`
+- Category: `'Dairy'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_ghee_vanaspati.sql` - SQL script with 11 INSERT statements (42 lines)
+- Includes ID setup (no category creation needed as Dairy already exists)
+
+**Sample Products:**
+- Jharna Ghee (jar) - 250 Ml (₹179, was ₹200)
+- Jharna Ghee (jar) - 500 Ml (₹365, was ₹395)
+- Gold Touch Ghee (jar) - 200 Ml (₹130, was ₹167)
+- Milkfood Rich Desi Ghee (Carton) - 900 Ml (₹539, was ₹630)
+- Provedic Desi Ghee (Ceka Pack) - 900 Ml (₹487, was ₹575)
+- Provedic Cow Ghee (Jar) - 1 Ltr (₹575, was ₹650)
+- Provedic Desi Ghee (Ceka Pack) - 500 Ml (₹271, was ₹300)
+- Various sizes from 100 ml to 1 ltr
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_ghee_vanaspati.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Dairy';`
+5. Check Dairy category page to see all products
+
+**Result:** Successfully extracted and prepared 11 ghee & vanaspati products for insertion into the existing "Dairy" category. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Ketchup & Sauces Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 49 products from `Ketchup & Sauces.xlsx` Excel file and generate SQL INSERT statements to populate a new "Ketchup and Sauces" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Ketchup & Sauces.xlsx
+2. **Created Python Script**: Built `extract_sauces.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters (including apostrophes)
+3. **Generated SQL File**: Created `insert_ketchup_sauces.sql` with:
+   - Category creation: `Ketchup and Sauces` with description
+   - ID auto-generation setup
+   - 49 product insertions
+
+**Data Mapping:**
+- Excel Column I (title) → `name`
+- Excel Column F (price) → `price`
+- Excel Column E (original price) → `original_price`
+- Excel Column G (size/weight) → `size`
+- Excel Column J (image URL) → `image_url`
+- Category: `'Ketchup and Sauces'`
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_ketchup_sauces.sql` - SQL script with 49 INSERT statements (161 lines)
+- Includes category creation and ID setup
+
+**Sample Products:**
+- Kissan Fresh Tomato Ketchup (Pouch) - 850 Gm (₹90, was ₹100)
+- Khao Piyo Veg Mayonnaise - 750 Gm (₹72, was ₹179)
+- Veeba Chef's Special Eggless Mayonnaise - 700 Gm (₹109, was ₹230)
+- Heinz Tomato Ketchup - 450 Gm (₹156, was ₹165)
+- Funfoods Veg Mayonnaise varieties (Original, Tandoori Masala, Burger)
+- Veeba varieties (Eggless Mayonnaise, Tandoori, Burger)
+- Ching's varieties (Green Chilli Sauce, Red Chilli Sauce, Dark Soy Sauce)
+- Khao Piyo varieties (Tomato Ketchup, Chilli Sauces, Soya Sauce)
+- Wingreens varieties (Pizza & Pasta Sauce, Schezwan Chilli Garlic, Chipotle Mayonnaise)
+- Various chutneys, vinegars, and condiments
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_ketchup_sauces.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Ketchup and Sauces';`
+5. Check Ketchup and Sauces category page to see all 49 products
+
+**Result:** Successfully extracted and prepared 49 ketchup & sauces products for insertion. Category "Ketchup and Sauces" will be created automatically. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Masala And Spices Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 136 products from `Masala And Spices.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Spices" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Masala And Spices.xlsx
+2. **Created Python Script**: Built `extract_masala.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_masala_spices.sql` with:
+   - ID auto-generation setup
+   - 136 product insertions into existing 'Spices' category
+
+**Data Mapping:**
+- Excel Column I (title) → `name`
+- Excel Column F (price) → `price`
+- Excel Column E (original price) → `original_price`
+- Excel Column G (size/weight) → `size`
+- Excel Column J (image URL) → `image_url`
+- Category: `'Spices'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_masala_spices.sql` - SQL script with 136 INSERT statements (417 lines)
+- Includes ID setup (no category creation needed as Spices already exists)
+
+**Sample Products:**
+- Sampoorti Poppy Seeds (Khus Khus) - 100 Gm (₹185, was ₹300)
+- Sampoorti CTC Combo (Mirchi Powder + Dhania Powder + Haldi Powder) - 500g each (₹330, was ₹660)
+- Sampoorti Jeera Whole - 500 Gm (₹155, was ₹400)
+- Sampoorti Haldi Powder - 500 Gm (₹110, was ₹220)
+- Shree Ram varieties (Haldi Powder, Mirchi Powder, Dhaniya Powder)
+- Catch varieties (Super Garam Masala, Red Chilli Powder, Hing, Chhole Masala, Kitchen King)
+- Everest varieties (Tikhalal Red Chilli Powder, Hingraj Powder, Chaat Masala, Sambhar Masala)
+- Various whole spices (Jeera, Elaichi, Black Pepper, Clove, Cinnamon, Fennel, Star Anise)
+- Powder spices (Haldi, Mirchi, Dhania, Garam Masala, Amchur, Dry Ginger)
+- Specialty masalas (Chhole Masala, Chat Masala, Pav Bhaji Masala, Paneer Butter Masala)
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_masala_spices.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Spices';`
+5. Check Spices category page to see all products
+
+**Result:** Successfully extracted and prepared 136 masala & spices products for insertion into the existing "Spices" category. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Namkeens & Salted Snacks Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 42 products from `Namkeens & Salted Snacks.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Snacks" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Namkeens & Salted Snacks.xlsx
+2. **Created Python Script**: Built `extract_namkeens.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_namkeens_snacks.sql` with:
+   - ID auto-generation setup
+   - 42 product insertions into existing 'Snacks' category
+
+**Data Mapping:**
+- Excel Column I (title) → `name`
+- Excel Column F (price) → `price`
+- Excel Column E (original price) → `original_price`
+- Excel Column G (size/weight) → `size`
+- Excel Column J (image URL) → `image_url`
+- Category: `'Snacks'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_namkeens_snacks.sql` - SQL script with 42 INSERT statements (135 lines)
+- Includes ID setup (no category creation needed as Snacks already exists)
+
+**Sample Products:**
+- Bingo Tedhe Medhe Masala Tadka - 75 gm (Buy 2 Get 1 Free) (₹40, was ₹60)
+- Fun Flips Puff Cheesy Pizza - 60 Gm (₹15, was ₹30)
+- Prabhuji Tok Jhal Misti (pouch) - 400 Gm (₹89, was ₹115)
+- Lays varieties (American Style Cream & Onion, India's Magic Masala)
+- Crax varieties (Cheese Balls, Curls Chatpata Masala, Fritts Cream & Onion, Corn Rings)
+- Bingo varieties (Tedhe Medhe Masala Tadka, No Rulz Cheese Curlz, Masala Curlz)
+- Cornitos varieties (Nacho Crisps, Party Mix, Crusties, Coated Green Peas)
+- Mukharochak varieties (Sweet & Sour Chanachur, Special Papri Chanachur, Chaal Bhaja, Dhania Peanuts)
+- Khao Piyo varieties (Lajawab Mixture, All In One Mixture)
+- Prabhuji varieties (Tok Jhal Misti, Bhujia, Moong Dal)
+- Fun Flips Puff varieties (Cheesy Pizza, Masala, Tango)
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_namkeens_snacks.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Snacks';`
+5. Check Snacks category page to see all products
+
+**Result:** Successfully extracted and prepared 42 namkeens & salted snacks products for insertion into the existing "Snacks" category. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Noodles, Pasta & Vermicelli Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 37 products from `Noodles, Pasta & Vermicelli.xlsx` Excel file and generate SQL INSERT statements to populate a new "Pasta, Noodles and Vermicelli" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Noodles, Pasta & Vermicelli.xlsx
+2. **Created Python Script**: Built `extract_noodles.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters (including apostrophes)
+3. **Generated SQL File**: Created `insert_noodles_pasta.sql` with:
+   - Category creation: `Pasta, Noodles and Vermicelli` with description
+   - ID auto-generation setup
+   - 37 product insertions
+
+**Data Mapping:**
+- Excel Column I (title) → `name`
+- Excel Column F (price) → `price`
+- Excel Column E (original price) → `original_price`
+- Excel Column G (size/weight) → `size`
+- Excel Column J (image URL) → `image_url`
+- Category: `'Pasta, Noodles and Vermicelli'`
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_noodles_pasta.sql` - SQL script with 37 INSERT statements (125 lines)
+- Includes category creation and ID setup
+
+**Sample Products:**
+- Sunfeast Yippee Noodles Wow Masala - 50 Gm x 12 (₹99, was ₹120)
+- Goldden Shinee Macroni Elbows - 1 Kg (₹80, was ₹160)
+- Goldden Shinee Penne Pasta - 1 Kg (₹80, was ₹160)
+- Khao Piyo Penne Pasta - 500 Gm (₹49, was ₹110)
+- Khao Piyo Roasted Vermicelli - 850 Gm (₹69, was ₹130)
+- Bambino varieties (Macaroni Pasta Elbow, Vermicelli Roasted)
+- Panda Treats Hakka Noodles (Plain, Rava/Sooji)
+- Ching's varieties (Secret Manchurian, Hot Garlic, Schezwan Instant Noodles)
+- Wai Wai varieties (6 In 1 Veg Noodles, Chicken Noodles, Dynamite Chicken, Cup Noodles)
+- Sunfeast Yippee varieties (Wow Masala, Korean Noodles Fiery Hot, Spicy Kimchi)
+- Maggi Cuppa Noodles (Masala, Chilli Chow)
+- Top Ramen Curry Noodles
+- Nissin varieties (Veggie Manchow Cup Noodles, Pokemon Ramen Fun Masala)
+- Wickedgud varieties (Curry Instant Noodles, Masala Instant Noodles)
+- Pou Chong Veg Hakka Noodles
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_noodles_pasta.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Pasta, Noodles and Vermicelli';`
+5. Check Pasta, Noodles and Vermicelli category page to see all 37 products
+
+**Result:** Successfully extracted and prepared 37 noodles, pasta & vermicelli products for insertion. Category "Pasta, Noodles and Vermicelli" will be created automatically. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Sugar, Salt & Jaggery Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 27 products from `Sugar, Salt & Jaggery.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Salt and Sugar" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Sugar, Salt & Jaggery.xlsx
+2. **Created Python Script**: Built `extract_sugar.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_sugar_salt.sql` with:
+   - ID auto-generation setup
+   - 27 product insertions into existing 'Salt and Sugar' category
+
+**Data Mapping:**
+- Excel Column J (title) → `name`
+- Excel Column H (price) → `price`
+- Excel Column G (data4/original price) → `original_price`
+- Excel Column I (data5/size) → `size`
+- Excel Column C (image-src) → `image_url`
+- Category: `'Salt and Sugar'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_sugar_salt.sql` - SQL script with 27 INSERT statements (37 lines)
+- Includes ID setup (no category creation needed as Salt and Sugar already exists)
+
+**Sample Products:**
+- Mishti Dhampur Premium Quality Sugar - 5 Kg (₹249, was ₹315)
+- Mishti Dhampur Premium Quality Sugar - 1 Kg (₹54, was ₹65)
+- Tata Salt - 1 Kg (₹28, was ₹30)
+- Sampoorti Iodised Salt - 1 Kg (₹11, was ₹30)
+- Sampoorti Sugar Small - 1 Kg (₹52, was ₹70)
+- Hilton varieties (Notlih Rock Salt, Pink Rock Salt, Black Salt)
+- Sampoorti varieties (Sugar, Iodised Salt, Sendha Namak, Black Salt, Lal Batasha, Sada Batasha, Mishri Gota)
+- Aashirvaad Iodised Salt - 1 Kg (₹25, was ₹27)
+- Tata Salt Lite - 1 Kg (₹46, was ₹50)
+- Catch Black Salt Sprinkler - 200 Gm (₹44, was ₹47)
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_sugar_salt.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Salt and Sugar';`
+5. Check Salt and Sugar category page to see all 27 products
+
+**Result:** Successfully extracted and prepared 27 sugar, salt & jaggery products for insertion into the existing "Salt and Sugar" category. All products ready for display! ✅
+
+---
+
+### ✅ Bulk Insert Tea & Coffee Products
+**Date Fixed:** November 2, 2025  
+**Task:** Extract 51 products from `Tea & Coffee.xlsx` Excel file and generate SQL INSERT statements to populate the existing "Beverages" category.
+
+**Solution:**
+1. **Extracted Excel Data**: Parsed XML from Tea & Coffee.xlsx
+2. **Created Python Script**: Built `extract_tea_coffee.py` to:
+   - Extract columns: title (name), price, original_price, size, image_url
+   - Generate SQL INSERT statements
+   - Handle HTML entities and special characters
+3. **Generated SQL File**: Created `insert_tea_coffee.sql` with:
+   - ID auto-generation setup
+   - 51 product insertions into existing 'Beverages' category
+
+**Data Mapping:**
+- Excel Column J (title) → `name`
+- Excel Column H (price) → `price`
+- Excel Column G (data4/original price) → `original_price`
+- Excel Column I (data5/size) → `size`
+- Excel Column C (image-src) → `image_url`
+- Category: `'Beverages'` (existing category)
+- Default values: `in_stock = true`, `rating = 4.5`
+
+**Files Created:**
+- `insert_tea_coffee.sql` - SQL script with 51 INSERT statements (61 lines)
+- Includes ID setup (no category creation needed as Beverages already exists)
+
+**Sample Products:**
+- Tata Agni Tea - 500 Gm (₹99, was ₹120)
+- City Gold Pyari Tea - 1 Kg (₹159, was ₹240)
+- Tata Tea Gold - 500 Gm (₹209, was ₹280)
+- Continental Strong Coffee (jar) - 50 Gm (₹90, was ₹180)
+- Sampoorti Kadak Leaf Tea varieties (1 Kg, 250 Gm)
+- Charminar Assam Tea varieties (1 Kg, 250 Gm)
+- Meri Chai varieties (Popular Strong CTC Tea, Elaichi Tea, Health Premium Tea)
+- Tata varieties (Agni Tea, Tea Gold, Premium Tea, Agni Elaichi Tea)
+- Coffee products (Continental, Bevzilla, Rage Coffee, Nescafe varieties)
+- Green Tea varieties (Tetley, Organic India Tulsi)
+- Wagh Bakri varieties (Leaf Tea, Instant Masala Tea, Instant Ginger Tea)
+- Red Label Tea - 500 Gm (₹260)
+
+**How to Use:**
+1. Open Supabase SQL Editor
+2. Copy contents of `insert_tea_coffee.sql`
+3. Paste and run in SQL Editor
+4. Verify with: `SELECT COUNT(*) FROM products WHERE category = 'Beverages';`
+5. Check Beverages category page to see all 51 products
+
+**Result:** Successfully extracted and prepared 51 tea & coffee products for insertion into the existing "Beverages" category. All products ready for display! ✅
+
+---
+
 ### ✅ Incorrect Product Counts in Admin Categories Page
 **Date Fixed:** November 1, 2025  
 **Issue:** In `/admin/categories`, the product counts were displaying random numbers that changed on every page refresh, instead of showing the actual number of products in each category from the database.

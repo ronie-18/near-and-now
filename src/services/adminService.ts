@@ -56,17 +56,34 @@ export interface Customer {
 // Products Management
 export async function getAdminProducts(): Promise<Product[]> {
   try {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // Fetch all products in batches to bypass Supabase's 1000 row limit
+    let allProducts: any[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('Error fetching admin products:', error);
-      throw error;
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + batchSize - 1);
+
+      if (error) {
+        console.error('Error fetching admin products:', error);
+        throw error;
+      }
+
+      if (data && data.length > 0) {
+        allProducts = [...allProducts, ...data];
+        from += batchSize;
+        hasMore = data.length === batchSize; // Continue if we got a full batch
+      } else {
+        hasMore = false;
+      }
     }
 
-    return data || [];
+    return allProducts;
   } catch (error) {
     console.error('Error in getAdminProducts:', error);
     throw error;
@@ -256,20 +273,38 @@ export async function deleteCategory(id: string): Promise<boolean> {
 // Get product counts for each category
 export async function getProductCountsByCategory(): Promise<Record<string, number>> {
   try {
-    const { data, error } = await supabase
-      .from('products')
-      .select('category');
+    // Fetch all category values in batches to bypass Supabase's 1000 row limit
+    let allCategories: string[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('Error fetching product counts:', error);
-      throw error;
+    while (hasMore) {
+      const { data: batchData, error: batchError } = await supabase
+        .from('products')
+        .select('category')
+        .range(from, from + batchSize - 1);
+
+      if (batchError) {
+        console.error('Error fetching product counts:', batchError);
+        throw batchError;
+      }
+
+      if (batchData && batchData.length > 0) {
+        allCategories = [...allCategories, ...batchData.map(p => p.category)];
+        from += batchSize;
+        hasMore = batchData.length === batchSize; // Continue if we got a full batch
+      } else {
+        hasMore = false;
+      }
     }
 
     // Count products by category
     const counts: Record<string, number> = {};
-    data?.forEach(product => {
-      const category = product.category;
-      counts[category] = (counts[category] || 0) + 1;
+    allCategories.forEach(category => {
+      if (category) {
+        counts[category] = (counts[category] || 0) + 1;
+      }
     });
 
     return counts;
