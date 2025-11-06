@@ -234,6 +234,13 @@ export interface OrderItem {
   image?: string;
 }
 
+export interface ShippingAddress {
+  address: string;
+  city: string;
+  state: string;
+  pincode: string;
+}
+
 export interface CreateOrderData {
   user_id?: string;
   customer_name: string;
@@ -246,12 +253,7 @@ export interface CreateOrderData {
   subtotal: number;
   delivery_fee: number;
   items: OrderItem[];
-  shipping_address: {
-    address: string;
-    city: string;
-    state: string;
-    pincode: string;
-  };
+  shipping_address: ShippingAddress;
 }
 
 export interface Order {
@@ -268,13 +270,14 @@ export interface Order {
   delivery_fee?: number;
   items?: OrderItem[];
   items_count?: number;
-  shipping_address?: any;
+  shipping_address?: ShippingAddress;
   created_at: string;
   updated_at?: string;
   order_number?: string;
 }
 
 // Generate order number in format: NNYYYYMMDD-XXXX
+// Uses database-side atomic generation via RPC to prevent race conditions
 async function generateOrderNumber(): Promise<string> {
   try {
     // Get today's date in YYYYMMDD format
@@ -284,48 +287,30 @@ async function generateOrderNumber(): Promise<string> {
     const day = String(today.getDate()).padStart(2, '0');
     const dateString = `${year}${month}${day}`;
     
-    // Find the last order number for today
+    // Date prefix for the order number
     const prefix = `NN${dateString}`;
     
-    // Query orders that start with today's prefix
-    const { data: todayOrders, error } = await supabase
-      .from('orders')
-      .select('order_number')
-      .like('order_number', `${prefix}%`)
-      .order('order_number', { ascending: false })
-      .limit(1);
+    // Call the database RPC function to atomically generate the next order number
+    // This uses FOR UPDATE locking to prevent race conditions
+    const { data, error } = await supabase.rpc('generate_next_order_number', {
+      date_prefix: prefix
+    });
 
     if (error) {
-      console.error('Error fetching today\'s orders:', error);
-      // Fallback: use timestamp if query fails
-      return `${prefix}-0001`;
+      console.error('Error generating order number via RPC:', error);
+      // Propagate the database error
+      throw new Error(`Failed to generate order number: ${error.message}`);
     }
 
-    let nextNumber = 1;
-    
-    if (todayOrders && todayOrders.length > 0) {
-      // Extract the number part from the last order
-      const lastOrderNumber = todayOrders[0].order_number;
-      const match = lastOrderNumber.match(/-(\d+)$/);
-      
-      if (match) {
-        const lastNumber = parseInt(match[1], 10);
-        nextNumber = lastNumber + 1;
-      }
+    if (!data || typeof data !== 'string') {
+      throw new Error('Invalid response from order number generator');
     }
-    
-    // Format with leading zeros (4 digits: 0001, 0002, etc.)
-    const formattedNumber = String(nextNumber).padStart(4, '0');
-    
-    return `${prefix}-${formattedNumber}`;
+
+    return data;
   } catch (error) {
     console.error('Error generating order number:', error);
-    // Fallback: use timestamp
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    return `NN${year}${month}${day}-0001`;
+    // Re-throw to propagate database errors
+    throw error;
   }
 }
 

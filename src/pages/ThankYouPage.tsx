@@ -1,6 +1,6 @@
-import { Link, useLocation } from 'react-router-dom';
+  import { Link, useLocation } from 'react-router-dom';
 import { formatPrice } from '../utils/formatters';
-import { Order } from '../services/supabase';
+import { Order, OrderItem } from '../services/supabase';
 
 const ThankYouPage = () => {
   const location = useLocation();
@@ -9,6 +9,22 @@ const ThankYouPage = () => {
   const order = orderData?.order;
   const orderNumber = orderData?.orderNumber || order?.order_number;
   const orderId = orderData?.orderId || order?.id;
+
+  // Generate a stable key for order items
+  const getItemKey = (item: OrderItem & { id?: string; sku?: string }): string => {
+    // Use id if available
+    if (item.id) {
+      return item.id;
+    }
+    // Otherwise, use a composite key from stable fields
+    const fields = [
+      item.product_id,
+      item.sku || '',
+      item.name,
+      item.price.toString()
+    ].filter(Boolean);
+    return fields.join('-');
+  };
   
   return (
     <div className="container mx-auto px-4 py-16">
@@ -40,8 +56,8 @@ const ThankYouPage = () => {
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Items ({order.items.length})</h3>
                 <div className="space-y-2">
-                  {order.items.map((item: any, index: number) => (
-                    <div key={index} className="flex justify-between text-sm">
+                  {order.items.map((item: OrderItem) => (
+                    <div key={getItemKey(item)} className="flex justify-between text-sm">
                       <span className="text-gray-600">
                         {item.name} x {item.quantity}
                       </span>

@@ -215,7 +215,7 @@ const OrdersPage = () => {
                       <>
                         <div className="divide-y divide-gray-200">
                           {order.items.map((item: any, index: number) => (
-                            <div key={index} className="py-3 flex justify-between">
+                            <div key={item.id || index} className="py-3 flex justify-between">
                               <div>
                                 <p className="text-gray-800">{item.name}</p>
                                 <p className="text-sm text-gray-500">Qty: {item.quantity}</p>

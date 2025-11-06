@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Mail, Phone, MapPin, Facebook, Twitter, Instagram, Linkedin, Send } from 'lucide-react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { subscribeToNewsletter } from '../../services/supabase';
 import { useNotification } from '../../context/NotificationContext';
 
@@ -10,6 +10,16 @@ const Footer = () => {
   const { showNotification } = useNotification();
   const [email, setEmail] = useState('');
   const [subscribeStatus, setSubscribeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   // Check if current path matches the link
   const isActiveLink = (path: string) => {
@@ -43,9 +53,15 @@ const Footer = () => {
       showNotification('Successfully subscribed to newsletter! 🎉', 'success');
       setEmail('');
 
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+
       // Reset status after 3 seconds
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         setSubscribeStatus('idle');
+        timeoutRef.current = null;
       }, 3000);
     } catch (error: any) {
       console.error('Error subscribing to newsletter:', error);
@@ -55,9 +71,15 @@ const Footer = () => {
       const errorMessage = error?.message || 'Failed to subscribe. Please try again.';
       showNotification(errorMessage, 'error');
       
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+
       // Reset error status after 3 seconds
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         setSubscribeStatus('idle');
+        timeoutRef.current = null;
       }, 3000);
     }
   }, [email, showNotification]);

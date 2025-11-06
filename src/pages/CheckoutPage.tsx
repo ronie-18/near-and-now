@@ -6,6 +6,14 @@ import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData } from '../services/supabase';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock } from 'lucide-react';
 
+const calculateOrderTotals = (cartTotal: number) => {
+  const subtotal = cartTotal;
+  const deliveryFee = cartTotal > 500 ? 0 : 40;
+  const discount = cartTotal > 1000 ? cartTotal * 0.1 : 0;
+  const orderTotal = subtotal + deliveryFee - discount;
+  return { subtotal, deliveryFee, discount, orderTotal };
+};
+
 const CheckoutPage = () => {
   const { cartItems, cartTotal, clearCart } = useCart();
   const { showNotification } = useNotification();
@@ -62,10 +70,7 @@ const CheckoutPage = () => {
       }));
 
       // Calculate totals
-      const subtotal = cartTotal;
-      const deliveryFee = cartTotal > 500 ? 0 : 40;
-      const discount = cartTotal > 1000 ? cartTotal * 0.1 : 0;
-      const orderTotal = subtotal + deliveryFee - discount;
+      const { subtotal, deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
 
       // Prepare order data
       const orderData: CreateOrderData = {
@@ -141,9 +146,7 @@ const CheckoutPage = () => {
     );
   }
 
-  const deliveryFee = cartTotal > 500 ? 0 : 40;
-  const discount = cartTotal > 1000 ? cartTotal * 0.1 : 0;
-  const finalTotal = cartTotal + deliveryFee - discount;
+  const { deliveryFee, discount, orderTotal: finalTotal } = calculateOrderTotals(cartTotal);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/5 via-white to-secondary/5 py-8">
