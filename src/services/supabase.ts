@@ -365,28 +365,100 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
 }
 
 // Get user orders
-export async function getUserOrders(userId: string): Promise<Order[]> {
+export async function getUserOrders(userId: string, userPhone?: string, userEmail?: string): Promise<Order[]> {
   try {
-    console.log('📦 Fetching orders for user:', userId);
+    console.log('📦 Fetching orders for user:', userId, 'phone:', userPhone, 'email:', userEmail);
     
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('❌ Error fetching user orders:', error);
-      throw new Error(`Failed to fetch orders: ${error.message}`);
+    // Build query to match orders by user_id OR customer_phone OR customer_email
+    // This ensures we get all orders even if user_id was null or different
+    // Supabase doesn't support OR directly in a single query easily
+    // So we'll fetch all matching orders and combine them
+    const queries = [];
+    
+    if (userId) {
+      queries.push(
+        supabase
+          .from('orders')
+          .select('*')
+          .eq('user_id', userId)
+      );
     }
-
-    console.log(`✅ Fetched ${data?.length || 0} orders for user`);
+    if (userPhone) {
+      queries.push(
+        supabase
+          .from('orders')
+          .select('*')
+          .eq('customer_phone', userPhone)
+      );
+    }
+    if (userEmail) {
+      queries.push(
+        supabase
+          .from('orders')
+          .select('*')
+          .eq('customer_email', userEmail)
+      );
+    }
     
-    // Transform orders to include items_count
-    return (data || []).map(order => ({
-      ...order,
-      items_count: order.items?.length || 0
-    }));
+    // If we have queries to execute
+    if (queries.length > 0) {
+      // Execute all queries in parallel
+      const results = await Promise.all(queries);
+      
+      // Combine results and remove duplicates
+      const allOrders: Order[] = [];
+      const orderIds = new Set<string>();
+      
+      for (const result of results) {
+        if (result.error) {
+          console.warn('⚠️ Error in one of the order queries:', result.error);
+          continue;
+        }
+        if (result.data) {
+          for (const order of result.data) {
+            if (!orderIds.has(order.id)) {
+              orderIds.add(order.id);
+              allOrders.push(order);
+            }
+          }
+        }
+      }
+      
+      // Sort by created_at descending
+      allOrders.sort((a, b) => {
+        const dateA = new Date(a.created_at).getTime();
+        const dateB = new Date(b.created_at).getTime();
+        return dateB - dateA;
+      });
+      
+      console.log(`✅ Fetched ${allOrders.length} orders for user (including matches by phone/email)`);
+      
+      // Transform orders to include items_count
+      return allOrders.map(order => ({
+        ...order,
+        items_count: order.items?.length || 0
+      }));
+    } else {
+      // Fallback to original query if no conditions
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('❌ Error fetching user orders:', error);
+        throw new Error(`Failed to fetch orders: ${error.message}`);
+      }
+
+      console.log(`✅ Fetched ${data?.length || 0} orders for user`);
+      
+      // Transform orders to include items_count
+      return (data || []).map(order => ({
+        ...order,
+        items_count: order.items?.length || 0
+      }));
+    }
   } catch (error) {
     console.error('❌ Error in getUserOrders:', error);
     throw error;
