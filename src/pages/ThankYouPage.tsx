@@ -11,17 +11,19 @@ const ThankYouPage = () => {
   const orderId = orderData?.orderId || order?.id;
 
   // Generate a stable key for order items
-  const getItemKey = (item: OrderItem & { id?: string; sku?: string }): string => {
-    // Use id if available
+  const getItemKey = (item: OrderItem & { id?: string; sku?: string }, index: number): string => {
+    // Use id if available (preferred)
     if (item.id) {
       return item.id;
     }
-    // Otherwise, use a composite key from stable fields
+    // Otherwise, use a composite key from stable fields with index as differentiator
+    // The index ensures uniqueness even when all composite fields match
     const fields = [
       item.product_id,
       item.sku || '',
       item.name,
-      item.price.toString()
+      item.price.toString(),
+      index.toString() // Stable index differentiator to guarantee uniqueness
     ].filter(Boolean);
     return fields.join('-');
   };
@@ -56,8 +58,8 @@ const ThankYouPage = () => {
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Items ({order.items.length})</h3>
                 <div className="space-y-2">
-                  {order.items.map((item: OrderItem) => (
-                    <div key={getItemKey(item)} className="flex justify-between text-sm">
+                  {order.items.map((item: OrderItem, index: number) => (
+                    <div key={getItemKey(item, index)} className="flex justify-between text-sm">
                       <span className="text-gray-600">
                         {item.name} x {item.quantity}
                       </span>

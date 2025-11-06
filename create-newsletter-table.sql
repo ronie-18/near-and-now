@@ -38,7 +38,7 @@ ALTER TABLE newsletter_subscriptions ENABLE ROW LEVEL SECURITY;
 -- Create policy to allow anyone to insert (subscribe)
 CREATE POLICY "Allow public to subscribe" ON newsletter_subscriptions
   FOR INSERT
-  WITH CHECK (auth.role() = 'authenticated');
+  WITH CHECK (true);
 
 -- Create policy to allow reading own subscription (optional, for unsubscribe functionality)
 CREATE POLICY "Allow reading subscriptions" ON newsletter_subscriptions
