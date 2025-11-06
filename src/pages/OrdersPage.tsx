@@ -2,43 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice } from '../utils/formatters';
-
-// Mock order data (in a real app, this would come from an API)
-const mockOrders = [
-  {
-    id: 'NN-123456',
-    date: '2025-10-20T14:30:00',
-    status: 'Delivered',
-    total: 1250.75,
-    items: [
-      { name: 'Organic Brown Rice', quantity: 2, price: 120.50 },
-      { name: 'Fresh Farm Eggs (Pack of 12)', quantity: 1, price: 95.75 },
-      { name: 'Whole Wheat Bread', quantity: 1, price: 45.00 }
-    ]
-  },
-  {
-    id: 'NN-123457',
-    date: '2025-10-15T09:45:00',
-    status: 'Processing',
-    total: 875.25,
-    items: [
-      { name: 'Mixed Vegetable Pack', quantity: 1, price: 250.00 },
-      { name: 'Organic Milk (1L)', quantity: 2, price: 65.50 },
-      { name: 'Cashew Nuts (200g)', quantity: 1, price: 180.00 }
-    ]
-  },
-  {
-    id: 'NN-123458',
-    date: '2025-10-05T16:20:00',
-    status: 'Delivered',
-    total: 1540.00,
-    items: [
-      { name: 'Premium Basmati Rice (5kg)', quantity: 1, price: 550.00 },
-      { name: 'Cold Pressed Coconut Oil (1L)', quantity: 1, price: 450.00 },
-      { name: 'Assorted Spices Pack', quantity: 1, price: 350.00 }
-    ]
-  }
-];
+import { getUserOrders, Order } from '../services/supabase';
 
 // Order status badge component
 const OrderStatusBadge = ({ status }: { status: string }) => {
@@ -75,11 +39,12 @@ const OrderStatusBadge = ({ status }: { status: string }) => {
 };
 
 const OrdersPage = () => {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const navigate = useNavigate();
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -88,16 +53,31 @@ const OrdersPage = () => {
     }
   }, [isAuthenticated, isLoading, navigate]);
 
-  // Fetch orders (mock data for now)
+  // Fetch orders from database
   useEffect(() => {
-    // Simulate API call delay
-    const timer = setTimeout(() => {
-      setOrders(mockOrders);
-      setLoading(false);
-    }, 1000);
-    
-    return () => clearTimeout(timer);
-  }, []);
+    const fetchOrders = async () => {
+      if (!isAuthenticated || !user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError(null);
+        const userOrders = await getUserOrders(user.id);
+        setOrders(userOrders);
+      } catch (err: any) {
+        console.error('Error fetching orders:', err);
+        setError('Failed to load orders. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (isAuthenticated && user?.id) {
+      fetchOrders();
+    }
+  }, [isAuthenticated, user?.id]);
 
   const toggleOrderDetails = (orderId: string) => {
     if (expandedOrder === orderId) {
@@ -116,6 +96,17 @@ const OrdersPage = () => {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const getStatusDisplay = (status: string) => {
+    const statusMap: Record<string, string> = {
+      'placed': 'Placed',
+      'confirmed': 'Confirmed',
+      'shipped': 'Shipped',
+      'delivered': 'Delivered',
+      'cancelled': 'Cancelled'
+    };
+    return statusMap[status] || status;
   };
 
   if (isLoading || loading) {
@@ -143,7 +134,13 @@ const OrdersPage = () => {
       <div className="max-w-4xl mx-auto">
         <h1 className="text-2xl font-bold text-gray-800 mb-6">My Orders</h1>
         
-        {orders.length === 0 ? (
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
+            {error}
+          </div>
+        )}
+
+        {orders.length === 0 && !loading ? (
           <div className="bg-white p-8 rounded-lg shadow-md text-center">
             <div className="w-16 h-16 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -169,22 +166,22 @@ const OrdersPage = () => {
                 <div className="p-4 border-b border-gray-200">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between">
                     <div>
-                      <p className="text-sm text-gray-500">Order ID</p>
-                      <p className="font-medium">{order.id}</p>
+                      <p className="text-sm text-gray-500">Order {order.order_number ? 'Number' : 'ID'}</p>
+                      <p className="font-medium">{order.order_number || order.id.substring(0, 8)}</p>
                     </div>
                     <div className="mt-2 sm:mt-0">
-                      <OrderStatusBadge status={order.status} />
+                      <OrderStatusBadge status={getStatusDisplay(order.order_status)} />
                     </div>
                   </div>
                   
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between mt-3">
                     <div>
                       <p className="text-sm text-gray-500">Order Date</p>
-                      <p>{formatDate(order.date)}</p>
+                      <p>{formatDate(order.created_at)}</p>
                     </div>
                     <div className="mt-2 sm:mt-0">
                       <p className="text-sm text-gray-500">Total Amount</p>
-                      <p className="font-medium">{formatPrice(order.total)}</p>
+                      <p className="font-medium">{formatPrice(order.order_total)}</p>
                     </div>
                   </div>
                 </div>
@@ -214,22 +211,53 @@ const OrdersPage = () => {
                 {expandedOrder === order.id && (
                   <div className="p-4 bg-gray-50">
                     <h3 className="font-medium text-gray-800 mb-3">Order Items</h3>
-                    <div className="divide-y divide-gray-200">
-                      {order.items.map((item: any, index: number) => (
-                        <div key={index} className="py-3 flex justify-between">
-                          <div>
-                            <p className="text-gray-800">{item.name}</p>
-                            <p className="text-sm text-gray-500">Qty: {item.quantity}</p>
-                          </div>
-                          <p className="text-gray-800">{formatPrice(item.price * item.quantity)}</p>
+                    {order.items && order.items.length > 0 ? (
+                      <>
+                        <div className="divide-y divide-gray-200">
+                          {order.items.map((item: any, index: number) => (
+                            <div key={index} className="py-3 flex justify-between">
+                              <div>
+                                <p className="text-gray-800">{item.name}</p>
+                                <p className="text-sm text-gray-500">Qty: {item.quantity}</p>
+                              </div>
+                              <p className="text-gray-800">{formatPrice(item.price * item.quantity)}</p>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                        
+                        <div className="mt-4 pt-4 border-t border-gray-200 space-y-2">
+                          {order.subtotal && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-gray-600">Subtotal</span>
+                              <span className="text-gray-800">{formatPrice(order.subtotal)}</span>
+                            </div>
+                          )}
+                          {order.delivery_fee !== undefined && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-gray-600">Delivery Fee</span>
+                              <span className="text-gray-800">
+                                {order.delivery_fee === 0 ? 'FREE' : formatPrice(order.delivery_fee)}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex justify-between pt-2 border-t border-gray-200">
+                            <p className="font-medium">Total</p>
+                            <p className="font-medium">{formatPrice(order.order_total)}</p>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-gray-500">No items found for this order.</p>
+                    )}
                     
-                    <div className="mt-4 pt-4 border-t border-gray-200 flex justify-between">
-                      <p className="font-medium">Total</p>
-                      <p className="font-medium">{formatPrice(order.total)}</p>
-                    </div>
+                    {order.shipping_address && (
+                      <div className="mt-4 pt-4 border-t border-gray-200">
+                        <h4 className="font-medium text-gray-800 mb-2">Shipping Address</h4>
+                        <p className="text-sm text-gray-600">
+                          {order.shipping_address.address}, {order.shipping_address.city}, {order.shipping_address.state} - {order.shipping_address.pincode}
+                        </p>
+                      </div>
+                    )}
                     
                     <div className="mt-6 flex justify-end">
                       <button className="text-primary hover:text-secondary">

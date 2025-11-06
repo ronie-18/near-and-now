@@ -224,3 +224,264 @@ export async function logout() {
     throw error;
   }
 }
+
+// Order types
+export interface OrderItem {
+  product_id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  image?: string;
+}
+
+export interface CreateOrderData {
+  user_id?: string;
+  customer_name: string;
+  customer_email?: string;
+  customer_phone: string;
+  order_status: 'placed' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
+  payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_method: string;
+  order_total: number;
+  subtotal: number;
+  delivery_fee: number;
+  items: OrderItem[];
+  shipping_address: {
+    address: string;
+    city: string;
+    state: string;
+    pincode: string;
+  };
+}
+
+export interface Order {
+  id: string;
+  user_id?: string;
+  customer_name: string;
+  customer_email?: string;
+  customer_phone?: string;
+  order_status: 'placed' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
+  payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_method: string;
+  order_total: number;
+  subtotal?: number;
+  delivery_fee?: number;
+  items?: OrderItem[];
+  items_count?: number;
+  shipping_address?: any;
+  created_at: string;
+  updated_at?: string;
+  order_number?: string;
+}
+
+// Generate order number in format: NNYYYYMMDD-XXXX
+async function generateOrderNumber(): Promise<string> {
+  try {
+    // Get today's date in YYYYMMDD format
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const dateString = `${year}${month}${day}`;
+    
+    // Find the last order number for today
+    const prefix = `NN${dateString}`;
+    
+    // Query orders that start with today's prefix
+    const { data: todayOrders, error } = await supabase
+      .from('orders')
+      .select('order_number')
+      .like('order_number', `${prefix}%`)
+      .order('order_number', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('Error fetching today\'s orders:', error);
+      // Fallback: use timestamp if query fails
+      return `${prefix}-0001`;
+    }
+
+    let nextNumber = 1;
+    
+    if (todayOrders && todayOrders.length > 0) {
+      // Extract the number part from the last order
+      const lastOrderNumber = todayOrders[0].order_number;
+      const match = lastOrderNumber.match(/-(\d+)$/);
+      
+      if (match) {
+        const lastNumber = parseInt(match[1], 10);
+        nextNumber = lastNumber + 1;
+      }
+    }
+    
+    // Format with leading zeros (4 digits: 0001, 0002, etc.)
+    const formattedNumber = String(nextNumber).padStart(4, '0');
+    
+    return `${prefix}-${formattedNumber}`;
+  } catch (error) {
+    console.error('Error generating order number:', error);
+    // Fallback: use timestamp
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `NN${year}${month}${day}-0001`;
+  }
+}
+
+// Create order
+export async function createOrder(orderData: CreateOrderData): Promise<Order> {
+  try {
+    console.log('🛒 Creating order...', orderData);
+    
+    // Generate order number in format: NNYYYYMMDD-XXXX
+    const orderNumber = await generateOrderNumber();
+    console.log('📝 Generated order number:', orderNumber);
+    
+    const orderPayload = {
+      user_id: orderData.user_id || null,
+      customer_name: orderData.customer_name,
+      customer_email: orderData.customer_email || null,
+      customer_phone: orderData.customer_phone,
+      order_status: orderData.order_status,
+      payment_status: orderData.payment_status,
+      payment_method: orderData.payment_method,
+      order_total: orderData.order_total,
+      subtotal: orderData.subtotal,
+      delivery_fee: orderData.delivery_fee,
+      items: orderData.items,
+      shipping_address: orderData.shipping_address,
+      order_number: orderNumber,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('orders')
+      .insert([orderPayload])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error creating order:', error);
+      throw new Error(`Failed to create order: ${error.message}`);
+    }
+
+    console.log('✅ Order created successfully:', data);
+    
+    return {
+      ...data,
+      items_count: data.items?.length || 0
+    };
+  } catch (error) {
+    console.error('❌ Error in createOrder:', error);
+    throw error;
+  }
+}
+
+// Get user orders
+export async function getUserOrders(userId: string): Promise<Order[]> {
+  try {
+    console.log('📦 Fetching orders for user:', userId);
+    
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('❌ Error fetching user orders:', error);
+      throw new Error(`Failed to fetch orders: ${error.message}`);
+    }
+
+    console.log(`✅ Fetched ${data?.length || 0} orders for user`);
+    
+    // Transform orders to include items_count
+    return (data || []).map(order => ({
+      ...order,
+      items_count: order.items?.length || 0
+    }));
+  } catch (error) {
+    console.error('❌ Error in getUserOrders:', error);
+    throw error;
+  }
+}
+
+// Newsletter subscription types
+export interface NewsletterSubscription {
+  id: string;
+  email: string;
+  subscribed_at: string;
+  is_active: boolean;
+}
+
+// Subscribe to newsletter
+export async function subscribeToNewsletter(email: string): Promise<NewsletterSubscription> {
+  try {
+    console.log('📧 Subscribing email to newsletter:', email);
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      throw new Error('Please enter a valid email address');
+    }
+
+    // Check if email already exists
+    const { data: existing } = await supabase
+      .from('newsletter_subscriptions')
+      .select('*')
+      .eq('email', email.toLowerCase().trim())
+      .single();
+
+    if (existing) {
+      // If already subscribed and active, return success
+      if (existing.is_active) {
+        console.log('✅ Email already subscribed');
+        return existing;
+      }
+      
+      // If exists but inactive, reactivate it
+      const { data: updated, error: updateError } = await supabase
+        .from('newsletter_subscriptions')
+        .update({ 
+          is_active: true,
+          subscribed_at: new Date().toISOString()
+        })
+        .eq('email', email.toLowerCase().trim())
+        .select()
+        .single();
+
+      if (updateError) {
+        throw new Error(`Failed to resubscribe: ${updateError.message}`);
+      }
+
+      console.log('✅ Email resubscribed successfully');
+      return updated;
+    }
+
+    // Create new subscription
+    const { data, error } = await supabase
+      .from('newsletter_subscriptions')
+      .insert([
+        {
+          email: email.toLowerCase().trim(),
+          is_active: true,
+          subscribed_at: new Date().toISOString()
+        }
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error subscribing to newsletter:', error);
+      throw new Error(`Failed to subscribe: ${error.message}`);
+    }
+
+    console.log('✅ Successfully subscribed to newsletter');
+    return data;
+  } catch (error: any) {
+    console.error('❌ Error in subscribeToNewsletter:', error);
+    throw error;
+  }
+}

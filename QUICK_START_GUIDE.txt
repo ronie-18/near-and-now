@@ -1,0 +1,263 @@
+QUICK START GUIDE - E-COMMERCE PLATFORM BUILD
+==============================================
+
+This is a simplified guide to get you started. Refer to ECOMMERCE_ROADMAP.txt for detailed steps.
+
+IMMEDIATE NEXT STEPS (Start Here)
+==================================
+
+STEP 1: Enhance Order Status System
+------------------------------------
+Priority: HIGH
+Time: 2-3 days
+
+What to do:
+1. Update order status enum in database to include:
+   - placed → confirmed → processing → ready_for_pickup → in_transit → out_for_delivery → delivered
+   - Add cancelled status
+
+2. Create order_tracking table for status history
+
+3. Update CheckoutPage to set initial status as 'placed'
+
+4. Update admin OrdersPage to allow status changes
+
+5. Add status timeline to user OrdersPage
+
+
+STEP 2: Create Tracking System
+-------------------------------
+Priority: HIGH
+Time: 3-4 days
+
+What to do:
+1. Create order_tracking table (if not done in Step 1)
+
+2. Add tracking_number field to orders table
+
+3. Generate unique tracking number for each order
+
+4. Create TrackOrderPage component
+
+5. Add tracking timeline visualization
+
+6. Add "Track Order" button to OrdersPage
+
+
+STEP 3: Delivery Address Management
+------------------------------------
+Priority: HIGH
+Time: 2-3 days
+
+What to do:
+1. Create user_addresses table
+
+2. Enhance AddressesPage (already exists) with:
+   - Add new address
+   - Edit address
+   - Delete address
+   - Set default address
+
+3. Update CheckoutPage to use saved addresses
+
+4. Add address selection dropdown in checkout
+
+
+STEP 4: Payment Integration
+----------------------------
+Priority: MEDIUM
+Time: 4-5 days
+
+What to do:
+1. Choose payment gateway (Razorpay recommended for India)
+
+2. Create paymentService.ts
+
+3. Integrate payment gateway in CheckoutPage
+
+4. Handle payment callbacks
+
+5. Update payment status in orders
+
+6. Add payment receipt generation
+
+
+STEP 5: Notifications
+---------------------
+Priority: MEDIUM
+Time: 3-4 days
+
+What to do:
+1. Set up email service (SendGrid/AWS SES)
+
+2. Create email templates for:
+   - Order confirmation
+   - Order shipped
+   - Out for delivery
+   - Delivered
+
+3. Set up SMS service (Twilio/AWS SNS) - optional
+
+4. Create notificationService.ts
+
+5. Send notifications on status changes
+
+
+STEP 6: Inventory Management
+-----------------------------
+Priority: MEDIUM
+Time: 2-3 days
+
+What to do:
+1. Add stock_quantity field to products table
+
+2. Update product creation/editing to include stock
+
+3. Check stock availability before order
+
+4. Deduct stock on order confirmation
+
+5. Add low stock alerts in admin
+
+
+STEP 7: Admin Delivery Management
+----------------------------------
+Priority: MEDIUM
+Time: 4-5 days
+
+What to do:
+1. Create delivery_partners table
+
+2. Create delivery_agents table
+
+3. Add delivery assignment UI in admin
+
+4. Create delivery management page
+
+5. Add route optimization (basic version)
+
+
+STEP 8: Real-Time Tracking
+---------------------------
+Priority: LOW (but high impact)
+Time: 3-4 days
+
+What to do:
+1. Set up Supabase Realtime or WebSocket
+
+2. Create realtimeService.ts
+
+3. Subscribe to order status changes
+
+4. Update tracking page in real-time
+
+5. Add live map (optional, if GPS tracking)
+
+
+RECOMMENDED SEQUENCE
+====================
+
+Week 1:
+- Step 1: Enhance Order Status System
+- Step 2: Create Tracking System
+
+Week 2:
+- Step 3: Delivery Address Management
+- Step 6: Inventory Management
+
+Week 3:
+- Step 4: Payment Integration
+- Step 5: Notifications
+
+Week 4:
+- Step 7: Admin Delivery Management
+- Step 8: Real-Time Tracking (if time permits)
+
+TECHNOLOGY STACK RECOMMENDATIONS
+=================================
+
+Payment Gateway:
+- Razorpay (India) - Easy integration, good docs
+- Stripe (International) - Global, robust
+
+SMS Service:
+- Twilio - Reliable, good pricing
+- AWS SNS - Cost-effective
+
+Email Service:
+- SendGrid - Free tier available
+- AWS SES - Very cheap
+
+Maps & Location:
+- Google Maps API (already have)
+- For delivery tracking and route optimization
+
+Real-Time:
+- Supabase Realtime (built-in, free)
+- Socket.io (if need more control)
+
+DATABASE TABLES TO CREATE
+=========================
+
+1. order_tracking
+   - id, order_id, status, location, timestamp, notes
+
+2. user_addresses
+   - id, user_id, address_type, full_address, city, state, pincode, is_default
+
+3. delivery_partners
+   - id, name, contact_number, service_areas, is_active
+
+4. delivery_agents
+   - id, partner_id, name, phone, vehicle_type, current_location
+
+5. notifications
+   - id, user_id, type, title, message, read, created_at
+
+6. inventory_logs (optional)
+   - id, product_id, change_type, quantity, reason, created_at
+
+KEY FILES TO CREATE
+===================
+
+Services:
+- src/services/trackingService.ts
+- src/services/paymentService.ts
+- src/services/notificationService.ts
+- src/services/deliveryService.ts
+- src/services/inventoryService.ts
+
+Pages:
+- src/pages/TrackOrderPage.tsx
+- src/pages/OrderDetailPage.tsx
+- src/pages/admin/DeliveryManagementPage.tsx
+
+Components:
+- src/components/tracking/TrackingTimeline.tsx
+- src/components/tracking/TrackingMap.tsx
+- src/components/payment/PaymentModal.tsx
+- src/components/address/AddressForm.tsx
+
+TESTING CHECKLIST
+=================
+
+After each step, test:
+- [ ] Feature works as expected
+- [ ] Database saves correctly
+- [ ] UI displays properly
+- [ ] Error handling works
+- [ ] Mobile responsive
+- [ ] No console errors
+
+FINAL NOTES
+===========
+
+- Start with MVP features first
+- Test thoroughly before moving to next step
+- Keep database backups
+- Document any custom logic
+- Use TypeScript for type safety
+- Follow existing code patterns
+
+For detailed information, see ECOMMERCE_ROADMAP.txt
+

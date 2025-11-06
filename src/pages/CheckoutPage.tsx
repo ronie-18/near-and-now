@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
+import { createOrder, CreateOrderData } from '../services/supabase';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock } from 'lucide-react';
 
 const CheckoutPage = () => {
@@ -50,14 +51,63 @@ const CheckoutPage = () => {
     // Only process the order on the final step
     try {
       setLoading(true);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Prepare order items from cart
+      const orderItems = cartItems.map(item => ({
+        product_id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+        image: item.image
+      }));
+
+      // Calculate totals
+      const subtotal = cartTotal;
+      const deliveryFee = cartTotal > 500 ? 0 : 40;
+      const discount = cartTotal > 1000 ? cartTotal * 0.1 : 0;
+      const orderTotal = subtotal + deliveryFee - discount;
+
+      // Prepare order data
+      const orderData: CreateOrderData = {
+        user_id: user?.id,
+        customer_name: formData.name,
+        customer_email: formData.email || undefined,
+        customer_phone: formData.phone,
+        order_status: 'placed',
+        payment_status: formData.paymentMethod === 'cod' ? 'pending' : 'pending',
+        payment_method: formData.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment',
+        order_total: orderTotal,
+        subtotal: subtotal,
+        delivery_fee: deliveryFee,
+        items: orderItems,
+        shipping_address: {
+          address: formData.address,
+          city: formData.city,
+          state: formData.state,
+          pincode: formData.pincode
+        }
+      };
+
+      // Create order in database
+      const createdOrder = await createOrder(orderData);
 
       showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
-      navigate('/thank-you');
-    } catch (error) {
+      
+      // Navigate to thank you page with order data
+      navigate('/thank-you', { 
+        state: { 
+          order: createdOrder,
+          orderId: createdOrder.id,
+          orderNumber: createdOrder.order_number
+        } 
+      });
+    } catch (error: any) {
       console.error('Error placing order:', error);
-      showNotification('Failed to place order. Please try again.', 'error');
+      showNotification(
+        error?.message || 'Failed to place order. Please try again.', 
+        'error'
+      );
     } finally {
       setLoading(false);
     }

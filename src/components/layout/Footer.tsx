@@ -1,10 +1,13 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Mail, Phone, MapPin, Facebook, Twitter, Instagram, Linkedin, Send } from 'lucide-react';
 import { useState, useCallback } from 'react';
+import { subscribeToNewsletter } from '../../services/supabase';
+import { useNotification } from '../../context/NotificationContext';
 
 const Footer = () => {
   const currentYear = new Date().getFullYear();
   const location = useLocation();
+  const { showNotification } = useNotification();
   const [email, setEmail] = useState('');
   const [subscribeStatus, setSubscribeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
@@ -14,26 +17,50 @@ const Footer = () => {
   };
 
   // Handle newsletter subscription
-  const handleNewsletterSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
+  const handleNewsletterSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (!email) return;
+    if (!email) {
+      showNotification('Please enter your email address', 'error');
+      return;
+    }
 
-    setSubscribeStatus('loading');
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      showNotification('Please enter a valid email address', 'error');
+      setSubscribeStatus('error');
+      return;
+    }
 
-    // Simulate API call
-    setTimeout(() => {
-      // TODO: Implement actual newsletter subscription logic
-      console.log('Subscribing email:', email);
+    try {
+      setSubscribeStatus('loading');
+      
+      // Subscribe to newsletter
+      await subscribeToNewsletter(email);
+      
       setSubscribeStatus('success');
+      showNotification('Successfully subscribed to newsletter! 🎉', 'success');
       setEmail('');
 
       // Reset status after 3 seconds
       setTimeout(() => {
         setSubscribeStatus('idle');
       }, 3000);
-    }, 1000);
-  }, [email]);
+    } catch (error: any) {
+      console.error('Error subscribing to newsletter:', error);
+      setSubscribeStatus('error');
+      
+      // Show user-friendly error message
+      const errorMessage = error?.message || 'Failed to subscribe. Please try again.';
+      showNotification(errorMessage, 'error');
+      
+      // Reset error status after 3 seconds
+      setTimeout(() => {
+        setSubscribeStatus('idle');
+      }, 3000);
+    }
+  }, [email, showNotification]);
 
   const quickLinks = [
     { name: 'Home', path: '/' },
@@ -251,8 +278,22 @@ const Footer = () => {
                   Successfully subscribed!
                 </p>
               )}
+              {subscribeStatus === 'error' && (
+                <p className="text-xs text-red-400 mt-2 flex items-center">
+                  <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                  Subscription failed. Please try again.
+                </p>
+              )}
               {subscribeStatus === 'loading' && (
-                <p className="text-xs text-gray-400 mt-2">Subscribing...</p>
+                <p className="text-xs text-gray-400 mt-2 flex items-center">
+                  <svg className="animate-spin h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Subscribing...
+                </p>
               )}
             </div>
           </div>
