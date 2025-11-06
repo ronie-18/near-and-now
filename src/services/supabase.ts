@@ -365,7 +365,7 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
 }
 
 // Get user orders
-export async function getUserOrders(userId: string, userPhone?: string, userEmail?: string): Promise<Order[]> {
+export async function getUserOrders(userId?: string, userPhone?: string, userEmail?: string): Promise<Order[]> {
   try {
     console.log('📦 Fetching orders for user:', userId, 'phone:', userPhone, 'email:', userEmail);
     
@@ -439,7 +439,15 @@ export async function getUserOrders(userId: string, userPhone?: string, userEmai
         items_count: order.items?.length || 0
       }));
     } else {
-      // Fallback to original query if no conditions
+      // Fallback: validate params before querying
+      const hasValidUserId = userId && typeof userId === 'string' && userId.trim() !== '';
+      
+      if (!hasValidUserId) {
+        console.warn('⚠️ No valid user identifier provided for order query (userId, phone, or email)');
+        return [];
+      }
+
+      // Build query with validated userId - only call .eq when userId is non-empty
       const { data, error } = await supabase
         .from('orders')
         .select('*')
@@ -447,8 +455,8 @@ export async function getUserOrders(userId: string, userPhone?: string, userEmai
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('❌ Error fetching user orders:', error);
-        throw new Error(`Failed to fetch orders: ${error.message}`);
+        console.warn('⚠️ Error fetching user orders:', error);
+        return [];
       }
 
       console.log(`✅ Fetched ${data?.length || 0} orders for user`);

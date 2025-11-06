@@ -77,7 +77,7 @@ const OrdersPage = () => {
     if (isAuthenticated && user?.id) {
       fetchOrders();
     }
-  }, [isAuthenticated, user?.id]);
+  }, [isAuthenticated, user?.id, user?.phone, user?.email]);
 
   const toggleOrderDetails = (orderId: string) => {
     if (expandedOrder === orderId) {
