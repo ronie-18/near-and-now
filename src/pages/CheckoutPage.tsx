@@ -33,6 +33,7 @@ const CheckoutPage = () => {
 
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
+  const [tipAmount, setTipAmount] = useState(0);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -71,6 +72,7 @@ const CheckoutPage = () => {
 
       // Calculate totals
       const { subtotal, deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
+      const finalOrderTotal = orderTotal + tipAmount;
 
       // Prepare order data
       const orderData: CreateOrderData = {
@@ -81,7 +83,7 @@ const CheckoutPage = () => {
         order_status: 'placed',
         payment_status: formData.paymentMethod === 'cod' ? 'pending' : 'pending',
         payment_method: formData.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment',
-        order_total: orderTotal,
+        order_total: finalOrderTotal,
         subtotal: subtotal,
         delivery_fee: deliveryFee,
         items: orderItems,
@@ -98,19 +100,19 @@ const CheckoutPage = () => {
 
       showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
-      
+
       // Navigate to thank you page with order data
-      navigate('/thank-you', { 
-        state: { 
+      navigate('/thank-you', {
+        state: {
           order: createdOrder,
           orderId: createdOrder.id,
           orderNumber: createdOrder.order_number
-        } 
+        }
       });
     } catch (error: any) {
       console.error('Error placing order:', error);
       showNotification(
-        error?.message || 'Failed to place order. Please try again.', 
+        error?.message || 'Failed to place order. Please try again.',
         'error'
       );
     } finally {
@@ -146,7 +148,8 @@ const CheckoutPage = () => {
     );
   }
 
-  const { deliveryFee, discount, orderTotal: finalTotal } = calculateOrderTotals(cartTotal);
+  const { deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
+  const finalTotal = orderTotal + tipAmount;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/5 via-white to-secondary/5 py-8">
@@ -369,7 +372,7 @@ const CheckoutPage = () => {
                     </div>
                   </div>
                 )}
-                
+
                 {/* Step 3: Order Review */}
                 {currentStep === 3 && (
                   <div className="mb-8">
@@ -377,7 +380,7 @@ const CheckoutPage = () => {
                       <CheckCircle className="w-5 h-5 text-primary mr-2" />
                       <h2 className="text-xl font-bold text-gray-800">Review Your Order</h2>
                     </div>
-                    
+
                     <div className="bg-gray-50 rounded-xl p-4 mb-4">
                       <h3 className="font-semibold text-gray-800 mb-2">Shipping Details</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
@@ -398,7 +401,7 @@ const CheckoutPage = () => {
                         </div>
                       </div>
                     </div>
-                    
+
                     <div className="bg-gray-50 rounded-xl p-4">
                       <h3 className="font-semibold text-gray-800 mb-2">Payment Method</h3>
                       <div className="flex items-center">
@@ -515,6 +518,35 @@ const CheckoutPage = () => {
                       <div className="flex justify-between text-green-600">
                         <span>Discount (10%)</span>
                         <span className="font-semibold">-₹{discount.toFixed(2)}</span>
+                      </div>
+                    )}
+
+                    <div className="pt-2">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-gray-600 text-sm">Add a tip (optional)</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[0, 20, 50, 100].map(amount => (
+                          <button
+                            key={amount}
+                            type="button"
+                            onClick={() => setTipAmount(amount)}
+                            className={`px-3 py-1 rounded-full border text-sm font-medium transition-colors ${
+                              tipAmount === amount
+                                ? 'bg-primary text-white border-primary'
+                                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                            }`}
+                          >
+                            {amount === 0 ? 'No Tip' : `₹${amount}`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {tipAmount > 0 && (
+                      <div className="flex justify-between text-gray-600">
+                        <span>Tip</span>
+                        <span className="font-semibold">₹{tipAmount.toFixed(2)}</span>
                       </div>
                     )}
 

@@ -169,7 +169,7 @@ const HomePage = () => {
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
-    
+
     return () => {
       clearTimeout(initializeScroll);
       if (scrollTimeoutRef.current) {
@@ -185,7 +185,7 @@ const HomePage = () => {
       setIsScrolling(true);
       const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
       categoryScrollRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
-      
+
       // Reset scrolling state after animation completes
       setTimeout(() => setIsScrolling(false), 500);
     }
@@ -197,7 +197,7 @@ const HomePage = () => {
       setIsScrolling(true);
       const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
       categoryScrollRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
-      
+
       // Reset scrolling state after animation completes
       setTimeout(() => setIsScrolling(false), 500);
     }
@@ -244,8 +244,8 @@ const HomePage = () => {
             <div
               ref={categoryScrollRef}
               className="flex-1 flex gap-4 md:gap-6 overflow-x-hidden scrollbar-hide"
-              style={{ 
-                scrollbarWidth: 'none', 
+              style={{
+                scrollbarWidth: 'none',
                 msOverflowStyle: 'none'
               }}
             >
@@ -255,7 +255,7 @@ const HomePage = () => {
                   <div
                     key={`skeleton-cat-${index}`}
                     className="flex-shrink-0 bg-white rounded-2xl p-5 animate-pulse shadow-md"
-                    style={{ 
+                    style={{
                       width: 'calc((100% - 4 * 1.5rem) / 5)',
                       minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
                     }}
@@ -271,7 +271,7 @@ const HomePage = () => {
                     key={`${category.id}-${index}`}
                     to={`/category/${encodeURIComponent(category.name)}`}
                     className="flex-shrink-0 group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
-                    style={{ 
+                    style={{
                       width: 'calc((100% - 4 * 1.5rem) / 5)',
                       minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
                     }}

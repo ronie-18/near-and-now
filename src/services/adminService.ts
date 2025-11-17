@@ -364,7 +364,7 @@ export async function getOrderById(id: string): Promise<Order | null> {
 export async function updateOrderStatus(id: string, status: Order['order_status']): Promise<Order | null> {
   try {
     console.log(`Updating order ${id} to status: ${status}`);
-    
+
     const { data, error } = await supabaseAdmin
       .from('orders')
       .update({ order_status: status, updated_at: new Date().toISOString() })
@@ -405,10 +405,10 @@ export async function getCustomers(): Promise<Customer[]> {
 
     // Group orders by customer email/phone to create customer list
     const customerMap = new Map<string, Customer>();
-    
+
     orders?.forEach(order => {
       const key = order.customer_email || order.customer_phone || order.customer_name;
-      
+
       if (customerMap.has(key)) {
         const customer = customerMap.get(key)!;
         customer.orders_count += 1;
@@ -485,40 +485,58 @@ export async function updateCustomerStatus(_id: string, _status: Customer['statu
 // Dashboard Statistics
 export async function getDashboardStats() {
   try {
-    // Get total products
-    const { data: products, error: productsError } = await supabase
-      .from('products')
-      .select('id');
-    
-    if (productsError) throw productsError;
-    
+    // Get total products with pagination to handle >1000 products
+    let allProducts: any[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id')
+        .range(from, from + batchSize - 1);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allProducts = [...allProducts, ...data];
+        from += batchSize;
+        hasMore = data.length === batchSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    const products = allProducts;
+
     // Get total orders with correct column names
     const { data: orders, error: ordersError } = await supabase
       .from('orders')
       .select('id, order_status, order_total, customer_email, customer_phone, customer_name');
-    
+
     if (ordersError) throw ordersError;
-    
+
     // Calculate unique customers from orders
     const uniqueCustomers = new Set();
     orders?.forEach(order => {
       const key = order.customer_email || order.customer_phone || order.customer_name;
       if (key) uniqueCustomers.add(key);
     });
-    
+
     // Calculate statistics
     const totalProducts = products?.length || 0;
     const totalOrders = orders?.length || 0;
     const totalCustomers = uniqueCustomers.size;
     const totalSales = orders?.reduce((sum, order) => sum + (order.order_total || 0), 0) || 0;
-    
+
     // Order status counts (using actual allowed status values from database)
     const placedOrders = orders?.filter(order => order.order_status === 'placed').length || 0;
     const confirmedOrders = orders?.filter(order => order.order_status === 'confirmed').length || 0;
     const shippedOrders = orders?.filter(order => order.order_status === 'shipped').length || 0;
     const deliveredOrders = orders?.filter(order => order.order_status === 'delivered').length || 0;
     const cancelledOrders = orders?.filter(order => order.order_status === 'cancelled').length || 0;
-    
+
     return {
       totalProducts,
       totalOrders,

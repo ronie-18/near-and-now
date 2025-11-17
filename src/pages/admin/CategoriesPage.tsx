@@ -23,10 +23,10 @@ const CategoriesPage = () => {
         setLoading(true);
         const data = await getCategories();
         setCategories(data);
-        
+
         // Get actual product counts for each category from database
         const countsByCategory = await getProductCountsByCategory();
-        
+
         // Map category IDs to category names
         const counts: Record<string, number> = {};
         data.forEach(category => {
@@ -73,7 +73,7 @@ const CategoriesPage = () => {
 
   // Filter categories based on search term
   const filteredCategories = categories.filter(category => {
-    const matchesSearch = category.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = category.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (category.description?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
                          category.id.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesSearch;
@@ -95,8 +95,8 @@ const CategoriesPage = () => {
           <p className="text-gray-600">Manage product categories</p>
         </div>
         <div className="mt-4 md:mt-0">
-          <Link 
-            to="/admin/categories/add" 
+          <Link
+            to="/admin/categories/add"
             className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-md hover:bg-primary/90 transition-colors"
           >
             <Plus size={18} className="mr-2" />
@@ -110,8 +110,8 @@ const CategoriesPage = () => {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center">
           <AlertCircle className="w-5 h-5 mr-2" />
           <span>{error}</span>
-          <button 
-            onClick={() => setError(null)} 
+          <button
+            onClick={() => setError(null)}
             className="ml-auto text-red-700 hover:text-red-900"
           >
             <span className="sr-only">Dismiss</span>
@@ -198,10 +198,10 @@ const CategoriesPage = () => {
                     <td className="px-6 py-4">
                       <div className="flex items-center">
                         {category.image_url ? (
-                          <img 
-                            src={category.image_url} 
-                            alt={category.name} 
-                            className="w-10 h-10 object-cover rounded-md mr-3" 
+                          <img
+                            src={category.image_url}
+                            alt={category.name}
+                            className="w-10 h-10 object-cover rounded-md mr-3"
                           />
                         ) : (
                           <div className="w-10 h-10 bg-gray-200 rounded-md flex items-center justify-center mr-3">
@@ -219,7 +219,7 @@ const CategoriesPage = () => {
                         <Link to={`/admin/categories/edit/${category.id}`} className="text-blue-600 hover:text-blue-900">
                           <Edit size={16} />
                         </Link>
-                        <button 
+                        <button
                           onClick={() => handleDeleteCategory(category.id)}
                           disabled={deleteLoading === category.id}
                           className={`text-red-600 hover:text-red-900 ${deleteLoading === category.id ? 'opacity-50 cursor-not-allowed' : ''}`}

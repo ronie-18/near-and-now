@@ -24,7 +24,7 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAddresses, setSavedAddresses] = useState<Location[]>([]);
-  
+
   const autocompleteService = useRef<google.maps.places.AutocompleteService | null>(null);
   const geocoder = useRef<google.maps.Geocoder | null>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -50,7 +50,7 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
     script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
     script.async = true;
     script.defer = true;
-    
+
     script.onload = () => {
       initializeServices();
     };
@@ -101,7 +101,7 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        
+
         try {
           const location = await reverseGeocode(latitude, longitude);
           if (location) {
@@ -173,16 +173,16 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
 
     // Clean the address by replacing all types of newlines with spaces
     let cleanAddress = place.formatted_address || '';
-    
+
     // Replace literal backslash-n (stored as string)
     cleanAddress = cleanAddress.split('\\n').join(' ');
     cleanAddress = cleanAddress.split('\\r').join(' ');
-    
+
     // Replace actual newline characters
     cleanAddress = cleanAddress.replace(/\n/g, ' ');
     cleanAddress = cleanAddress.replace(/\r/g, ' ');
     cleanAddress = cleanAddress.replace(/\t/g, ' ');
-    
+
     // Replace multiple spaces with single space
     cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
 

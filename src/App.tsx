@@ -39,16 +39,16 @@ const AppContent: React.FC = () => {
   React.useEffect(() => {
     console.log('📦 App content loaded successfully');
   }, []);
-  
+
   return (
     <Routes>
       {/* Admin Routes - Outside of main Layout */}
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin/*" element={<AdminRoutes />} />
-      
+
       {/* Test Route - No Layout */}
       <Route path="/test" element={<TestPage />} />
-      
+
       {/* Frontend Routes - With Layout */}
       <Route path="/*" element={
         <Layout notifications={notifications} removeNotification={removeNotification}>
@@ -80,7 +80,7 @@ const AppContent: React.FC = () => {
 
 function App() {
   console.log('✅ [APP.TSX] App component rendering');
-  
+
   React.useEffect(() => {
     console.log('✅ [APP.TSX] App mounted successfully');
     console.log('📍 URL:', window.location.href);
