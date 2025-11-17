@@ -45,10 +45,10 @@ const Footer = () => {
 
     try {
       setSubscribeStatus('loading');
-      
+
       // Subscribe to newsletter
       await subscribeToNewsletter(email);
-      
+
       setSubscribeStatus('success');
       showNotification('Successfully subscribed to newsletter! 🎉', 'success');
       setEmail('');
@@ -66,11 +66,11 @@ const Footer = () => {
     } catch (error: any) {
       console.error('Error subscribing to newsletter:', error);
       setSubscribeStatus('error');
-      
+
       // Show user-friendly error message
       const errorMessage = error?.message || 'Failed to subscribe. Please try again.';
       showNotification(errorMessage, 'error');
-      
+
       // Clear any existing timeout
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
@@ -241,25 +241,25 @@ const Footer = () => {
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <MapPin className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">123 Main Street, New Delhi, India</span>
+                    <span className="text-sm">438, Sucasa Pearl, Kolkata, West Bengal - 700084</span>
                   </a>
                 </li>
                 <li>
                   <a
-                    href="mailto:support@nearnow.com"
+                    href="mailto:snearandnowofficial2025@gmail.com"
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <Mail className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">support@nearnow.com</span>
+                    <span className="text-sm">nearandnowofficial2025@gmail.com</span>
                   </a>
                 </li>
                 <li>
                   <a
-                    href="tel:+919876543210"
+                    href="tel:+919477035649"
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <Phone className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">+91 98765 43210</span>
+                    <span className="text-sm">+91 94770 35649</span>
                   </a>
                 </li>
               </ul>
