@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts } from '../services/supabase';
@@ -8,15 +8,12 @@ import { useNotification } from '../context/NotificationContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatCategoryName } from '../utils/formatCategoryName';
 
-type SortOption = 'default' | 'price-low' | 'price-high' | 'name-asc' | 'name-desc' | 'newest';
-
 const HomePage = () => {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [sortBy, setSortBy] = useState<SortOption>('default');
   const [itemsToShow, setItemsToShow] = useState(12);
   const { showNotification } = useNotification();
   const observerTarget = useRef<HTMLDivElement>(null);
@@ -48,36 +45,10 @@ const HomePage = () => {
     fetchData();
   }, [showNotification]);
 
-  // Sort products based on selected option
-  const sortProducts = useCallback((products: Product[], sortOption: SortOption): Product[] => {
-    const sorted = [...products];
-
-    switch (sortOption) {
-      case 'price-low':
-        return sorted.sort((a, b) => a.price - b.price);
-      case 'price-high':
-        return sorted.sort((a, b) => b.price - a.price);
-      case 'name-asc':
-        return sorted.sort((a, b) => a.name.localeCompare(b.name));
-      case 'name-desc':
-        return sorted.sort((a, b) => b.name.localeCompare(a.name));
-      case 'newest':
-        return sorted.sort((a, b) => {
-          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-          return dateB - dateA;
-        });
-      case 'default':
-      default:
-        return sorted;
-    }
-  }, []);
-
-  // Update displayed products when sorting changes or items to show changes
+  // Update displayed products when items to show changes
   useEffect(() => {
-    const sorted = sortProducts(allProducts, sortBy);
-    setDisplayedProducts(sorted.slice(0, itemsToShow));
-  }, [allProducts, sortBy, itemsToShow, sortProducts]);
+    setDisplayedProducts(allProducts.slice(0, itemsToShow));
+  }, [allProducts, itemsToShow]);
 
   // Infinite scroll observer
   useEffect(() => {
@@ -109,13 +80,6 @@ const HomePage = () => {
     };
   }, [loading, loadingMore, itemsToShow, allProducts.length]);
 
-  // Handle sort change
-  const handleSortChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSortBy(e.target.value as SortOption);
-    setItemsToShow(ITEMS_PER_LOAD); // Reset to initial load
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
-
   // Create infinite loop of categories (5 copies for seamless looping)
   const infiniteCategories = [
     ...categories,
@@ -126,7 +90,7 @@ const HomePage = () => {
   ];
 
   // Check for infinite scroll loop and reset position
-  const checkInfiniteScroll = useCallback(() => {
+  const checkInfiniteScroll = () => {
     if (!categoryScrollRef.current || categories.length === 0) return;
 
     const container = categoryScrollRef.current;
@@ -143,7 +107,7 @@ const HomePage = () => {
     else if (scrollLeft < singleSetWidth) {
       container.scrollLeft = scrollLeft + singleSetWidth;
     }
-  }, [categories.length]);
+  };
 
   // Setup scroll event listener for infinite loop
   useEffect(() => {
@@ -327,41 +291,17 @@ const HomePage = () => {
       {/* All Products Section */}
       <section className="py-16 bg-white">
         <div className="container mx-auto px-4">
-          {/* Header with Sort */}
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
-            <div>
-              <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
-                Our Products
-              </h2>
-              <p className="text-gray-600">
-                {allProducts.length > 0
-                  ? `Showing ${displayedProducts.length} of ${allProducts.length} products`
-                  : 'Browse through our complete collection of quality products'
-                }
-              </p>
-            </div>
-
-            {/* Sort Dropdown */}
-            {!loading && allProducts.length > 0 && (
-              <div className="flex items-center gap-3">
-                <label htmlFor="sort-select" className="text-gray-700 font-medium whitespace-nowrap">
-                  Sort by:
-                </label>
-                <select
-                  id="sort-select"
-                  value={sortBy}
-                  onChange={handleSortChange}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-700 cursor-pointer"
-                >
-                  <option value="default">All</option>
-                  <option value="price-low">Price: Low to High</option>
-                  <option value="price-high">Price: High to Low</option>
-                  <option value="name-asc">Name: A to Z</option>
-                  <option value="name-desc">Name: Z to A</option>
-                  <option value="newest">Newest First</option>
-                </select>
-              </div>
-            )}
+          {/* Header */}
+          <div className="mb-10">
+            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
+              Our Products
+            </h2>
+            <p className="text-gray-600">
+              {allProducts.length > 0
+                ? `Showing ${displayedProducts.length} of ${allProducts.length} products`
+                : 'Browse through our complete collection of quality products'
+              }
+            </p>
           </div>
 
           {/* Products Grid */}
