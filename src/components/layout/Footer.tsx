@@ -333,7 +333,7 @@ const Footer = () => {
 
             {/* Legal Links */}
             <div className="flex flex-wrap justify-center gap-4 md:gap-6">
-              {legalLinks.map((link, index) => (
+              {legalLinks.map((link) => (
                 <Link
                   key={link.path}
                   to={link.path}

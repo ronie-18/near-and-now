@@ -7,4 +7,13 @@
 7. odering for someone else (to be added later)
 8. in the checkout page there should be also one more section like "you might also like..." which shows similar suggested products
 9. tracking page to be added **
-10. 
+10. category suggestions
+11.	green dot remove from logo (done)
+12.	tips -> 5,10,20,..., customize also (done)
+13.	delivery fee to be removed (done)
+14.	help & support
+15.	add barcode during delivery (find the solution for expiry date)
+16.	remove download invoice from orders page in profile section
+17.	customer privacy policy to be updated on the basis of the company
+18.	remove sort by in home page
+19.	***only categories will be shown in the main page and after clicking then it will be opening the items and the categories section will be shift to the left side ***
