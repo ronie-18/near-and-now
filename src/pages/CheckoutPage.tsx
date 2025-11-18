@@ -8,7 +8,7 @@ import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail
 
 const calculateOrderTotals = (cartTotal: number) => {
   const subtotal = cartTotal;
-  const deliveryFee = cartTotal > 500 ? 0 : 40;
+  const deliveryFee = 0;
   const discount = cartTotal > 1000 ? cartTotal * 0.1 : 0;
   const orderTotal = subtotal + deliveryFee - discount;
   return { subtotal, deliveryFee, discount, orderTotal };
@@ -34,6 +34,7 @@ const CheckoutPage = () => {
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [tipAmount, setTipAmount] = useState(0);
+  const [customTip, setCustomTip] = useState('');
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -504,16 +505,6 @@ const CheckoutPage = () => {
                       <span className="font-semibold">₹{cartTotal.toFixed(2)}</span>
                     </div>
 
-                    <div className="flex justify-between text-gray-600">
-                      <span className="flex items-center">
-                        <Truck className="w-4 h-4 mr-1" />
-                        Delivery Fee
-                      </span>
-                      <span className={`font-semibold ${deliveryFee === 0 ? 'text-green-600' : ''}`}>
-                        {deliveryFee === 0 ? 'FREE' : `₹${deliveryFee.toFixed(2)}`}
-                      </span>
-                    </div>
-
                     {discount > 0 && (
                       <div className="flex justify-between text-green-600">
                         <span>Discount (10%)</span>
@@ -521,34 +512,10 @@ const CheckoutPage = () => {
                       </div>
                     )}
 
-                    <div className="pt-2">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-gray-600 text-sm">Add a tip (optional)</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {[0, 20, 50, 100].map(amount => (
-                          <button
-                            key={amount}
-                            type="button"
-                            onClick={() => setTipAmount(amount)}
-                            className={`px-3 py-1 rounded-full border text-sm font-medium transition-colors ${
-                              tipAmount === amount
-                                ? 'bg-primary text-white border-primary'
-                                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                            }`}
-                          >
-                            {amount === 0 ? 'No Tip' : `₹${amount}`}
-                          </button>
-                        ))}
-                      </div>
+                    <div className="flex justify-between text-gray-600">
+                      <span>Tip</span>
+                      <span className="font-semibold">₹{tipAmount.toFixed(2)}</span>
                     </div>
-
-                    {tipAmount > 0 && (
-                      <div className="flex justify-between text-gray-600">
-                        <span>Tip</span>
-                        <span className="font-semibold">₹{tipAmount.toFixed(2)}</span>
-                      </div>
-                    )}
 
                     <div className="flex justify-between text-lg font-bold text-gray-800 pt-3 border-t-2 border-gray-100">
                       <span>Total</span>
@@ -556,35 +523,23 @@ const CheckoutPage = () => {
                     </div>
                   </div>
 
-                  {cartTotal < 500 && (
-                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                      <p className="text-sm text-amber-800">
-                        Add ₹{(500 - cartTotal).toFixed(2)} more to get FREE delivery!
-                      </p>
+                  <div className="mt-6">
+                    <Link
+                      to="/cart"
+                      className="block w-full text-center py-3 px-4 border-2 border-primary text-primary rounded-xl hover:bg-primary hover:text-white transition-all duration-300 font-semibold"
+                    >
+                      ← Back to Cart
+                    </Link>
+                  </div>
+
+                  <div className="mt-6 space-y-2">
+                    <div className="flex items-center text-sm text-gray-600">
+                      <Shield className="w-4 h-4 mr-2 text-green-600" />
+                      <span>Secure checkout</span>
                     </div>
-                  )}
+                  </div>
                 </>
               )}
-
-              <div className="mt-6">
-                <Link
-                  to="/cart"
-                  className="block w-full text-center py-3 px-4 border-2 border-primary text-primary rounded-xl hover:bg-primary hover:text-white transition-all duration-300 font-semibold"
-                >
-                  ← Back to Cart
-                </Link>
-              </div>
-
-              <div className="mt-6 space-y-2">
-                <div className="flex items-center text-sm text-gray-600">
-                  <Shield className="w-4 h-4 mr-2 text-green-600" />
-                  <span>Secure checkout</span>
-                </div>
-                <div className="flex items-center text-sm text-gray-600">
-                  <Truck className="w-4 h-4 mr-2 text-blue-600" />
-                  <span>Free delivery on orders above ₹500</span>
-                </div>
-              </div>
             </div>
           </div>
         </div>

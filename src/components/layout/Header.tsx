@@ -164,7 +164,6 @@ const Header = () => {
                     alt="Near & Now"
                     className="h-16 w-16 object-contain transform group-hover:scale-110 transition-transform duration-300"
                   />
-                  <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full animate-pulse"></div>
                 </div>
                 <div className="ml-3">
                   <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent leading-none">
