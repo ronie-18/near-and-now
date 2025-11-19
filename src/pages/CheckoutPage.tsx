@@ -35,6 +35,7 @@ const CheckoutPage = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [tipAmount, setTipAmount] = useState(0);
   const [customTip, setCustomTip] = useState('');
+  const [selectedTip, setSelectedTip] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -125,6 +126,20 @@ const CheckoutPage = () => {
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1);
     }
+  };
+
+  const handleTipSelect = (amount: number) => {
+    setSelectedTip(amount.toString());
+    setTipAmount(amount);
+    setCustomTip('');
+  };
+
+  const handleCustomTipChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setCustomTip(value);
+    const numValue = parseFloat(value) || 0;
+    setTipAmount(numValue);
+    setSelectedTip('custom');
   };
 
   if (!isAuthenticated) {
@@ -370,6 +385,47 @@ const CheckoutPage = () => {
                         </div>
                         <Shield className="w-6 h-6 text-primary" />
                       </label>
+                    </div>
+
+                    {/* Tips Section */}
+                    <div className="mt-8">
+                      <div className="flex items-center mb-4">
+                        <span className="text-xl font-bold text-gray-800">Add a Tip</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        {[5, 10, 15, 20].map((amount) => (
+                          <button
+                            key={amount}
+                            type="button"
+                            onClick={() => handleTipSelect(amount)}
+                            className={`py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
+                              selectedTip === amount.toString()
+                                ? 'bg-gradient-to-r from-primary to-secondary text-white shadow-lg scale-105'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow-md'
+                            }`}
+                          >
+                            ₹{amount}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="mt-4">
+                        <label htmlFor="customTip" className="block text-gray-700 mb-2 font-medium">
+                          Custom Amount
+                        </label>
+                        <input
+                          type="number"
+                          id="customTip"
+                          name="customTip"
+                          value={customTip}
+                          onChange={handleCustomTipChange}
+                          min="0"
+                          step="1"
+                          placeholder="Enter custom tip amount"
+                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 hover:border-gray-300"
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
