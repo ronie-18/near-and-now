@@ -6,7 +6,7 @@ import CartSidebar from '../cart/CartSidebar';
 import LocationPicker from '../location/LocationPicker';
 import {
   Search, ShoppingCart, User, MapPin, ChevronDown, Menu, X,
-  LogOut, Package, UserCircle, LogIn, UserPlus, Clock
+  LogOut, Package, UserCircle, LogIn, UserPlus, Clock, Sparkles
 } from 'lucide-react';
 
 interface Location {
@@ -112,20 +112,12 @@ const Header = () => {
   const formatAddressLines = (address: string): { line1: string; line2: string } => {
     if (!address) return { line1: '', line2: '' };
 
-    // Replace all types of newlines and line breaks with spaces
-    // Handle both literal string "\n" and actual newline characters
     let cleanAddress = address;
-
-    // Replace literal backslash-n (stored as string)
     cleanAddress = cleanAddress.split('\\n').join(' ');
     cleanAddress = cleanAddress.split('\\r').join(' ');
-
-    // Replace actual newline characters
     cleanAddress = cleanAddress.replace(/\n/g, ' ');
     cleanAddress = cleanAddress.replace(/\r/g, ' ');
     cleanAddress = cleanAddress.replace(/\t/g, ' ');
-
-    // Replace multiple spaces with single space
     cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
 
     const parts = cleanAddress.split(',').map(part => part.trim());
@@ -134,10 +126,7 @@ const Header = () => {
       return { line1: parts[0] || '', line2: parts[1] || '' };
     }
 
-    // First line: first part (max 40 chars with ellipsis)
     const line1 = parts[0].length > 40 ? parts[0].substring(0, 37) + '...' : parts[0];
-
-    // Second line: next 1-2 parts (max 50 chars with ellipsis)
     const line2Full = parts.slice(1, 3).join(', ');
     const line2 = line2Full.length > 50 ? line2Full.substring(0, 47) + '...' : line2Full;
 
@@ -149,44 +138,49 @@ const Header = () => {
   return (
     <>
       <header className={`bg-white sticky top-0 z-50 transition-all duration-300 ${
-        scrolled ? 'shadow-lg' : 'shadow-md'
+        scrolled ? 'shadow-xl border-b border-gray-100' : 'shadow-md'
       }`}>
 
         {/* Main Header */}
-        <div className="border-b border-gray-100">
-          <div className="container mx-auto px-4 py-3">
+        <div className="border-b border-gray-100/50">
+          <div className="container mx-auto px-4 py-4">
             <div className="flex items-center justify-between gap-4">
-              {/* Logo */}
+              {/* Logo - Enhanced */}
               <Link to="/" className="flex items-center flex-shrink-0 group">
                 <div className="relative">
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all duration-300"></div>
                   <img
                     src="/Logo.png"
                     alt="Near & Now"
-                    className="h-16 w-16 object-contain transform group-hover:scale-110 transition-transform duration-300"
+                    className="h-14 w-14 object-contain transform group-hover:scale-110 transition-transform duration-300 relative z-10"
                   />
                 </div>
                 <div className="ml-3">
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent leading-none">
+                  <h1 className="text-2xl font-black bg-gradient-to-r from-primary via-green-600 to-secondary bg-clip-text text-transparent leading-none tracking-tight">
                     Near & Now
                   </h1>
-                  <p className="text-sm text-gray-500 mt-1 font-medium">Digital Dukan, Local Dil Se</p>
+                  <p className="text-xs text-gray-600 mt-1 font-semibold tracking-wide">Digital Dukan, Local Dil Se</p>
                 </div>
               </Link>
 
-              {/* Location Selector - Desktop */}
+              {/* Location Selector - Enhanced Desktop */}
               <div className="hidden lg:block">
                 <button
                   onClick={toggleLocationPicker}
-                  className="flex items-center gap-3 px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-primary hover:shadow-lg transition-all duration-300 group bg-gray-50 hover:bg-white min-w-[280px] max-w-[320px]"
+                  className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-2xl hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10 transition-all duration-300 group bg-gradient-to-br from-gray-50 to-white hover:from-primary/5 hover:to-secondary/5 min-w-[280px] max-w-[320px] relative overflow-hidden"
                 >
-                  <div className="w-10 h-10 bg-gradient-to-br from-primary to-green-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-md">
-                    <MapPin className="w-5 h-5 text-white" />
+                  <div className="absolute inset-0 bg-gradient-to-r from-primary/0 via-primary/5 to-primary/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
+                  <div className="w-11 h-11 bg-gradient-to-br from-primary via-green-600 to-secondary rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg group-hover:shadow-xl group-hover:scale-110 transition-all duration-300 relative z-10">
+                    <MapPin className="w-5 h-5 text-white drop-shadow-lg" />
                   </div>
-                  <div className="text-left flex-1 min-w-0">
-                    <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide mb-1">Deliver to</p>
+                  <div className="text-left flex-1 min-w-0 relative z-10">
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                      <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse"></span>
+                      Deliver to
+                    </p>
                     {currentLocation ? (
                       <>
-                        <p className="text-sm font-bold text-gray-800 truncate leading-tight whitespace-nowrap">
+                        <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
                           {formatAddressLines(currentLocation.address).line1}
                         </p>
                         <p className="text-xs text-gray-600 truncate leading-tight mt-0.5 whitespace-nowrap">
@@ -194,48 +188,54 @@ const Header = () => {
                         </p>
                       </>
                     ) : (
-                      <p className="text-sm font-bold text-gray-800 flex items-center gap-1">
+                      <p className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
                         Select Location
+                        <Sparkles className="w-3 h-3 text-primary animate-pulse" />
                       </p>
                     )}
                   </div>
-                  <ChevronDown className="w-4 h-4 text-gray-400 group-hover:text-primary transition-colors flex-shrink-0" />
+                  <ChevronDown className="w-4 h-4 text-gray-400 group-hover:text-primary group-hover:translate-y-0.5 transition-all flex-shrink-0 relative z-10" />
                 </button>
               </div>
 
-              {/* Search Bar - Desktop */}
+              {/* Search Bar - Enhanced Desktop */}
               <div className="hidden md:block flex-1 max-w-2xl">
                 <form onSubmit={handleSearch} className="relative">
                   <div className={`relative transition-all duration-300 ${
-                    isSearchFocused ? 'transform scale-105' : ''
+                    isSearchFocused ? 'transform scale-[1.02]' : ''
                   }`}>
-                    <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Search for products, brands and more..."
-                      className="w-full pl-12 pr-4 py-3.5 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:shadow-lg transition-all duration-300 text-sm bg-gray-50 focus:bg-white"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      onFocus={() => setIsSearchFocused(true)}
-                      onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
-                    />
-                    {searchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => setSearchQuery('')}
-                        className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
+                    <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-secondary/20 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-2xl focus-within:border-primary/50 focus-within:shadow-xl focus-within:shadow-primary/10 transition-all duration-300 overflow-hidden">
+                      <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors z-10" />
+                      <input
+                        type="text"
+                        placeholder="Search for products, brands and more..."
+                        className="w-full pl-12 pr-4 py-3.5 bg-transparent focus:outline-none text-sm text-gray-900 placeholder-gray-400 relative z-10"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onFocus={() => setIsSearchFocused(true)}
+                        onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                      />
+                      {searchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery('')}
+                          className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-1 transition-all z-10"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Search Suggestions Dropdown */}
+                  {/* Search Suggestions Dropdown - Enhanced */}
                   {isSearchFocused && (
-                    <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 p-4 z-50">
-                      <div className="mb-3">
-                        <p className="text-xs font-semibold text-gray-500 uppercase mb-2 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
+                    <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-gray-100 p-5 z-50 backdrop-blur-xl">
+                      <div>
+                        <p className="text-xs font-bold text-gray-600 uppercase mb-3 flex items-center gap-2">
+                          <div className="w-6 h-6 bg-gradient-to-br from-primary to-secondary rounded-lg flex items-center justify-center">
+                            <Clock className="w-3.5 h-3.5 text-white" />
+                          </div>
                           Popular Searches
                         </p>
                         <div className="flex flex-wrap gap-2">
@@ -244,7 +244,7 @@ const Header = () => {
                               key={term}
                               type="button"
                               onClick={() => setSearchQuery(term)}
-                              className="px-3 py-1.5 bg-gray-100 hover:bg-primary hover:text-white text-sm rounded-lg transition-colors duration-200"
+                              className="px-4 py-2 bg-gradient-to-br from-gray-50 to-gray-100 hover:from-primary hover:to-secondary hover:text-white text-sm font-medium rounded-xl transition-all duration-200 border border-gray-200 hover:border-transparent hover:shadow-lg hover:scale-105"
                             >
                               {term}
                             </button>
@@ -256,105 +256,112 @@ const Header = () => {
                 </form>
               </div>
 
-              {/* Right Side Actions */}
+              {/* Right Side Actions - Enhanced */}
               <div className="flex items-center gap-2 lg:gap-4 flex-shrink-0">
 
-                {/* User Menu - Desktop */}
+                {/* User Menu - Enhanced Desktop */}
                 <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={toggleUserMenu}
-                    className="hidden md:flex flex-col items-center text-gray-600 hover:text-primary transition-all duration-300 group px-2"
+                    className="hidden md:flex flex-col items-center text-gray-600 hover:text-primary transition-all duration-300 group px-2 py-1 rounded-xl hover:bg-primary/5"
                   >
                     <div className="relative">
                       {isAuthenticated ? (
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-white font-bold shadow-lg group-hover:shadow-xl transition-shadow">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary via-green-600 to-secondary flex items-center justify-center text-white font-bold shadow-lg group-hover:shadow-xl group-hover:shadow-primary/30 group-hover:scale-110 transition-all duration-300 ring-2 ring-white">
                           {user?.name?.charAt(0).toUpperCase() || 'U'}
                         </div>
                       ) : (
-                        <UserCircle className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center group-hover:from-primary/10 group-hover:to-secondary/10 transition-all duration-300">
+                          <UserCircle className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                        </div>
                       )}
                     </div>
-                    <span className="text-xs mt-1 font-medium">
+                    <span className="text-xs mt-1 font-semibold">
                       {isAuthenticated ? user?.name?.split(' ')[0] || 'Account' : 'Login'}
                     </span>
                   </button>
 
-                  {/* User Dropdown */}
+                  {/* User Dropdown - Enhanced */}
                   {isUserMenuOpen && (
-                    <div className="absolute right-0 mt-3 w-64 bg-white rounded-2xl shadow-2xl py-2 z-50 border border-gray-100 animate-fadeIn">
+                    <div className="absolute right-0 mt-3 w-72 bg-white rounded-3xl shadow-2xl py-2 z-50 border border-gray-100 animate-fadeIn overflow-hidden">
                       {isAuthenticated ? (
                         <>
-                          <div className="px-4 py-4 border-b border-gray-100 bg-gradient-to-r from-primary/5 to-secondary/5">
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-white font-bold text-lg shadow-lg">
+                          <div className="px-5 py-5 border-b border-gray-100 bg-gradient-to-br from-primary/10 via-green-50 to-secondary/10 relative overflow-hidden">
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-primary/20 to-transparent rounded-full blur-3xl"></div>
+                            <div className="flex items-center gap-3 relative z-10">
+                              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary via-green-600 to-secondary flex items-center justify-center text-white font-bold text-xl shadow-xl ring-4 ring-white">
                                 {user?.name?.charAt(0).toUpperCase() || 'U'}
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="font-bold text-gray-800 truncate">{user?.name || 'User'}</p>
-                                <p className="text-xs text-gray-500 truncate">{user?.phone || user?.email}</p>
+                                <p className="font-bold text-gray-900 truncate text-base">{user?.name || 'User'}</p>
+                                <p className="text-xs text-gray-600 truncate mt-0.5">{user?.phone || user?.email}</p>
                               </div>
                             </div>
                           </div>
-                          <div className="py-1">
+                          <div className="py-2 px-2">
                             <Link
                               to="/profile"
-                              className="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-primary/5 hover:text-primary transition-all group"
+                              className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-primary/10 hover:to-transparent hover:text-primary transition-all group rounded-xl mx-1"
                               onClick={() => setIsUserMenuOpen(false)}
                             >
-                              <div className="w-8 h-8 rounded-lg bg-gray-100 group-hover:bg-primary/10 flex items-center justify-center transition-colors">
-                                <User className="w-4 h-4" />
+                              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/10 to-primary/5 group-hover:from-primary/20 group-hover:to-primary/10 flex items-center justify-center transition-all group-hover:scale-110">
+                                <User className="w-5 h-5 text-primary" />
                               </div>
-                              <span className="font-medium">My Profile</span>
+                              <span className="font-semibold">My Profile</span>
                             </Link>
                             <Link
                               to="/orders"
-                              className="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-primary/5 hover:text-primary transition-all group"
+                              className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-secondary/10 hover:to-transparent hover:text-secondary transition-all group rounded-xl mx-1"
                               onClick={() => setIsUserMenuOpen(false)}
                             >
-                              <div className="w-8 h-8 rounded-lg bg-gray-100 group-hover:bg-primary/10 flex items-center justify-center transition-colors">
-                                <Package className="w-4 h-4" />
+                              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-secondary/10 to-secondary/5 group-hover:from-secondary/20 group-hover:to-secondary/10 flex items-center justify-center transition-all group-hover:scale-110">
+                                <Package className="w-5 h-5 text-secondary" />
                               </div>
-                              <span className="font-medium">My Orders</span>
+                              <span className="font-semibold">My Orders</span>
                             </Link>
                           </div>
-                          <div className="border-t border-gray-100 mt-1 pt-1">
+                          <div className="border-t border-gray-100 mt-1 pt-2 px-2">
                             <button
                               onClick={handleLogout}
-                              className="flex items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-all w-full group"
+                              className="flex items-center gap-3 px-4 py-3.5 text-sm text-red-600 hover:bg-red-50 transition-all w-full group rounded-xl mx-1"
                             >
-                              <div className="w-8 h-8 rounded-lg bg-red-50 group-hover:bg-red-100 flex items-center justify-center transition-colors">
-                                <LogOut className="w-4 h-4" />
+                              <div className="w-10 h-10 rounded-xl bg-red-50 group-hover:bg-red-100 flex items-center justify-center transition-all group-hover:scale-110">
+                                <LogOut className="w-5 h-5" />
                               </div>
-                              <span className="font-medium">Logout</span>
+                              <span className="font-semibold">Logout</span>
                             </button>
                           </div>
                         </>
                       ) : (
                         <>
-                          <div className="px-4 py-3 bg-gradient-to-r from-primary/5 to-secondary/5 border-b border-gray-100">
-                            <p className="text-sm font-semibold text-gray-800">Welcome to Near & Now</p>
-                            <p className="text-xs text-gray-500 mt-0.5">Login to get best offers</p>
+                          <div className="px-5 py-4 bg-gradient-to-br from-primary/10 via-green-50 to-secondary/10 border-b border-gray-100 relative overflow-hidden">
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-primary/30 to-transparent rounded-full blur-2xl"></div>
+                            <p className="text-base font-bold text-gray-900 relative z-10">Welcome to Near & Now</p>
+                            <p className="text-xs text-gray-600 mt-1 relative z-10 flex items-center gap-1">
+                              <Sparkles className="w-3 h-3 text-primary" />
+                              Login to get best offers
+                            </p>
                           </div>
-                          <div className="py-1">
+                          <div className="py-2 px-2">
                             <Link
                               to="/login"
-                              className="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-primary/5 hover:text-primary transition-all group"
+                              className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-primary/10 hover:to-transparent hover:text-primary transition-all group rounded-xl mx-1"
                               onClick={() => setIsUserMenuOpen(false)}
                             >
-                              <div className="w-8 h-8 rounded-lg bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
-                                <LogIn className="w-4 h-4 text-primary" />
+                              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/10 to-primary/5 group-hover:from-primary/20 group-hover:to-primary/10 flex items-center justify-center transition-all group-hover:scale-110">
+                                <LogIn className="w-5 h-5 text-primary" />
                               </div>
-                              <span className="font-medium">Login</span>
+                              <span className="font-semibold">Login</span>
                             </Link>
                             <Link
                               to="/register"
-                              className="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-primary/5 hover:text-primary transition-all group"
+                              className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-secondary/10 hover:to-transparent hover:text-secondary transition-all group rounded-xl mx-1"
                               onClick={() => setIsUserMenuOpen(false)}
                             >
-                              <div className="w-8 h-8 rounded-lg bg-secondary/10 group-hover:bg-secondary/20 flex items-center justify-center transition-colors">
-                                <UserPlus className="w-4 h-4 text-secondary" />
+                              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-secondary/10 to-secondary/5 group-hover:from-secondary/20 group-hover:to-secondary/10 flex items-center justify-center transition-all group-hover:scale-110">
+                                <UserPlus className="w-5 h-5 text-secondary" />
                               </div>
-                              <span className="font-medium">Create Account</span>
+                              <span className="font-semibold">Create Account</span>
                             </Link>
                           </div>
                         </>
@@ -363,31 +370,33 @@ const Header = () => {
                   )}
                 </div>
 
-                {/* Cart Button */}
+                {/* Cart Button - Enhanced */}
                 <button
                   onClick={toggleCartSidebar}
-                  className="hidden md:flex flex-col items-center text-gray-600 hover:text-primary transition-all duration-300 relative group px-2"
+                  className="hidden md:flex flex-col items-center text-gray-600 hover:text-primary transition-all duration-300 relative group px-2 py-1 rounded-xl hover:bg-primary/5"
                 >
                   <div className="relative">
-                    <ShoppingCart className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center group-hover:from-primary/10 group-hover:to-secondary/10 transition-all duration-300">
+                      <ShoppingCart className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                    </div>
                     {cartCount > 0 && (
-                      <span className="absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-red-600 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-lg animate-pulse">
+                      <span className="absolute -top-1 -right-1 bg-gradient-to-r from-red-500 to-red-600 text-white text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center shadow-lg animate-pulse ring-2 ring-white">
                         {cartCount}
                       </span>
                     )}
                   </div>
-                  <span className="text-xs mt-1 font-medium">Cart</span>
+                  <span className="text-xs mt-1 font-semibold">Cart</span>
                 </button>
 
-                {/* Mobile Icons */}
-                <div className="flex md:hidden items-center gap-3">
+                {/* Mobile Icons - Enhanced */}
+                <div className="flex md:hidden items-center gap-2">
                   {isAuthenticated ? (
                     <div ref={mobileUserMenuRef} className="relative">
                       <button
                         onClick={toggleUserMenu}
                         className="relative"
                       >
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-white font-bold shadow-lg">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary via-green-600 to-secondary flex items-center justify-center text-white font-bold shadow-lg ring-2 ring-white active:scale-95 transition-transform">
                           {user?.name?.charAt(0).toUpperCase() || 'U'}
                         </div>
                       </button>
@@ -413,17 +422,17 @@ const Header = () => {
                       )}
                     </div>
                   ) : (
-                    <Link to="/login" className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center hover:bg-primary hover:text-white transition-all">
+                    <Link to="/login" className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center hover:from-primary hover:to-secondary hover:text-white transition-all active:scale-95">
                       <User className="w-5 h-5" />
                     </Link>
                   )}
 
-                  <button onClick={toggleCartSidebar} className="relative">
-                    <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center hover:bg-primary hover:text-white transition-all">
+                  <button onClick={toggleCartSidebar} className="relative active:scale-95 transition-transform">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center hover:from-primary hover:to-secondary hover:text-white transition-all">
                       <ShoppingCart className="w-5 h-5" />
                     </div>
                     {cartCount > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-gradient-to-r from-red-500 to-red-600 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-lg">
+                      <span className="absolute -top-1 -right-1 bg-gradient-to-r from-red-500 to-red-600 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-lg ring-2 ring-white">
                         {cartCount}
                       </span>
                     )}
@@ -431,7 +440,7 @@ const Header = () => {
 
                   <button
                     onClick={toggleMobileMenu}
-                    className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center hover:bg-primary hover:text-white transition-all"
+                    className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center hover:from-primary hover:to-secondary hover:text-white transition-all active:scale-95"
                   >
                     {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
                   </button>
@@ -439,17 +448,19 @@ const Header = () => {
               </div>
             </div>
 
-            {/* Mobile Search */}
+            {/* Mobile Search - Enhanced */}
             <div className="mt-3 md:hidden">
               <form onSubmit={handleSearch} className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search products..."
-                  className="w-full pl-11 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:shadow-lg transition-all text-sm bg-gray-50 focus:bg-white"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+                <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-2xl focus-within:border-primary/50 focus-within:shadow-lg transition-all duration-300">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search products..."
+                    className="w-full pl-11 pr-4 py-3 bg-transparent focus:outline-none text-sm"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
               </form>
             </div>
           </div>
@@ -457,64 +468,67 @@ const Header = () => {
 
       </header>
 
-      {/* Mobile Menu Overlay */}
+      {/* Mobile Menu Overlay - Enhanced */}
       {isMobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 bg-black bg-opacity-50 z-40" onClick={toggleMobileMenu}>
+        <div className="md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 animate-fadeIn" onClick={toggleMobileMenu}>
           <div
-            className="absolute right-0 top-0 h-full w-80 bg-white shadow-2xl overflow-y-auto"
+            className="absolute right-0 top-0 h-full w-80 bg-white shadow-2xl overflow-y-auto animate-slideInRight"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-gray-800">Menu</h2>
-                <button onClick={toggleMobileMenu} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors">
+                <h2 className="text-xl font-black text-gray-900 bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">Menu</h2>
+                <button onClick={toggleMobileMenu} className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center hover:from-red-100 hover:to-red-200 hover:text-red-600 transition-all active:scale-95">
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
               <div className="space-y-2">
-                <Link to="/category/staples" className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors" onClick={toggleMobileMenu}>
-                  <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center">
+                <Link to="/category/staples" className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-amber-50 hover:to-transparent transition-all group" onClick={toggleMobileMenu}>
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-sm">
                     🌾
                   </div>
-                  <span className="font-medium text-gray-800">Staples</span>
+                  <span className="font-bold text-gray-800">Staples</span>
                 </Link>
-                <Link to="/category/vegetables" className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors" onClick={toggleMobileMenu}>
-                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+                <Link to="/category/vegetables" className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-green-50 hover:to-transparent transition-all group" onClick={toggleMobileMenu}>
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-100 to-green-200 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-sm">
                     🥬
                   </div>
-                  <span className="font-medium text-gray-800">Vegetables</span>
+                  <span className="font-bold text-gray-800">Vegetables</span>
                 </Link>
-                <Link to="/category/fruits" className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors" onClick={toggleMobileMenu}>
-                  <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center">
+                <Link to="/category/fruits" className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-red-50 hover:to-transparent transition-all group" onClick={toggleMobileMenu}>
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red-100 to-red-200 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-sm">
                     🍎
                   </div>
-                  <span className="font-medium text-gray-800">Fruits</span>
+                  <span className="font-bold text-gray-800">Fruits</span>
                 </Link>
-                <Link to="/category/dairy" className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors" onClick={toggleMobileMenu}>
-                  <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                <Link to="/category/dairy" className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-blue-50 hover:to-transparent transition-all group" onClick={toggleMobileMenu}>
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-sm">
                     🥛
                   </div>
-                  <span className="font-medium text-gray-800">Dairy</span>
+                  <span className="font-bold text-gray-800">Dairy</span>
                 </Link>
-                <Link to="/offers" className="flex items-center gap-3 p-3 rounded-xl bg-red-50 hover:bg-red-100 transition-colors" onClick={toggleMobileMenu}>
-                  <div className="w-10 h-10 rounded-lg bg-red-200 flex items-center justify-center">
+                <Link to="/offers" className="flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-r from-red-50 to-red-100 hover:from-red-100 hover:to-red-200 transition-all group shadow-sm" onClick={toggleMobileMenu}>
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red-200 to-red-300 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-md">
                     🏷️
                   </div>
-                  <span className="font-bold text-red-600">Special Offers</span>
+                  <span className="font-black text-red-700">Special Offers</span>
                 </Link>
               </div>
 
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <button
                   onClick={toggleLocationPicker}
-                  className="flex items-start gap-3 w-full p-4 rounded-xl hover:bg-primary/5 transition-all border-2 border-transparent hover:border-primary/20"
+                  className="flex items-start gap-3 w-full p-4 rounded-2xl hover:bg-gradient-to-br hover:from-primary/5 hover:to-secondary/5 transition-all border-2 border-gray-100 hover:border-primary/30 hover:shadow-lg active:scale-[0.98]"
                 >
-                  <div className="w-10 h-10 bg-gradient-to-br from-primary to-green-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-md mt-0.5">
-                    <MapPin className="w-5 h-5 text-white" />
+                  <div className="w-12 h-12 bg-gradient-to-br from-primary via-green-600 to-secondary rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg mt-0.5">
+                    <MapPin className="w-6 h-6 text-white drop-shadow-lg" />
                   </div>
                   <div className="text-left flex-1 min-w-0">
-                    <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Deliver to</p>
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                      <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse"></span>
+                      Deliver to
+                    </p>
                     {currentLocation ? (
                       <>
                         <p className="text-sm font-bold text-gray-800 line-clamp-1 leading-tight whitespace-nowrap">
@@ -525,8 +539,9 @@ const Header = () => {
                         </p>
                       </>
                     ) : (
-                      <p className="text-sm font-bold text-gray-800">
+                      <p className="text-sm font-bold text-gray-800 flex items-center gap-1.5">
                         Select Location
+                        <Sparkles className="w-3 h-3 text-primary animate-pulse" />
                       </p>
                     )}
                   </div>
