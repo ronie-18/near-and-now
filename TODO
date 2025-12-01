@@ -6,10 +6,10 @@ Todo:
   ✔ tips -> 5,10,20,..., customize also @done(25-11-19 00:19)
   ✔ delivery fee to be removed @done(25-11-19 00:19)
   ✔ remove sort by in home page @done(25-11-19 00:19)
-  ☐ individual users profile to be added with saved location over database connections
+  ✔ individual users profile to be added with saved location over database connections @done(25-11-19 00:19)
+  ✔ in the checkout page there should be also one more section like "you might also like..." which shows similar suggested products @done(25-12-02 00:20)
   ☐ add one more step to verify details of the users
   ☐ ordering for someone else (to be added later)
-  ☐ in the checkout page there should be also one more section like "you might also like..." which shows similar suggested products
   ☐ *** tracking page to be added ***
   ☐ category suggestions
   ☐ *** help & support ***

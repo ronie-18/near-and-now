@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
-import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress } from '../services/supabase';
-import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus } from 'lucide-react';
+import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, getAllProducts, Product } from '../services/supabase';
+import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
+import ProductCard from '../components/products/ProductCard';
 
 const calculateOrderTotals = (cartTotal: number) => {
   const subtotal = cartTotal;
@@ -46,6 +47,11 @@ const CheckoutPage = () => {
   const [saveAddress, setSaveAddress] = useState(true); // Save address by default
   const [editAddressId, setEditAddressId] = useState<string | null>(null);
 
+  // Suggested products
+  const [suggestedProducts, setSuggestedProducts] = useState<Product[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const suggestionsScrollRef = useRef<HTMLDivElement>(null);
+
   // Fetch saved addresses on component mount
   useEffect(() => {
     const fetchAddresses = async () => {
@@ -86,6 +92,69 @@ const CheckoutPage = () => {
       fetchAddresses();
     }
   }, [user?.id]);
+
+  // Fetch and filter suggested products based on cart items
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      if (cartItems.length === 0) {
+        setSuggestedProducts([]);
+        return;
+      }
+
+      try {
+        setLoadingSuggestions(true);
+        const allProducts = await getAllProducts();
+
+        // Get unique categories from cart items
+        const cartCategories = Array.from(
+          new Set(cartItems.map(item => {
+            // Find the product category from all products
+            const product = allProducts.find(p => p.id === item.id);
+            return product?.category;
+          }).filter(Boolean))
+        );
+
+        // Get cart item IDs to exclude
+        const cartItemIds = new Set(cartItems.map(item => item.id));
+
+        // Filter products: same category as cart items, not already in cart, in stock
+        const suggestions = allProducts
+          .filter(product => {
+            return (
+              cartCategories.includes(product.category) &&
+              !cartItemIds.has(product.id) &&
+              product.in_stock
+            );
+          })
+          .slice(0, 10); // Limit to 10 suggestions
+
+        setSuggestedProducts(suggestions);
+      } catch (error) {
+        console.error('Error fetching suggested products:', error);
+        setSuggestedProducts([]);
+      } finally {
+        setLoadingSuggestions(false);
+      }
+    };
+
+    fetchSuggestions();
+  }, [cartItems]);
+
+  // Scroll suggestions left
+  const scrollSuggestionsLeft = () => {
+    if (suggestionsScrollRef.current) {
+      const cardWidth = 280; // Approximate card width with gap
+      suggestionsScrollRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
+    }
+  };
+
+  // Scroll suggestions right
+  const scrollSuggestionsRight = () => {
+    if (suggestionsScrollRef.current) {
+      const cardWidth = 280; // Approximate card width with gap
+      suggestionsScrollRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
+    }
+  };
 
   const populateFormWithAddress = (address: DbAddress) => {
     setFormData(prev => ({
@@ -879,6 +948,69 @@ const CheckoutPage = () => {
                   </button>
                 </div>
               </form>
+
+              {/* You Might Also Like Section - Only show in Step 1 */}
+              {currentStep === 1 && cartItems.length > 0 && suggestedProducts.length > 0 && (
+                <div className="mt-8 pt-8 border-t border-gray-200">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h3 className="text-xl font-bold text-gray-800 mb-1">You might also like...</h3>
+                      <p className="text-sm text-gray-500">Based on items in your cart</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={scrollSuggestionsLeft}
+                        className="p-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+                        aria-label="Scroll left"
+                      >
+                        <ChevronLeft className="w-5 h-5 text-gray-600" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={scrollSuggestionsRight}
+                        className="p-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+                        aria-label="Scroll right"
+                      >
+                        <ChevronRight className="w-5 h-5 text-gray-600" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {loadingSuggestions ? (
+                    <div className="flex gap-4 overflow-hidden">
+                      {Array.from({ length: 5 }).map((_, index) => (
+                        <div
+                          key={index}
+                          className="flex-shrink-0 w-64 bg-white rounded-lg shadow-md overflow-hidden animate-pulse"
+                        >
+                          <div className="h-48 bg-gray-200"></div>
+                          <div className="p-4">
+                            <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                            <div className="h-6 bg-gray-200 rounded w-1/2"></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      ref={suggestionsScrollRef}
+                      className="flex gap-4 overflow-x-auto scrollbar-hide pb-4"
+                      style={{
+                        scrollbarWidth: 'none',
+                        msOverflowStyle: 'none',
+                        WebkitOverflowScrolling: 'touch'
+                      }}
+                    >
+                      {suggestedProducts.map((product) => (
+                        <div key={product.id} className="flex-shrink-0 w-64">
+                          <ProductCard product={product} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
