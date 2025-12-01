@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
-import { createOrder, CreateOrderData, getUserAddresses, createAddress, Address as DbAddress } from '../services/supabase';
+import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress } from '../services/supabase';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus } from 'lucide-react';
 
 const calculateOrderTotals = (cartTotal: number) => {
@@ -37,13 +37,14 @@ const CheckoutPage = () => {
   const [tipAmount, setTipAmount] = useState(0);
   const [customTip, setCustomTip] = useState('');
   const [selectedTip, setSelectedTip] = useState<string | null>(null);
-  
+
   // Address management
   const [savedAddresses, setSavedAddresses] = useState<DbAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [showNewAddressForm, setShowNewAddressForm] = useState(false);
   const [loadingAddresses, setLoadingAddresses] = useState(true);
   const [saveAddress, setSaveAddress] = useState(true); // Save address by default
+  const [editAddressId, setEditAddressId] = useState<string | null>(null);
 
   // Fetch saved addresses on component mount
   useEffect(() => {
@@ -57,7 +58,7 @@ const CheckoutPage = () => {
         setLoadingAddresses(true);
         const addresses = await getUserAddresses(user.id);
         setSavedAddresses(addresses);
-        
+
         // Auto-select default address if available
         const defaultAddress = addresses.find(addr => addr.is_default);
         if (defaultAddress) {
@@ -98,6 +99,7 @@ const CheckoutPage = () => {
   };
 
   const handleAddressSelect = (addressId: string) => {
+    setEditAddressId(null); // Clear edit mode when selecting an address
     setSelectedAddressId(addressId);
     const address = savedAddresses.find(addr => addr.id === addressId);
     if (address) {
@@ -107,6 +109,7 @@ const CheckoutPage = () => {
   };
 
   const handleNewAddress = () => {
+    setEditAddressId(null); // Clear edit mode
     setSelectedAddressId(null);
     setFormData(prev => ({
       ...prev,
@@ -121,12 +124,106 @@ const CheckoutPage = () => {
     setSaveAddress(true); // Default to saving new addresses
   };
 
+  const handleEditAddress = (addressId: string) => {
+    const addr = savedAddresses.find(a => a.id === addressId);
+    if (addr) {
+      setEditAddressId(addressId);
+      setSelectedAddressId(addressId);
+      setShowNewAddressForm(true);
+      setFormData(prev => ({
+        ...prev,
+        name: user?.name || '',
+        email: user?.email || '',
+        phone: addr.phone,
+        address: addr.address_line_1 + (addr.address_line_2 ? ', ' + addr.address_line_2 : ''),
+        city: addr.city,
+        state: addr.state,
+        pincode: addr.pincode,
+        addressName: addr.name
+      }));
+      setSaveAddress(true);
+    }
+  };
+
+  const handleDeleteAddress = async (addressId: string) => {
+    if (!user?.id) return;
+    if (!window.confirm('Are you sure you want to delete this address?')) return;
+    try {
+      setLoadingAddresses(true);
+      await deleteAddress(addressId, user.id);
+      let addresses = await getUserAddresses(user.id);
+      setSavedAddresses(addresses);
+
+      // Re-select default or first
+      if (addresses.length > 0) {
+        const defaultAddr = addresses.find(a => a.is_default) || addresses[0];
+        setSelectedAddressId(defaultAddr.id);
+        populateFormWithAddress(defaultAddr);
+        setShowNewAddressForm(false);
+      } else {
+        setSelectedAddressId(null);
+        setShowNewAddressForm(true);
+      }
+      showNotification('Address deleted', 'success');
+    } catch (error) {
+      showNotification('Failed to delete address', 'error');
+    } finally {
+      setLoadingAddresses(false);
+    }
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
       [name]: value
     }));
+  };
+
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (editAddressId) {
+      // Editing existing address
+      if (!user?.id) {
+        showNotification('User not authenticated', 'error');
+        return;
+      }
+      const addressParts = formData.address.split(',');
+      const addressLine1 = addressParts[0]?.trim() || formData.address;
+      const addressLine2 = addressParts.slice(1).join(',').trim() || undefined;
+      try {
+        setLoadingAddresses(true);
+        await updateAddress(editAddressId, user.id, {
+          name: formData.addressName,
+          address_line_1: addressLine1,
+          address_line_2: addressLine2,
+          city: formData.city,
+          state: formData.state,
+          pincode: formData.pincode,
+          phone: formData.phone
+        });
+        const updatedAddressId = editAddressId; // Store before clearing
+        let addresses = await getUserAddresses(user.id);
+        setSavedAddresses(addresses);
+        setEditAddressId(null);
+        setShowNewAddressForm(false);
+        showNotification('Address updated', 'success');
+        // Update form and selection
+        const updated = addresses.find(a => a.id === updatedAddressId);
+        if (updated) {
+          setSelectedAddressId(updatedAddressId);
+          populateFormWithAddress(updated);
+        }
+      } catch (error) {
+        showNotification('Failed to update address', 'error');
+      } finally {
+        setLoadingAddresses(false);
+      }
+      return;
+    }
+    // Otherwise fall back to normal submission logic
+    handleSubmit(e);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -148,7 +245,7 @@ const CheckoutPage = () => {
       setLoading(true);
 
       // Save new address if checkbox is checked and it's a new address (not from saved addresses)
-      if (saveAddress && showNewAddressForm && user?.id) {
+      if (saveAddress && showNewAddressForm && !editAddressId && user?.id) {
         try {
           // Parse address into address_line_1 and address_line_2 if possible
           const addressParts = formData.address.split(',');
@@ -167,7 +264,16 @@ const CheckoutPage = () => {
             is_default: savedAddresses.length === 0 // Set as default if it's the first address
           };
 
-          await createAddress(newAddressData);
+          const createdAddress = await createAddress(newAddressData);
+
+          // Refresh the addresses list to include the newly added address
+          const updatedAddresses = await getUserAddresses(user.id);
+          setSavedAddresses(updatedAddresses);
+
+          // Select the newly created address
+          setSelectedAddressId(createdAddress.id);
+          setShowNewAddressForm(false);
+
           showNotification('Address saved for future orders', 'success');
         } catch (addressError) {
           console.error('Error saving address:', addressError);
@@ -329,7 +435,7 @@ const CheckoutPage = () => {
                 </h1>
               </div>
 
-              <form onSubmit={handleSubmit}>
+              <form onSubmit={handleFormSubmit}>
                 {/* Step 1: Shipping Information */}
                 {currentStep === 1 && (
                   <div className="mb-8">
@@ -371,7 +477,7 @@ const CheckoutPage = () => {
                                 : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
                             }`}
                           >
-                            <div className="flex items-start">
+                            <div className="flex items-start w-full">
                               <input
                                 type="radio"
                                 name="savedAddress"
@@ -381,7 +487,7 @@ const CheckoutPage = () => {
                                 className="mt-1 h-4 w-4 text-primary focus:ring-primary border-gray-300"
                               />
                               <div className="ml-3 flex-1">
-                                <div className="flex items-center">
+                                <div className="flex items-center gap-2">
                                   <span className="font-semibold text-gray-800">{address.name}</span>
                                   {address.is_default && (
                                     <span className="ml-2 bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full">
@@ -398,6 +504,20 @@ const CheckoutPage = () => {
                                 </p>
                                 <p className="text-sm text-gray-600">Phone: {address.phone}</p>
                               </div>
+                              <div className="flex flex-col gap-2 ml-2">
+                                <button
+                                  type="button"
+                                  className="text-blue-500 hover:text-blue-600 text-xs font-medium px-2 py-1 rounded"
+                                  style={{minWidth:'44px'}}
+                                  onClick={() => handleEditAddress(address.id)}
+                                >Edit</button>
+                                <button
+                                  type="button"
+                                  className="text-red-500 hover:text-red-600 text-xs font-medium px-2 py-1 rounded"
+                                  style={{minWidth:'44px'}}
+                                  onClick={() => handleDeleteAddress(address.id)}
+                                >Delete</button>
+                              </div>
                             </div>
                           </label>
                         ))}
@@ -412,6 +532,7 @@ const CheckoutPage = () => {
                             <button
                               type="button"
                               onClick={() => {
+                                setEditAddressId(null); // Clear edit mode
                                 setShowNewAddressForm(false);
                                 if (savedAddresses.length > 0) {
                                   const defaultAddr = savedAddresses.find(a => a.is_default) || savedAddresses[0];
@@ -425,7 +546,7 @@ const CheckoutPage = () => {
                             </button>
                           </div>
                         )}
-                        
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="group">
                             <label htmlFor="name" className="block text-gray-700 mb-2 font-medium flex items-center">
@@ -549,7 +670,7 @@ const CheckoutPage = () => {
                                 <p className="text-sm text-gray-600">You can manage your saved addresses from your profile</p>
                               </div>
                             </label>
-                            
+
                             {/* Address Name Field - shown when save checkbox is checked */}
                             {saveAddress && (
                               <div className="mt-3">
@@ -632,7 +753,7 @@ const CheckoutPage = () => {
                       <div className="flex items-center mb-4">
                         <span className="text-xl font-bold text-gray-800">Add a Tip</span>
                       </div>
-                      
+
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                         {[5, 10, 15, 20].map((amount) => (
                           <button
