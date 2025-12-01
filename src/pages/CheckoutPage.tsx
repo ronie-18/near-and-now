@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
-import { createOrder, CreateOrderData } from '../services/supabase';
-import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock } from 'lucide-react';
+import { createOrder, CreateOrderData, getUserAddresses, createAddress, Address as DbAddress } from '../services/supabase';
+import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus } from 'lucide-react';
 
 const calculateOrderTotals = (cartTotal: number) => {
   const subtotal = cartTotal;
@@ -28,7 +28,8 @@ const CheckoutPage = () => {
     city: '',
     state: '',
     pincode: '',
-    paymentMethod: 'cod'
+    paymentMethod: 'cod',
+    addressName: '' // For naming saved addresses
   });
 
   const [loading, setLoading] = useState(false);
@@ -36,6 +37,89 @@ const CheckoutPage = () => {
   const [tipAmount, setTipAmount] = useState(0);
   const [customTip, setCustomTip] = useState('');
   const [selectedTip, setSelectedTip] = useState<string | null>(null);
+  
+  // Address management
+  const [savedAddresses, setSavedAddresses] = useState<DbAddress[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const [showNewAddressForm, setShowNewAddressForm] = useState(false);
+  const [loadingAddresses, setLoadingAddresses] = useState(true);
+  const [saveAddress, setSaveAddress] = useState(true); // Save address by default
+
+  // Fetch saved addresses on component mount
+  useEffect(() => {
+    const fetchAddresses = async () => {
+      if (!user?.id) {
+        setLoadingAddresses(false);
+        return;
+      }
+
+      try {
+        setLoadingAddresses(true);
+        const addresses = await getUserAddresses(user.id);
+        setSavedAddresses(addresses);
+        
+        // Auto-select default address if available
+        const defaultAddress = addresses.find(addr => addr.is_default);
+        if (defaultAddress) {
+          setSelectedAddressId(defaultAddress.id);
+          populateFormWithAddress(defaultAddress);
+          setShowNewAddressForm(false);
+        } else if (addresses.length > 0) {
+          // Select first address if no default
+          setSelectedAddressId(addresses[0].id);
+          populateFormWithAddress(addresses[0]);
+          setShowNewAddressForm(false);
+        } else {
+          // Show new address form if no addresses exist
+          setShowNewAddressForm(true);
+        }
+      } catch (error) {
+        console.error('Error fetching addresses:', error);
+        setShowNewAddressForm(true);
+      } finally {
+        setLoadingAddresses(false);
+      }
+    };
+
+    if (user?.id) {
+      fetchAddresses();
+    }
+  }, [user?.id]);
+
+  const populateFormWithAddress = (address: DbAddress) => {
+    setFormData(prev => ({
+      ...prev,
+      address: address.address_line_1 + (address.address_line_2 ? ', ' + address.address_line_2 : ''),
+      city: address.city,
+      state: address.state,
+      pincode: address.pincode,
+      phone: address.phone
+    }));
+  };
+
+  const handleAddressSelect = (addressId: string) => {
+    setSelectedAddressId(addressId);
+    const address = savedAddresses.find(addr => addr.id === addressId);
+    if (address) {
+      populateFormWithAddress(address);
+      setShowNewAddressForm(false);
+    }
+  };
+
+  const handleNewAddress = () => {
+    setSelectedAddressId(null);
+    setFormData(prev => ({
+      ...prev,
+      address: '',
+      city: '',
+      state: '',
+      pincode: '',
+      phone: user?.phone || '',
+      addressName: ''
+    }));
+    setShowNewAddressForm(true);
+    setSaveAddress(true); // Default to saving new addresses
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -62,6 +146,35 @@ const CheckoutPage = () => {
     // Only process the order on the final step
     try {
       setLoading(true);
+
+      // Save new address if checkbox is checked and it's a new address (not from saved addresses)
+      if (saveAddress && showNewAddressForm && user?.id) {
+        try {
+          // Parse address into address_line_1 and address_line_2 if possible
+          const addressParts = formData.address.split(',');
+          const addressLine1 = addressParts[0]?.trim() || formData.address;
+          const addressLine2 = addressParts.slice(1).join(',').trim() || undefined;
+
+          const newAddressData = {
+            user_id: user.id,
+            name: formData.addressName || 'Delivery Address', // Use custom name or default
+            address_line_1: addressLine1,
+            address_line_2: addressLine2,
+            city: formData.city,
+            state: formData.state,
+            pincode: formData.pincode,
+            phone: formData.phone,
+            is_default: savedAddresses.length === 0 // Set as default if it's the first address
+          };
+
+          await createAddress(newAddressData);
+          showNotification('Address saved for future orders', 'success');
+        } catch (addressError) {
+          console.error('Error saving address:', addressError);
+          // Don't fail the order if address save fails
+          showNotification('Order placed but address could not be saved', 'info');
+        }
+      }
 
       // Prepare order items from cart
       const orderItems = cartItems.map(item => ({
@@ -220,120 +333,247 @@ const CheckoutPage = () => {
                 {/* Step 1: Shipping Information */}
                 {currentStep === 1 && (
                   <div className="mb-8">
-                    <div className="flex items-center mb-4">
-                      <MapPin className="w-5 h-5 text-primary mr-2" />
-                      <h2 className="text-xl font-bold text-gray-800">Shipping Information</h2>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center">
+                        <MapPin className="w-5 h-5 text-primary mr-2" />
+                        <h2 className="text-xl font-bold text-gray-800">Shipping Information</h2>
+                      </div>
+                      {savedAddresses.length > 0 && !showNewAddressForm && (
+                        <button
+                          type="button"
+                          onClick={handleNewAddress}
+                          className="flex items-center text-primary hover:text-secondary text-sm font-medium"
+                        >
+                          <Plus className="w-4 h-4 mr-1" />
+                          Add New Address
+                        </button>
+                      )}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="group">
-                        <label htmlFor="name" className="block text-gray-700 mb-2 font-medium flex items-center">
-                          <User className="w-4 h-4 mr-1" />
-                          Full Name *
-                        </label>
-                        <input
-                          type="text"
-                          id="name"
-                          name="name"
-                          value={formData.name}
-                          onChange={handleChange}
-                          required
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
-                          placeholder="John Doe"
-                        />
+                    {/* Loading state */}
+                    {loadingAddresses && (
+                      <div className="animate-pulse space-y-3 mb-6">
+                        <div className="h-24 bg-gray-200 rounded-xl"></div>
+                        <div className="h-24 bg-gray-200 rounded-xl"></div>
                       </div>
+                    )}
 
-                      <div className="group">
-                        <label htmlFor="email" className="block text-gray-700 mb-2 font-medium flex items-center">
-                          <Mail className="w-4 h-4 mr-1" />
-                          Email *
-                        </label>
-                        <input
-                          type="email"
-                          id="email"
-                          name="email"
-                          value={formData.email}
-                          onChange={handleChange}
-                          required
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
-                          placeholder="john@example.com"
-                        />
+                    {/* Saved addresses selection */}
+                    {!loadingAddresses && savedAddresses.length > 0 && !showNewAddressForm && (
+                      <div className="mb-6 space-y-3">
+                        <p className="text-sm text-gray-600 mb-3">Select a delivery address:</p>
+                        {savedAddresses.map((address) => (
+                          <label
+                            key={address.id}
+                            className={`block p-4 border-2 rounded-xl cursor-pointer transition-all duration-300 ${
+                              selectedAddressId === address.id
+                                ? 'border-primary bg-primary/5 shadow-md'
+                                : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                            }`}
+                          >
+                            <div className="flex items-start">
+                              <input
+                                type="radio"
+                                name="savedAddress"
+                                value={address.id}
+                                checked={selectedAddressId === address.id}
+                                onChange={() => handleAddressSelect(address.id)}
+                                className="mt-1 h-4 w-4 text-primary focus:ring-primary border-gray-300"
+                              />
+                              <div className="ml-3 flex-1">
+                                <div className="flex items-center">
+                                  <span className="font-semibold text-gray-800">{address.name}</span>
+                                  {address.is_default && (
+                                    <span className="ml-2 bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full">
+                                      Default
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-sm text-gray-600 mt-1">
+                                  {address.address_line_1}
+                                  {address.address_line_2 && `, ${address.address_line_2}`}
+                                </p>
+                                <p className="text-sm text-gray-600">
+                                  {address.city}, {address.state} - {address.pincode}
+                                </p>
+                                <p className="text-sm text-gray-600">Phone: {address.phone}</p>
+                              </div>
+                            </div>
+                          </label>
+                        ))}
                       </div>
+                    )}
 
-                      <div className="group">
-                        <label htmlFor="phone" className="block text-gray-700 mb-2 font-medium flex items-center">
-                          <Phone className="w-4 h-4 mr-1" />
-                          Phone Number *
-                        </label>
-                        <input
-                          type="tel"
-                          id="phone"
-                          name="phone"
-                          value={formData.phone}
-                          onChange={handleChange}
-                          required
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
-                          placeholder="+91 98765 43210"
-                        />
-                      </div>
+                    {/* New address form or when showing new address */}
+                    {(!loadingAddresses && (showNewAddressForm || savedAddresses.length === 0)) && (
+                      <>
+                        {savedAddresses.length > 0 && (
+                          <div className="mb-4">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowNewAddressForm(false);
+                                if (savedAddresses.length > 0) {
+                                  const defaultAddr = savedAddresses.find(a => a.is_default) || savedAddresses[0];
+                                  setSelectedAddressId(defaultAddr.id);
+                                  populateFormWithAddress(defaultAddr);
+                                }
+                              }}
+                              className="text-sm text-primary hover:text-secondary"
+                            >
+                              ← Back to saved addresses
+                            </button>
+                          </div>
+                        )}
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="group">
+                            <label htmlFor="name" className="block text-gray-700 mb-2 font-medium flex items-center">
+                              <User className="w-4 h-4 mr-1" />
+                              Full Name *
+                            </label>
+                            <input
+                              type="text"
+                              id="name"
+                              name="name"
+                              value={formData.name}
+                              onChange={handleChange}
+                              required
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="John Doe"
+                            />
+                          </div>
 
-                      <div className="group">
-                        <label htmlFor="pincode" className="block text-gray-700 mb-2 font-medium">PIN Code *</label>
-                        <input
-                          type="text"
-                          id="pincode"
-                          name="pincode"
-                          value={formData.pincode}
-                          onChange={handleChange}
-                          required
-                          maxLength={6}
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
-                          placeholder="700001"
-                        />
-                      </div>
+                          <div className="group">
+                            <label htmlFor="email" className="block text-gray-700 mb-2 font-medium flex items-center">
+                              <Mail className="w-4 h-4 mr-1" />
+                              Email *
+                            </label>
+                            <input
+                              type="email"
+                              id="email"
+                              name="email"
+                              value={formData.email}
+                              onChange={handleChange}
+                              required
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="john@example.com"
+                            />
+                          </div>
 
-                      <div className="md:col-span-2 group">
-                        <label htmlFor="address" className="block text-gray-700 mb-2 font-medium">Street Address *</label>
-                        <textarea
-                          id="address"
-                          name="address"
-                          value={formData.address}
-                          onChange={handleChange}
-                          required
-                          rows={2}
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300 resize-none"
-                          placeholder="House no, Building name, Street"
-                        />
-                      </div>
+                          <div className="group">
+                            <label htmlFor="phone" className="block text-gray-700 mb-2 font-medium flex items-center">
+                              <Phone className="w-4 h-4 mr-1" />
+                              Phone Number *
+                            </label>
+                            <input
+                              type="tel"
+                              id="phone"
+                              name="phone"
+                              value={formData.phone}
+                              onChange={handleChange}
+                              required
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="+91 98765 43210"
+                            />
+                          </div>
 
-                      <div className="group">
-                        <label htmlFor="city" className="block text-gray-700 mb-2 font-medium">City *</label>
-                        <input
-                          type="text"
-                          id="city"
-                          name="city"
-                          value={formData.city}
-                          onChange={handleChange}
-                          required
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
-                          placeholder="Kolkata"
-                        />
-                      </div>
+                          <div className="group">
+                            <label htmlFor="pincode" className="block text-gray-700 mb-2 font-medium">PIN Code *</label>
+                            <input
+                              type="text"
+                              id="pincode"
+                              name="pincode"
+                              value={formData.pincode}
+                              onChange={handleChange}
+                              required
+                              maxLength={6}
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="700001"
+                            />
+                          </div>
 
-                      <div className="group">
-                        <label htmlFor="state" className="block text-gray-700 mb-2 font-medium">State *</label>
-                        <input
-                          type="text"
-                          id="state"
-                          name="state"
-                          value={formData.state}
-                          onChange={handleChange}
-                          required
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
-                          placeholder="West Bengal"
-                        />
-                      </div>
-                    </div>
+                          <div className="md:col-span-2 group">
+                            <label htmlFor="address" className="block text-gray-700 mb-2 font-medium">Street Address *</label>
+                            <textarea
+                              id="address"
+                              name="address"
+                              value={formData.address}
+                              onChange={handleChange}
+                              required
+                              rows={2}
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300 resize-none"
+                              placeholder="House no, Building name, Street"
+                            />
+                          </div>
+
+                          <div className="group">
+                            <label htmlFor="city" className="block text-gray-700 mb-2 font-medium">City *</label>
+                            <input
+                              type="text"
+                              id="city"
+                              name="city"
+                              value={formData.city}
+                              onChange={handleChange}
+                              required
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="Kolkata"
+                            />
+                          </div>
+
+                          <div className="group">
+                            <label htmlFor="state" className="block text-gray-700 mb-2 font-medium">State *</label>
+                            <input
+                              type="text"
+                              id="state"
+                              name="state"
+                              value={formData.state}
+                              onChange={handleChange}
+                              required
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="West Bengal"
+                            />
+                          </div>
+
+                          {/* Save Address Checkbox */}
+                          <div className="md:col-span-2 mt-4">
+                            <label className="flex items-center p-4 bg-blue-50 border-2 border-blue-200 rounded-xl cursor-pointer hover:bg-blue-100 transition-all duration-300">
+                              <input
+                                type="checkbox"
+                                checked={saveAddress}
+                                onChange={(e) => setSaveAddress(e.target.checked)}
+                                className="h-5 w-5 text-primary focus:ring-primary border-gray-300 rounded"
+                              />
+                              <div className="ml-3 flex-1">
+                                <span className="font-semibold text-gray-800">Save this address for future orders</span>
+                                <p className="text-sm text-gray-600">You can manage your saved addresses from your profile</p>
+                              </div>
+                            </label>
+                            
+                            {/* Address Name Field - shown when save checkbox is checked */}
+                            {saveAddress && (
+                              <div className="mt-3">
+                                <label htmlFor="addressName" className="block text-sm font-medium text-gray-700 mb-1">
+                                  Address Label (Optional)
+                                </label>
+                                <input
+                                  type="text"
+                                  id="addressName"
+                                  name="addressName"
+                                  value={formData.addressName}
+                                  onChange={handleChange}
+                                  placeholder="e.g., Home, Office, Apartment"
+                                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Give this address a name to easily identify it later
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 

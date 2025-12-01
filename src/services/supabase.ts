@@ -550,3 +550,196 @@ export async function subscribeToNewsletter(email: string): Promise<NewsletterSu
     throw error;
   }
 }
+
+// Address types
+export interface Address {
+  id: string;
+  user_id: string;
+  name: string;
+  address_line_1: string;
+  address_line_2?: string;
+  city: string;
+  state: string;
+  pincode: string;
+  phone: string;
+  is_default: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateAddressData {
+  user_id: string;
+  name: string;
+  address_line_1: string;
+  address_line_2?: string;
+  city: string;
+  state: string;
+  pincode: string;
+  phone: string;
+  is_default: boolean;
+}
+
+export interface UpdateAddressData {
+  name?: string;
+  address_line_1?: string;
+  address_line_2?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  phone?: string;
+  is_default?: boolean;
+}
+
+// Get all addresses for a user
+export async function getUserAddresses(userId: string): Promise<Address[]> {
+  try {
+    console.log('📍 Fetching addresses for user:', userId);
+    
+    const { data, error } = await supabase
+      .from('addresses')
+      .select('*')
+      .eq('user_id', userId)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('❌ Error fetching addresses:', error);
+      throw new Error(`Failed to fetch addresses: ${error.message}`);
+    }
+
+    console.log(`✅ Fetched ${data?.length || 0} addresses`);
+    return data || [];
+  } catch (error: any) {
+    console.error('❌ Error in getUserAddresses:', error);
+    throw error;
+  }
+}
+
+// Create a new address
+export async function createAddress(addressData: CreateAddressData): Promise<Address> {
+  try {
+    console.log('📍 Creating new address...');
+    
+    // If this is set as default, unset all other default addresses for this user
+    if (addressData.is_default) {
+      await supabase
+        .from('addresses')
+        .update({ is_default: false })
+        .eq('user_id', addressData.user_id);
+    }
+
+    const { data, error } = await supabase
+      .from('addresses')
+      .insert([addressData])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error creating address:', error);
+      throw new Error(`Failed to create address: ${error.message}`);
+    }
+
+    console.log('✅ Address created successfully');
+    return data;
+  } catch (error: any) {
+    console.error('❌ Error in createAddress:', error);
+    throw error;
+  }
+}
+
+// Update an address
+export async function updateAddress(addressId: string, userId: string, updateData: UpdateAddressData): Promise<Address> {
+  try {
+    console.log('📍 Updating address:', addressId);
+    
+    // If setting this as default, unset all other default addresses for this user
+    if (updateData.is_default) {
+      await supabase
+        .from('addresses')
+        .update({ is_default: false })
+        .eq('user_id', userId)
+        .neq('id', addressId);
+    }
+
+    const { data, error } = await supabase
+      .from('addresses')
+      .update({
+        ...updateData,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', addressId)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error updating address:', error);
+      throw new Error(`Failed to update address: ${error.message}`);
+    }
+
+    console.log('✅ Address updated successfully');
+    return data;
+  } catch (error: any) {
+    console.error('❌ Error in updateAddress:', error);
+    throw error;
+  }
+}
+
+// Delete an address
+export async function deleteAddress(addressId: string, userId: string): Promise<void> {
+  try {
+    console.log('📍 Deleting address:', addressId);
+    
+    const { error } = await supabase
+      .from('addresses')
+      .delete()
+      .eq('id', addressId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('❌ Error deleting address:', error);
+      throw new Error(`Failed to delete address: ${error.message}`);
+    }
+
+    console.log('✅ Address deleted successfully');
+  } catch (error: any) {
+    console.error('❌ Error in deleteAddress:', error);
+    throw error;
+  }
+}
+
+// Set an address as default
+export async function setDefaultAddress(addressId: string, userId: string): Promise<Address> {
+  try {
+    console.log('📍 Setting default address:', addressId);
+    
+    // Unset all other default addresses for this user
+    await supabase
+      .from('addresses')
+      .update({ is_default: false })
+      .eq('user_id', userId);
+
+    // Set this address as default
+    const { data, error } = await supabase
+      .from('addresses')
+      .update({ 
+        is_default: true,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', addressId)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error setting default address:', error);
+      throw new Error(`Failed to set default address: ${error.message}`);
+    }
+
+    console.log('✅ Default address updated successfully');
+    return data;
+  } catch (error: any) {
+    console.error('❌ Error in setDefaultAddress:', error);
+    throw error;
+  }
+}

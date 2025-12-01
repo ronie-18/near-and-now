@@ -2,32 +2,14 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
-
-// Mock address data (in a real app, this would come from an API)
-const mockAddresses = [
-  {
-    id: '1',
-    name: 'Home',
-    addressLine1: '123, Green Valley Apartments',
-    addressLine2: 'MG Road, Indiranagar',
-    city: 'Bangalore',
-    state: 'Karnataka',
-    pincode: '560038',
-    phone: '9876543210',
-    isDefault: true
-  },
-  {
-    id: '2',
-    name: 'Office',
-    addressLine1: 'Block B, Tech Park',
-    addressLine2: 'Whitefield',
-    city: 'Bangalore',
-    state: 'Karnataka',
-    pincode: '560066',
-    phone: '9876543211',
-    isDefault: false
-  }
-];
+import {
+  getUserAddresses,
+  createAddress,
+  updateAddress,
+  deleteAddress,
+  setDefaultAddress,
+  Address as DbAddress
+} from '../services/supabase';
 
 interface Address {
   id: string;
@@ -42,7 +24,7 @@ interface Address {
 }
 
 const AddressesPage = () => {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const { showNotification } = useNotification();
   const navigate = useNavigate();
   
@@ -69,16 +51,44 @@ const AddressesPage = () => {
     }
   }, [isAuthenticated, isLoading, navigate]);
 
-  // Fetch addresses (mock data for now)
+  // Fetch addresses from database
   useEffect(() => {
-    // Simulate API call delay
-    const timer = setTimeout(() => {
-      setAddresses(mockAddresses);
-      setLoading(false);
-    }, 1000);
-    
-    return () => clearTimeout(timer);
-  }, []);
+    const fetchAddresses = async () => {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const data = await getUserAddresses(user.id);
+        
+        // Transform database addresses to component format
+        const transformedAddresses = data.map(addr => ({
+          id: addr.id,
+          name: addr.name,
+          addressLine1: addr.address_line_1,
+          addressLine2: addr.address_line_2,
+          city: addr.city,
+          state: addr.state,
+          pincode: addr.pincode,
+          phone: addr.phone,
+          isDefault: addr.is_default
+        }));
+        
+        setAddresses(transformedAddresses);
+      } catch (error) {
+        console.error('Error fetching addresses:', error);
+        showNotification('Failed to load addresses', 'error');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (user?.id) {
+      fetchAddresses();
+    }
+  }, [user?.id, showNotification]);
 
   // Reset form when editing state changes
   useEffect(() => {
@@ -119,7 +129,7 @@ const AddressesPage = () => {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Validation
@@ -141,65 +151,153 @@ const AddressesPage = () => {
       showNotification('Please enter a valid 6-digit pincode', 'error');
       return;
     }
-    
-    if (editingAddress) {
-      // Update existing address
-      const updatedAddresses = addresses.map(addr => 
-        addr.id === editingAddress.id ? { ...formData, id: addr.id } : addr
-      );
-      
-      // If setting this as default, unset others
-      if (formData.isDefault) {
-        updatedAddresses.forEach(addr => {
-          if (addr.id !== editingAddress.id) {
-            addr.isDefault = false;
-          }
-        });
-      }
-      
-      setAddresses(updatedAddresses);
-      showNotification('Address updated successfully', 'success');
-    } else {
-      // Add new address
-      const newAddress = {
-        ...formData,
-        id: Math.random().toString(36).substring(2, 10)
-      };
-      
-      // If setting this as default, unset others
-      let updatedAddresses = [...addresses];
-      if (formData.isDefault) {
-        updatedAddresses = updatedAddresses.map(addr => ({ ...addr, isDefault: false }));
-      }
-      
-      setAddresses([...updatedAddresses, newAddress]);
-      showNotification('Address added successfully', 'success');
+
+    if (!user?.id) {
+      showNotification('User not authenticated', 'error');
+      return;
     }
-    
-    setEditingAddress(null);
-    setShowAddForm(false);
+
+    try {
+      if (editingAddress) {
+        // Update existing address
+        const updateData = {
+          name: formData.name,
+          address_line_1: formData.addressLine1,
+          address_line_2: formData.addressLine2 || undefined,
+          city: formData.city,
+          state: formData.state,
+          pincode: formData.pincode,
+          phone: formData.phone,
+          is_default: formData.isDefault
+        };
+
+        await updateAddress(editingAddress.id, user.id, updateData);
+        
+        // Refresh addresses list
+        const data = await getUserAddresses(user.id);
+        const transformedAddresses = data.map(addr => ({
+          id: addr.id,
+          name: addr.name,
+          addressLine1: addr.address_line_1,
+          addressLine2: addr.address_line_2,
+          city: addr.city,
+          state: addr.state,
+          pincode: addr.pincode,
+          phone: addr.phone,
+          isDefault: addr.is_default
+        }));
+        setAddresses(transformedAddresses);
+        
+        showNotification('Address updated successfully', 'success');
+      } else {
+        // Add new address
+        const createData = {
+          user_id: user.id,
+          name: formData.name,
+          address_line_1: formData.addressLine1,
+          address_line_2: formData.addressLine2 || undefined,
+          city: formData.city,
+          state: formData.state,
+          pincode: formData.pincode,
+          phone: formData.phone,
+          is_default: formData.isDefault
+        };
+
+        await createAddress(createData);
+        
+        // Refresh addresses list
+        const data = await getUserAddresses(user.id);
+        const transformedAddresses = data.map(addr => ({
+          id: addr.id,
+          name: addr.name,
+          addressLine1: addr.address_line_1,
+          addressLine2: addr.address_line_2,
+          city: addr.city,
+          state: addr.state,
+          pincode: addr.pincode,
+          phone: addr.phone,
+          isDefault: addr.is_default
+        }));
+        setAddresses(transformedAddresses);
+        
+        showNotification('Address added successfully', 'success');
+      }
+      
+      setEditingAddress(null);
+      setShowAddForm(false);
+    } catch (error) {
+      console.error('Error saving address:', error);
+      showNotification('Failed to save address. Please try again.', 'error');
+    }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     const addressToDelete = addresses.find(addr => addr.id === id);
     
     if (addressToDelete?.isDefault) {
       showNotification('Cannot delete default address', 'error');
       return;
     }
-    
-    setAddresses(addresses.filter(addr => addr.id !== id));
-    showNotification('Address deleted successfully', 'success');
+
+    if (!user?.id) {
+      showNotification('User not authenticated', 'error');
+      return;
+    }
+
+    try {
+      await deleteAddress(id, user.id);
+      
+      // Refresh addresses list
+      const data = await getUserAddresses(user.id);
+      const transformedAddresses = data.map(addr => ({
+        id: addr.id,
+        name: addr.name,
+        addressLine1: addr.address_line_1,
+        addressLine2: addr.address_line_2,
+        city: addr.city,
+        state: addr.state,
+        pincode: addr.pincode,
+        phone: addr.phone,
+        isDefault: addr.is_default
+      }));
+      setAddresses(transformedAddresses);
+      
+      showNotification('Address deleted successfully', 'success');
+    } catch (error) {
+      console.error('Error deleting address:', error);
+      showNotification('Failed to delete address. Please try again.', 'error');
+    }
   };
 
-  const handleSetDefault = (id: string) => {
-    const updatedAddresses = addresses.map(addr => ({
-      ...addr,
-      isDefault: addr.id === id
-    }));
-    
-    setAddresses(updatedAddresses);
-    showNotification('Default address updated', 'success');
+  const handleSetDefault = async (id: string) => {
+    if (!user?.id) {
+      showNotification('User not authenticated', 'error');
+      return;
+    }
+
+    try {
+      await setDefaultAddress(id, user.id);
+      
+      // Refresh addresses list
+      const data = await getUserAddresses(user.id);
+      const transformedAddresses = data.map(addr => ({
+        id: addr.id,
+        name: addr.name,
+        addressLine1: addr.address_line_1,
+        addressLine2: addr.address_line_2,
+        city: addr.city,
+        state: addr.state,
+        pincode: addr.pincode,
+        phone: addr.phone,
+        isDefault: addr.is_default
+      }));
+      setAddresses(transformedAddresses);
+      
+      showNotification('Default address updated', 'success');
+    } catch (error) {
+      console.error('Error setting default address:', error);
+      showNotification('Failed to set default address. Please try again.', 'error');
+    }
   };
 
   if (isLoading || loading) {

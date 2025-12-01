@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts } from '../services/supabase';
@@ -61,7 +61,7 @@ const HomePage = () => {
             setTimeout(() => {
               setItemsToShow((prev) => prev + ITEMS_PER_LOAD);
               setLoadingMore(false);
-            }, 500);
+            }, 200); // Reduced from 500ms to 200ms for faster loading
           }
         }
       },
@@ -90,24 +90,24 @@ const HomePage = () => {
   ];
 
   // Check for infinite scroll loop and reset position
-  const checkInfiniteScroll = () => {
+  const checkInfiniteScroll = useCallback(() => {
     if (!categoryScrollRef.current || categories.length === 0) return;
 
     const container = categoryScrollRef.current;
-    const scrollLeft = container.scrollLeft;
+    const currentScrollLeft = container.scrollLeft;
     const scrollWidth = container.scrollWidth;
     const singleSetWidth = scrollWidth / 5; // Width of one complete set of categories
 
     // Reset to center set (index 2) when at boundaries
     // If scrolled past the 3rd set, jump back to 2nd set
-    if (scrollLeft >= singleSetWidth * 3) {
-      container.scrollLeft = scrollLeft - singleSetWidth;
+    if (currentScrollLeft >= singleSetWidth * 3) {
+      container.scrollLeft = currentScrollLeft - singleSetWidth;
     }
     // If scrolled before the 2nd set, jump forward to 2nd set
-    else if (scrollLeft < singleSetWidth) {
-      container.scrollLeft = scrollLeft + singleSetWidth;
+    else if (currentScrollLeft < singleSetWidth) {
+      container.scrollLeft = currentScrollLeft + singleSetWidth;
     }
-  };
+  }, [categories.length]);
 
   // Setup scroll event listener for infinite loop
   useEffect(() => {
@@ -144,7 +144,7 @@ const HomePage = () => {
   }, [categories, checkInfiniteScroll]);
 
   // Scroll categories left (one card width)
-  const scrollLeft = () => {
+  const handleScrollLeft = useCallback(() => {
     if (categoryScrollRef.current) {
       setIsScrolling(true);
       const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
@@ -153,10 +153,10 @@ const HomePage = () => {
       // Reset scrolling state after animation completes
       setTimeout(() => setIsScrolling(false), 500);
     }
-  };
+  }, []);
 
   // Scroll categories right (one card width)
-  const scrollRight = () => {
+  const handleScrollRight = useCallback(() => {
     if (categoryScrollRef.current) {
       setIsScrolling(true);
       const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
@@ -165,7 +165,7 @@ const HomePage = () => {
       // Reset scrolling state after animation completes
       setTimeout(() => setIsScrolling(false), 500);
     }
-  };
+  }, []);
 
   // Generate background color for categories
   const getCategoryBgColor = (index: number) => {
@@ -196,7 +196,7 @@ const HomePage = () => {
             {/* Left Arrow */}
             {!loading && categories.length > 0 && (
               <button
-                onClick={scrollLeft}
+                onClick={handleScrollLeft}
                 className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
                 aria-label="Scroll left"
               >
@@ -270,7 +270,7 @@ const HomePage = () => {
             {/* Right Arrow */}
             {!loading && categories.length > 0 && (
               <button
-                onClick={scrollRight}
+                onClick={handleScrollRight}
                 className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
                 aria-label="Scroll right"
               >
