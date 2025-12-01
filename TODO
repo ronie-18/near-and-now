@@ -1,20 +1,18 @@
 Todo:
   ✔ Admin dashboard products count to be updated @done(25-11-19 00:19)
   ✔ Categories products images to be added @done(25-11-19 00:19)
-  ☐ tips section to be added in the checkout page @done(25-11-19 00:19)
+  ✔ tips section to be added in the checkout page @done(25-12-01 00:44)
   ✔ green dot remove from logo @done(25-11-19 00:19)
   ✔ tips -> 5,10,20,..., customize also @done(25-11-19 00:19)
   ✔ delivery fee to be removed @done(25-11-19 00:19)
   ✔ remove sort by in home page @done(25-11-19 00:19)
-
-  ☐ location part to be fixed ->
   ☐ individual users profile to be added with saved location over database connections
   ☐ add one more step to verify details of the users
   ☐ ordering for someone else (to be added later)
   ☐ in the checkout page there should be also one more section like "you might also like..." which shows similar suggested products
   ☐ *** tracking page to be added ***
   ☐ category suggestions
-  ☐ ***help & support***
+  ☐ *** help & support ***
   ☐ remove download invoice from orders page in profile section
   ☐ customer privacy policy to be updated on the basis of the company
   ☐ ***only categories will be shown in the main page and after clicking then it will be opening the items and the categories section will be shift to the left side ***
