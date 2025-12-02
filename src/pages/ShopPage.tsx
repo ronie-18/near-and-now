@@ -19,14 +19,26 @@ const ShopPage = () => {
   
   const { showNotification } = useNotification();
 
+  // Shuffle array function for randomization
+  const shuffleArray = <T,>(array: T[]): T[] => {
+    const newArray = [...array];
+    for (let i = newArray.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+    }
+    return newArray;
+  };
+
   // Fetch products on mount
   useEffect(() => {
     const fetchProducts = async () => {
       try {
         setLoading(true);
         const allProducts = await getAllProducts();
-        setProducts(allProducts);
-        setFilteredProducts(allProducts);
+        // Randomize products for variety
+        const randomizedProducts = shuffleArray(allProducts);
+        setProducts(randomizedProducts);
+        setFilteredProducts(randomizedProducts);
         
         // Extract unique categories and sort alphabetically
         const uniqueCategories = Array.from(
@@ -87,8 +99,8 @@ const ShopPage = () => {
         result.sort((a, b) => b.name.localeCompare(a.name));
         break;
       default:
-        // Default sorting (newest first based on id)
-        result.sort((a, b) => b.id.localeCompare(a.id));
+        // Default sorting keeps the randomized order from initial load
+        // No additional sorting needed
         break;
     }
     
@@ -320,35 +332,28 @@ const ShopPage = () => {
           
           {/* Product Grid */}
           <div className="lg:w-3/4">
-            {/* Sort and Results Bar */}
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-4 mb-6">
-              <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <div className="bg-primary/10 text-primary px-4 py-2 rounded-lg font-bold text-lg">
-                    {filteredProducts.length}
-                  </div>
-                  <span className="text-gray-600">
-                    of {products.length} products
-                  </span>
-                </div>
-                
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <label htmlFor="sort-by" className="text-gray-600 font-medium whitespace-nowrap">
-                    Sort by:
-                  </label>
-                  <select
-                    id="sort-by"
-                    value={sortBy}
-                    onChange={handleSortChange}
-                    className="flex-1 sm:flex-none border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 font-medium text-gray-700 cursor-pointer"
-                  >
-                    <option value="default">Newest First</option>
-                    <option value="price-asc">Price: Low to High</option>
-                    <option value="price-desc">Price: High to Low</option>
-                    <option value="name-asc">Name: A to Z</option>
-                    <option value="name-desc">Name: Z to A</option>
-                  </select>
-                </div>
+            {/* Sort Bar */}
+            <div className="flex items-center justify-between mb-6">
+              <div className="text-gray-600 font-medium">
+                Showing <span className="text-primary font-bold">{filteredProducts.length}</span> products
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <label htmlFor="sort-by" className="text-gray-600 font-medium whitespace-nowrap">
+                  Sort:
+                </label>
+                <select
+                  id="sort-by"
+                  value={sortBy}
+                  onChange={handleSortChange}
+                  className="border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 font-medium text-gray-700 cursor-pointer bg-white"
+                >
+                  <option value="default">Random</option>
+                  <option value="price-asc">Price: Low to High</option>
+                  <option value="price-desc">Price: High to Low</option>
+                  <option value="name-asc">Name: A to Z</option>
+                  <option value="name-desc">Name: Z to A</option>
+                </select>
               </div>
             </div>
             

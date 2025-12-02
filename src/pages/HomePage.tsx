@@ -22,6 +22,16 @@ const HomePage = () => {
 
   const ITEMS_PER_LOAD = 20; // Load 20 products per "Load More" click
 
+  // Shuffle array function for randomization
+  const shuffleArray = <T,>(array: T[]): T[] => {
+    const newArray = [...array];
+    for (let i = newArray.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+    }
+    return newArray;
+  };
+
   // Fetch all products and categories on mount
   useEffect(() => {
     const fetchData = async () => {
@@ -31,7 +41,9 @@ const HomePage = () => {
           getAllProducts(),
           getCategories(),
         ]);
-        setAllProducts(products);
+        // Randomize products for variety on home page
+        const randomizedProducts = shuffleArray(products);
+        setAllProducts(randomizedProducts);
         setCategories(categoriesData);
       } catch (error) {
         console.error("Error fetching data:", error);
