@@ -29,12 +29,14 @@ export interface Product {
   description?: string;
   image?: string;
   image_url?: string;
+  images?: string[]; // Array of additional image URLs
   category: string;
   in_stock: boolean;
   rating?: number;
   size?: string;
   weight?: string;
   created_at?: string;
+  updated_at?: string;
   isLoose?: boolean;
 }
 

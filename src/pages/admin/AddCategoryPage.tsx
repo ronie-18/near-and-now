@@ -1,7 +1,19 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { ArrowLeft, Save, AlertCircle } from 'lucide-react';
+import { 
+  ArrowLeft, 
+  Save, 
+  AlertCircle, 
+  X, 
+  Check, 
+  Loader2,
+  Layers,
+  Palette,
+  Hash,
+  Link as LinkIcon,
+  FileText
+} from 'lucide-react';
 import { createCategory } from '../../services/adminService';
 
 const AddCategoryPage = () => {
@@ -18,15 +30,9 @@ const AddCategoryPage = () => {
     display_order: '',
   });
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value, type } = e.target;
-    
-    if (type === 'checkbox') {
-      const checked = (e.target as HTMLInputElement).checked;
-      setFormData(prev => ({ ...prev, [name]: checked }));
-    } else {
-      setFormData(prev => ({ ...prev, [name]: value }));
-    }
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -34,7 +40,6 @@ const AddCategoryPage = () => {
     setError(null);
     setSuccess(false);
 
-    // Validation
     if (!formData.name.trim()) {
       setError('Category name is required');
       return;
@@ -71,162 +76,218 @@ const AddCategoryPage = () => {
 
   return (
     <AdminLayout>
-      <div className="mb-6">
-        <button
-          onClick={() => navigate('/admin/categories')}
-          className="inline-flex items-center text-gray-600 hover:text-gray-900 mb-4"
-        >
-          <ArrowLeft size={18} className="mr-2" />
-          Back to Categories
-        </button>
-        <h1 className="text-2xl font-bold text-gray-800">Add New Category</h1>
-        <p className="text-gray-600">Create a new product category</p>
-      </div>
-
-      {/* Success Message */}
-      {success && (
-        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-6 flex items-center">
-          <AlertCircle className="w-5 h-5 mr-2" />
-          <span>Category created successfully! Redirecting...</span>
-        </div>
-      )}
-
-      {/* Error Message */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center">
-          <AlertCircle className="w-5 h-5 mr-2" />
-          <span>{error}</span>
+      <div className="max-w-3xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
           <button
-            onClick={() => setError(null)}
-            className="ml-auto text-red-700 hover:text-red-900"
+            onClick={() => navigate('/admin/categories')}
+            className="inline-flex items-center text-gray-500 hover:text-gray-700 transition-colors mb-4 group"
           >
-            <span className="sr-only">Dismiss</span>
-            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-            </svg>
+            <ArrowLeft size={18} className="mr-2 group-hover:-translate-x-1 transition-transform" />
+            Back to Categories
           </button>
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-gradient-to-br from-violet-500 to-purple-500 rounded-2xl flex items-center justify-center shadow-lg">
+              <Layers className="w-7 h-7 text-white" />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Add New Category</h1>
+              <p className="text-gray-500 mt-1">Create a new product category</p>
+            </div>
+          </div>
         </div>
-      )}
 
-      {/* Form */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <form onSubmit={handleSubmit}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Category Name */}
-            <div className="md:col-span-2">
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-                Category Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="name"
-                name="name"
-                value={formData.name}
-                onChange={handleChange}
-                required
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                placeholder="e.g., Vegetables, Fruits, Dairy"
-              />
+        {/* Success Message */}
+        {success && (
+          <div className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg animate-in slide-in-from-top">
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
+              <Check className="w-5 h-5" />
             </div>
-
-            {/* Color */}
-            <div>
-              <label htmlFor="color" className="block text-sm font-medium text-gray-700 mb-2">
-                Color/Theme <span className="text-gray-400 text-xs">(Optional)</span>
-              </label>
-              <input
-                type="text"
-                id="color"
-                name="color"
-                value={formData.color}
-                onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                placeholder="e.g., from-green-100 to-green-200"
-              />
-              <p className="mt-1 text-xs text-gray-500">Tailwind gradient classes for category card</p>
-            </div>
-
-            {/* Display Order */}
-            <div>
-              <label htmlFor="display_order" className="block text-sm font-medium text-gray-700 mb-2">
-                Display Order <span className="text-gray-400 text-xs">(Optional)</span>
-              </label>
-              <input
-                type="number"
-                id="display_order"
-                name="display_order"
-                value={formData.display_order}
-                onChange={handleChange}
-                min="0"
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                placeholder="e.g., 1, 2, 3..."
-              />
-              <p className="mt-1 text-xs text-gray-500">Lower numbers appear first</p>
-            </div>
-
-            {/* Image URL */}
-            <div className="md:col-span-2">
-              <label htmlFor="image_url" className="block text-sm font-medium text-gray-700 mb-2">
-                Image URL <span className="text-gray-400 text-xs">(Optional)</span>
-              </label>
-              <input
-                type="url"
-                id="image_url"
-                name="image_url"
-                value={formData.image_url}
-                onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                placeholder="https://example.com/category-image.jpg"
-              />
-              <p className="mt-1 text-xs text-gray-500">Enter a URL for the category image</p>
-            </div>
-
-            {/* Description */}
-            <div className="md:col-span-2">
-              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-2">
-                Description <span className="text-gray-400 text-xs">(Optional)</span>
-              </label>
-              <textarea
-                id="description"
-                name="description"
-                value={formData.description}
-                onChange={handleChange}
-                rows={4}
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                placeholder="Enter category description..."
-              />
-            </div>
+            <span className="font-medium">Category created successfully! Redirecting...</span>
           </div>
+        )}
 
-          {/* Action Buttons */}
-          <div className="mt-6 flex items-center justify-end space-x-4">
-            <button
-              type="button"
-              onClick={() => navigate('/admin/categories')}
-              className="px-6 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors"
-              disabled={loading}
-            >
-              Cancel
+        {/* Error Message */}
+        {error && (
+          <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg animate-in slide-in-from-top">
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <span className="flex-1 font-medium">{error}</span>
+            <button onClick={() => setError(null)} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
+              <X size={18} />
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center px-6 py-2 bg-primary text-white rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                  Creating...
-                </>
-              ) : (
-                <>
-                  <Save size={18} className="mr-2" />
-                  Create Category
-                </>
+          </div>
+        )}
+
+        {/* Form */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <form onSubmit={handleSubmit}>
+            {/* Category Info Section */}
+            <div className="p-6 border-b border-gray-100">
+              <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2">
+                <span className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center text-violet-600 text-sm font-bold">1</span>
+                Category Information
+              </h2>
+              
+              <div className="space-y-5">
+                {/* Category Name */}
+                <div>
+                  <label htmlFor="name" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Category Name <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Layers size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      id="name"
+                      name="name"
+                      value={formData.name}
+                      onChange={handleChange}
+                      required
+                      className="w-full pl-11 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-violet-500 transition-colors text-gray-800"
+                      placeholder="e.g., Vegetables, Fruits, Dairy"
+                    />
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label htmlFor="description" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Description <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <div className="relative">
+                    <FileText size={18} className="absolute left-4 top-4 text-gray-400" />
+                    <textarea
+                      id="description"
+                      name="description"
+                      value={formData.description}
+                      onChange={handleChange}
+                      rows={3}
+                      className="w-full pl-11 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-violet-500 transition-colors text-gray-800 resize-none"
+                      placeholder="Enter a brief description of this category..."
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Appearance Section */}
+            <div className="p-6 border-b border-gray-100 bg-gray-50/50">
+              <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2">
+                <span className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center text-purple-600 text-sm font-bold">2</span>
+                Appearance & Display
+              </h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Color */}
+                <div>
+                  <label htmlFor="color" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Color Theme <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <div className="relative">
+                    <Palette size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      id="color"
+                      name="color"
+                      value={formData.color}
+                      onChange={handleChange}
+                      className="w-full pl-11 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-violet-500 transition-colors text-gray-800"
+                      placeholder="e.g., from-green-100 to-green-200"
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-gray-500">Tailwind gradient classes for category card</p>
+                </div>
+
+                {/* Display Order */}
+                <div>
+                  <label htmlFor="display_order" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Display Order <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <div className="relative">
+                    <Hash size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="number"
+                      id="display_order"
+                      name="display_order"
+                      value={formData.display_order}
+                      onChange={handleChange}
+                      min="0"
+                      className="w-full pl-11 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-violet-500 transition-colors text-gray-800"
+                      placeholder="e.g., 1, 2, 3..."
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-gray-500">Lower numbers appear first on the homepage</p>
+                </div>
+              </div>
+
+              {/* Image URL */}
+              <div className="mt-5">
+                <label htmlFor="image_url" className="block text-sm font-semibold text-gray-700 mb-2">
+                  Image URL <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                </label>
+                <div className="relative">
+                  <LinkIcon size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="url"
+                    id="image_url"
+                    name="image_url"
+                    value={formData.image_url}
+                    onChange={handleChange}
+                    className="w-full pl-11 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-violet-500 transition-colors text-gray-800"
+                    placeholder="https://example.com/category-image.jpg"
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-gray-500">Direct URL to the category image</p>
+              </div>
+
+              {/* Image Preview */}
+              {formData.image_url && (
+                <div className="mt-4 p-4 bg-white rounded-xl border-2 border-dashed border-gray-200">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Image Preview</p>
+                  <img
+                    src={formData.image_url}
+                    alt="Category preview"
+                    className="w-32 h-32 object-cover rounded-xl shadow-md"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                </div>
               )}
-            </button>
-          </div>
-        </form>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="p-6 bg-gray-50 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => navigate('/admin/categories')}
+                className="px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-xl hover:bg-gray-100 transition-colors font-semibold"
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="inline-flex items-center px-8 py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-xl hover:from-violet-600 hover:to-purple-600 transition-all font-semibold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={20} className="animate-spin mr-2" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Save size={20} className="mr-2" />
+                    Create Category
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </AdminLayout>
   );

@@ -1,6 +1,84 @@
 import { supabase, supabaseAdmin } from './supabase';
 import { Product } from './supabase';
 
+// Image Upload Constants
+const STORAGE_BUCKET = 'product-images';
+const SUPABASE_URL = 'https://mpbszymyubxavjoxhzfm.supabase.co';
+
+// Image Upload Functions
+export async function uploadProductImage(file: File): Promise<string | null> {
+  try {
+    // Generate unique filename
+    const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
+    const filePath = `products/${fileName}`;
+
+    // Upload to Supabase Storage
+    const { data, error } = await supabaseAdmin.storage
+      .from(STORAGE_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
+
+    if (error) {
+      console.error('Error uploading image:', error);
+      // If bucket doesn't exist, try to create it
+      if (error.message.includes('Bucket not found')) {
+        console.log('Creating storage bucket...');
+        await supabaseAdmin.storage.createBucket(STORAGE_BUCKET, {
+          public: true,
+          fileSizeLimit: 5242880, // 5MB
+          allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+        });
+        // Retry upload
+        const { data: retryData, error: retryError } = await supabaseAdmin.storage
+          .from(STORAGE_BUCKET)
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: false
+          });
+        if (retryError) {
+          console.error('Retry upload failed:', retryError);
+          return null;
+        }
+        return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${retryData.path}`;
+      }
+      return null;
+    }
+
+    // Return public URL
+    return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${data.path}`;
+  } catch (error) {
+    console.error('Error in uploadProductImage:', error);
+    return null;
+  }
+}
+
+export async function deleteProductImage(imageUrl: string): Promise<boolean> {
+  try {
+    // Extract file path from URL
+    const urlParts = imageUrl.split(`${STORAGE_BUCKET}/`);
+    if (urlParts.length < 2) return false;
+    
+    const filePath = urlParts[1];
+
+    const { error } = await supabaseAdmin.storage
+      .from(STORAGE_BUCKET)
+      .remove([filePath]);
+
+    if (error) {
+      console.error('Error deleting image:', error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error in deleteProductImage:', error);
+    return false;
+  }
+}
+
 // Admin Types
 export interface Category {
   id: string;

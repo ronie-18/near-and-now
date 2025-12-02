@@ -1,335 +1,365 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { Search, Filter, Eye, ChevronLeft, ChevronRight, Mail, Phone, Calendar, MapPin } from 'lucide-react';
+import { 
+  Search, 
+  Filter, 
+  Eye, 
+  ChevronLeft, 
+  ChevronRight, 
+  Mail, 
+  Phone, 
+  Calendar, 
+  MapPin,
+  Users,
+  ShoppingBag,
+  TrendingUp,
+  X,
+  RefreshCw,
+  UserCheck,
+  UserX
+} from 'lucide-react';
+import { getCustomers, Customer } from '../../services/adminService';
 
-// Mock customer data
-const mockCustomers = [
-  { 
-    id: 'C001', 
-    name: 'John Doe', 
-    email: 'john.doe@example.com', 
-    phone: '+91 98765 43210', 
-    joinDate: '2025-01-15', 
-    orders: 12,
-    totalSpent: '₹15,250',
-    status: 'Active',
-    location: 'Kolkata, West Bengal'
-  },
-  { 
-    id: 'C002', 
-    name: 'Jane Smith', 
-    email: 'jane.smith@example.com', 
-    phone: '+91 87654 32109', 
-    joinDate: '2025-02-20', 
-    orders: 8,
-    totalSpent: '₹9,800',
-    status: 'Active',
-    location: 'Mumbai, Maharashtra'
-  },
-  { 
-    id: 'C003', 
-    name: 'Robert Johnson', 
-    email: 'robert.j@example.com', 
-    phone: '+91 76543 21098', 
-    joinDate: '2025-03-10', 
-    orders: 15,
-    totalSpent: '₹22,500',
-    status: 'Active',
-    location: 'Delhi, Delhi'
-  },
-  { 
-    id: 'C004', 
-    name: 'Emily Davis', 
-    email: 'emily.d@example.com', 
-    phone: '+91 65432 10987', 
-    joinDate: '2025-03-25', 
-    orders: 3,
-    totalSpent: '₹4,200',
-    status: 'Inactive',
-    location: 'Bangalore, Karnataka'
-  },
-  { 
-    id: 'C005', 
-    name: 'Michael Wilson', 
-    email: 'michael.w@example.com', 
-    phone: '+91 54321 09876', 
-    joinDate: '2025-04-05', 
-    orders: 10,
-    totalSpent: '₹12,800',
-    status: 'Active',
-    location: 'Chennai, Tamil Nadu'
-  },
-  { 
-    id: 'C006', 
-    name: 'Sarah Brown', 
-    email: 'sarah.b@example.com', 
-    phone: '+91 43210 98765', 
-    joinDate: '2025-04-18', 
-    orders: 6,
-    totalSpent: '₹7,500',
-    status: 'Active',
-    location: 'Hyderabad, Telangana'
-  },
-  { 
-    id: 'C007', 
-    name: 'David Miller', 
-    email: 'david.m@example.com', 
-    phone: '+91 32109 87654', 
-    joinDate: '2025-05-02', 
-    orders: 0,
-    totalSpent: '₹0',
-    status: 'Inactive',
-    location: 'Pune, Maharashtra'
-  },
-  { 
-    id: 'C008', 
-    name: 'Lisa Taylor', 
-    email: 'lisa.t@example.com', 
-    phone: '+91 21098 76543', 
-    joinDate: '2025-05-15', 
-    orders: 4,
-    totalSpent: '₹5,600',
-    status: 'Active',
-    location: 'Ahmedabad, Gujarat'
-  },
-  { 
-    id: 'C009', 
-    name: 'James Anderson', 
-    email: 'james.a@example.com', 
-    phone: '+91 10987 65432', 
-    joinDate: '2025-06-01', 
-    orders: 7,
-    totalSpent: '₹9,200',
-    status: 'Active',
-    location: 'Jaipur, Rajasthan'
-  },
-  { 
-    id: 'C010', 
-    name: 'Patricia Thomas', 
-    email: 'patricia.t@example.com', 
-    phone: '+91 09876 54321', 
-    joinDate: '2025-06-20', 
-    orders: 9,
-    totalSpent: '₹11,400',
-    status: 'Active',
-    location: 'Lucknow, Uttar Pradesh'
-  },
-];
+// Constants
+const ITEMS_PER_PAGE = 10;
+
+// Modern Stat Card
+interface StatCardProps {
+  icon: React.ComponentType<{ className?: string }>;
+  gradient: string;
+  label: string;
+  value: number | string;
+  subtitle?: string;
+}
+
+const StatCard: React.FC<StatCardProps> = ({ icon: Icon, gradient, label, value, subtitle }) => (
+  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
+    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
+    <div className="relative z-10">
+      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
+        <Icon className="w-6 h-6" />
+      </div>
+      <p className="text-white/80 text-sm font-medium">{label}</p>
+      <p className="text-3xl font-bold mt-1">{value}</p>
+      {subtitle && <p className="text-white/60 text-xs mt-1">{subtitle}</p>}
+    </div>
+  </div>
+);
+
+// Loading Spinner
+const LoadingSpinner = () => (
+  <div className="p-16 flex flex-col items-center justify-center">
+    <div className="relative">
+      <div className="w-16 h-16 border-4 border-purple-200 rounded-full" />
+      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-purple-500 rounded-full animate-spin border-t-transparent" />
+    </div>
+    <p className="mt-4 text-gray-500 font-medium">Loading customers...</p>
+  </div>
+);
+
+// Empty State
+const EmptyState = ({ searchTerm }: { searchTerm: string }) => (
+  <div className="p-16 text-center">
+    <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
+      <Users className="w-12 h-12 text-gray-400" />
+    </div>
+    <h3 className="text-xl font-bold text-gray-800 mb-2">No customers found</h3>
+    <p className="text-gray-500">
+      {searchTerm ? 'Try a different search term.' : 'Customers will appear here when they make purchases.'}
+    </p>
+  </div>
+);
 
 const CustomersPage = () => {
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedStatus, setSelectedStatus] = useState('All');
-  const itemsPerPage = 8;
 
-  // Filter customers based on search term and status
-  const filteredCustomers = mockCustomers.filter(customer => {
-    const matchesSearch = customer.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         customer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         customer.id.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = selectedStatus === 'All' || customer.status === selectedStatus;
-    return matchesSearch && matchesStatus;
-  });
+  // Fetch customers
+  const fetchCustomers = async () => {
+    try {
+      setLoading(true);
+      const data = await getCustomers();
+      setCustomers(data);
+    } catch (err) {
+      console.error('Error fetching customers:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  // Stats
+  const stats = useMemo(() => ({
+    total: customers.length,
+    active: customers.filter(c => c.status === 'Active').length,
+    totalOrders: customers.reduce((sum, c) => sum + c.orders_count, 0),
+    totalRevenue: customers.reduce((sum, c) => sum + c.total_spent, 0),
+  }), [customers]);
+
+  // Filtered customers
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(customer => {
+      const matchesSearch = 
+        customer.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        (customer.email?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
+        (customer.phone?.includes(searchTerm) ?? false) ||
+        customer.id.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = selectedStatus === 'All' || customer.status === selectedStatus;
+      return matchesSearch && matchesStatus;
+    });
+  }, [customers, searchTerm, selectedStatus]);
 
   // Pagination
-  const indexOfLastCustomer = currentPage * itemsPerPage;
-  const indexOfFirstCustomer = indexOfLastCustomer - itemsPerPage;
+  const totalPages = Math.ceil(filteredCustomers.length / ITEMS_PER_PAGE);
+  const indexOfLastCustomer = currentPage * ITEMS_PER_PAGE;
+  const indexOfFirstCustomer = indexOfLastCustomer - ITEMS_PER_PAGE;
   const currentCustomers = filteredCustomers.slice(indexOfFirstCustomer, indexOfLastCustomer);
-  const totalPages = Math.ceil(filteredCustomers.length / itemsPerPage);
 
-  // Get unique statuses
-  const statuses = ['All', ...new Set(mockCustomers.map(customer => customer.status))];
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedStatus]);
+
+  const statuses = ['All', 'Active', 'Inactive'];
 
   return (
     <AdminLayout>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Customers</h1>
-        <p className="text-gray-600">Manage your customer database</p>
-      </div>
-
-      {/* Customer Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Total Customers</p>
-              <p className="text-xl font-bold text-gray-800">{mockCustomers.length}</p>
-            </div>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
+            <p className="text-gray-500 mt-1">View and manage your customer database</p>
           </div>
-        </div>
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mr-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Active Customers</p>
-              <p className="text-xl font-bold text-gray-800">
-                {mockCustomers.filter(customer => customer.status === 'Active').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mr-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Total Orders</p>
-              <p className="text-xl font-bold text-gray-800">
-                {mockCustomers.reduce((total, customer) => total + customer.orders, 0)}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Filters and Search */}
-      <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="relative flex-1">
-            <span className="absolute inset-y-0 left-0 flex items-center pl-3">
-              <Search size={18} className="text-gray-400" />
-            </span>
-            <input
-              type="text"
-              placeholder="Search customers by name, email, or ID..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 w-full rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-            />
-          </div>
-          
-          <div className="flex items-center">
-            <Filter size={18} className="text-gray-400 mr-2" />
-            <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="py-2 px-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-            >
-              {statuses.map(status => (
-                <option key={status} value={status}>{status}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Customers Table */}
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                <th className="px-6 py-3">ID</th>
-                <th className="px-6 py-3">Customer</th>
-                <th className="px-6 py-3">Contact</th>
-                <th className="px-6 py-3">Location</th>
-                <th className="px-6 py-3">Join Date</th>
-                <th className="px-6 py-3">Orders</th>
-                <th className="px-6 py-3">Total Spent</th>
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {currentCustomers.map((customer) => (
-                <tr key={customer.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm font-medium text-gray-800">{customer.id}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center">
-                      <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center mr-3">
-                        <span className="text-primary font-medium">{customer.name.split(' ').map(n => n[0]).join('')}</span>
-                      </div>
-                      <span className="text-sm font-medium text-gray-800">{customer.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm text-gray-600">
-                      <div className="flex items-center mb-1">
-                        <Mail size={14} className="mr-1" />
-                        <span>{customer.email}</span>
-                      </div>
-                      <div className="flex items-center">
-                        <Phone size={14} className="mr-1" />
-                        <span>{customer.phone}</span>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center text-sm text-gray-600">
-                      <MapPin size={14} className="mr-1" />
-                      <span>{customer.location}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center text-sm text-gray-600">
-                      <Calendar size={14} className="mr-1" />
-                      <span>{customer.joinDate}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{customer.orders}</td>
-                  <td className="px-6 py-4 text-sm font-medium text-gray-800">{customer.totalSpent}</td>
-                  <td className="px-6 py-4">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                      ${customer.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                      {customer.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right text-sm font-medium">
-                    <button className="text-primary hover:text-primary/80">
-                      <Eye size={16} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <button
+            onClick={fetchCustomers}
+            className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
+          >
+            <RefreshCw size={18} className="mr-2" />
+            Refresh
+          </button>
         </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
-            <div className="text-sm text-gray-500">
-              Showing {indexOfFirstCustomer + 1} to {Math.min(indexOfLastCustomer, filteredCustomers.length)} of {filteredCustomers.length} customers
-            </div>
-            <div className="flex space-x-1">
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className={`px-3 py-1 rounded ${currentPage === 1 ? 'text-gray-400 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-200'}`}
-              >
-                <ChevronLeft size={16} />
-              </button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-                <button
-                  key={page}
-                  onClick={() => setCurrentPage(page)}
-                  className={`px-3 py-1 rounded ${currentPage === page ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-200'}`}
-                >
-                  {page}
+        {/* Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+          <StatCard
+            icon={Users}
+            gradient="bg-gradient-to-br from-violet-500 to-purple-600"
+            label="Total Customers"
+            value={stats.total}
+          />
+          <StatCard
+            icon={UserCheck}
+            gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
+            label="Active Customers"
+            value={stats.active}
+            subtitle={`${stats.total > 0 ? Math.round((stats.active / stats.total) * 100) : 0}% of total`}
+          />
+          <StatCard
+            icon={ShoppingBag}
+            gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
+            label="Total Orders"
+            value={stats.totalOrders}
+          />
+          <StatCard
+            icon={TrendingUp}
+            gradient="bg-gradient-to-br from-amber-500 to-orange-600"
+            label="Total Revenue"
+            value={`₹${stats.totalRevenue.toLocaleString()}`}
+          />
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+          <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+            <div className="relative flex-1">
+              <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by name, email, phone, or ID..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:ring-0 transition-colors text-gray-800"
+              />
+              {searchTerm && (
+                <button onClick={() => setSearchTerm('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X size={18} />
                 </button>
-              ))}
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className={`px-3 py-1 rounded ${currentPage === totalPages ? 'text-gray-400 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-200'}`}
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <Filter size={18} className="text-gray-400" />
+              <select
+                value={selectedStatus}
+                onChange={(e) => setSelectedStatus(e.target.value)}
+                className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:ring-0 transition-colors min-w-[140px] text-gray-700"
               >
-                <ChevronRight size={16} />
-              </button>
+                {statuses.map(status => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
             </div>
           </div>
-        )}
+        </div>
+
+        {/* Customers Table */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          {loading ? (
+            <LoadingSpinner />
+          ) : filteredCustomers.length === 0 ? (
+            <EmptyState searchTerm={searchTerm} />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
+                  <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Contact</th>
+                    <th className="px-6 py-4">Location</th>
+                    <th className="px-6 py-4">Joined</th>
+                    <th className="px-6 py-4">Orders</th>
+                    <th className="px-6 py-4">Total Spent</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {currentCustomers.map((customer) => (
+                    <tr key={customer.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-purple-50/30 transition-all duration-200">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center shadow-md">
+                            <span className="text-white font-bold">
+                              {customer.name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                            </span>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-gray-800 group-hover:text-purple-600 transition-colors">
+                              {customer.name}
+                            </p>
+                            <p className="text-xs text-gray-400 font-mono">#{customer.id.substring(0, 8)}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="space-y-1">
+                          {customer.email && (
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Mail size={14} className="text-gray-400" />
+                              <span>{customer.email}</span>
+                            </div>
+                          )}
+                          {customer.phone && (
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Phone size={14} className="text-gray-400" />
+                              <span>{customer.phone}</span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        {customer.location ? (
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <MapPin size={14} className="text-gray-400" />
+                            <span>{customer.location}</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 italic text-sm">Not available</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <Calendar size={14} className="text-gray-400" />
+                          <span>{new Date(customer.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center px-3 py-1.5 rounded-xl bg-blue-100 text-blue-700 text-sm font-semibold">
+                          {customer.orders_count} orders
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-lg font-bold text-gray-800">₹{customer.total_spent.toLocaleString()}</span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold
+                          ${customer.status === 'Active' 
+                            ? 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700' 
+                            : 'bg-gray-100 text-gray-600'}`}>
+                          {customer.status === 'Active' ? <UserCheck size={14} /> : <UserX size={14} />}
+                          {customer.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex justify-end">
+                          <button
+                            className="p-2.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                            title="View Details"
+                          >
+                            <Eye size={18} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <p className="text-sm text-gray-600">
+                Showing <span className="font-semibold text-gray-800">{indexOfFirstCustomer + 1}</span> to{' '}
+                <span className="font-semibold text-gray-800">{Math.min(indexOfLastCustomer, filteredCustomers.length)}</span> of{' '}
+                <span className="font-semibold text-gray-800">{filteredCustomers.length}</span> customers
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  <ChevronLeft size={20} />
+                </button>
+                <div className="flex gap-1">
+                  {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                    let page: number;
+                    if (totalPages <= 5) page = i + 1;
+                    else if (currentPage <= 3) page = i + 1;
+                    else if (currentPage >= totalPages - 2) page = totalPages - 4 + i;
+                    else page = currentPage - 2 + i;
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`w-10 h-10 rounded-xl font-semibold transition-all
+                          ${currentPage === page
+                            ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-lg'
+                            : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  <ChevronRight size={20} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </AdminLayout>
   );
