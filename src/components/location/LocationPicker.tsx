@@ -390,12 +390,36 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
     // Replace multiple spaces with single space
     cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
 
+    // Safely extract lat/lng as primitive numbers
+    // Use nullish coalescing (??) instead of || to handle 0 values correctly
+    let finalLat: number;
+    let finalLng: number;
+
+    if (lat !== undefined && lat !== null) {
+      finalLat = Number(lat);
+    } else if (place.geometry?.location) {
+      // Google Maps LatLng objects have lat() and lng() methods
+      const loc = place.geometry.location;
+      finalLat = typeof loc.lat === 'function' ? Number(loc.lat()) : Number(loc.lat) || 0;
+    } else {
+      finalLat = 0;
+    }
+
+    if (lng !== undefined && lng !== null) {
+      finalLng = Number(lng);
+    } else if (place.geometry?.location) {
+      const loc = place.geometry.location;
+      finalLng = typeof loc.lng === 'function' ? Number(loc.lng()) : Number(loc.lng) || 0;
+    } else {
+      finalLng = 0;
+    }
+
     const location: Location = {
       address: cleanAddress,
       city: city || 'Unknown',
       pincode: pincode || '000000',
-      lat: lat || place.geometry?.location?.lat() || 0,
-      lng: lng || place.geometry?.location?.lng() || 0,
+      lat: finalLat,
+      lng: finalLng,
     };
 
     return location;
