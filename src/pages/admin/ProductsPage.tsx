@@ -12,7 +12,6 @@ import {
   Package,
   ShoppingCart,
   AlertTriangle,
-  TrendingUp,
   Eye,
   X,
   Grid3X3,
@@ -26,7 +25,6 @@ import {
   Loader2,
   ImageOff,
   RefreshCw,
-  Download,
   Sparkles
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -779,7 +777,6 @@ const ProductsPage = () => {
     total: products.length,
     inStock: products.filter(p => p.in_stock).length,
     outOfStock: products.filter(p => !p.in_stock).length,
-    totalValue: products.reduce((sum, p) => sum + (p.price || 0), 0),
   }), [products]);
 
   // Pagination
@@ -838,7 +835,7 @@ const ProductsPage = () => {
         {success && <SuccessAlert message={success} onDismiss={() => setSuccess(null)} />}
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           <StatCard
             icon={Package}
             gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
@@ -859,12 +856,6 @@ const ProductsPage = () => {
             label="Out of Stock"
             value={stats.outOfStock}
             subtitle={stats.outOfStock > 0 ? "Needs attention" : "All stocked up!"}
-          />
-          <StatCard
-            icon={TrendingUp}
-            gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-            label="Total Value"
-            value={formatPrice(stats.totalValue)}
           />
         </div>
 

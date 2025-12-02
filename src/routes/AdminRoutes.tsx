@@ -6,6 +6,7 @@ import OrdersPage from '../pages/admin/OrdersPage';
 import CustomersPage from '../pages/admin/CustomersPage';
 import CategoriesPage from '../pages/admin/CategoriesPage';
 import AddCategoryPage from '../pages/admin/AddCategoryPage';
+import ReportsPage from '../pages/admin/ReportsPage';
 
 // Admin authentication guard
 const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
@@ -76,6 +77,14 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <AddCategoryPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/reports"
+        element={
+          <AdminAuthGuard>
+            <ReportsPage />
           </AdminAuthGuard>
         }
       />

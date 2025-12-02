@@ -10,7 +10,6 @@ import {
   Layers,
   AlertCircle,
   Package,
-  Grid3X3,
   X,
   Loader2,
   RefreshCw,
@@ -218,9 +217,6 @@ const CategoriesPage = () => {
   const stats = useMemo(() => ({
     totalCategories: categories.length,
     totalProducts: Object.values(productCounts).reduce((sum, count) => sum + count, 0),
-    avgProductsPerCategory: categories.length > 0
-      ? Math.round(Object.values(productCounts).reduce((sum, count) => sum + count, 0) / categories.length)
-      : 0,
   }), [categories, productCounts]);
 
   // Pagination
@@ -266,7 +262,7 @@ const CategoriesPage = () => {
         {success && <SuccessAlert message={success} onDismiss={() => setSuccess(null)} />}
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <StatCard
             icon={Layers}
             gradient="bg-gradient-to-br from-violet-500 to-purple-600"
@@ -278,12 +274,6 @@ const CategoriesPage = () => {
             gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
             label="Total Products"
             value={stats.totalProducts}
-          />
-          <StatCard
-            icon={Grid3X3}
-            gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-            label="Avg Products/Category"
-            value={stats.avgProductsPerCategory}
           />
         </div>
 

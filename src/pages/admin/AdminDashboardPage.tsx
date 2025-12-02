@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import {
   ShoppingBag,
@@ -15,13 +15,14 @@ import {
   ArrowDownRight,
   RefreshCw,
   X,
-  Eye,
-  BarChart3
+  Calendar,
+  BarChart3,
+  Layers
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getDashboardStats, getAdminProducts, getOrders } from '../../services/adminService';
+import { getDashboardStats, getAdminProducts, getOrders, getCategories, Order } from '../../services/adminService';
 
-// Modern Stat Card
+// Modern Stat Card (with optional link)
 interface StatCardProps {
   icon: React.ComponentType<{ className?: string }>;
   gradient: string;
@@ -29,6 +30,7 @@ interface StatCardProps {
   value: string | number;
   change?: string;
   changeType?: 'positive' | 'negative';
+  href?: string;
 }
 
 const StatCard: React.FC<StatCardProps> = ({
@@ -37,28 +39,37 @@ const StatCard: React.FC<StatCardProps> = ({
   label,
   value,
   change,
-  changeType = 'positive'
-}) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-6 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-20 h-20 bg-white/10 rounded-full blur-xl" />
-    <div className="relative z-10">
-      <div className="flex items-center justify-between mb-4">
-        <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-          <Icon className="w-6 h-6" />
-        </div>
-        {change && (
-          <div className={`flex items-center gap-1 text-sm font-medium px-2 py-1 rounded-full backdrop-blur-sm ${changeType === 'positive' ? 'bg-white/20' : 'bg-red-400/30'}`}>
-            {changeType === 'positive' ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-            {change}
+  changeType = 'positive',
+  href
+}) => {
+  const content = (
+    <div className={`relative overflow-hidden rounded-2xl ${gradient} p-6 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 ${href ? 'cursor-pointer' : ''}`}>
+      <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
+      <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-20 h-20 bg-white/10 rounded-full blur-xl" />
+      <div className="relative z-10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
+            <Icon className="w-6 h-6" />
           </div>
-        )}
+          {change && (
+            <div className={`flex items-center gap-1 text-sm font-medium px-2 py-1 rounded-full backdrop-blur-sm ${changeType === 'positive' ? 'bg-white/20' : 'bg-red-400/30'}`}>
+              {changeType === 'positive' ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+              {change}
+            </div>
+          )}
+        </div>
+        <p className="text-white/80 text-sm font-medium">{label}</p>
+        <p className="text-3xl font-bold mt-1">{value}</p>
       </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
     </div>
-  </div>
-);
+  );
+
+  if (href) {
+    return <Link to={href}>{content}</Link>;
+  }
+
+  return content;
+};
 
 // Order Status Card
 interface StatusCardProps {
@@ -107,6 +118,164 @@ const LoadingSpinner = () => (
   </div>
 );
 
+// Interactive Bar Chart Component
+interface SalesChartProps {
+  data: { date: string; sales: number; orders: number }[];
+  period: string;
+}
+
+const SalesChart: React.FC<SalesChartProps> = ({ data }) => {
+  const totalSales = data.reduce((sum, d) => sum + d.sales, 0);
+  const totalOrders = data.reduce((sum, d) => sum + d.orders, 0);
+  const avgSales = data.length > 0 ? Math.round(totalSales / data.length) : 0;
+  
+  // Dynamic Y-axis based on actual max value
+  const actualMax = Math.max(...data.map(d => d.sales), 0);
+  // Round up to nearest nice number (1000, 2000, 5000, 10000, etc.)
+  const getNiceMax = (val: number): number => {
+    if (val === 0) return 5000;
+    if (val <= 1000) return 1000;
+    if (val <= 2000) return 2000;
+    if (val <= 3000) return 3000;
+    if (val <= 4000) return 4000;
+    if (val <= 5000) return 5000;
+    if (val <= 10000) return 10000;
+    if (val <= 20000) return 20000;
+    if (val <= 50000) return 50000;
+    return Math.ceil(val / 10000) * 10000;
+  };
+  const maxYAxis = getNiceMax(actualMax);
+  
+  // Generate Y-axis values (5 ticks)
+  const yAxisValues = [
+    maxYAxis,
+    Math.round(maxYAxis * 0.75),
+    Math.round(maxYAxis * 0.5),
+    Math.round(maxYAxis * 0.25),
+    0
+  ];
+  
+  // Calculate growth
+  const firstHalf = data.slice(0, Math.floor(data.length / 2));
+  const secondHalf = data.slice(Math.floor(data.length / 2));
+  const firstHalfTotal = firstHalf.reduce((sum, d) => sum + d.sales, 0);
+  const secondHalfTotal = secondHalf.reduce((sum, d) => sum + d.sales, 0);
+  const growth = firstHalfTotal > 0 ? ((secondHalfTotal - firstHalfTotal) / firstHalfTotal) * 100 : 0;
+
+  return (
+    <div className="overflow-hidden">
+      {/* Chart Summary Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 border border-emerald-100">
+          <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Total Revenue</p>
+          <p className="text-2xl font-bold text-emerald-700 mt-1">₹{totalSales.toLocaleString()}</p>
+        </div>
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
+          <p className="text-xs text-blue-600 font-semibold uppercase tracking-wide">Total Orders</p>
+          <p className="text-2xl font-bold text-blue-700 mt-1">{totalOrders}</p>
+        </div>
+        <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-100">
+          <p className="text-xs text-violet-600 font-semibold uppercase tracking-wide">Avg. Daily Sales</p>
+          <p className="text-2xl font-bold text-violet-700 mt-1">₹{avgSales.toLocaleString()}</p>
+        </div>
+        <div className={`bg-gradient-to-br ${growth >= 0 ? 'from-green-50 to-emerald-50 border-green-100' : 'from-red-50 to-rose-50 border-red-100'} rounded-xl p-4 border`}>
+          <p className={`text-xs ${growth >= 0 ? 'text-green-600' : 'text-red-600'} font-semibold uppercase tracking-wide`}>Growth</p>
+          <div className="flex items-center gap-2 mt-1">
+            {growth >= 0 ? <TrendingUp className="w-5 h-5 text-green-600" /> : <ArrowDownRight className="w-5 h-5 text-red-600" />}
+            <p className={`text-2xl font-bold ${growth >= 0 ? 'text-green-700' : 'text-red-700'}`}>{growth >= 0 ? '+' : ''}{growth.toFixed(1)}%</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Bar Chart */}
+      {data.length > 0 ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 overflow-hidden">
+          {/* Chart Area */}
+          <div className="flex">
+            {/* Y-axis labels - Dynamic values */}
+            <div className="w-16 flex flex-col justify-between text-xs text-gray-500 font-medium pr-2 h-52 flex-shrink-0">
+              {yAxisValues.map((val, i) => (
+                <span key={i}>₹{val.toLocaleString()}</span>
+              ))}
+            </div>
+
+            {/* Chart with bars - fixed width container */}
+            <div className="flex-1 min-w-0 overflow-hidden">
+              {/* Bars container */}
+              <div className="h-52 border-l-2 border-b-2 border-gray-300 flex items-end px-1">
+                {data.map((item, index) => {
+                  // Calculate height in pixels based on container height (208px = h-52)
+                  const containerHeight = 200; // pixels
+                  const barHeight = maxYAxis > 0 ? (item.sales / maxYAxis) * containerHeight : 0;
+                  
+                  return (
+                    <div 
+                      key={index} 
+                      className="flex-1 flex flex-col items-center justify-end group min-w-0 px-0.5 h-full"
+                    >
+                      {/* Tooltip - only show if there's data */}
+                      {item.sales > 0 && (
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity mb-1 bg-black text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap z-10">
+                          ₹{item.sales.toLocaleString()} ({item.orders} orders)
+                        </div>
+                      )}
+                      {/* Bar - BLACK color, only render if has sales */}
+                      {item.sales > 0 ? (
+                        <div
+                          className="w-full max-w-[30px] bg-gray-900 hover:bg-gray-700 cursor-pointer transition-colors rounded-t mx-auto"
+                          style={{ 
+                            height: `${Math.max(barHeight, 4)}px`
+                          }}
+                        />
+                      ) : (
+                        <div className="w-full h-0" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* X-axis labels - aligned with bars */}
+              <div className="flex mt-2 px-1">
+                {data.map((item, index) => (
+                  <div 
+                    key={index} 
+                    className="flex-1 text-center min-w-0 px-0.5"
+                  >
+                    <span className="text-[10px] text-gray-500 font-medium truncate block">{item.date}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+          <div className="text-gray-400 mb-2">
+            <BarChart3 className="w-12 h-12 mx-auto" />
+          </div>
+          <p className="text-gray-500 font-medium">No order data available</p>
+          <p className="text-gray-400 text-sm mt-1">Orders will appear here once placed</p>
+        </div>
+      )}
+
+      {/* Chart Legend */}
+      <div className="flex items-center justify-center gap-8 mt-4 pt-4 border-t border-gray-100">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-gray-900 rounded" />
+          <span className="text-sm text-gray-600 font-medium">Daily Revenue</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className={`flex items-center gap-1 px-2 py-1 rounded-full ${growth >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+            {growth >= 0 ? <TrendingUp size={12} /> : <ArrowDownRight size={12} />}
+            <span className="text-xs font-semibold">{growth >= 0 ? 'Upward' : 'Downward'} Trend</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AdminDashboardPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,8 +289,11 @@ const AdminDashboardPage = () => {
     deliveredOrders: 0,
     cancelledOrders: 0
   });
-  const [recentOrders, setRecentOrders] = useState<any[]>([]);
+  const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [topProducts, setTopProducts] = useState<any[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [salesPeriod, setSalesPeriod] = useState<'7' | '30' | '90'>('7');
+  const [totalCategories, setTotalCategories] = useState(0);
 
   const fetchDashboardData = async () => {
     try {
@@ -132,9 +304,16 @@ const AdminDashboardPage = () => {
       setDashboardStats(stats);
 
       const orders = await getOrders();
+      setAllOrders(orders);
       setRecentOrders(orders.slice(0, 5));
 
-      const products = await getAdminProducts();
+      const [products, categories] = await Promise.all([
+        getAdminProducts(),
+        getCategories()
+      ]);
+      
+      setTotalCategories(categories.length);
+      
       const topProds = products
         .sort(() => 0.5 - Math.random())
         .slice(0, 5)
@@ -158,6 +337,61 @@ const AdminDashboardPage = () => {
     fetchDashboardData();
   }, []);
 
+  // Generate sales data - Show all dates for period, bars only on days with orders
+  const salesData = useMemo(() => {
+    const now = new Date();
+    now.setHours(23, 59, 59, 999);
+    const daysToShow = parseInt(salesPeriod);
+    
+    // Group orders by date - aggregate total sales per day
+    const ordersByDate: Record<string, { sales: number; orders: number }> = {};
+    
+    if (allOrders && allOrders.length > 0) {
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - daysToShow);
+      startDate.setHours(0, 0, 0, 0);
+
+      allOrders.forEach(order => {
+        if (order.order_status === 'cancelled') return;
+        const orderDate = new Date(order.created_at);
+        if (orderDate >= startDate && orderDate <= now) {
+          const dateKey = orderDate.toDateString();
+          if (!ordersByDate[dateKey]) {
+            ordersByDate[dateKey] = { sales: 0, orders: 0 };
+          }
+          ordersByDate[dateKey].sales += order.order_total || 0;
+          ordersByDate[dateKey].orders += 1;
+        }
+      });
+    }
+
+    // Generate all dates for the period
+    const allDates: { date: string; sales: number; orders: number; dateKey: string }[] = [];
+    
+    // Determine step size to keep chart manageable
+    // 7 days: show all 7 days
+    // 30 days: show every 3rd day (10 points)
+    // 90 days: show every 9th day (10 points)
+    const stepSize = daysToShow <= 7 ? 1 : daysToShow <= 30 ? 3 : 9;
+    
+    for (let i = daysToShow - 1; i >= 0; i -= stepSize) {
+      const date = new Date(now);
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+      const dateKey = date.toDateString();
+      const orderData = ordersByDate[dateKey] || { sales: 0, orders: 0 };
+      
+      allDates.push({
+        date: date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+        sales: orderData.sales,
+        orders: orderData.orders,
+        dateKey
+      });
+    }
+
+    return allDates;
+  }, [allOrders, salesPeriod]);
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'delivered': return <CheckCircle className="w-4 h-4" />;
@@ -178,6 +412,8 @@ const AdminDashboardPage = () => {
       default: return 'bg-gray-100 text-gray-700';
     }
   };
+
+  const periodLabel = salesPeriod === '7' ? 'Last 7 Days' : salesPeriod === '30' ? 'Last 30 Days' : 'Last 90 Days';
 
   return (
     <AdminLayout>
@@ -205,7 +441,7 @@ const AdminDashboardPage = () => {
         ) : (
           <>
             {/* Main Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5">
               <StatCard
                 icon={DollarSign}
                 gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
@@ -215,29 +451,72 @@ const AdminDashboardPage = () => {
                 changeType="positive"
               />
               <StatCard
-                icon={ShoppingBag}
-                gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-                label="Total Orders"
-                value={dashboardStats.totalOrders}
-                change="+8.2%"
-                changeType="positive"
-              />
-              <StatCard
-                icon={Users}
-                gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-                label="Total Customers"
-                value={dashboardStats.totalCustomers}
-                change="+15.3%"
-                changeType="positive"
-              />
-              <StatCard
                 icon={Package}
-                gradient="bg-gradient-to-br from-amber-500 to-orange-600"
+                gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
                 label="Total Products"
                 value={dashboardStats.totalProducts}
                 change="+5.7%"
                 changeType="positive"
+                href="/admin/products"
               />
+              <StatCard
+                icon={Layers}
+                gradient="bg-gradient-to-br from-violet-500 to-purple-600"
+                label="Total Categories"
+                value={totalCategories}
+                change="+2.1%"
+                changeType="positive"
+                href="/admin/categories"
+              />
+              <StatCard
+                icon={ShoppingBag}
+                gradient="bg-gradient-to-br from-amber-500 to-orange-600"
+                label="Total Orders"
+                value={dashboardStats.totalOrders}
+                change="+8.2%"
+                changeType="positive"
+                href="/admin/orders"
+              />
+              <StatCard
+                icon={Users}
+                gradient="bg-gradient-to-br from-rose-500 to-pink-600"
+                label="Total Customers"
+                value={dashboardStats.totalCustomers}
+                change="+15.3%"
+                changeType="positive"
+                href="/admin/customers"
+              />
+            </div>
+
+            {/* Sales Overview Chart */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl flex items-center justify-center">
+                    <BarChart3 className="w-6 h-6 text-emerald-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-800">Sales Overview</h2>
+                    <p className="text-sm text-gray-500">Revenue trends for {periodLabel.toLowerCase()}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 bg-gray-100 rounded-xl p-1">
+                  {(['7', '30', '90'] as const).map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setSalesPeriod(p)}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                        salesPeriod === p
+                          ? 'bg-white text-emerald-600 shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {p === '7' ? '7 Days' : p === '30' ? '30 Days' : '90 Days'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <SalesChart data={salesData} period={periodLabel} />
             </div>
 
             {/* Order Status Overview */}
@@ -366,24 +645,20 @@ const AdminDashboardPage = () => {
               </div>
             </div>
 
-            {/* Sales Chart Placeholder */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-bold text-gray-800">Sales Overview</h2>
-                <select className="text-sm border-2 border-gray-200 rounded-xl px-4 py-2 focus:border-emerald-500 focus:outline-none transition-colors">
-                  <option>Last 7 Days</option>
-                  <option>Last 30 Days</option>
-                  <option>Last 90 Days</option>
-                </select>
-              </div>
-              <div className="h-80 flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl border-2 border-dashed border-gray-200">
-                <div className="text-center">
-                  <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mx-auto mb-4">
-                    <BarChart3 size={32} className="text-gray-400" />
-                  </div>
-                  <p className="text-gray-600 font-medium">Sales chart will be displayed here</p>
-                  <p className="text-sm text-gray-400 mt-1">Connect analytics to visualize sales trends</p>
+            {/* Quick Link to Reports */}
+            <div className="bg-gradient-to-r from-violet-500 to-purple-600 rounded-2xl p-6 text-white">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold">Want more detailed analytics?</h3>
+                  <p className="text-violet-200 mt-1">Check out the Reports section for in-depth insights</p>
                 </div>
+                <Link
+                  to="/admin/reports"
+                  className="inline-flex items-center px-6 py-3 bg-white text-violet-600 rounded-xl hover:bg-violet-50 transition-colors font-semibold shadow-lg"
+                >
+                  View Reports
+                  <ArrowUpRight size={18} className="ml-2" />
+                </Link>
               </div>
             </div>
           </>
