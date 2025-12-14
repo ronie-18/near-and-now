@@ -8,6 +8,7 @@ import {
   Search, ShoppingCart, User, MapPin, ChevronDown, Menu, X,
   LogOut, Package, UserCircle, LogIn, UserPlus, Clock, Sparkles
 } from 'lucide-react';
+import { searchProducts, Product } from '../../services/supabase';
 
 interface Location {
   address: string;
@@ -28,6 +29,10 @@ const Header = () => {
   const [scrolled, setScrolled] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
+  const [searchSuggestions, setSearchSuggestions] = useState<Product[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
 
   const userMenuRef = useRef<HTMLDivElement>(null);
   const mobileUserMenuRef = useRef<HTMLDivElement>(null);
@@ -70,12 +75,68 @@ const Header = () => {
     };
   }, []);
 
+  // Handle click outside to close search suggestions
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setIsSearchFocused(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // ENHANCED LIVE SEARCH SUGGESTIONS LOGIC
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchSuggestions([]);
+      setSuggestionsLoading(false);
+      return;
+    }
+
+    setSuggestionsLoading(true);
+
+    // Clear previous timeout
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // Set new timeout for debounced search
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const products = await searchProducts(searchQuery);
+        setSearchSuggestions(products.slice(0, 8)); // show max 8 suggestions
+      } catch (err) {
+        console.error('Search error:', err);
+        setSearchSuggestions([]);
+      } finally {
+        setSuggestionsLoading(false);
+      }
+    }, 300); // 300ms debounce
+
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, [searchQuery]);
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
       window.location.href = `/search?q=${encodeURIComponent(searchQuery)}`;
       setSearchQuery('');
+      setIsSearchFocused(false);
     }
+  };
+
+  const handleSuggestionClick = (productId: string) => {
+    window.location.href = `/product/${productId}`;
+    setIsSearchFocused(false);
+    setSearchQuery('');
   };
 
   const toggleMobileMenu = () => {
@@ -188,7 +249,7 @@ const Header = () => {
                         </p>
                       </>
                     ) : (
-                      <p className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                      <p className="text-sm font-bold text-gray-900 flex items-center gap-1">
                         Select Location
                         <Sparkles className="w-3 h-3 text-primary animate-pulse" />
                       </p>
@@ -199,7 +260,7 @@ const Header = () => {
               </div>
 
               {/* Search Bar - Enhanced Desktop */}
-              <div className="hidden md:block flex-1 max-w-2xl">
+              <div className="hidden md:block flex-1 max-w-2xl" ref={searchRef}>
                 <form onSubmit={handleSearch} className="relative">
                   <div className={`relative transition-all duration-300 ${
                     isSearchFocused ? 'transform scale-[1.02]' : ''
@@ -210,16 +271,18 @@ const Header = () => {
                       <input
                         type="text"
                         placeholder="Search for products, brands and more..."
-                        className="w-full pl-12 pr-4 py-3.5 bg-transparent focus:outline-none text-sm text-gray-900 placeholder-gray-400 relative z-10"
+                        className="w-full pl-12 pr-12 py-3.5 bg-transparent focus:outline-none text-sm text-gray-900 placeholder-gray-400 relative z-10"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onFocus={() => setIsSearchFocused(true)}
-                        onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
                       />
                       {searchQuery && (
                         <button
                           type="button"
-                          onClick={() => setSearchQuery('')}
+                          onClick={() => {
+                            setSearchQuery('');
+                            setSearchSuggestions([]);
+                          }}
                           className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-1 transition-all z-10"
                         >
                           <X className="w-4 h-4" />
@@ -231,26 +294,108 @@ const Header = () => {
                   {/* Search Suggestions Dropdown - Enhanced */}
                   {isSearchFocused && (
                     <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-gray-100 p-5 z-50 backdrop-blur-xl">
-                      <div>
-                        <p className="text-xs font-bold text-gray-600 uppercase mb-3 flex items-center gap-2">
-                          <div className="w-6 h-6 bg-gradient-to-br from-primary to-secondary rounded-lg flex items-center justify-center">
-                            <Clock className="w-3.5 h-3.5 text-white" />
+                      {suggestionsLoading ? (
+                        <div className="py-6 text-center">
+                          <div className="inline-flex items-center gap-2 text-gray-500 text-sm">
+                            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                            Searching...
                           </div>
-                          Popular Searches
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {popularSearches.map((term) => (
-                            <button
-                              key={term}
-                              type="button"
-                              onClick={() => setSearchQuery(term)}
-                              className="px-4 py-2 bg-gradient-to-br from-gray-50 to-gray-100 hover:from-primary hover:to-secondary hover:text-white text-sm font-medium rounded-xl transition-all duration-200 border border-gray-200 hover:border-transparent hover:shadow-lg hover:scale-105"
-                            >
-                              {term}
-                            </button>
-                          ))}
                         </div>
-                      </div>
+                      ) : searchSuggestions.length > 0 ? (
+                        <div>
+                          <p className="text-xs font-bold text-gray-500 uppercase mb-3 tracking-wide">
+                            Product Suggestions
+                          </p>
+                          <ul className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+                            {searchSuggestions.map((product) => (
+                              <li
+                                key={product.id}
+                                className="flex items-center gap-4 py-3 px-2 cursor-pointer hover:bg-gradient-to-r hover:from-primary/5 hover:to-transparent rounded-xl transition-all group"
+                                onClick={() => handleSuggestionClick(product.id)}
+                              >
+                                <img
+                                  src={product.image || 'https://via.placeholder.com/48?text=No+Image'}
+                                  alt={product.name}
+                                  className="w-12 h-12 object-cover rounded-lg border border-gray-200 group-hover:border-primary/30 transition-all flex-shrink-0"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-semibold text-sm text-gray-900 truncate group-hover:text-primary transition-colors">
+                                    {product.name}
+                                  </div>
+                                  <div className="text-xs text-gray-500 mt-0.5">
+                                    {product.category || 'Product'}
+                                  </div>
+                                </div>
+                                <div className="text-right flex-shrink-0">
+                                  <div className="text-base font-bold text-primary">₹{Math.round(product.price)}</div>
+                                  {product.unit && (
+                                    <div className="text-xs text-gray-400">{product.unit}</div>
+                                  )}
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : searchQuery.trim() ? (
+                        <div className="py-6">
+                          <div className="text-center mb-4">
+                            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                              <Search className="w-8 h-8 text-gray-400" />
+                            </div>
+                            <p className="text-gray-600 font-medium">No exact matches found for "{searchQuery}"</p>
+                            <p className="text-xs text-gray-400 mt-1">Try these alternative searches:</p>
+                          </div>
+                          <div className="space-y-2">
+                            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Suggested Searches:</p>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSearchQuery(searchQuery.split(' ')[0])}
+                                className="px-3 py-2 bg-gradient-to-br from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 text-sm font-medium rounded-xl transition-all border border-blue-200 hover:shadow-md"
+                              >
+                                Search "{searchQuery.split(' ')[0]}"
+                              </button>
+                              {popularSearches.slice(0, 4).map((term) => (
+                                <button
+                                  key={term}
+                                  type="button"
+                                  onClick={() => setSearchQuery(term)}
+                                  className="px-3 py-2 bg-gradient-to-br from-gray-50 to-gray-100 hover:from-primary hover:to-secondary hover:text-white text-sm font-medium rounded-xl transition-all border border-gray-200 hover:border-transparent hover:shadow-md"
+                                >
+                                  {term}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                            <p className="text-xs text-amber-800 flex items-center gap-2">
+                              <Sparkles className="w-4 h-4" />
+                              <span><strong>Tip:</strong> Try searching by category like "Vegetables", "Fruits", "Dairy" or brand names</span>
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-xs font-bold text-gray-600 uppercase mb-3 flex items-center gap-2">
+                            <div className="w-6 h-6 bg-gradient-to-br from-primary to-secondary rounded-lg flex items-center justify-center">
+                              <Clock className="w-3.5 h-3.5 text-white" />
+                            </div>
+                            Popular Searches
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {popularSearches.map((term) => (
+                              <button
+                                key={term}
+                                type="button"
+                                onClick={() => setSearchQuery(term)}
+                                className="px-4 py-2 bg-gradient-to-br from-gray-50 to-gray-100 hover:from-primary hover:to-secondary hover:text-white text-sm font-medium rounded-xl transition-all duration-200 border border-gray-200 hover:border-transparent hover:shadow-lg hover:scale-105"
+                              >
+                                {term}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </form>
@@ -459,8 +604,77 @@ const Header = () => {
                     className="w-full pl-11 pr-4 py-3 bg-transparent focus:outline-none text-sm"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
+                    onFocus={() => setIsSearchFocused(true)}
                   />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSearchSuggestions([]);
+                      }}
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-700"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
+
+                {/* Mobile Search Suggestions */}
+                {isSearchFocused && searchQuery && (
+                  <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-gray-100 p-4 z-50 max-h-[400px] overflow-y-auto">
+                    {suggestionsLoading ? (
+                      <div className="py-4 text-center">
+                        <div className="inline-flex items-center gap-2 text-gray-500 text-sm">
+                          <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                          Searching...
+                        </div>
+                      </div>
+                    ) : searchSuggestions.length > 0 ? (
+                      <ul className="divide-y divide-gray-100">
+                        {searchSuggestions.map((product) => (
+                          <li
+                            key={product.id}
+                            className="flex items-center gap-3 py-2 cursor-pointer hover:bg-primary/5 rounded-lg transition"
+                            onClick={() => handleSuggestionClick(product.id)}
+                          >
+                            <img
+                              src={product.image || 'https://via.placeholder.com/40?text=No+Image'}
+                              alt={product.name}
+                              className="w-10 h-10 object-cover rounded-lg border border-gray-200"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-sm text-gray-900 truncate">{product.name}</div>
+                              <div className="text-xs text-primary font-bold">₹{Math.round(product.price)}</div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="py-4">
+                        <div className="text-center mb-3">
+                          <p className="text-gray-600 text-sm font-medium">No matches for "{searchQuery}"</p>
+                          <p className="text-xs text-gray-400 mt-1">Try these suggestions:</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                          {popularSearches.slice(0, 3).map((term) => (
+                            <button
+                              key={term}
+                              type="button"
+                              onClick={() => {
+                                setSearchQuery(term);
+                                setIsSearchFocused(false);
+                              }}
+                              className="px-3 py-1.5 bg-gradient-to-br from-gray-50 to-gray-100 hover:from-primary hover:to-secondary hover:text-white text-xs font-medium rounded-lg transition-all border border-gray-200"
+                            >
+                              {term}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </form>
             </div>
           </div>

@@ -22,6 +22,7 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KE
 
 // Product types
 export interface Product {
+  unit: ReactNode;
   id: string;
   name: string;
   price: number;
@@ -44,7 +45,7 @@ export interface Product {
 export async function getAllProducts(): Promise<Product[]> {
   try {
     console.log('🔄 Fetching products from Supabase...');
-    
+
     // Fetch all products in batches to bypass Supabase's 1000 row limit
     let allProducts: any[] = [];
     let from = 0;
@@ -74,7 +75,7 @@ export async function getAllProducts(): Promise<Product[]> {
     }
 
     console.log(`✅ Successfully fetched ${allProducts.length} products`);
-    
+
     // Transform products to match frontend expectations
     return transformSupabaseProducts(allProducts);
   } catch (error) {
@@ -87,7 +88,7 @@ export async function getAllProducts(): Promise<Product[]> {
 export async function getProductsByCategory(categoryName: string): Promise<Product[]> {
   try {
     console.log('🔎 getProductsByCategory - Querying for category:', categoryName);
-    
+
     // Fetch all products in batches to bypass Supabase's 1000 row limit
     let allProducts: any[] = [];
     let from = 0;
@@ -288,10 +289,10 @@ async function generateOrderNumber(): Promise<string> {
     const month = String(today.getMonth() + 1).padStart(2, '0');
     const day = String(today.getDate()).padStart(2, '0');
     const dateString = `${year}${month}${day}`;
-    
+
     // Date prefix for the order number
     const prefix = `NN${dateString}`;
-    
+
     // Call the database RPC function to atomically generate the next order number
     // This uses FOR UPDATE locking to prevent race conditions
     const { data, error } = await supabase.rpc('generate_next_order_number', {
@@ -320,11 +321,11 @@ async function generateOrderNumber(): Promise<string> {
 export async function createOrder(orderData: CreateOrderData): Promise<Order> {
   try {
     console.log('🛒 Creating order...', orderData);
-    
+
     // Generate order number in format: NNYYYYMMDD-XXXX
     const orderNumber = await generateOrderNumber();
     console.log('📝 Generated order number:', orderNumber);
-    
+
     const orderPayload = {
       user_id: orderData.user_id || null,
       customer_name: orderData.customer_name,
@@ -355,7 +356,7 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
     }
 
     console.log('✅ Order created successfully:', data);
-    
+
     return {
       ...data,
       items_count: data.items?.length || 0
@@ -370,13 +371,13 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
 export async function getUserOrders(userId?: string, userPhone?: string, userEmail?: string): Promise<Order[]> {
   try {
     console.log('📦 Fetching orders for user:', userId, 'phone:', userPhone, 'email:', userEmail);
-    
+
     // Build query to match orders by user_id OR customer_phone OR customer_email
     // This ensures we get all orders even if user_id was null or different
     // Supabase doesn't support OR directly in a single query easily
     // So we'll fetch all matching orders and combine them
     const queries = [];
-    
+
     if (userId) {
       queries.push(
         supabase
@@ -401,16 +402,16 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
           .eq('customer_email', userEmail)
       );
     }
-    
+
     // If we have queries to execute
     if (queries.length > 0) {
       // Execute all queries in parallel
       const results = await Promise.all(queries);
-      
+
       // Combine results and remove duplicates
       const allOrders: Order[] = [];
       const orderIds = new Set<string>();
-      
+
       for (const result of results) {
         if (result.error) {
           console.warn('⚠️ Error in one of the order queries:', result.error);
@@ -425,16 +426,16 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
           }
         }
       }
-      
+
       // Sort by created_at descending
       allOrders.sort((a, b) => {
         const dateA = new Date(a.created_at).getTime();
         const dateB = new Date(b.created_at).getTime();
         return dateB - dateA;
       });
-      
+
       console.log(`✅ Fetched ${allOrders.length} orders for user (including matches by phone/email)`);
-      
+
       // Transform orders to include items_count
       return allOrders.map(order => ({
         ...order,
@@ -443,7 +444,7 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
     } else {
       // Fallback: validate params before querying
       const hasValidUserId = userId && typeof userId === 'string' && userId.trim() !== '';
-      
+
       if (!hasValidUserId) {
         console.warn('⚠️ No valid user identifier provided for order query (userId, phone, or email)');
         return [];
@@ -462,7 +463,7 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
       }
 
       console.log(`✅ Fetched ${data?.length || 0} orders for user`);
-      
+
       // Transform orders to include items_count
       return (data || []).map(order => ({
         ...order,
@@ -487,7 +488,7 @@ export interface NewsletterSubscription {
 export async function subscribeToNewsletter(email: string): Promise<NewsletterSubscription> {
   try {
     console.log('📧 Subscribing email to newsletter:', email);
-    
+
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
@@ -507,11 +508,11 @@ export async function subscribeToNewsletter(email: string): Promise<NewsletterSu
         console.log('✅ Email already subscribed');
         return existing;
       }
-      
+
       // If exists but inactive, reactivate it
       const { data: updated, error: updateError } = await supabase
         .from('newsletter_subscriptions')
-        .update({ 
+        .update({
           is_active: true,
           subscribed_at: new Date().toISOString()
         })
@@ -596,7 +597,7 @@ export interface UpdateAddressData {
 export async function getUserAddresses(userId: string): Promise<Address[]> {
   try {
     console.log('📍 Fetching addresses for user:', userId);
-    
+
     const { data, error } = await supabase
       .from('addresses')
       .select('*')
@@ -621,7 +622,7 @@ export async function getUserAddresses(userId: string): Promise<Address[]> {
 export async function createAddress(addressData: CreateAddressData): Promise<Address> {
   try {
     console.log('📍 Creating new address...');
-    
+
     // If this is set as default, unset all other default addresses for this user
     if (addressData.is_default) {
       await supabase
@@ -653,7 +654,7 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
 export async function updateAddress(addressId: string, userId: string, updateData: UpdateAddressData): Promise<Address> {
   try {
     console.log('📍 Updating address:', addressId);
-    
+
     // If setting this as default, unset all other default addresses for this user
     if (updateData.is_default) {
       await supabase
@@ -691,7 +692,7 @@ export async function updateAddress(addressId: string, userId: string, updateDat
 export async function deleteAddress(addressId: string, userId: string): Promise<void> {
   try {
     console.log('📍 Deleting address:', addressId);
-    
+
     const { error } = await supabase
       .from('addresses')
       .delete()
@@ -714,7 +715,7 @@ export async function deleteAddress(addressId: string, userId: string): Promise<
 export async function setDefaultAddress(addressId: string, userId: string): Promise<Address> {
   try {
     console.log('📍 Setting default address:', addressId);
-    
+
     // Unset all other default addresses for this user
     await supabase
       .from('addresses')
@@ -724,7 +725,7 @@ export async function setDefaultAddress(addressId: string, userId: string): Prom
     // Set this address as default
     const { data, error } = await supabase
       .from('addresses')
-      .update({ 
+      .update({
         is_default: true,
         updated_at: new Date().toISOString()
       })

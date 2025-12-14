@@ -9,7 +9,7 @@ const CartPage = () => {
   const [couponApplied, setCouponApplied] = useState(false);
   const [discount, setDiscount] = useState(0);
   const navigate = useNavigate();
-  
+
   const deliveryFee = cartTotal > 500 ? 0 : 40;
   const orderTotal = cartTotal + deliveryFee - discount;
 
@@ -47,7 +47,7 @@ const CartPage = () => {
   return (
     <div className="container mx-auto px-4 py-8">
       <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6">Your Shopping Cart</h1>
-      
+
       {cartItems.length === 0 ? (
         <div className="bg-white p-8 rounded-lg shadow-md text-center">
           <div className="w-20 h-20 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4">
@@ -78,14 +78,14 @@ const CartPage = () => {
                   <div className="w-1/5 text-center">Quantity</div>
                   <div className="w-1/5 text-right">Total</div>
                 </div>
-                
+
                 {cartItems.map((item) => (
                   <div key={`${item.id}-${item.isLoose ? 'loose' : 'regular'}`} className="flex items-center py-4 border-b border-gray-200 last:border-b-0">
                     {/* Product */}
                     <div className="w-2/5 flex items-center">
                       <div className="w-16 h-16 flex-shrink-0 bg-gray-100 rounded-md overflow-hidden">
-                        <img 
-                          src={item.image || 'https://via.placeholder.com/64x64?text=No+Image'} 
+                        <img
+                          src={item.image || 'https://via.placeholder.com/64x64?text=No+Image'}
                           alt={item.name}
                           className="w-full h-full object-cover"
                         />
@@ -103,12 +103,12 @@ const CartPage = () => {
                         </button>
                       </div>
                     </div>
-                    
+
                     {/* Price */}
                     <div className="w-1/5 text-center">
                       <span className="text-gray-800">{formatPrice(item.price)}</span>
                     </div>
-                    
+
                     {/* Quantity */}
                     <div className="w-1/5 text-center">
                       <div className="flex items-center justify-center">
@@ -133,7 +133,7 @@ const CartPage = () => {
                         </button>
                       </div>
                     </div>
-                    
+
                     {/* Total */}
                     <div className="w-1/5 text-right">
                       <span className="text-gray-800 font-medium">{formatPrice(item.price * item.quantity)}</span>
@@ -141,7 +141,7 @@ const CartPage = () => {
                   </div>
                 ))}
               </div>
-              
+
               <div className="bg-gray-50 p-6 flex justify-between items-center">
                 <button
                   onClick={() => clearCart()}
@@ -161,30 +161,30 @@ const CartPage = () => {
               </div>
             </div>
           </div>
-          
+
           {/* Order Summary */}
           <div className="lg:w-1/3">
             <div className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-800 mb-4">Order Summary</h2>
-              
+
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal</span>
                   <span>{formatPrice(cartTotal)}</span>
                 </div>
-                
+
                 <div className="flex justify-between text-gray-600">
                   <span>Delivery Fee</span>
                   <span>{deliveryFee === 0 ? 'Free' : formatPrice(deliveryFee)}</span>
                 </div>
-                
+
                 {discount > 0 && (
                   <div className="flex justify-between text-green-600">
                     <span>Discount</span>
                     <span>-{formatPrice(discount)}</span>
                   </div>
                 )}
-                
+
                 <div className="border-t border-gray-200 pt-3 mt-3">
                   <div className="flex justify-between font-bold text-gray-800">
                     <span>Total</span>
@@ -195,7 +195,7 @@ const CartPage = () => {
                   )}
                 </div>
               </div>
-              
+
               {/* Coupon Code */}
               <div className="mb-6">
                 <h3 className="text-sm font-medium text-gray-700 mb-2">Apply Coupon</h3>
@@ -233,7 +233,7 @@ const CartPage = () => {
                 )}
                 <p className="text-xs text-gray-500 mt-1">Try WELCOME20 for 20% off (up to ₹200)</p>
               </div>
-              
+
               <button
                 onClick={() => navigate('/checkout')}
                 className="w-full bg-primary hover:bg-secondary text-white py-3 rounded-md font-medium transition-colors"
@@ -241,7 +241,7 @@ const CartPage = () => {
                 Proceed to Checkout
               </button>
             </div>
-            
+
             {/* Payment Methods */}
             <div className="mt-4 bg-white rounded-lg shadow-md p-6">
               <h3 className="text-sm font-medium text-gray-700 mb-3">We Accept</h3>
