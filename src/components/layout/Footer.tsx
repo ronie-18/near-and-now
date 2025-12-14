@@ -241,7 +241,7 @@ const Footer = () => {
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <MapPin className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">438, Sucasa Pearl, Kolkata, West Bengal - 700084</span>
+                    <span className="text-sm">Kolkata, West Bengal</span>
                   </a>
                 </li>
                 <li>
