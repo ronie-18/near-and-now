@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect, useMemo } from "react";
+import { Link } from "react-router-dom";
 import {
   Search,
   Plus,
@@ -25,21 +25,28 @@ import {
   Loader2,
   ImageOff,
   RefreshCw,
-  Sparkles
-} from 'lucide-react';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { getAdminProducts, deleteProduct, createProduct, updateProduct, getCategories, Category } from '../../services/adminService';
-import { Product } from '../../services/supabase';
+  Sparkles,
+} from "lucide-react";
+import AdminLayout from "../../components/admin/layout/AdminLayout";
+import {
+  getAdminProducts,
+  deleteProduct,
+  createProduct,
+  updateProduct,
+  getCategories,
+  Category,
+} from "../../services/adminService";
+import { Product } from "../../services/supabase";
 
 // Constants
 const ITEMS_PER_PAGE = 10;
 
 // Helper functions
 const truncateId = (id: string) => id.substring(0, 8);
-const formatPrice = (price: number) => `₹${price.toLocaleString('en-IN')}`;
+const formatPrice = (price: number) => `₹${price.toLocaleString("en-IN")}`;
 
-type SortField = 'name' | 'price' | 'category' | 'in_stock' | 'created_at';
-type SortDirection = 'asc' | 'desc';
+type SortField = "name" | "price" | "category" | "in_stock" | "created_at";
+type SortDirection = "asc" | "desc";
 
 // Modern Stat Card
 interface StatCardProps {
@@ -57,9 +64,11 @@ const StatCard: React.FC<StatCardProps> = ({
   label,
   value,
   subtitle,
-  trend
+  trend,
 }) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
+  <div
+    className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}
+  >
     <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
     <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-20 h-20 bg-white/10 rounded-full blur-xl" />
     <div className="relative z-10">
@@ -75,9 +84,7 @@ const StatCard: React.FC<StatCardProps> = ({
       </div>
       <p className="text-white/80 text-sm font-medium">{label}</p>
       <p className="text-3xl font-bold mt-1">{value}</p>
-      {subtitle && (
-        <p className="text-white/60 text-xs mt-1">{subtitle}</p>
-      )}
+      {subtitle && <p className="text-white/60 text-xs mt-1">{subtitle}</p>}
     </div>
   </div>
 );
@@ -143,18 +150,21 @@ interface EmptyStateProps {
   selectedCategory: string;
 }
 
-const EmptyState: React.FC<EmptyStateProps> = ({ searchTerm, selectedCategory }) => (
+const EmptyState: React.FC<EmptyStateProps> = ({
+  searchTerm,
+  selectedCategory,
+}) => (
   <div className="p-16 text-center">
     <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
       <Package className="w-12 h-12 text-gray-400" />
     </div>
     <h3 className="text-xl font-bold text-gray-800 mb-2">No products found</h3>
     <p className="text-gray-500 mb-6 max-w-md mx-auto">
-      {searchTerm || selectedCategory !== 'All'
-        ? 'Try adjusting your search or filters to find what you\'re looking for.'
-        : 'Get started by adding your first product to the catalog.'}
+      {searchTerm || selectedCategory !== "All"
+        ? "Try adjusting your search or filters to find what you're looking for."
+        : "Get started by adding your first product to the catalog."}
     </p>
-    {!searchTerm && selectedCategory === 'All' && (
+    {!searchTerm && selectedCategory === "All" && (
       <Link
         to="/admin/products/add"
         className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg hover:shadow-xl font-semibold"
@@ -170,14 +180,18 @@ const EmptyState: React.FC<EmptyStateProps> = ({ searchTerm, selectedCategory })
 interface ProductImageProps {
   imageUrl?: string;
   productName: string;
-  size?: 'sm' | 'md' | 'lg';
+  size?: "sm" | "md" | "lg";
 }
 
-const ProductImage: React.FC<ProductImageProps> = ({ imageUrl, productName, size = 'md' }) => {
+const ProductImage: React.FC<ProductImageProps> = ({
+  imageUrl,
+  productName,
+  size = "md",
+}) => {
   const sizeClasses = {
-    sm: 'w-10 h-10 text-xs',
-    md: 'w-14 h-14 text-sm',
-    lg: 'w-20 h-20 text-base'
+    sm: "w-10 h-10 text-xs",
+    md: "w-14 h-14 text-sm",
+    lg: "w-20 h-20 text-base",
   };
 
   const [imgError, setImgError] = useState(false);
@@ -195,11 +209,15 @@ const ProductImage: React.FC<ProductImageProps> = ({ imageUrl, productName, size
   }
 
   return (
-    <div className={`${sizeClasses[size]} bg-gradient-to-br from-violet-400 via-purple-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-md ring-2 ring-white`}>
+    <div
+      className={`${sizeClasses[size]} bg-gradient-to-br from-violet-400 via-purple-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-md ring-2 ring-white`}
+    >
       {imgError ? (
         <ImageOff className="w-1/2 h-1/2 text-white/80" />
       ) : (
-        <span className="font-bold text-white">{productName.substring(0, 2).toUpperCase()}</span>
+        <span className="font-bold text-white">
+          {productName.substring(0, 2).toUpperCase()}
+        </span>
       )}
     </div>
   );
@@ -219,7 +237,7 @@ const SortableHeader: React.FC<SortableHeaderProps> = ({
   field,
   currentSort,
   direction,
-  onSort
+  onSort,
 }) => (
   <th
     className="px-5 py-4 cursor-pointer group hover:bg-gray-100 transition-colors"
@@ -229,7 +247,7 @@ const SortableHeader: React.FC<SortableHeaderProps> = ({
       <span>{label}</span>
       <span className="opacity-0 group-hover:opacity-100 transition-opacity">
         {currentSort === field ? (
-          direction === 'asc' ? (
+          direction === "asc" ? (
             <ArrowUp size={14} className="text-emerald-500" />
           ) : (
             <ArrowDown size={14} className="text-emerald-500" />
@@ -247,7 +265,7 @@ const QuickAddModal = ({
   isOpen,
   onClose,
   categories,
-  onProductAdded
+  onProductAdded,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -255,11 +273,11 @@ const QuickAddModal = ({
   onProductAdded: () => void;
 }) => {
   const [formData, setFormData] = useState({
-    name: '',
-    category: '',
-    price: '',
+    name: "",
+    category: "",
+    price: "",
     in_stock: true,
-    description: ''
+    description: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -269,15 +287,15 @@ const QuickAddModal = ({
     setError(null);
 
     if (!formData.name.trim()) {
-      setError('Product name is required');
+      setError("Product name is required");
       return;
     }
     if (!formData.category) {
-      setError('Please select a category');
+      setError("Please select a category");
       return;
     }
     if (!formData.price || parseFloat(formData.price) <= 0) {
-      setError('Please enter a valid price');
+      setError("Please enter a valid price");
       return;
     }
 
@@ -291,16 +309,23 @@ const QuickAddModal = ({
         description: formData.description.trim() || undefined,
         image: undefined,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        unit: undefined,
       });
 
       // Reset form and close
-      setFormData({ name: '', category: '', price: '', in_stock: true, description: '' });
+      setFormData({
+        name: "",
+        category: "",
+        price: "",
+        in_stock: true,
+        description: "",
+      });
       onProductAdded();
       onClose();
     } catch (err) {
-      console.error('Error creating product:', err);
-      setError('Failed to create product. Please try again.');
+      console.error("Error creating product:", err);
+      setError("Failed to create product. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -325,8 +350,12 @@ const QuickAddModal = ({
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-white">Quick Add Product</h2>
-                <p className="text-emerald-100 text-sm">Add a product in seconds</p>
+                <h2 className="text-xl font-bold text-white">
+                  Quick Add Product
+                </h2>
+                <p className="text-emerald-100 text-sm">
+                  Add a product in seconds
+                </p>
               </div>
             </div>
             <button
@@ -355,7 +384,9 @@ const QuickAddModal = ({
               type="text"
               placeholder="e.g., Organic Brown Rice 1kg"
               value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, name: e.target.value })
+              }
               className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-0 transition-colors text-gray-800"
               disabled={isSubmitting}
             />
@@ -368,13 +399,17 @@ const QuickAddModal = ({
               </label>
               <select
                 value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, category: e.target.value })
+                }
                 className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-0 transition-colors text-gray-800"
                 disabled={isSubmitting}
               >
                 <option value="">Select...</option>
-                {categories.map(cat => (
-                  <option key={cat.id} value={cat.name}>{cat.name}</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.name}>
+                    {cat.name}
+                  </option>
                 ))}
               </select>
             </div>
@@ -389,7 +424,9 @@ const QuickAddModal = ({
                 step="0.01"
                 min="0"
                 value={formData.price}
-                onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, price: e.target.value })
+                }
                 className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-0 transition-colors text-gray-800"
                 disabled={isSubmitting}
               />
@@ -403,7 +440,9 @@ const QuickAddModal = ({
             <textarea
               placeholder="Brief product description..."
               value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, description: e.target.value })
+              }
               className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-0 transition-colors text-gray-800 h-20 resize-none"
               disabled={isSubmitting}
             />
@@ -412,16 +451,20 @@ const QuickAddModal = ({
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
             <div>
               <p className="font-semibold text-gray-800">Stock Status</p>
-              <p className="text-sm text-gray-500">Is this product available?</p>
+              <p className="text-sm text-gray-500">
+                Is this product available?
+              </p>
             </div>
             <button
               type="button"
-              onClick={() => setFormData({ ...formData, in_stock: !formData.in_stock })}
-              className={`relative w-14 h-8 rounded-full transition-colors ${formData.in_stock ? 'bg-emerald-500' : 'bg-gray-300'}`}
+              onClick={() =>
+                setFormData({ ...formData, in_stock: !formData.in_stock })
+              }
+              className={`relative w-14 h-8 rounded-full transition-colors ${formData.in_stock ? "bg-emerald-500" : "bg-gray-300"}`}
               disabled={isSubmitting}
             >
               <span
-                className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${formData.in_stock ? 'left-7' : 'left-1'}`}
+                className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${formData.in_stock ? "left-7" : "left-1"}`}
               />
             </button>
           </div>
@@ -513,23 +556,36 @@ const ProductRow: React.FC<{
         {toggleLoading === product.id ? (
           <Loader2 size={24} className="animate-spin text-gray-400" />
         ) : product.in_stock ? (
-          <ToggleRight size={28} className="text-emerald-500 group-hover/toggle:text-emerald-600" />
+          <ToggleRight
+            size={28}
+            className="text-emerald-500 group-hover/toggle:text-emerald-600"
+          />
         ) : (
-          <ToggleLeft size={28} className="text-gray-400 group-hover/toggle:text-gray-500" />
+          <ToggleLeft
+            size={28}
+            className="text-gray-400 group-hover/toggle:text-gray-500"
+          />
         )}
-        <span className={`text-sm font-medium ${product.in_stock ? 'text-emerald-600' : 'text-gray-500'}`}>
-          {product.in_stock ? 'In Stock' : 'Out of Stock'}
+        <span
+          className={`text-sm font-medium ${product.in_stock ? "text-emerald-600" : "text-gray-500"}`}
+        >
+          {product.in_stock ? "In Stock" : "Out of Stock"}
         </span>
       </button>
     </td>
     <td className="px-5 py-4">
-      <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold
-        ${product.in_stock
-          ? 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700'
-          : 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700'
-        }`}>
-        <span className={`w-2 h-2 rounded-full mr-2 ${product.in_stock ? 'bg-emerald-500' : 'bg-red-500'}`} />
-        {product.in_stock ? 'Active' : 'Inactive'}
+      <span
+        className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold
+        ${
+          product.in_stock
+            ? "bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700"
+            : "bg-gradient-to-r from-red-100 to-rose-100 text-red-700"
+        }`}
+      >
+        <span
+          className={`w-2 h-2 rounded-full mr-2 ${product.in_stock ? "bg-emerald-500" : "bg-red-500"}`}
+        />
+        {product.in_stock ? "Active" : "Inactive"}
       </span>
     </td>
     <td className="px-5 py-4">
@@ -576,14 +632,21 @@ const ProductCard: React.FC<{
   <div className="bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 overflow-hidden group border border-gray-100">
     {/* Image */}
     <div className="aspect-square bg-gradient-to-br from-gray-100 to-gray-50 p-4 flex items-center justify-center relative">
-      <ProductImage imageUrl={product.image} productName={product.name} size="lg" />
+      <ProductImage
+        imageUrl={product.image}
+        productName={product.name}
+        size="lg"
+      />
       <div className="absolute top-3 right-3">
-        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold shadow-sm
-          ${product.in_stock
-            ? 'bg-emerald-500 text-white'
-            : 'bg-red-500 text-white'
-          }`}>
-          {product.in_stock ? 'In Stock' : 'Out of Stock'}
+        <span
+          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold shadow-sm
+          ${
+            product.in_stock
+              ? "bg-emerald-500 text-white"
+              : "bg-red-500 text-white"
+          }`}
+        >
+          {product.in_stock ? "In Stock" : "Out of Stock"}
         </span>
       </div>
     </div>
@@ -593,13 +656,17 @@ const ProductCard: React.FC<{
       <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
         #{truncateId(product.id)}
       </span>
-      <h3 className="font-bold text-gray-800 mt-2 line-clamp-1">{product.name}</h3>
+      <h3 className="font-bold text-gray-800 mt-2 line-clamp-1">
+        {product.name}
+      </h3>
       <p className="text-xs text-gray-500 mt-1 line-clamp-2 h-8">
-        {product.description || 'No description'}
+        {product.description || "No description"}
       </p>
 
       <div className="flex items-center justify-between mt-3">
-        <span className="text-xl font-bold text-emerald-600">{formatPrice(product.price)}</span>
+        <span className="text-xl font-bold text-emerald-600">
+          {formatPrice(product.price)}
+        </span>
         <span className="text-xs font-medium px-2 py-1 bg-purple-100 text-purple-700 rounded-full">
           {product.category}
         </span>
@@ -651,15 +718,15 @@ const ProductsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [selectedCategory, setSelectedCategory] = useState("All");
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [toggleLoading, setToggleLoading] = useState<string | null>(null);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  const [sortField, setSortField] = useState<SortField>('created_at');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [sortField, setSortField] = useState<SortField>("name");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   // Fetch data
   const fetchData = async () => {
@@ -668,13 +735,13 @@ const ProductsPage = () => {
       setError(null);
       const [productsData, categoriesData] = await Promise.all([
         getAdminProducts(),
-        getCategories()
+        getCategories(),
       ]);
       setProducts(productsData);
       setCategories(categoriesData);
     } catch (err) {
-      console.error('Error fetching data:', err);
-      setError('Failed to load products. Please try again.');
+      console.error("Error fetching data:", err);
+      setError("Failed to load products. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -687,31 +754,35 @@ const ProductsPage = () => {
   // Handle sort
   const handleSort = (field: SortField) => {
     if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
       setSortField(field);
-      setSortDirection('asc');
+      setSortDirection("asc");
     }
   };
 
   // Handle product deletion
   const handleDeleteProduct = async (id: string, productName: string) => {
-    if (confirm(`Are you sure you want to delete "${productName}"? This action cannot be undone.`)) {
+    if (
+      confirm(
+        `Are you sure you want to delete "${productName}"? This action cannot be undone.`
+      )
+    ) {
       try {
         setDeleteLoading(id);
         setError(null);
         const successResult = await deleteProduct(id);
 
         if (successResult) {
-          setProducts(prev => prev.filter(p => p.id !== id));
+          setProducts((prev) => prev.filter((p) => p.id !== id));
           setSuccess(`"${productName}" has been deleted successfully.`);
           setTimeout(() => setSuccess(null), 3000);
         } else {
-          setError('Failed to delete product. Please try again.');
+          setError("Failed to delete product. Please try again.");
         }
       } catch (err) {
-        console.error('Error deleting product:', err);
-        setError('An error occurred while deleting the product.');
+        console.error("Error deleting product:", err);
+        setError("An error occurred while deleting the product.");
       } finally {
         setDeleteLoading(null);
       }
@@ -722,13 +793,28 @@ const ProductsPage = () => {
   const handleToggleStock = async (id: string, currentStatus: boolean) => {
     try {
       setToggleLoading(id);
+      setError(null);
+
       const updated = await updateProduct(id, { in_stock: !currentStatus });
+
       if (updated) {
-        setProducts(prev => prev.map(p => p.id === id ? { ...p, in_stock: !currentStatus } : p));
+        // Update the product in the state
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.id === id ? { ...p, in_stock: !currentStatus } : p
+          )
+        );
+
+        // Show success message
+        const newStatus = currentStatus ? "Out of Stock" : "In Stock";
+        setSuccess(`Stock status updated to "${newStatus}"`);
+        setTimeout(() => setSuccess(null), 2000);
+      } else {
+        setError("Failed to update stock status. Please try again.");
       }
     } catch (err) {
-      console.error('Error toggling stock:', err);
-      setError('Failed to update stock status.');
+      console.error("Error toggling stock:", err);
+      setError("Failed to update stock status. Please try again.");
     } finally {
       setToggleLoading(null);
     }
@@ -736,13 +822,15 @@ const ProductsPage = () => {
 
   // Filtered and sorted products
   const filteredProducts = useMemo(() => {
-    let result = products.filter(product => {
+    let result = products.filter((product) => {
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch =
         product.name.toLowerCase().includes(searchLower) ||
         (product.id && product.id.toLowerCase().includes(searchLower)) ||
-        (product.description && product.description.toLowerCase().includes(searchLower));
-      const matchesCategory = selectedCategory === 'All' || product.category === selectedCategory;
+        (product.description &&
+          product.description.toLowerCase().includes(searchLower));
+      const matchesCategory =
+        selectedCategory === "All" || product.category === selectedCategory;
       return matchesSearch && matchesCategory;
     });
 
@@ -750,40 +838,51 @@ const ProductsPage = () => {
     result.sort((a, b) => {
       let comparison = 0;
       switch (sortField) {
-        case 'name':
+        case "name":
           comparison = a.name.localeCompare(b.name);
           break;
-        case 'price':
+        case "price":
           comparison = a.price - b.price;
           break;
-        case 'category':
-          comparison = (a.category || '').localeCompare(b.category || '');
+        case "category":
+          comparison = (a.category || "").localeCompare(b.category || "");
           break;
-        case 'in_stock':
-          comparison = (a.in_stock === b.in_stock) ? 0 : a.in_stock ? -1 : 1;
+        case "in_stock":
+          comparison = a.in_stock === b.in_stock ? 0 : a.in_stock ? -1 : 1;
           break;
-        case 'created_at':
-          comparison = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+        case "name":
+          comparison = (a.name || "").localeCompare(b.name || "");
+          break;
+        case "created_at":
+          comparison =
+            new Date(a.created_at || 0).getTime() -
+            new Date(b.created_at || 0).getTime();
           break;
       }
-      return sortDirection === 'asc' ? comparison : -comparison;
+      return sortDirection === "asc" ? comparison : -comparison;
     });
 
     return result;
   }, [products, searchTerm, selectedCategory, sortField, sortDirection]);
 
   // Stats
-  const stats = useMemo(() => ({
-    total: products.length,
-    inStock: products.filter(p => p.in_stock).length,
-    outOfStock: products.filter(p => !p.in_stock).length,
-  }), [products]);
+  const stats = useMemo(
+    () => ({
+      total: products.length,
+      inStock: products.filter((p) => p.in_stock).length,
+      outOfStock: products.filter((p) => !p.in_stock).length,
+    }),
+    [products]
+  );
 
   // Pagination
   const totalPages = Math.ceil(filteredProducts.length / ITEMS_PER_PAGE);
   const indexOfLastProduct = currentPage * ITEMS_PER_PAGE;
   const indexOfFirstProduct = indexOfLastProduct - ITEMS_PER_PAGE;
-  const currentProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct);
+  const currentProducts = filteredProducts.slice(
+    indexOfFirstProduct,
+    indexOfLastProduct
+  );
 
   // Reset page on filter change
   useEffect(() => {
@@ -791,10 +890,10 @@ const ProductsPage = () => {
   }, [searchTerm, selectedCategory]);
 
   // Get unique categories from products
-  const productCategories = useMemo(() => {
-    const unique = ['All', ...new Set(products.map(p => p.category).filter(Boolean))];
-    return unique;
-  }, [products]);
+  const productCategories = useMemo(
+    () => ["All", ...new Set(products.map((p) => p.category).filter(Boolean))],
+    [products]
+  );
 
   return (
     <AdminLayout>
@@ -803,7 +902,9 @@ const ProductsPage = () => {
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Products</h1>
-            <p className="text-gray-500 mt-1">Manage your product inventory and catalog</p>
+            <p className="text-gray-500 mt-1">
+              Manage your product inventory and catalog
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -831,8 +932,12 @@ const ProductsPage = () => {
         </div>
 
         {/* Alerts */}
-        {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
-        {success && <SuccessAlert message={success} onDismiss={() => setSuccess(null)} />}
+        {error && (
+          <ErrorAlert message={error} onDismiss={() => setError(null)} />
+        )}
+        {success && (
+          <SuccessAlert message={success} onDismiss={() => setSuccess(null)} />
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -855,7 +960,9 @@ const ProductsPage = () => {
             gradient="bg-gradient-to-br from-red-500 to-rose-600"
             label="Out of Stock"
             value={stats.outOfStock}
-            subtitle={stats.outOfStock > 0 ? "Needs attention" : "All stocked up!"}
+            subtitle={
+              stats.outOfStock > 0 ? "Needs attention" : "All stocked up!"
+            }
           />
         </div>
 
@@ -864,7 +971,10 @@ const ProductsPage = () => {
           <div className="flex flex-col lg:flex-row lg:items-center gap-4">
             {/* Search */}
             <div className="relative flex-1">
-              <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search
+                size={20}
+                className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+              />
               <input
                 type="text"
                 placeholder="Search products by name, ID, or description..."
@@ -874,7 +984,7 @@ const ProductsPage = () => {
               />
               {searchTerm && (
                 <button
-                  onClick={() => setSearchTerm('')}
+                  onClick={() => setSearchTerm("")}
                   className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   <X size={18} />
@@ -890,8 +1000,10 @@ const ProductsPage = () => {
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-0 transition-colors min-w-[160px] text-gray-700"
               >
-                {productCategories.map(category => (
-                  <option key={category} value={category}>{category}</option>
+                {productCategories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
                 ))}
               </select>
             </div>
@@ -899,14 +1011,14 @@ const ProductsPage = () => {
             {/* View Toggle */}
             <div className="flex items-center bg-gray-100 rounded-xl p-1">
               <button
-                onClick={() => setViewMode('list')}
-                className={`p-2.5 rounded-lg transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-emerald-600' : 'text-gray-500 hover:text-gray-700'}`}
+                onClick={() => setViewMode("list")}
+                className={`p-2.5 rounded-lg transition-all ${viewMode === "list" ? "bg-white shadow-sm text-emerald-600" : "text-gray-500 hover:text-gray-700"}`}
               >
                 <List size={20} />
               </button>
               <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white shadow-sm text-emerald-600' : 'text-gray-500 hover:text-gray-700'}`}
+                onClick={() => setViewMode("grid")}
+                className={`p-2.5 rounded-lg transition-all ${viewMode === "grid" ? "bg-white shadow-sm text-emerald-600" : "text-gray-500 hover:text-gray-700"}`}
               >
                 <Grid3X3 size={20} />
               </button>
@@ -919,17 +1031,44 @@ const ProductsPage = () => {
           {loading ? (
             <LoadingSpinner />
           ) : filteredProducts.length === 0 ? (
-            <EmptyState searchTerm={searchTerm} selectedCategory={selectedCategory} />
-          ) : viewMode === 'list' ? (
+            <EmptyState
+              searchTerm={searchTerm}
+              selectedCategory={selectedCategory}
+            />
+          ) : viewMode === "list" ? (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
                   <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
                     <th className="px-5 py-4">ID</th>
-                    <SortableHeader label="Product" field="name" currentSort={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Category" field="category" currentSort={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Price" field="price" currentSort={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Stock" field="in_stock" currentSort={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableHeader
+                      label="Product"
+                      field="name"
+                      currentSort={sortField}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Category"
+                      field="category"
+                      currentSort={sortField}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Price"
+                      field="price"
+                      currentSort={sortField}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Stock"
+                      field="in_stock"
+                      currentSort={sortField}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
                     <th className="px-5 py-4">Status</th>
                     <th className="px-5 py-4 text-right">Actions</th>
                   </tr>
@@ -967,13 +1106,25 @@ const ProductsPage = () => {
           {totalPages > 1 && (
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
               <p className="text-sm text-gray-600">
-                Showing <span className="font-semibold text-gray-800">{indexOfFirstProduct + 1}</span> to{' '}
-                <span className="font-semibold text-gray-800">{Math.min(indexOfLastProduct, filteredProducts.length)}</span> of{' '}
-                <span className="font-semibold text-gray-800">{filteredProducts.length}</span> products
+                Showing{" "}
+                <span className="font-semibold text-gray-800">
+                  {indexOfFirstProduct + 1}
+                </span>{" "}
+                to{" "}
+                <span className="font-semibold text-gray-800">
+                  {Math.min(indexOfLastProduct, filteredProducts.length)}
+                </span>{" "}
+                of{" "}
+                <span className="font-semibold text-gray-800">
+                  {filteredProducts.length}
+                </span>{" "}
+                products
               </p>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  onClick={() =>
+                    setCurrentPage((prev) => Math.max(prev - 1, 1))
+                  }
                   disabled={currentPage === 1}
                   className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                 >
@@ -997,9 +1148,10 @@ const ProductsPage = () => {
                         key={page}
                         onClick={() => setCurrentPage(page)}
                         className={`w-10 h-10 rounded-xl font-semibold transition-all
-                          ${currentPage === page
-                            ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg'
-                            : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+                          ${
+                            currentPage === page
+                              ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg"
+                              : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50"
                           }`}
                       >
                         {page}
@@ -1009,7 +1161,9 @@ const ProductsPage = () => {
                 </div>
 
                 <button
-                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  onClick={() =>
+                    setCurrentPage((prev) => Math.min(prev + 1, totalPages))
+                  }
                   disabled={currentPage === totalPages}
                   className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                 >
@@ -1028,7 +1182,7 @@ const ProductsPage = () => {
         categories={categories}
         onProductAdded={() => {
           fetchData();
-          setSuccess('Product added successfully!');
+          setSuccess("Product added successfully!");
           setTimeout(() => setSuccess(null), 3000);
         }}
       />
