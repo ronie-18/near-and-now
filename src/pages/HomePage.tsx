@@ -17,7 +17,7 @@ const HomePage = () => {
   const [itemsToShow, setItemsToShow] = useState(20); // Show minimum 20 products initially
   const { showNotification } = useNotification();
   const categoryScrollRef = useRef<HTMLDivElement>(null);
-  const [isScrolling, setIsScrolling] = useState(false);
+  const [, setIsScrolling] = useState(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const ITEMS_PER_LOAD = 20; // Load 20 products per "Load More" click
@@ -90,7 +90,7 @@ const HomePage = () => {
 
     const container = categoryScrollRef.current;
     const currentScrollLeft = container.scrollLeft;
-    const scrollWidth = container.scrollWidth;
+    const { scrollWidth } = container;
     const singleSetWidth = scrollWidth / 5; // Width of one complete set of categories
 
     // Reset to center set (index 2) when at boundaries
