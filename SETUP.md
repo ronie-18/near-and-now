@@ -18,7 +18,7 @@ This project uses environment variables to store sensitive configuration like AP
 
 3. **Your `.env` file should look like:**
    ```
-   VITE_GOOGLE_MAPS_API_KEY=AIzaSyCIyizHk4GySPlZBNvcGEXVydsENNC4NjQ
+   VITE_GOOGLE_MAPS_API_KEY=AIzaSyAaEh8Qu-k6nT5BphpHcOUBOZ5RJ7F2QTQ
    VITE_LOCATION_CACHE_DURATION=86400000
    VITE_SEARCH_RADIUS_KM=2
    VITE_MAX_SAVED_ADDRESSES=5
