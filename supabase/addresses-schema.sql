@@ -92,3 +92,4 @@ CREATE TRIGGER trigger_ensure_one_default_address
 -- GRANT ALL ON addresses TO service_role;
 
 
+

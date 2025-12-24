@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
@@ -160,14 +160,19 @@ const Header = () => {
     }
   };
 
-  const handleLocationSelect = (location: Location) => {
+  const handleLocationSelect = useCallback((location: Location) => {
+    console.log('🎯 Header: Location selected');
     setCurrentLocation(location);
     localStorage.setItem('currentLocation', JSON.stringify(location));
-  };
+  }, []);
 
-  const toggleLocationPicker = () => {
-    setIsLocationPickerOpen(!isLocationPickerOpen);
-  };
+  const openLocationPicker = useCallback(() => {
+    setIsLocationPickerOpen(true);
+  }, []);
+
+  const closeLocationPicker = useCallback(() => {
+    setIsLocationPickerOpen(false);
+  }, []);
 
   // Format address to show first 2 lines
   const formatAddressLines = (address: string): { line1: string; line2: string } => {
@@ -227,7 +232,7 @@ const Header = () => {
               {/* Location Selector - Enhanced Desktop */}
               <div className="hidden lg:block">
                 <button
-                  onClick={toggleLocationPicker}
+                  onClick={openLocationPicker}
                   className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-2xl hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10 transition-all duration-300 group bg-gradient-to-br from-gray-50 to-white hover:from-primary/5 hover:to-secondary/5 min-w-[280px] max-w-[320px] relative overflow-hidden"
                 >
                   <div className="absolute inset-0 bg-gradient-to-r from-primary/0 via-primary/5 to-primary/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
@@ -732,7 +737,7 @@ const Header = () => {
 
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <button
-                  onClick={toggleLocationPicker}
+                  onClick={openLocationPicker}
                   className="flex items-start gap-3 w-full p-4 rounded-2xl hover:bg-gradient-to-br hover:from-primary/5 hover:to-secondary/5 transition-all border-2 border-gray-100 hover:border-primary/30 hover:shadow-lg active:scale-[0.98]"
                 >
                   <div className="w-12 h-12 bg-gradient-to-br from-primary via-green-600 to-secondary rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg mt-0.5">
@@ -773,7 +778,7 @@ const Header = () => {
       {/* Location Picker Modal */}
       <LocationPicker
         isOpen={isLocationPickerOpen}
-        onClose={() => setIsLocationPickerOpen(false)}
+        onClose={closeLocationPicker}
         onLocationSelect={handleLocationSelect}
         currentLocation={currentLocation || undefined}
       />

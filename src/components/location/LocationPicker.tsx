@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { MapPin, Navigation, X, Search, Loader2, Check } from 'lucide-react';
 import APP_CONFIG from '../../config/app-config';
 
@@ -28,10 +28,11 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
   const geocoder = useRef<google.maps.Geocoder | null>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const placesService = useRef<google.maps.places.PlacesService | null>(null);
+  const isInitialized = useRef(false);
 
   // Load Google Maps API
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || isInitialized.current) return;
 
     const apiKey = APP_CONFIG.getApiKey();
     console.log('🔑 LocationPicker - API Key:', apiKey ? `${apiKey.substring(0, 10)}...` : 'NOT FOUND');
@@ -42,62 +43,16 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
       return;
     }
 
-    // Print troubleshooting guide
-    console.group('📚 GOOGLE MAPS API TROUBLESHOOTING GUIDE');
-    console.log('If you see REQUEST_DENIED, check these in order:');
-    console.log('');
-    console.log('1️⃣ ENABLE ALL REQUIRED APIs:');
-    console.log('   Go to: https://console.cloud.google.com/apis/library');
-    console.log('   Enable: Maps JavaScript API, Places API, Geocoding API');
-    console.log('');
-    console.log('2️⃣ CHECK API KEY RESTRICTIONS:');
-    console.log('   Go to: https://console.cloud.google.com/apis/credentials');
-    console.log('   Click your API key > Edit');
-    console.log('   ');
-    console.log('   Application restrictions:');
-    console.log('     ✅ "None" (for testing) OR');
-    console.log('     ✅ "HTTP referrers" with these patterns:');
-    console.log('        - localhost:5173/*');
-    console.log('        - 127.0.0.1:5173/*');
-    console.log('        - your-domain.com/*');
-    console.log('   ');
-    console.log('   API restrictions:');
-    console.log('     ✅ "Don\'t restrict key" (for testing) OR');
-    console.log('     ✅ "Restrict key" with ALL these APIs selected:');
-    console.log('        - Geocoding API');
-    console.log('        - Maps JavaScript API');
-    console.log('        - Places API');
-    console.log('');
-    console.log('3️⃣ ENABLE BILLING:');
-    console.log('   Go to: https://console.cloud.google.com/billing');
-    console.log('   Make sure billing is enabled for your project');
-    console.log('');
-    console.log('4️⃣ WAIT FOR PROPAGATION:');
-    console.log('   Changes can take 5-10 minutes to propagate');
-    console.log('   Try hard refresh (Ctrl+Shift+R) after changes');
-    console.groupEnd();
-
     // Check if script already exists
     if (window.google?.maps) {
       console.log('✅ Google Maps API already loaded');
       initializeServices();
+      isInitialized.current = true;
       return;
     }
 
-    // Listen for Google Maps API errors (before loading script)
-    const originalConsoleError = console.error;
-    const mapErrorHandler = (...args: any[]) => {
-      const message = args.join(' ');
-      if (message.includes('Google Maps') || message.includes('API key') || message.includes('MapsRequestError')) {
-        console.error('🚨 GOOGLE MAPS API ERROR DETECTED:', ...args);
-      }
-      originalConsoleError(...args);
-    };
-    console.error = mapErrorHandler;
-
     // Load Google Maps script
     console.log('📥 Loading Google Maps API...');
-    console.log('🔗 Script URL:', `https://maps.googleapis.com/maps/api/js?key=${apiKey.substring(0, 10)}...&libraries=places`);
     const script = document.createElement('script');
     script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
     script.async = true;
@@ -105,12 +60,8 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
 
     script.onload = () => {
       console.log('✅ Google Maps API loaded successfully');
-      // Check for any errors in window
-      if ((window as any).gm_authFailure) {
-        console.error('❌ GOOGLE MAPS AUTH FAILURE DETECTED!');
-        console.error('Check: https://console.cloud.google.com/apis/credentials');
-      }
       initializeServices();
+      isInitialized.current = true;
     };
 
     script.onerror = (error) => {
@@ -154,124 +105,147 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
     return () => {
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   const initializeServices = () => {
     if (window.google?.maps) {
       geocoder.current = new google.maps.Geocoder();
-      // Create a hidden div for PlacesService (required by API)
       const mapDiv = document.createElement('div');
       placesService.current = new google.maps.places.PlacesService(mapDiv as HTMLDivElement);
-      console.log('✅ Google Maps services initialized (Places & Geocoder)');
-    } else {
-      console.error('❌ Cannot initialize services: window.google.maps not available');
+      console.log('✅ Google Maps services initialized');
     }
   };
 
-  const getCurrentLocation = async () => {
+  const getCurrentLocation = useCallback(async () => {
     console.log('📍 getCurrentLocation called');
-    setIsLoadingLocation(true);
-    setError(null);
+    
+    if (isLoadingLocation) {
+      console.log('⏸️ Already loading, skipping...');
+      return;
+    }
 
     if (!navigator.geolocation) {
       console.error('❌ Geolocation not supported');
       setError('Geolocation is not supported by your browser');
-      setIsLoadingLocation(false);
       return;
     }
 
-    // Wait for Google Maps API to be loaded
+    setIsLoadingLocation(true);
+    setError(null);
+
+    // Wait for Google Maps to be ready
     const waitForGoogleMaps = (): Promise<void> => {
       return new Promise((resolve, reject) => {
         if (window.google?.maps) {
-          console.log('✅ Google Maps already available');
-          initializeServices();
+          if (!geocoder.current) {
+            initializeServices();
+          }
           resolve();
           return;
         }
 
-        console.log('⏳ Waiting for Google Maps to load...');
-        // Wait up to 10 seconds for Google Maps to load
         let attempts = 0;
-        const maxAttempts = 50; // 50 attempts * 200ms = 10 seconds
+        const maxAttempts = 50;
         const checkInterval = setInterval(() => {
           attempts++;
           if (window.google?.maps) {
-            console.log(`✅ Google Maps loaded after ${attempts * 200}ms`);
-            initializeServices();
+            if (!geocoder.current) {
+              initializeServices();
+            }
             clearInterval(checkInterval);
             resolve();
           } else if (attempts >= maxAttempts) {
-            console.error('❌ Google Maps failed to load after 10 seconds');
             clearInterval(checkInterval);
-            reject(new Error('Google Maps API failed to load. Please check your API key.'));
+            reject(new Error('Google Maps API failed to load'));
           }
         }, 200);
       });
     };
 
     try {
-      // Wait for Google Maps to be ready
       await waitForGoogleMaps();
-
-      // Ensure geocoder is initialized
-      if (!geocoder.current) {
-        console.log('🔧 Initializing geocoder...');
-        if (window.google?.maps) {
-          geocoder.current = new window.google.maps.Geocoder();
-          console.log('✅ Geocoder initialized');
-        } else {
-          console.error('❌ window.google.maps not available');
-          throw new Error('Google Maps Geocoder is not available');
-        }
-      } else {
-        console.log('✅ Geocoder already initialized');
-      }
 
       navigator.geolocation.getCurrentPosition(
         async (position) => {
-          const { latitude, longitude } = position.coords;
-          console.log('Got coordinates:', latitude, longitude);
-
           try {
-            const location = await reverseGeocode(latitude, longitude);
-            if (location) {
-              console.log('Location found:', location);
-              handleLocationSelect(location);
-            } else {
-              console.warn('No location found for coordinates:', latitude, longitude);
-              setError('Could not find an address for your location. Please try searching manually.');
+            const { latitude, longitude } = position.coords;
+            console.log('📍 Got coordinates:', { lat: latitude, lng: longitude });
+
+            if (!geocoder.current) {
+              throw new Error('Geocoder not initialized');
             }
+
+            // Geocode the coordinates
+            geocoder.current.geocode(
+              { location: { lat: latitude, lng: longitude } },
+              (results, status) => {
+                console.log('📡 Geocoding status:', status);
+                
+                if (status === 'OK' && results && results[0]) {
+                  const result = results[0];
+                  console.log('✅ Geocoding result received');
+                  
+                  // Parse the location
+                  let city = '';
+                  let pincode = '';
+                  
+                  if (result.address_components) {
+                    result.address_components.forEach((component) => {
+                      if (component.types.includes('locality')) {
+                        city = String(component.long_name);
+                      }
+                      if (component.types.includes('postal_code')) {
+                        pincode = String(component.long_name);
+                      }
+                    });
+                  }
+
+                  let cleanAddress = String(result.formatted_address || '');
+                  cleanAddress = cleanAddress.replace(/[\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+
+                  const location: Location = {
+                    address: cleanAddress,
+                    city: city || 'Unknown',
+                    pincode: pincode || '000000',
+                    lat: Number(latitude),
+                    lng: Number(longitude),
+                  };
+
+                  console.log('✅ Location parsed successfully');
+                  
+                  // Close the loading state first
+                  setIsLoadingLocation(false);
+                  
+                  // Call the selection handler
+                  handleLocationSelect(location);
+                } else {
+                  console.error('❌ Geocoding failed:', status);
+                  setIsLoadingLocation(false);
+                  setError(`Failed to get address: ${status}`);
+                }
+              }
+            );
           } catch (err: any) {
-            console.error('Reverse geocoding error:', err);
-            const errorMessage = err?.message || 'Unknown error';
-            if (errorMessage.includes('REQUEST_DENIED')) {
-              setError('Geocoding API access denied. Please check your Google Maps API key permissions.');
-            } else if (errorMessage.includes('OVER_QUERY_LIMIT')) {
-              setError('Geocoding API quota exceeded. Please try again later.');
-            } else if (errorMessage.includes('ZERO_RESULTS')) {
-              setError('Could not find an address for your location. Please try searching manually.');
-            } else {
-              setError(`Failed to get address: ${errorMessage}. Please try searching manually.`);
-            }
-          } finally {
+            console.error('❌ Error processing coordinates:', err);
             setIsLoadingLocation(false);
+            setError(err?.message || 'Failed to process location');
           }
         },
         (error) => {
+          console.error('❌ Geolocation error:', error);
           setIsLoadingLocation(false);
           switch (error.code) {
             case error.PERMISSION_DENIED:
-              setError('Location permission denied. Please enable location access in your browser settings.');
+              setError('Location permission denied. Please enable location access.');
               break;
             case error.POSITION_UNAVAILABLE:
-              setError('Location information unavailable. Please try searching manually.');
+              setError('Location information unavailable.');
               break;
             case error.TIMEOUT:
-              setError('Location request timed out. Please try again.');
+              setError('Location request timed out.');
               break;
             default:
-              setError('An unknown error occurred. Please try searching manually.');
+              setError('An unknown error occurred.');
           }
         },
         {
@@ -281,149 +255,11 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
         }
       );
     } catch (err: any) {
+      console.error('❌ Error initializing:', err);
       setIsLoadingLocation(false);
-      console.error('Error getting current location:', err);
-      setError(err?.message || 'Failed to initialize location services. Please check your Google Maps API key.');
+      setError(err?.message || 'Failed to initialize location services');
     }
-  };
-
-  const reverseGeocode = async (lat: number, lng: number): Promise<Location | null> => {
-    if (!geocoder.current) {
-      throw new Error('Geocoder is not initialized');
-    }
-
-    // Log diagnostic information
-    console.group('🔍 GEOCODING REQUEST DIAGNOSTICS');
-    console.log('📍 Coordinates:', { lat, lng });
-    console.log('🌐 Current URL:', window.location.href);
-    console.log('🌐 Origin:', window.location.origin);
-    console.log('🌐 Referrer:', document.referrer || '(none)');
-    console.log('🔑 API Key loaded:', APP_CONFIG.getApiKey() ? 'Yes' : 'No');
-    console.log('🗺️ Google Maps loaded:', !!window.google?.maps);
-    console.groupEnd();
-
-    return new Promise((resolve, reject) => {
-      try {
-        geocoder.current!.geocode(
-          { location: { lat, lng } },
-          (results, status) => {
-            console.group('📡 GEOCODING RESPONSE');
-            console.log('Status:', status);
-            console.log('Results count:', results?.length || 0);
-            
-            if (status === 'OK' && results && results[0]) {
-              const result = results[0];
-              console.log('✅ Geocoding result:', result.formatted_address);
-              console.groupEnd();
-              const location = parseGooglePlace(result, lat, lng);
-              resolve(location);
-            } else if (status === 'ZERO_RESULTS') {
-              console.warn('⚠️ No results found for coordinates:', lat, lng);
-              console.groupEnd();
-              resolve(null);
-            } else {
-              // Handle different error statuses
-              let errorMsg = `Geocoding failed with status: ${status}`;
-              
-              switch (status) {
-                case 'REQUEST_DENIED':
-                  errorMsg = 'REQUEST_DENIED: Geocoding API access denied. Check API key permissions.';
-                  console.error('❌ REQUEST_DENIED ERROR DETAILS:');
-                  console.error('  - Geocoding API enabled?');
-                  console.error('  - API key restrictions correct?');
-                  console.error('  - Billing enabled on Google Cloud project?');
-                  console.error('  - Check: https://console.cloud.google.com/apis/credentials');
-                  break;
-                case 'OVER_QUERY_LIMIT':
-                  errorMsg = 'OVER_QUERY_LIMIT: Geocoding API quota exceeded.';
-                  break;
-                case 'INVALID_REQUEST':
-                  errorMsg = 'INVALID_REQUEST: Invalid geocoding request.';
-                  break;
-                case 'UNKNOWN_ERROR':
-                  errorMsg = 'UNKNOWN_ERROR: An unknown error occurred during geocoding.';
-                  break;
-                default:
-                  errorMsg = `Geocoding failed: ${status}`;
-              }
-              
-              console.error('❌ Geocoding error:', errorMsg);
-              console.groupEnd();
-              reject(new Error(errorMsg));
-            }
-          }
-        );
-      } catch (err) {
-        console.error('Geocoding exception:', err);
-        reject(err);
-      }
-    });
-  };
-
-  const parseGooglePlace = (place: google.maps.GeocoderResult | google.maps.places.PlaceResult, lat?: number, lng?: number): Location => {
-    let city = '';
-    let pincode = '';
-
-    if (place.address_components) {
-      place.address_components.forEach((component) => {
-        if (component.types.includes('locality')) {
-          city = component.long_name;
-        }
-        if (component.types.includes('postal_code')) {
-          pincode = component.long_name;
-        }
-      });
-    }
-
-    // Clean the address by replacing all types of newlines with spaces
-    let cleanAddress = place.formatted_address || '';
-
-    // Replace literal backslash-n (stored as string)
-    cleanAddress = cleanAddress.split('\\n').join(' ');
-    cleanAddress = cleanAddress.split('\\r').join(' ');
-
-    // Replace actual newline characters
-    cleanAddress = cleanAddress.replace(/\n/g, ' ');
-    cleanAddress = cleanAddress.replace(/\r/g, ' ');
-    cleanAddress = cleanAddress.replace(/\t/g, ' ');
-
-    // Replace multiple spaces with single space
-    cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
-
-    // Safely extract lat/lng as primitive numbers
-    // Use nullish coalescing (??) instead of || to handle 0 values correctly
-    let finalLat: number;
-    let finalLng: number;
-
-    if (lat !== undefined && lat !== null) {
-      finalLat = Number(lat);
-    } else if (place.geometry?.location) {
-      // Google Maps LatLng objects have lat() and lng() methods
-      const loc = place.geometry.location;
-      finalLat = typeof loc.lat === 'function' ? Number(loc.lat()) : Number(loc.lat) || 0;
-    } else {
-      finalLat = 0;
-    }
-
-    if (lng !== undefined && lng !== null) {
-      finalLng = Number(lng);
-    } else if (place.geometry?.location) {
-      const loc = place.geometry.location;
-      finalLng = typeof loc.lng === 'function' ? Number(loc.lng()) : Number(loc.lng) || 0;
-    } else {
-      finalLng = 0;
-    }
-
-    const location: Location = {
-      address: cleanAddress,
-      city: city || 'Unknown',
-      pincode: pincode || '000000',
-      lat: finalLat,
-      lng: finalLng,
-    };
-
-    return location;
-  };
+  }, [isLoadingLocation]);
 
   const searchPlaces = async (query: string) => {
     if (!query.trim()) {
@@ -433,51 +269,52 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
 
     setIsLoadingSuggestions(true);
 
-    // Clear previous timeout
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
 
-    // Debounce search
     searchTimeoutRef.current = setTimeout(async () => {
       try {
-        // Check if new API is available
-        if (window.google?.maps?.places?.AutocompleteSuggestion) {
-          console.log('🔄 Using new AutocompleteSuggestion API');
-          // Use the new AutocompleteSuggestion API
-          const request = {
-            input: query,
-            includedPrimaryTypes: ['address', 'establishment', 'geocode'],
-            locationRestriction: {
-              country: 'IN', // Restrict to India
-            },
-          };
-
-          const { suggestions } = await google.maps.places.AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
-          
-          setIsLoadingSuggestions(false);
-
-          if (suggestions && suggestions.length > 0) {
-            // Get details for each suggestion
-            const locations = await Promise.all(
-              suggestions.slice(0, 5).map(async (suggestion) => {
-                if (suggestion.placePrediction?.placeId) {
-                  return await getPlaceDetails(suggestion.placePrediction.placeId);
-                }
-                return null;
-              })
-            );
-
-            setSuggestions(locations.filter((loc): loc is Location => loc !== null));
-          } else {
-            setSuggestions([]);
-          }
-        } else {
-          // Fallback to old API if new one is not available
-          console.warn('⚠️ New AutocompleteSuggestion API not available, using fallback');
+        if (!window.google?.maps?.places?.AutocompleteService) {
+          console.warn('⚠️ AutocompleteService not available');
           setIsLoadingSuggestions(false);
           setSuggestions([]);
+          return;
         }
+
+        console.log('🔍 Searching places for:', query);
+        const service = new google.maps.places.AutocompleteService();
+        
+        service.getPlacePredictions(
+          {
+            input: query,
+            componentRestrictions: { country: 'in' },
+          },
+          async (predictions, status) => {
+            console.log('📡 Autocomplete status:', status);
+            setIsLoadingSuggestions(false);
+            
+            if (status === google.maps.places.PlacesServiceStatus.OK && predictions) {
+              console.log('✅ Got predictions:', predictions.length);
+              
+              const locations = await Promise.all(
+                predictions.slice(0, 5).map(async (prediction) => {
+                  if (prediction.place_id) {
+                    return await getPlaceDetails(prediction.place_id);
+                  }
+                  return null;
+                })
+              );
+
+              const validLocations = locations.filter((loc): loc is Location => loc !== null);
+              console.log('✅ Parsed locations:', validLocations.length);
+              setSuggestions(validLocations);
+            } else {
+              console.warn('⚠️ No predictions returned or error status:', status);
+              setSuggestions([]);
+            }
+          }
+        );
       } catch (error) {
         console.error('❌ Autocomplete error:', error);
         setIsLoadingSuggestions(false);
@@ -497,10 +334,42 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
         },
         (place, status) => {
           if (status === 'OK' && place) {
-            const location = parseGooglePlace(place);
+            let city = '';
+            let pincode = '';
+            
+            if (place.address_components) {
+              place.address_components.forEach((component) => {
+                if (component.types.includes('locality')) {
+                  city = String(component.long_name);
+                }
+                if (component.types.includes('postal_code')) {
+                  pincode = String(component.long_name);
+                }
+              });
+            }
+
+            let cleanAddress = String(place.formatted_address || '');
+            cleanAddress = cleanAddress.replace(/[\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+
+            let lat = 0;
+            let lng = 0;
+            
+            if (place.geometry?.location) {
+              const loc = place.geometry.location;
+              lat = typeof loc.lat === 'function' ? Number(loc.lat()) : Number(loc.lat) || 0;
+              lng = typeof loc.lng === 'function' ? Number(loc.lng()) : Number(loc.lng) || 0;
+            }
+
+            const location: Location = {
+              address: cleanAddress,
+              city: city || 'Unknown',
+              pincode: pincode || '000000',
+              lat,
+              lng,
+            };
+
             resolve(location);
           } else {
-            console.error('❌ getPlaceDetails failed:', status);
             resolve(null);
           }
         }
@@ -508,26 +377,42 @@ const LocationPicker = ({ isOpen, onClose, onLocationSelect, currentLocation }: 
     });
   };
 
-  const handleLocationSelect = (location: Location) => {
-    // Save to localStorage
-    const saved = [...savedAddresses];
-    const existingIndex = saved.findIndex(
-      (addr) => addr.address === location.address
-    );
+  const handleLocationSelect = useCallback((location: Location) => {
+    console.log('📍 handleLocationSelect called');
 
-    if (existingIndex === -1) {
-      saved.unshift(location);
-      // Keep only last MAX_SAVED_ADDRESSES
-      if (saved.length > APP_CONFIG.MAX_SAVED_ADDRESSES) {
-        saved.pop();
+    try {
+      // Validate
+      if (!location?.address) {
+        console.error('❌ Invalid location');
+        return;
       }
-      setSavedAddresses(saved);
-      localStorage.setItem('savedAddresses', JSON.stringify(saved));
-    }
 
-    onLocationSelect(location);
-    onClose();
-  };
+      // Save to localStorage
+      const saved = [...savedAddresses];
+      const existingIndex = saved.findIndex(
+        (addr) => addr.address === location.address
+      );
+
+      if (existingIndex === -1) {
+        saved.unshift(location);
+        if (saved.length > APP_CONFIG.MAX_SAVED_ADDRESSES) {
+          saved.pop();
+        }
+        setSavedAddresses(saved);
+        localStorage.setItem('savedAddresses', JSON.stringify(saved));
+      }
+
+      console.log('✅ Calling parent callback...');
+      // Call parent callback
+      onLocationSelect(location);
+      
+      console.log('✅ Closing modal...');
+      // Close modal
+      onClose();
+    } catch (error) {
+      console.error('❌ Error in handleLocationSelect:', error);
+    }
+  }, [savedAddresses, onLocationSelect, onClose]);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
