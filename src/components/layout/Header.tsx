@@ -174,10 +174,11 @@ const Header = () => {
     setIsLocationPickerOpen(false);
   }, []);
 
-  // Format address to show first 2 lines
-  const formatAddressLines = (address: string): { line1: string; line2: string } => {
-    if (!address) return { line1: '', line2: '' };
+  // Format address to single line
+  const formatAddress = (address: string, maxLength: number = 60): string => {
+    if (!address) return '';
 
+    // Clean the address - remove all newlines, tabs, and extra spaces
     let cleanAddress = address;
     cleanAddress = cleanAddress.split('\\n').join(' ');
     cleanAddress = cleanAddress.split('\\r').join(' ');
@@ -186,17 +187,12 @@ const Header = () => {
     cleanAddress = cleanAddress.replace(/\t/g, ' ');
     cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
 
-    const parts = cleanAddress.split(',').map(part => part.trim());
-
-    if (parts.length <= 2) {
-      return { line1: parts[0] || '', line2: parts[1] || '' };
+    // Truncate if too long
+    if (cleanAddress.length > maxLength) {
+      return cleanAddress.substring(0, maxLength - 3) + '...';
     }
 
-    const line1 = parts[0].length > 40 ? parts[0].substring(0, 37) + '...' : parts[0];
-    const line2Full = parts.slice(1, 3).join(', ');
-    const line2 = line2Full.length > 50 ? line2Full.substring(0, 47) + '...' : line2Full;
-
-    return { line1, line2 };
+    return cleanAddress;
   };
 
   const popularSearches = ['Rice', 'Milk', 'Vegetables', 'Atta', 'Oil'];
@@ -245,14 +241,9 @@ const Header = () => {
                       Deliver to
                     </p>
                     {currentLocation ? (
-                      <>
-                        <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line1}
-                        </p>
-                        <p className="text-xs text-gray-600 truncate leading-tight mt-0.5 whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line2}
-                        </p>
-                      </>
+                      <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
+                        {formatAddress(currentLocation.address, 45)}
+                      </p>
                     ) : (
                       <p className="text-sm font-bold text-gray-900 flex items-center gap-1">
                         Select Location
@@ -749,14 +740,9 @@ const Header = () => {
                       Deliver to
                     </p>
                     {currentLocation ? (
-                      <>
-                        <p className="text-sm font-bold text-gray-800 line-clamp-1 leading-tight whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line1}
-                        </p>
-                        <p className="text-xs text-gray-600 line-clamp-1 leading-tight mt-1 whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line2}
-                        </p>
-                      </>
+                      <p className="text-sm font-bold text-gray-800 truncate leading-tight whitespace-nowrap">
+                        {formatAddress(currentLocation.address, 40)}
+                      </p>
                     ) : (
                       <p className="text-sm font-bold text-gray-800 flex items-center gap-1.5">
                         Select Location

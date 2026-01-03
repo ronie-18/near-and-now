@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import ProductGrid from "../components/products/ProductGrid";
-import { getAllProducts } from "../services/supabase";
+import { getAllProducts, getProductsByCategory } from "../services/supabase";
 import { Product } from "../services/supabase";
 import { getCategories, Category } from "../services/adminService";
 import { useNotification } from "../context/NotificationContext";
@@ -19,6 +19,12 @@ const HomePage = () => {
   const categoryScrollRef = useRef<HTMLDivElement>(null);
   const [, setIsScrolling] = useState(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Featured category carousel states
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [categoryProducts, setCategoryProducts] = useState<Product[]>([]);
+  const [loadingCategoryProducts, setLoadingCategoryProducts] = useState(false);
+  const categoryTabsScrollRef = useRef<HTMLDivElement>(null);
 
   const ITEMS_PER_LOAD = 20; // Load 20 products per "Load More" click
 
@@ -45,6 +51,11 @@ const HomePage = () => {
         const randomizedProducts = shuffleArray(products);
         setAllProducts(randomizedProducts);
         setCategories(categoriesData);
+        
+        // Set first category as selected by default
+        if (categoriesData.length > 0) {
+          setSelectedCategory(categoriesData[0].name);
+        }
       } catch (error) {
         console.error("Error fetching data:", error);
         showNotification("Failed to load data. Please try again.", "error");
@@ -55,6 +66,26 @@ const HomePage = () => {
 
     fetchData();
   }, [showNotification]);
+
+  // Fetch products when selected category changes
+  useEffect(() => {
+    if (!selectedCategory) return;
+
+    const fetchCategoryProducts = async () => {
+      try {
+        setLoadingCategoryProducts(true);
+        const products = await getProductsByCategory(selectedCategory);
+        setCategoryProducts(products.slice(0, 8)); // Show first 8 products
+      } catch (error) {
+        console.error("Error fetching category products:", error);
+        setCategoryProducts([]);
+      } finally {
+        setLoadingCategoryProducts(false);
+      }
+    };
+
+    fetchCategoryProducts();
+  }, [selectedCategory]);
 
   // Update displayed products when items to show changes
   useEffect(() => {
@@ -185,6 +216,26 @@ const HomePage = () => {
     return colors[index % colors.length];
   };
 
+  // Scroll category tabs left
+  const scrollCategoryTabsLeft = () => {
+    if (categoryTabsScrollRef.current) {
+      categoryTabsScrollRef.current.scrollBy({
+        left: -200,
+        behavior: "smooth",
+      });
+    }
+  };
+
+  // Scroll category tabs right
+  const scrollCategoryTabsRight = () => {
+    if (categoryTabsScrollRef.current) {
+      categoryTabsScrollRef.current.scrollBy({
+        left: 200,
+        behavior: "smooth",
+      });
+    }
+  };
+
   return (
     <>
       {/* Categories Section */}
@@ -299,6 +350,138 @@ const HomePage = () => {
               </p>
             </div>
           )}
+        </div>
+      </section>
+
+      {/* Featured Category Products Section */}
+      <section className="py-16 bg-gradient-to-b from-gray-50 to-white">
+        <div className="container mx-auto px-4">
+          <div className="text-center mb-10">
+            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-3">
+              Explore by Category
+            </h2>
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+              Select a category to discover handpicked products
+            </p>
+          </div>
+
+          {/* Category Tabs Carousel */}
+          <div className="flex items-center justify-center gap-3 mb-8">
+            {/* Left Arrow */}
+            {!loading && categories.length > 5 && (
+              <button
+                onClick={scrollCategoryTabsLeft}
+                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 shadow-md transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500"
+                aria-label="Scroll tabs left"
+              >
+                <ChevronLeft className="w-5 h-5 text-gray-700" />
+              </button>
+            )}
+
+            {/* Category Tabs */}
+            <div
+              ref={categoryTabsScrollRef}
+              className="flex-1 flex gap-3 overflow-x-auto scrollbar-hide px-2"
+              style={{
+                scrollbarWidth: "none",
+                msOverflowStyle: "none",
+                maxWidth: "900px",
+              }}
+            >
+              {loading
+                ? Array.from({ length: 6 }).map((_, index) => (
+                    <div
+                      key={`skeleton-tab-${index}`}
+                      className="flex-shrink-0 h-12 w-32 bg-gray-200 rounded-full animate-pulse"
+                    />
+                  ))
+                : categories.map((category) => (
+                    <button
+                      key={category.id}
+                      onClick={() => setSelectedCategory(category.name)}
+                      className={`flex-shrink-0 px-6 py-3 rounded-full font-semibold transition-all duration-300 whitespace-nowrap ${
+                        selectedCategory === category.name
+                          ? "bg-gradient-to-r from-primary to-secondary text-white shadow-lg scale-105"
+                          : "bg-white text-gray-700 hover:bg-gray-100 shadow-md hover:shadow-lg"
+                      }`}
+                    >
+                      {formatCategoryName(category.name)}
+                    </button>
+                  ))}
+            </div>
+
+            {/* Right Arrow */}
+            {!loading && categories.length > 5 && (
+              <button
+                onClick={scrollCategoryTabsRight}
+                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 shadow-md transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500"
+                aria-label="Scroll tabs right"
+              >
+                <ChevronRight className="w-5 h-5 text-gray-700" />
+              </button>
+            )}
+          </div>
+
+          {/* Category Products Grid */}
+          <div className="mt-8">
+            {loadingCategoryProducts ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <div
+                    key={`skeleton-product-${index}`}
+                    className="bg-white rounded-2xl shadow-md animate-pulse overflow-hidden"
+                  >
+                    <div className="w-full h-48 bg-gray-200" />
+                    <div className="p-4 space-y-3">
+                      <div className="h-4 bg-gray-200 rounded w-3/4" />
+                      <div className="h-4 bg-gray-200 rounded w-1/2" />
+                      <div className="h-8 bg-gray-200 rounded" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : categoryProducts.length > 0 ? (
+              <>
+                <ProductGrid products={categoryProducts} loading={false} />
+                {categoryProducts.length >= 8 && (
+                  <div className="text-center mt-8">
+                    <Link
+                      to={`/category/${encodeURIComponent(selectedCategory)}`}
+                      className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300"
+                    >
+                      <span>View All {formatCategoryName(selectedCategory)} Products</span>
+                      <ChevronRight className="w-5 h-5" />
+                    </Link>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-12 bg-white rounded-2xl shadow-md">
+                <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-8 w-8 text-gray-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                    />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                  No Products in This Category
+                </h3>
+                <p className="text-gray-500">
+                  We're working on adding new products. Check back soon!
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
