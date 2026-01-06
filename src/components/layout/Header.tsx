@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
@@ -160,25 +160,19 @@ const Header = () => {
     }
   };
 
-  const handleLocationSelect = useCallback((location: Location) => {
-    console.log('🎯 Header: Location selected');
+  const handleLocationSelect = (location: Location) => {
     setCurrentLocation(location);
     localStorage.setItem('currentLocation', JSON.stringify(location));
-  }, []);
+  };
 
-  const openLocationPicker = useCallback(() => {
-    setIsLocationPickerOpen(true);
-  }, []);
+  const toggleLocationPicker = () => {
+    setIsLocationPickerOpen(!isLocationPickerOpen);
+  };
 
-  const closeLocationPicker = useCallback(() => {
-    setIsLocationPickerOpen(false);
-  }, []);
+  // Format address to show first 2 lines
+  const formatAddressLines = (address: string): { line1: string; line2: string } => {
+    if (!address) return { line1: '', line2: '' };
 
-  // Format address to single line
-  const formatAddress = (address: string, maxLength: number = 60): string => {
-    if (!address) return '';
-
-    // Clean the address - remove all newlines, tabs, and extra spaces
     let cleanAddress = address;
     cleanAddress = cleanAddress.split('\\n').join(' ');
     cleanAddress = cleanAddress.split('\\r').join(' ');
@@ -187,12 +181,17 @@ const Header = () => {
     cleanAddress = cleanAddress.replace(/\t/g, ' ');
     cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
 
-    // Truncate if too long
-    if (cleanAddress.length > maxLength) {
-      return cleanAddress.substring(0, maxLength - 3) + '...';
+    const parts = cleanAddress.split(',').map(part => part.trim());
+
+    if (parts.length <= 2) {
+      return { line1: parts[0] || '', line2: parts[1] || '' };
     }
 
-    return cleanAddress;
+    const line1 = parts[0].length > 40 ? parts[0].substring(0, 37) + '...' : parts[0];
+    const line2Full = parts.slice(1, 3).join(', ');
+    const line2 = line2Full.length > 50 ? line2Full.substring(0, 47) + '...' : line2Full;
+
+    return { line1, line2 };
   };
 
   const popularSearches = ['Rice', 'Milk', 'Vegetables', 'Atta', 'Oil'];
@@ -228,7 +227,7 @@ const Header = () => {
               {/* Location Selector - Enhanced Desktop */}
               <div className="hidden lg:block">
                 <button
-                  onClick={openLocationPicker}
+                  onClick={toggleLocationPicker}
                   className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-2xl hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10 transition-all duration-300 group bg-gradient-to-br from-gray-50 to-white hover:from-primary/5 hover:to-secondary/5 min-w-[280px] max-w-[320px] relative overflow-hidden"
                 >
                   <div className="absolute inset-0 bg-gradient-to-r from-primary/0 via-primary/5 to-primary/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
@@ -241,9 +240,14 @@ const Header = () => {
                       Deliver to
                     </p>
                     {currentLocation ? (
-                      <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
-                        {formatAddress(currentLocation.address, 45)}
-                      </p>
+                      <>
+                        <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
+                          {formatAddressLines(currentLocation.address).line1}
+                        </p>
+                        <p className="text-xs text-gray-600 truncate leading-tight mt-0.5 whitespace-nowrap">
+                          {formatAddressLines(currentLocation.address).line2}
+                        </p>
+                      </>
                     ) : (
                       <p className="text-sm font-bold text-gray-900 flex items-center gap-1">
                         Select Location
@@ -728,7 +732,7 @@ const Header = () => {
 
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <button
-                  onClick={openLocationPicker}
+                  onClick={toggleLocationPicker}
                   className="flex items-start gap-3 w-full p-4 rounded-2xl hover:bg-gradient-to-br hover:from-primary/5 hover:to-secondary/5 transition-all border-2 border-gray-100 hover:border-primary/30 hover:shadow-lg active:scale-[0.98]"
                 >
                   <div className="w-12 h-12 bg-gradient-to-br from-primary via-green-600 to-secondary rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg mt-0.5">
@@ -740,9 +744,14 @@ const Header = () => {
                       Deliver to
                     </p>
                     {currentLocation ? (
-                      <p className="text-sm font-bold text-gray-800 truncate leading-tight whitespace-nowrap">
-                        {formatAddress(currentLocation.address, 40)}
-                      </p>
+                      <>
+                        <p className="text-sm font-bold text-gray-800 line-clamp-1 leading-tight whitespace-nowrap">
+                          {formatAddressLines(currentLocation.address).line1}
+                        </p>
+                        <p className="text-xs text-gray-600 line-clamp-1 leading-tight mt-1 whitespace-nowrap">
+                          {formatAddressLines(currentLocation.address).line2}
+                        </p>
+                      </>
                     ) : (
                       <p className="text-sm font-bold text-gray-800 flex items-center gap-1.5">
                         Select Location
@@ -764,7 +773,7 @@ const Header = () => {
       {/* Location Picker Modal */}
       <LocationPicker
         isOpen={isLocationPickerOpen}
-        onClose={closeLocationPicker}
+        onClose={() => setIsLocationPickerOpen(false)}
         onLocationSelect={handleLocationSelect}
         currentLocation={currentLocation || undefined}
       />

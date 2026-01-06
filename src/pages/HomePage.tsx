@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Link } from "react-router-dom";
-import ProductGrid from "../components/products/ProductGrid";
-import { getAllProducts, getProductsByCategory } from "../services/supabase";
-import { Product } from "../services/supabase";
-import { getCategories, Category } from "../services/adminService";
-import { useNotification } from "../context/NotificationContext";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { formatCategoryName } from "../utils/formatCategoryName";
+import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
+import ProductGrid from '../components/products/ProductGrid';
+import { getAllProducts } from '../services/supabase';
+import { Product } from '../services/supabase';
+import { getCategories, Category } from '../services/adminService';
+import { useNotification } from '../context/NotificationContext';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { formatCategoryName } from '../utils/formatCategoryName';
 
 const HomePage = () => {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
@@ -14,29 +14,14 @@ const HomePage = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [itemsToShow, setItemsToShow] = useState(20); // Show minimum 20 products initially
+  const [itemsToShow, setItemsToShow] = useState(12);
   const { showNotification } = useNotification();
+  const observerTarget = useRef<HTMLDivElement>(null);
   const categoryScrollRef = useRef<HTMLDivElement>(null);
-  const [, setIsScrolling] = useState(false);
+  const [isScrolling, setIsScrolling] = useState(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
-  // Featured category carousel states
-  const [selectedCategory, setSelectedCategory] = useState<string>("");
-  const [categoryProducts, setCategoryProducts] = useState<Product[]>([]);
-  const [loadingCategoryProducts, setLoadingCategoryProducts] = useState(false);
-  const categoryTabsScrollRef = useRef<HTMLDivElement>(null);
 
-  const ITEMS_PER_LOAD = 20; // Load 20 products per "Load More" click
-
-  // Shuffle array function for randomization
-  const shuffleArray = <T,>(array: T[]): T[] => {
-    const newArray = [...array];
-    for (let i = newArray.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
-    }
-    return newArray;
-  };
+  const ITEMS_PER_LOAD = 12;
 
   // Fetch all products and categories on mount
   useEffect(() => {
@@ -45,20 +30,13 @@ const HomePage = () => {
         setLoading(true);
         const [products, categoriesData] = await Promise.all([
           getAllProducts(),
-          getCategories(),
+          getCategories()
         ]);
-        // Randomize products for variety on home page
-        const randomizedProducts = shuffleArray(products);
-        setAllProducts(randomizedProducts);
+        setAllProducts(products);
         setCategories(categoriesData);
-        
-        // Set first category as selected by default
-        if (categoriesData.length > 0) {
-          setSelectedCategory(categoriesData[0].name);
-        }
       } catch (error) {
-        console.error("Error fetching data:", error);
-        showNotification("Failed to load data. Please try again.", "error");
+        console.error('Error fetching data:', error);
+        showNotification('Failed to load data. Please try again.', 'error');
       } finally {
         setLoading(false);
       }
@@ -67,44 +45,40 @@ const HomePage = () => {
     fetchData();
   }, [showNotification]);
 
-  // Fetch products when selected category changes
-  useEffect(() => {
-    if (!selectedCategory) return;
-
-    const fetchCategoryProducts = async () => {
-      try {
-        setLoadingCategoryProducts(true);
-        const products = await getProductsByCategory(selectedCategory);
-        setCategoryProducts(products.slice(0, 8)); // Show first 8 products
-      } catch (error) {
-        console.error("Error fetching category products:", error);
-        setCategoryProducts([]);
-      } finally {
-        setLoadingCategoryProducts(false);
-      }
-    };
-
-    fetchCategoryProducts();
-  }, [selectedCategory]);
-
   // Update displayed products when items to show changes
   useEffect(() => {
     setDisplayedProducts(allProducts.slice(0, itemsToShow));
   }, [allProducts, itemsToShow]);
 
-  // Handle "Load More" button click
-  const handleLoadMore = () => {
-    if (itemsToShow < allProducts.length && !loadingMore) {
-      setLoadingMore(true);
-      // Simulate loading delay for better UX
-      setTimeout(() => {
-        setItemsToShow((prev) =>
-          Math.min(prev + ITEMS_PER_LOAD, allProducts.length)
-        );
-        setLoadingMore(false);
-      }, 300);
+  // Infinite scroll observer
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loading && !loadingMore) {
+          if (itemsToShow < allProducts.length) {
+            setLoadingMore(true);
+            // Simulate loading delay for better UX
+            setTimeout(() => {
+              setItemsToShow((prev) => prev + ITEMS_PER_LOAD);
+              setLoadingMore(false);
+            }, 500);
+          }
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    const currentTarget = observerTarget.current;
+    if (currentTarget) {
+      observer.observe(currentTarget);
     }
-  };
+
+    return () => {
+      if (currentTarget) {
+        observer.unobserve(currentTarget);
+      }
+    };
+  }, [loading, loadingMore, itemsToShow, allProducts.length]);
 
   // Create infinite loop of categories (5 copies for seamless looping)
   const infiniteCategories = [
@@ -112,28 +86,28 @@ const HomePage = () => {
     ...categories,
     ...categories,
     ...categories,
-    ...categories,
+    ...categories
   ];
 
   // Check for infinite scroll loop and reset position
-  const checkInfiniteScroll = useCallback(() => {
+  const checkInfiniteScroll = () => {
     if (!categoryScrollRef.current || categories.length === 0) return;
 
     const container = categoryScrollRef.current;
-    const currentScrollLeft = container.scrollLeft;
-    const { scrollWidth } = container;
+    const scrollLeft = container.scrollLeft;
+    const scrollWidth = container.scrollWidth;
     const singleSetWidth = scrollWidth / 5; // Width of one complete set of categories
 
     // Reset to center set (index 2) when at boundaries
     // If scrolled past the 3rd set, jump back to 2nd set
-    if (currentScrollLeft >= singleSetWidth * 3) {
-      container.scrollLeft = currentScrollLeft - singleSetWidth;
+    if (scrollLeft >= singleSetWidth * 3) {
+      container.scrollLeft = scrollLeft - singleSetWidth;
     }
     // If scrolled before the 2nd set, jump forward to 2nd set
-    else if (currentScrollLeft < singleSetWidth) {
-      container.scrollLeft = currentScrollLeft + singleSetWidth;
+    else if (scrollLeft < singleSetWidth) {
+      container.scrollLeft = scrollLeft + singleSetWidth;
     }
-  }, [categories.length]);
+  };
 
   // Setup scroll event listener for infinite loop
   useEffect(() => {
@@ -158,82 +132,49 @@ const HomePage = () => {
       }, 50);
     };
 
-    container.addEventListener("scroll", handleScroll, { passive: true });
+    container.addEventListener('scroll', handleScroll, { passive: true });
 
     return () => {
       clearTimeout(initializeScroll);
       if (scrollTimeoutRef.current) {
         clearTimeout(scrollTimeoutRef.current);
       }
-      container.removeEventListener("scroll", handleScroll);
+      container.removeEventListener('scroll', handleScroll);
     };
   }, [categories, checkInfiniteScroll]);
 
   // Scroll categories left (one card width)
-  const handleScrollLeft = useCallback(() => {
+  const scrollLeft = () => {
     if (categoryScrollRef.current) {
       setIsScrolling(true);
       const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
-      categoryScrollRef.current.scrollBy({
-        left: -cardWidth,
-        behavior: "smooth",
-      });
+      categoryScrollRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
 
       // Reset scrolling state after animation completes
       setTimeout(() => setIsScrolling(false), 500);
     }
-  }, []);
+  };
 
   // Scroll categories right (one card width)
-  const handleScrollRight = useCallback(() => {
+  const scrollRight = () => {
     if (categoryScrollRef.current) {
       setIsScrolling(true);
       const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
-      categoryScrollRef.current.scrollBy({
-        left: cardWidth,
-        behavior: "smooth",
-      });
+      categoryScrollRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
 
       // Reset scrolling state after animation completes
       setTimeout(() => setIsScrolling(false), 500);
     }
-  }, []);
+  };
 
   // Generate background color for categories
   const getCategoryBgColor = (index: number) => {
     const colors = [
-      "bg-green-50",
-      "bg-red-50",
-      "bg-yellow-50",
-      "bg-orange-50",
-      "bg-pink-50",
-      "bg-slate-50",
-      "bg-blue-50",
-      "bg-purple-50",
-      "bg-teal-50",
-      "bg-indigo-50",
+      'bg-green-50', 'bg-red-50', 'bg-yellow-50', 'bg-orange-50',
+      'bg-pink-50', 'bg-slate-50', 'bg-blue-50', 'bg-purple-50',
+      'bg-teal-50', 'bg-indigo-50'
     ];
     return colors[index % colors.length];
-  };
-
-  // Scroll category tabs left
-  const scrollCategoryTabsLeft = () => {
-    if (categoryTabsScrollRef.current) {
-      categoryTabsScrollRef.current.scrollBy({
-        left: -200,
-        behavior: "smooth",
-      });
-    }
-  };
-
-  // Scroll category tabs right
-  const scrollCategoryTabsRight = () => {
-    if (categoryTabsScrollRef.current) {
-      categoryTabsScrollRef.current.scrollBy({
-        left: 200,
-        behavior: "smooth",
-      });
-    }
   };
 
   return (
@@ -246,8 +187,7 @@ const HomePage = () => {
               Shop by Category
             </h2>
             <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Discover a wide variety of fresh products across all your favorite
-              categories
+              Discover a wide variety of fresh products across all your favorite categories
             </p>
           </div>
 
@@ -256,7 +196,7 @@ const HomePage = () => {
             {/* Left Arrow */}
             {!loading && categories.length > 0 && (
               <button
-                onClick={handleScrollLeft}
+                onClick={scrollLeft}
                 className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
                 aria-label="Scroll left"
               >
@@ -269,71 +209,68 @@ const HomePage = () => {
               ref={categoryScrollRef}
               className="flex-1 flex gap-4 md:gap-6 overflow-x-hidden scrollbar-hide"
               style={{
-                scrollbarWidth: "none",
-                msOverflowStyle: "none",
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none'
               }}
             >
-              {loading
-                ? // Category Skeleton Loaders - 5 cards
-                  Array.from({ length: 5 }).map((_, index) => (
-                    <div
-                      key={`skeleton-cat-${index}`}
-                      className="flex-shrink-0 bg-white rounded-2xl p-5 animate-pulse shadow-md"
-                      style={{
-                        width: "calc((100% - 4 * 1.5rem) / 5)",
-                        minWidth: "calc((100% - 4 * 1.5rem) / 5)",
-                      }}
-                    >
-                      <div className="w-full h-40 bg-gray-200 rounded-xl mb-4"></div>
-                      <div className="h-5 bg-gray-200 rounded mb-2"></div>
-                      <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+              {loading ? (
+                // Category Skeleton Loaders - 5 cards
+                Array.from({ length: 5 }).map((_, index) => (
+                  <div
+                    key={`skeleton-cat-${index}`}
+                    className="flex-shrink-0 bg-white rounded-2xl p-5 animate-pulse shadow-md"
+                    style={{
+                      width: 'calc((100% - 4 * 1.5rem) / 5)',
+                      minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
+                    }}
+                  >
+                    <div className="w-full h-40 bg-gray-200 rounded-xl mb-4"></div>
+                    <div className="h-5 bg-gray-200 rounded mb-2"></div>
+                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                  </div>
+                ))
+              ) : (
+                infiniteCategories.map((category, index) => (
+                  <Link
+                    key={`${category.id}-${index}`}
+                    to={`/category/${encodeURIComponent(category.name)}`}
+                    className="flex-shrink-0 group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
+                    style={{
+                      width: 'calc((100% - 4 * 1.5rem) / 5)',
+                      minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
+                    }}
+                  >
+                    <div className={`${category.color || getCategoryBgColor(index)} p-4`}>
+                      <div className="overflow-hidden rounded-xl">
+                        <img
+                          src={category.image_url || `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`}
+                          alt={category.name}
+                          loading="lazy"
+                          className="w-full h-40 object-cover transform group-hover:scale-110 transition-transform duration-300"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
+                          }}
+                        />
+                      </div>
                     </div>
-                  ))
-                : infiniteCategories.map((category, index) => (
-                    <Link
-                      key={`${category.id}-${index}`}
-                      to={`/category/${encodeURIComponent(category.name)}`}
-                      className="flex-shrink-0 group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
-                      style={{
-                        width: "calc((100% - 4 * 1.5rem) / 5)",
-                        minWidth: "calc((100% - 4 * 1.5rem) / 5)",
-                      }}
-                    >
-                      <div
-                        className={`${category.color || getCategoryBgColor(index)} p-4`}
-                      >
-                        <div className="overflow-hidden rounded-xl">
-                          <img
-                            src={
-                              category.image_url ||
-                              `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`
-                            }
-                            alt={category.name}
-                            loading="lazy"
-                            className="w-full h-40 object-cover transform group-hover:scale-110 transition-transform duration-300"
-                            onError={(e) => {
-                              const target = e.target as HTMLImageElement;
-                              target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <div className="p-4 text-center">
-                        <h3 className="font-bold text-gray-800 text-base mb-1.5 group-hover:text-green-600 transition-colors">
-                          {formatCategoryName(category.name)}
-                        </h3>
-                        <p className="text-sm text-gray-500 line-clamp-2">
-                          {category.description || "Browse products"}
-                        </p>
-                      </div>
-                    </Link>
-                  ))}
+                    <div className="p-4 text-center">
+                      <h3 className="font-bold text-gray-800 text-base mb-1.5 group-hover:text-green-600 transition-colors">
+                        {formatCategoryName(category.name)}
+                      </h3>
+                      <p className="text-sm text-gray-500 line-clamp-2">
+                        {category.description || 'Browse products'}
+                      </p>
+                    </div>
+                  </Link>
+                ))
+              )}
             </div>
 
             {/* Right Arrow */}
             {!loading && categories.length > 0 && (
               <button
-                onClick={handleScrollRight}
+                onClick={scrollRight}
                 className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
                 aria-label="Scroll right"
               >
@@ -345,143 +282,9 @@ const HomePage = () => {
           {/* Empty State */}
           {!loading && categories.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-gray-500">
-                No categories available at the moment.
-              </p>
+              <p className="text-gray-500">No categories available at the moment.</p>
             </div>
           )}
-        </div>
-      </section>
-
-      {/* Featured Category Products Section */}
-      <section className="py-16 bg-gradient-to-b from-gray-50 to-white">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-10">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-3">
-              Explore by Category
-            </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Select a category to discover handpicked products
-            </p>
-          </div>
-
-          {/* Category Tabs Carousel */}
-          <div className="flex items-center justify-center gap-3 mb-8">
-            {/* Left Arrow */}
-            {!loading && categories.length > 5 && (
-              <button
-                onClick={scrollCategoryTabsLeft}
-                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 shadow-md transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500"
-                aria-label="Scroll tabs left"
-              >
-                <ChevronLeft className="w-5 h-5 text-gray-700" />
-              </button>
-            )}
-
-            {/* Category Tabs */}
-            <div
-              ref={categoryTabsScrollRef}
-              className="flex-1 flex gap-3 overflow-x-auto scrollbar-hide px-2"
-              style={{
-                scrollbarWidth: "none",
-                msOverflowStyle: "none",
-                maxWidth: "900px",
-              }}
-            >
-              {loading
-                ? Array.from({ length: 6 }).map((_, index) => (
-                    <div
-                      key={`skeleton-tab-${index}`}
-                      className="flex-shrink-0 h-12 w-32 bg-gray-200 rounded-full animate-pulse"
-                    />
-                  ))
-                : categories.map((category) => (
-                    <button
-                      key={category.id}
-                      onClick={() => setSelectedCategory(category.name)}
-                      className={`flex-shrink-0 px-6 py-3 rounded-full font-semibold transition-all duration-300 whitespace-nowrap ${
-                        selectedCategory === category.name
-                          ? "bg-gradient-to-r from-primary to-secondary text-white shadow-lg scale-105"
-                          : "bg-white text-gray-700 hover:bg-gray-100 shadow-md hover:shadow-lg"
-                      }`}
-                    >
-                      {formatCategoryName(category.name)}
-                    </button>
-                  ))}
-            </div>
-
-            {/* Right Arrow */}
-            {!loading && categories.length > 5 && (
-              <button
-                onClick={scrollCategoryTabsRight}
-                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 shadow-md transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500"
-                aria-label="Scroll tabs right"
-              >
-                <ChevronRight className="w-5 h-5 text-gray-700" />
-              </button>
-            )}
-          </div>
-
-          {/* Category Products Grid */}
-          <div className="mt-8">
-            {loadingCategoryProducts ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {Array.from({ length: 8 }).map((_, index) => (
-                  <div
-                    key={`skeleton-product-${index}`}
-                    className="bg-white rounded-2xl shadow-md animate-pulse overflow-hidden"
-                  >
-                    <div className="w-full h-48 bg-gray-200" />
-                    <div className="p-4 space-y-3">
-                      <div className="h-4 bg-gray-200 rounded w-3/4" />
-                      <div className="h-4 bg-gray-200 rounded w-1/2" />
-                      <div className="h-8 bg-gray-200 rounded" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : categoryProducts.length > 0 ? (
-              <>
-                <ProductGrid products={categoryProducts} loading={false} />
-                {categoryProducts.length >= 8 && (
-                  <div className="text-center mt-8">
-                    <Link
-                      to={`/category/${encodeURIComponent(selectedCategory)}`}
-                      className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300"
-                    >
-                      <span>View All {formatCategoryName(selectedCategory)} Products</span>
-                      <ChevronRight className="w-5 h-5" />
-                    </Link>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="text-center py-12 bg-white rounded-2xl shadow-md">
-                <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-8 w-8 text-gray-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-                    />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                  No Products in This Category
-                </h3>
-                <p className="text-gray-500">
-                  We're working on adding new products. Check back soon!
-                </p>
-              </div>
-            )}
-          </div>
         </div>
       </section>
 
@@ -496,78 +299,42 @@ const HomePage = () => {
             <p className="text-gray-600">
               {allProducts.length > 0
                 ? `Showing ${displayedProducts.length} of ${allProducts.length} products`
-                : "Browse through our complete collection of quality products"}
+                : 'Browse through our complete collection of quality products'
+              }
             </p>
           </div>
 
           {/* Products Grid */}
           <ProductGrid products={displayedProducts} loading={loading} />
 
-          {/* Load More Button */}
-          {!loading && displayedProducts.length < allProducts.length && (
+          {/* Loading More Indicator */}
+          {loadingMore && (
             <div className="flex justify-center items-center py-8">
-              {loadingMore ? (
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-gray-600 font-medium">
-                    Loading more products...
-                  </span>
-                </div>
-              ) : (
-                <button
-                  onClick={handleLoadMore}
-                  className="px-8 py-4 bg-gradient-to-r from-primary to-secondary text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-2"
-                >
-                  <span>Load More Products</span>
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div>
+                <span className="text-gray-600 font-medium">Loading more products...</span>
+              </div>
             </div>
           )}
 
-          {/* Products Count Info */}
+          {/* Infinite Scroll Observer Target */}
           {!loading && displayedProducts.length < allProducts.length && (
-            <div className="text-center text-sm text-gray-500 mb-4">
-              Showing {displayedProducts.length} of {allProducts.length}{" "}
-              products
+            <div ref={observerTarget} className="h-20 flex items-center justify-center">
+              <div className="text-gray-400 text-sm">Scroll for more products</div>
             </div>
           )}
 
           {/* End of Products Message */}
-          {!loading &&
-            displayedProducts.length > 0 &&
-            displayedProducts.length === allProducts.length && (
-              <div className="text-center py-8">
-                <div className="inline-flex items-center gap-2 text-gray-500">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  <span className="font-medium">
-                    You've reached the end of our catalog
-                  </span>
-                </div>
+          {!loading && displayedProducts.length > 0 && displayedProducts.length === allProducts.length && (
+            <div className="text-center py-8">
+              <div className="inline-flex items-center gap-2 text-gray-500">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span className="font-medium">You've reached the end of our catalog</span>
               </div>
-            )}
+            </div>
+          )}
 
           {/* Show message when no products available */}
           {!loading && allProducts.length === 0 && (
@@ -596,6 +363,7 @@ const HomePage = () => {
           )}
         </div>
       </section>
+
     </>
   );
 };
