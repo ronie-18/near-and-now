@@ -5,7 +5,6 @@ import { getAllProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
 import { getCategories, Category } from '../services/adminService';
 import { useNotification } from '../context/NotificationContext';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatCategoryName } from '../utils/formatCategoryName';
 
 const HomePage = () => {
@@ -17,9 +16,6 @@ const HomePage = () => {
   const [itemsToShow, setItemsToShow] = useState(12);
   const { showNotification } = useNotification();
   const observerTarget = useRef<HTMLDivElement>(null);
-  const categoryScrollRef = useRef<HTMLDivElement>(null);
-  const [isScrolling, setIsScrolling] = useState(false);
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const ITEMS_PER_LOAD = 12;
 
@@ -80,93 +76,6 @@ const HomePage = () => {
     };
   }, [loading, loadingMore, itemsToShow, allProducts.length]);
 
-  // Create infinite loop of categories (5 copies for seamless looping)
-  const infiniteCategories = [
-    ...categories,
-    ...categories,
-    ...categories,
-    ...categories,
-    ...categories
-  ];
-
-  // Check for infinite scroll loop and reset position
-  const checkInfiniteScroll = () => {
-    if (!categoryScrollRef.current || categories.length === 0) return;
-
-    const container = categoryScrollRef.current;
-    const scrollLeft = container.scrollLeft;
-    const scrollWidth = container.scrollWidth;
-    const singleSetWidth = scrollWidth / 5; // Width of one complete set of categories
-
-    // Reset to center set (index 2) when at boundaries
-    // If scrolled past the 3rd set, jump back to 2nd set
-    if (scrollLeft >= singleSetWidth * 3) {
-      container.scrollLeft = scrollLeft - singleSetWidth;
-    }
-    // If scrolled before the 2nd set, jump forward to 2nd set
-    else if (scrollLeft < singleSetWidth) {
-      container.scrollLeft = scrollLeft + singleSetWidth;
-    }
-  };
-
-  // Setup scroll event listener for infinite loop
-  useEffect(() => {
-    const container = categoryScrollRef.current;
-    if (!container || categories.length === 0) return;
-
-    // Initialize scroll position to middle set (2nd set out of 5)
-    const initializeScroll = setTimeout(() => {
-      if (container.scrollWidth > 0) {
-        const singleSetWidth = container.scrollWidth / 5;
-        container.scrollLeft = singleSetWidth * 2; // Start at 2nd set
-      }
-    }, 100);
-
-    // Use passive listener for better performance
-    const handleScroll = () => {
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-      scrollTimeoutRef.current = setTimeout(() => {
-        checkInfiniteScroll();
-      }, 50);
-    };
-
-    container.addEventListener('scroll', handleScroll, { passive: true });
-
-    return () => {
-      clearTimeout(initializeScroll);
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-      container.removeEventListener('scroll', handleScroll);
-    };
-  }, [categories, checkInfiniteScroll]);
-
-  // Scroll categories left (one card width)
-  const scrollLeft = () => {
-    if (categoryScrollRef.current) {
-      setIsScrolling(true);
-      const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
-      categoryScrollRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
-
-      // Reset scrolling state after animation completes
-      setTimeout(() => setIsScrolling(false), 500);
-    }
-  };
-
-  // Scroll categories right (one card width)
-  const scrollRight = () => {
-    if (categoryScrollRef.current) {
-      setIsScrolling(true);
-      const cardWidth = categoryScrollRef.current.offsetWidth / 5; // Width of one card when 5 are visible
-      categoryScrollRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
-
-      // Reset scrolling state after animation completes
-      setTimeout(() => setIsScrolling(false), 500);
-    }
-  };
-
   // Generate background color for categories
   const getCategoryBgColor = (index: number) => {
     const colors = [
@@ -179,115 +88,6 @@ const HomePage = () => {
 
   return (
     <>
-      {/* Categories Section */}
-      <section className="py-16 bg-gradient-to-b from-white to-gray-50">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-3">
-              Shop by Category
-            </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Discover a wide variety of fresh products across all your favorite categories
-            </p>
-          </div>
-
-          {/* Categories Carousel with Arrow Buttons */}
-          <div className="flex items-center justify-center gap-3 md:gap-4">
-            {/* Left Arrow */}
-            {!loading && categories.length > 0 && (
-              <button
-                onClick={scrollLeft}
-                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
-                aria-label="Scroll left"
-              >
-                <ChevronLeft className="w-5 h-5 md:w-6 md:h-6 text-gray-700" />
-              </button>
-            )}
-
-            {/* Scrollable Categories Container - Shows 5 cards at a time */}
-            <div
-              ref={categoryScrollRef}
-              className="flex-1 flex gap-4 md:gap-6 overflow-x-hidden scrollbar-hide"
-              style={{
-                scrollbarWidth: 'none',
-                msOverflowStyle: 'none'
-              }}
-            >
-              {loading ? (
-                // Category Skeleton Loaders - 5 cards
-                Array.from({ length: 5 }).map((_, index) => (
-                  <div
-                    key={`skeleton-cat-${index}`}
-                    className="flex-shrink-0 bg-white rounded-2xl p-5 animate-pulse shadow-md"
-                    style={{
-                      width: 'calc((100% - 4 * 1.5rem) / 5)',
-                      minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
-                    }}
-                  >
-                    <div className="w-full h-40 bg-gray-200 rounded-xl mb-4"></div>
-                    <div className="h-5 bg-gray-200 rounded mb-2"></div>
-                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                  </div>
-                ))
-              ) : (
-                infiniteCategories.map((category, index) => (
-                  <Link
-                    key={`${category.id}-${index}`}
-                    to={`/category/${encodeURIComponent(category.name)}`}
-                    className="flex-shrink-0 group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
-                    style={{
-                      width: 'calc((100% - 4 * 1.5rem) / 5)',
-                      minWidth: 'calc((100% - 4 * 1.5rem) / 5)'
-                    }}
-                  >
-                    <div className={`${category.color || getCategoryBgColor(index)} p-4`}>
-                      <div className="overflow-hidden rounded-xl">
-                        <img
-                          src={category.image_url || `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`}
-                          alt={category.name}
-                          loading="lazy"
-                          className="w-full h-40 object-cover transform group-hover:scale-110 transition-transform duration-300"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div className="p-4 text-center">
-                      <h3 className="font-bold text-gray-800 text-base mb-1.5 group-hover:text-green-600 transition-colors">
-                        {formatCategoryName(category.name)}
-                      </h3>
-                      <p className="text-sm text-gray-500 line-clamp-2">
-                        {category.description || 'Browse products'}
-                      </p>
-                    </div>
-                  </Link>
-                ))
-              )}
-            </div>
-
-            {/* Right Arrow */}
-            {!loading && categories.length > 0 && (
-              <button
-                onClick={scrollRight}
-                className="flex-shrink-0 bg-white hover:bg-gray-100 rounded-full p-2 md:p-3 shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-green-500 z-10"
-                aria-label="Scroll right"
-              >
-                <ChevronRight className="w-5 h-5 md:w-6 md:h-6 text-gray-700" />
-              </button>
-            )}
-          </div>
-
-          {/* Empty State */}
-          {!loading && categories.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-gray-500">No categories available at the moment.</p>
-            </div>
-          )}
-        </div>
-      </section>
-
       {/* All Products Section */}
       <section className="py-16 bg-white">
         <div className="container mx-auto px-4">
@@ -359,6 +159,75 @@ const HomePage = () => {
               <p className="text-gray-500">
                 We're working on adding new products. Check back soon!
               </p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Categories Section - Moved to End */}
+      <section className="py-16 bg-gradient-to-b from-gray-50 to-white">
+        <div className="container mx-auto px-4">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-3">
+              Shop by Category
+            </h2>
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+              Discover a wide variety of fresh products across all your favorite categories
+            </p>
+          </div>
+
+          {/* Categories Grid - 5 per row */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6">
+            {loading ? (
+              // Category Skeleton Loaders
+              Array.from({ length: 10 }).map((_, index) => (
+                <div
+                  key={`skeleton-cat-${index}`}
+                  className="bg-white rounded-2xl p-5 animate-pulse shadow-md"
+                >
+                  <div className="w-full h-40 bg-gray-200 rounded-xl mb-4"></div>
+                  <div className="h-5 bg-gray-200 rounded mb-2"></div>
+                  <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                </div>
+              ))
+            ) : (
+              categories.map((category, index) => (
+                <Link
+                  key={category.id}
+                  to={`/category/${encodeURIComponent(category.name)}`}
+                  className="group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
+                >
+                  <div className={`${category.color || getCategoryBgColor(index)} p-4`}>
+                    <div className="overflow-hidden rounded-xl">
+                      <img
+                        src={category.image_url || `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`}
+                        alt={category.name}
+                        loading="lazy"
+                        className="w-full h-40 object-cover transform group-hover:scale-110 transition-transform duration-300"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="p-4 text-center">
+                    <h3 className="font-bold text-gray-800 text-base mb-1.5 group-hover:text-green-600 transition-colors">
+                      {formatCategoryName(category.name)}
+                    </h3>
+                    <p className="text-sm text-gray-500 line-clamp-2">
+                      {category.description || 'Browse products'}
+                    </p>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
+
+          {/* Empty State */}
+          {!loading && categories.length === 0 && (
+            <div className="text-center py-12">
+              <p className="text-gray-500">No categories available at the moment.</p>
             </div>
           )}
         </div>
