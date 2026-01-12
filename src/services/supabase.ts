@@ -746,3 +746,345 @@ export async function setDefaultAddress(addressId: string, userId: string): Prom
     throw error;
   }
 }
+
+// =====================================================
+// DELIVERY TRACKING SYSTEM
+// =====================================================
+
+// Delivery Agent interface
+export interface DeliveryAgent {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  vehicle_type?: 'bike' | 'scooter' | 'car' | 'bicycle' | 'on_foot';
+  vehicle_number?: string;
+  current_latitude?: number;
+  current_longitude?: number;
+  is_active: boolean;
+  is_available: boolean;
+  rating?: number;
+  total_deliveries?: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+// Order Tracking Update interface
+export interface TrackingUpdate {
+  id: string;
+  order_id: string;
+  delivery_agent_id?: string;
+  status: 'order_placed' | 'order_confirmed' | 'preparing' | 'ready_for_pickup' | 
+          'agent_assigned' | 'picked_up' | 'in_transit' | 'nearby' | 'arrived' | 
+          'delivered' | 'failed' | 'cancelled';
+  latitude?: number;
+  longitude?: number;
+  location_name?: string;
+  notes?: string;
+  updated_by: string;
+  timestamp: string;
+  created_at: string;
+}
+
+// Agent Location History interface
+export interface AgentLocation {
+  id: string;
+  agent_id: string;
+  order_id?: string;
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  speed?: number;
+  heading?: number;
+  timestamp: string;
+}
+
+// Get order tracking information by order ID
+export async function getOrderTracking(orderId: string): Promise<{
+  order: Order;
+  agent?: DeliveryAgent;
+  tracking_updates: TrackingUpdate[];
+  current_location?: AgentLocation;
+}> {
+  try {
+    console.log('📍 Fetching tracking info for order:', orderId);
+
+    // Get order details
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+
+    if (orderError) throw orderError;
+    if (!order) throw new Error('Order not found');
+
+    // Get delivery agent if assigned
+    let agent: DeliveryAgent | undefined;
+    if (order.delivery_agent_id) {
+      const { data: agentData, error: agentError } = await supabase
+        .from('delivery_agents')
+        .select('*')
+        .eq('id', order.delivery_agent_id)
+        .single();
+
+      if (!agentError && agentData) {
+        agent = agentData;
+      }
+    }
+
+    // Get all tracking updates for this order
+    const { data: trackingUpdates, error: trackingError } = await supabase
+      .from('order_tracking')
+      .select('*')
+      .eq('order_id', orderId)
+      .order('timestamp', { ascending: false });
+
+    if (trackingError) throw trackingError;
+
+    // Get current/latest location of agent if available
+    let currentLocation: AgentLocation | undefined;
+    if (order.delivery_agent_id) {
+      const { data: locationData, error: locationError } = await supabase
+        .from('agent_location_history')
+        .select('*')
+        .eq('agent_id', order.delivery_agent_id)
+        .eq('order_id', orderId)
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!locationError && locationData) {
+        currentLocation = locationData;
+      }
+    }
+
+    console.log('✅ Tracking info fetched successfully');
+    return {
+      order,
+      agent,
+      tracking_updates: trackingUpdates || [],
+      current_location: currentLocation
+    };
+  } catch (error) {
+    console.error('❌ Error fetching order tracking:', error);
+    throw error;
+  }
+}
+
+// Get order tracking by tracking number (public access)
+export async function getOrderTrackingByNumber(trackingNumber: string): Promise<{
+  order: Order;
+  agent?: DeliveryAgent;
+  tracking_updates: TrackingUpdate[];
+  current_location?: AgentLocation;
+}> {
+  try {
+    console.log('📍 Fetching tracking info for tracking number:', trackingNumber);
+
+    // Get order by tracking number
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('tracking_number', trackingNumber)
+      .single();
+
+    if (orderError) throw orderError;
+    if (!order) throw new Error('Order not found with this tracking number');
+
+    // Use the order ID to get full tracking info
+    return getOrderTracking(order.id);
+  } catch (error) {
+    console.error('❌ Error fetching tracking by number:', error);
+    throw error;
+  }
+}
+
+// Subscribe to real-time tracking updates for an order
+export function subscribeToOrderTracking(
+  orderId: string,
+  callback: (update: TrackingUpdate) => void
+) {
+  console.log('🔄 Setting up real-time tracking subscription for order:', orderId);
+
+  const channel = supabase
+    .channel(`order-tracking-${orderId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'order_tracking',
+        filter: `order_id=eq.${orderId}`
+      },
+      (payload) => {
+        console.log('📡 New tracking update received:', payload);
+        callback(payload.new as TrackingUpdate);
+      }
+    )
+    .subscribe();
+
+  // Return unsubscribe function
+  return () => {
+    console.log('🔌 Unsubscribing from tracking updates');
+    supabase.removeChannel(channel);
+  };
+}
+
+// Subscribe to real-time agent location updates
+export function subscribeToAgentLocation(
+  agentId: string,
+  orderId: string,
+  callback: (location: AgentLocation) => void
+) {
+  console.log('🔄 Setting up real-time location subscription for agent:', agentId);
+
+  const channel = supabase
+    .channel(`agent-location-${agentId}-${orderId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'agent_location_history',
+        filter: `agent_id=eq.${agentId}`
+      },
+      (payload) => {
+        const newLocation = payload.new as AgentLocation;
+        // Only callback if this location is for our order
+        if (newLocation.order_id === orderId) {
+          console.log('📡 New agent location received:', newLocation);
+          callback(newLocation);
+        }
+      }
+    )
+    .subscribe();
+
+  // Return unsubscribe function
+  return () => {
+    console.log('🔌 Unsubscribing from agent location updates');
+    supabase.removeChannel(channel);
+  };
+}
+
+// Add tracking update (for admin/agent use)
+export async function addTrackingUpdate(
+  orderId: string,
+  status: TrackingUpdate['status'],
+  options?: {
+    latitude?: number;
+    longitude?: number;
+    location_name?: string;
+    notes?: string;
+    updated_by?: string;
+  }
+): Promise<TrackingUpdate> {
+  try {
+    console.log('📍 Adding tracking update:', { orderId, status, options });
+
+    const { data, error } = await supabase.rpc('add_tracking_update', {
+      p_order_id: orderId,
+      p_status: status,
+      p_latitude: options?.latitude || null,
+      p_longitude: options?.longitude || null,
+      p_location_name: options?.location_name || null,
+      p_notes: options?.notes || null,
+      p_updated_by: options?.updated_by || 'system'
+    });
+
+    if (error) throw error;
+
+    console.log('✅ Tracking update added successfully');
+    return data;
+  } catch (error) {
+    console.error('❌ Error adding tracking update:', error);
+    throw error;
+  }
+}
+
+// Update agent location (for agent app)
+export async function updateAgentLocation(
+  agentId: string,
+  latitude: number,
+  longitude: number,
+  orderId?: string,
+  options?: {
+    accuracy?: number;
+    speed?: number;
+    heading?: number;
+  }
+): Promise<void> {
+  try {
+    await supabase.rpc('update_agent_location', {
+      p_agent_id: agentId,
+      p_latitude: latitude,
+      p_longitude: longitude,
+      p_order_id: orderId || null,
+      p_accuracy: options?.accuracy || null,
+      p_speed: options?.speed || null,
+      p_heading: options?.heading || null
+    });
+
+    console.log('✅ Agent location updated');
+  } catch (error) {
+    console.error('❌ Error updating agent location:', error);
+    throw error;
+  }
+}
+
+// Get all available delivery agents
+export async function getAvailableAgents(): Promise<DeliveryAgent[]> {
+  try {
+    const { data, error } = await supabase
+      .from('delivery_agents')
+      .select('*')
+      .eq('is_active', true)
+      .eq('is_available', true)
+      .order('rating', { ascending: false });
+
+    if (error) throw error;
+
+    return data || [];
+  } catch (error) {
+    console.error('❌ Error fetching available agents:', error);
+    throw error;
+  }
+}
+
+// Assign delivery agent to order
+export async function assignDeliveryAgent(
+  orderId: string,
+  agentId: string,
+  estimatedDeliveryTime?: Date
+): Promise<void> {
+  try {
+    console.log('🚚 Assigning agent to order:', { orderId, agentId });
+
+    // Generate tracking number if not exists
+    const { data: trackingNum } = await supabase.rpc('generate_tracking_number');
+
+    // Update order with agent and tracking number
+    const { error } = await supabase
+      .from('orders')
+      .update({
+        delivery_agent_id: agentId,
+        tracking_number: trackingNum,
+        estimated_delivery_time: estimatedDeliveryTime?.toISOString() || null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId);
+
+    if (error) throw error;
+
+    // Add tracking update
+    await addTrackingUpdate(orderId, 'agent_assigned', {
+      notes: 'Delivery agent has been assigned to your order',
+      updated_by: 'system'
+    });
+
+    console.log('✅ Agent assigned successfully');
+  } catch (error) {
+    console.error('❌ Error assigning agent:', error);
+    throw error;
+  }
+}

@@ -8,15 +8,27 @@ Todo:
   ✔ remove sort by in home page @done(25-11-19 00:19)
   ✔ individual users profile to be added with saved location over database connections @done(25-11-19 00:19)
   ✔ in the checkout page there should be also one more section like "you might also like..." which shows similar suggested products @done(25-12-02 00:20)
-  ☐ add one more step to verify details of the users
-  ☐ ordering for someone else (to be added later)
-  ☐ *** tracking page to be added ***
-  ☐ category suggestions
-  ☐ *** help & support ***
+
+🔴 CRITICAL PRIORITY:
+  ✔ *** tracking page to be added *** (TrackOrderPage.tsx with real-time order tracking) @done(26-01-12)
+  ☐ add one more step to verify details of the users (verification step in checkout)
+  ☐ *** help & support *** (create Help & Support page)
+  ☐ Admin page -> categories -> actions buttons not working (fix CategoriesPage actions)
+  
+🟡 HIGH PRIORITY:
+  ☐ Apply coupon code to be added to the checkout page and remove cart page
   ☐ remove download invoice from orders page in profile section
   ☐ customer privacy policy to be updated on the basis of the company
   ☐ ***only categories will be shown in the main page and after clicking then it will be opening the items and the categories section will be shift to the left side ***
-  ☐ Apply coupon code to be added to the checkout page and remove cart page
-  ☐ Admin page -> categories -> actions buttons not working
+  ☐ category suggestions
+  
+🟢 MEDIUM PRIORITY:
+  ☐ ordering for someone else (to be added later)
+  ☐ Wishlist feature - complete backend functionality (database, service functions, WishlistPage)
   ☐ API for google map billing is required contact -> RAJ
-  ☐ Tracking page to be added
+  
+🔵 NICE TO HAVE:
+  ☐ Performance optimization (code splitting, lazy loading, image optimization)
+  ☐ SEO improvements (meta tags, sitemap.xml, robots.txt, structured data)
+  ☐ Comprehensive testing (unit tests, integration tests for critical flows)
+  ☐ Enhanced loading states with skeleton loaders
