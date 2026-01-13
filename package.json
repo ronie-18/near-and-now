@@ -23,8 +23,9 @@
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitejs/plugin-react": "^4.0.3",
-    "@vitest/coverage-v8": "^0.34.6",
+    "@vitest/coverage-v8": "^4.0.17",
     "autoprefixer": "^10.4.21",
+    "baseline-browser-mapping": "^2.9.14",
     "eslint": "^8.45.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.3",
@@ -34,7 +35,7 @@
     "tailwindcss": "^3.3.5",
     "typescript": "^5.0.2",
     "vite": "^7.1.7",
-    "vitest": "^0.34.6"
+    "vitest": "^4.0.17"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.9",
