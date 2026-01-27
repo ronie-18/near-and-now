@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, User, AlertCircle } from 'lucide-react';
+import { authenticateAdmin } from '../../services/adminAuthService';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
@@ -15,14 +16,16 @@ const AdminLoginPage = () => {
     setLoading(true);
 
     try {
-      // This is a placeholder for actual authentication logic
-      // In a real application, you would make an API call to authenticate the admin
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      // Authenticate admin using database
+      const result = await authenticateAdmin(email, password);
 
-      // For demo purposes, hardcoded credentials
-      if (email === 'admin@nearnow.com' && password === 'admin123') {
-        // Set admin authentication in localStorage or context
+      if (result) {
+        // Store authentication in localStorage
         localStorage.setItem('adminAuth', 'true');
+        localStorage.setItem('adminAuthExpiresAt', String(Date.now() + 1000 * 60 * 60 * 12)); // 12 hours
+        localStorage.setItem('adminToken', result.token);
+        localStorage.setItem('adminData', JSON.stringify(result.admin));
+
         navigate('/admin');
       } else {
         setError('Invalid email or password');
@@ -43,17 +46,17 @@ const AdminLoginPage = () => {
           <div className="flex justify-center mb-6">
             <img src="/Logo.png" alt="Near & Now" className="h-16 w-16" />
           </div>
-          
+
           <h1 className="text-3xl font-bold text-gray-800 mb-2 text-center">Admin Login</h1>
           <p className="text-gray-600 mb-8 text-center">Enter your credentials to access the admin panel</p>
-          
+
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center">
               <AlertCircle className="w-5 h-5 mr-2" />
               <span>{error}</span>
             </div>
           )}
-          
+
           <form onSubmit={handleSubmit}>
             <div className="mb-6">
               <label htmlFor="email" className="block text-gray-700 mb-2 font-medium">Email</label>
@@ -72,7 +75,7 @@ const AdminLoginPage = () => {
                 />
               </div>
             </div>
-            
+
             <div className="mb-8">
               <label htmlFor="password" className="block text-gray-700 mb-2 font-medium">Password</label>
               <div className="relative">
@@ -90,7 +93,7 @@ const AdminLoginPage = () => {
                 />
               </div>
             </div>
-            
+
             <button
               type="submit"
               disabled={loading}
@@ -108,10 +111,10 @@ const AdminLoginPage = () => {
               )}
             </button>
           </form>
-          
+
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">
-              <span className="font-medium">Demo Credentials:</span> admin@nearnow.com / admin123
+              <span className="font-medium">Note:</span> Use your admin credentials to login
             </p>
           </div>
         </div>

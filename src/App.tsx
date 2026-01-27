@@ -22,7 +22,6 @@ import AddressesPage from './pages/AddressesPage';
 import CartPage from './pages/CartPage';
 import AboutPage from './pages/AboutPage';
 import TestPage from './pages/TestPage';
-import TrackOrderPage from './pages/TrackOrderPage';
 
 // Policy pages
 import TermsOfServicePage from './pages/policies/TermsOfServicePage';
@@ -64,7 +63,6 @@ const AppContent: React.FC = () => {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/orders" element={<OrdersPage />} />
-            <Route path="/track/:orderId" element={<TrackOrderPage />} />
             <Route path="/addresses" element={<AddressesPage />} />
             <Route path="/cart" element={<CartPage />} />
             <Route path="/about" element={<AboutPage />} />

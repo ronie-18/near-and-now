@@ -7,14 +7,37 @@ import CustomersPage from '../pages/admin/CustomersPage';
 import CategoriesPage from '../pages/admin/CategoriesPage';
 import AddCategoryPage from '../pages/admin/AddCategoryPage';
 import ReportsPage from '../pages/admin/ReportsPage';
+import AdminManagementPage from '../pages/admin/AdminManagementPage';
+import CreateAdminPage from '../pages/admin/CreateAdminPage';
+import EditAdminPage from '../pages/admin/EditAdminPage';
 
 // Admin authentication guard
 const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
-  // This is a placeholder for actual authentication logic
-  // In a real application, you would check if the user is authenticated and has admin privileges
-  const isAdmin = true; // Replace with actual admin authentication check
+  const isAdminAuth = (() => {
+    try {
+      const flag = localStorage.getItem('adminAuth');
+      if (flag !== 'true') return false;
 
-  if (!isAdmin) {
+      // Optional expiry support (if present)
+      const expiresAt = localStorage.getItem('adminAuthExpiresAt');
+      if (!expiresAt) return true;
+
+      const exp = Number(expiresAt);
+      if (!Number.isFinite(exp)) return true;
+
+      if (Date.now() > exp) {
+        localStorage.removeItem('adminAuth');
+        localStorage.removeItem('adminAuthExpiresAt');
+        return false;
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  if (!isAdminAuth) {
     return <Navigate to="/admin/login" replace />;
   }
 
@@ -85,6 +108,30 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <ReportsPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/admins"
+        element={
+          <AdminAuthGuard>
+            <AdminManagementPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/admins/create"
+        element={
+          <AdminAuthGuard>
+            <CreateAdminPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/admins/edit/:id"
+        element={
+          <AdminAuthGuard>
+            <EditAdminPage />
           </AdminAuthGuard>
         }
       />

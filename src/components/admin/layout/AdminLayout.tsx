@@ -15,7 +15,8 @@ import {
   Search,
   ChevronDown,
   Layers,
-  BarChart3
+  BarChart3,
+  Shield
 } from 'lucide-react';
 
 interface AdminLayoutProps {
@@ -134,6 +135,15 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               >
                 <BarChart3 className="h-5 w-5 mr-3" />
                 {sidebarOpen && <span>Reports</span>}
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/admin/admins"
+                className={`flex items-center p-3 rounded-lg transition-colors ${isActive('/admin/admins') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+              >
+                <Shield className="h-5 w-5 mr-3" />
+                {sidebarOpen && <span>Admin Management</span>}
               </Link>
             </li>
             <li>
