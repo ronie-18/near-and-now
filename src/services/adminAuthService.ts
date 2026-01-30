@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin } from './supabase';
+import { supabaseAdmin } from './supabase';
 import bcrypt from 'bcryptjs';
 
 // Admin types
@@ -286,9 +286,9 @@ export function hasPermission(admin: Admin, permission: string): boolean {
   }
 
   // Check wildcard permissions (e.g., "products.*" matches "products.create")
-  const [resource, action] = permission.split('.');
+  const [resource] = permission.split('.');
   const wildcardPermission = `${resource}.*`;
-  
+
   return admin.permissions.includes(wildcardPermission);
 }
 

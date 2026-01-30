@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Route, Routes, Navigate } from 'react-router-dom';
 import AdminDashboardPage from '../pages/admin/AdminDashboardPage';
 import ProductsPage from '../pages/admin/ProductsPage';
@@ -10,34 +11,28 @@ import ReportsPage from '../pages/admin/ReportsPage';
 import AdminManagementPage from '../pages/admin/AdminManagementPage';
 import CreateAdminPage from '../pages/admin/CreateAdminPage';
 import EditAdminPage from '../pages/admin/EditAdminPage';
+import { isAdminAuthenticated } from '../services/secureAdminAuth';
 
-// Admin authentication guard
+// Secure admin authentication guard using JWT tokens
 const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
-  const isAdminAuth = (() => {
-    try {
-      const flag = localStorage.getItem('adminAuth');
-      if (flag !== 'true') return false;
+  const [isAuth, setIsAuth] = useState<boolean | null>(null);
 
-      // Optional expiry support (if present)
-      const expiresAt = localStorage.getItem('adminAuthExpiresAt');
-      if (!expiresAt) return true;
+  useEffect(() => {
+    isAdminAuthenticated().then(setIsAuth);
+  }, []);
 
-      const exp = Number(expiresAt);
-      if (!Number.isFinite(exp)) return true;
+  if (isAuth === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">Verifying authentication...</p>
+        </div>
+      </div>
+    );
+  }
 
-      if (Date.now() > exp) {
-        localStorage.removeItem('adminAuth');
-        localStorage.removeItem('adminAuthExpiresAt');
-        return false;
-      }
-
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-
-  if (!isAdminAuth) {
+  if (!isAuth) {
     return <Navigate to="/admin/login" replace />;
   }
 

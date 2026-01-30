@@ -31,8 +31,8 @@ async function fixOrderStatusConstraint() {
     // Step 2: Add new constraint with 'shipped'
     console.log('Step 2: Adding new constraint with shipped status...');
     const { error: addError } = await supabase.rpc('exec_sql', {
-      sql: `ALTER TABLE orders 
-            ADD CONSTRAINT orders_order_status_check 
+      sql: `ALTER TABLE orders
+            ADD CONSTRAINT orders_order_status_check
             CHECK (order_status IN ('placed', 'confirmed', 'shipped', 'delivered', 'cancelled'));`
     });
 

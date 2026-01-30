@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
@@ -12,12 +12,10 @@ const HomePage = () => {
   const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [itemsToShow, setItemsToShow] = useState(12);
   const { showNotification } = useNotification();
-  const observerTarget = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
-  const ITEMS_PER_LOAD = 12;
+  const MAX_PRODUCTS_ON_HOME = 40;
 
   // Fetch all products and categories on mount
   useEffect(() => {
@@ -41,40 +39,10 @@ const HomePage = () => {
     fetchData();
   }, [showNotification]);
 
-  // Update displayed products when items to show changes
+  // Limit displayed products to MAX_PRODUCTS_ON_HOME
   useEffect(() => {
-    setDisplayedProducts(allProducts.slice(0, itemsToShow));
-  }, [allProducts, itemsToShow]);
-
-  // Infinite scroll observer
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && !loading && !loadingMore) {
-          if (itemsToShow < allProducts.length) {
-            setLoadingMore(true);
-            // Simulate loading delay for better UX
-            setTimeout(() => {
-              setItemsToShow((prev) => prev + ITEMS_PER_LOAD);
-              setLoadingMore(false);
-            }, 500);
-          }
-        }
-      },
-      { threshold: 0.1 }
-    );
-
-    const currentTarget = observerTarget.current;
-    if (currentTarget) {
-      observer.observe(currentTarget);
-    }
-
-    return () => {
-      if (currentTarget) {
-        observer.unobserve(currentTarget);
-      }
-    };
-  }, [loading, loadingMore, itemsToShow, allProducts.length]);
+    setDisplayedProducts(allProducts.slice(0, MAX_PRODUCTS_ON_HOME));
+  }, [allProducts]);
 
   // Generate background color for categories
   const getCategoryBgColor = (index: number) => {
@@ -88,83 +56,7 @@ const HomePage = () => {
 
   return (
     <>
-      {/* All Products Section */}
-      <section className="py-16 bg-white">
-        <div className="container mx-auto px-4">
-          {/* Header */}
-          <div className="mb-10">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
-              Our Products
-            </h2>
-            <p className="text-gray-600">
-              {allProducts.length > 0
-                ? `Showing ${displayedProducts.length} of ${allProducts.length} products`
-                : 'Browse through our complete collection of quality products'
-              }
-            </p>
-          </div>
-
-          {/* Products Grid */}
-          <ProductGrid products={displayedProducts} loading={loading} />
-
-          {/* Loading More Indicator */}
-          {loadingMore && (
-            <div className="flex justify-center items-center py-8">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-gray-600 font-medium">Loading more products...</span>
-              </div>
-            </div>
-          )}
-
-          {/* Infinite Scroll Observer Target */}
-          {!loading && displayedProducts.length < allProducts.length && (
-            <div ref={observerTarget} className="h-20 flex items-center justify-center">
-              <div className="text-gray-400 text-sm">Scroll for more products</div>
-            </div>
-          )}
-
-          {/* End of Products Message */}
-          {!loading && displayedProducts.length > 0 && displayedProducts.length === allProducts.length && (
-            <div className="text-center py-8">
-              <div className="inline-flex items-center gap-2 text-gray-500">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                <span className="font-medium">You've reached the end of our catalog</span>
-              </div>
-            </div>
-          )}
-
-          {/* Show message when no products available */}
-          {!loading && allProducts.length === 0 && (
-            <div className="text-center py-12">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-24 w-24 mx-auto text-gray-300 mb-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-                />
-              </svg>
-              <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                No Products Available
-              </h3>
-              <p className="text-gray-500">
-                We're working on adding new products. Check back soon!
-              </p>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Categories Section - Moved to End */}
+      {/* Categories Section - Moved to Top */}
       <section className="py-16 bg-gradient-to-b from-gray-50 to-white">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
@@ -228,6 +120,74 @@ const HomePage = () => {
           {!loading && categories.length === 0 && (
             <div className="text-center py-12">
               <p className="text-gray-500">No categories available at the moment.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Featured Products Section */}
+      <section className="py-16 bg-white">
+        <div className="container mx-auto px-4">
+          {/* Header */}
+          <div className="mb-10">
+            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
+              Featured Products
+            </h2>
+            <p className="text-gray-600">
+              {allProducts.length > 0
+                ? `Showing ${displayedProducts.length} of ${allProducts.length} products`
+                : 'Browse through our complete collection of quality products'
+              }
+            </p>
+          </div>
+
+          {/* Products Grid */}
+          <ProductGrid products={displayedProducts} loading={loading} />
+
+          {/* Show More Products Button */}
+          {!loading && allProducts.length > MAX_PRODUCTS_ON_HOME && (
+            <div className="text-center mt-12">
+              <button
+                onClick={() => navigate('/shop')}
+                className="inline-flex items-center gap-3 bg-gradient-to-r from-primary to-secondary hover:from-secondary hover:to-primary text-white px-8 py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                Show More Products
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <p className="text-gray-500 mt-4 text-sm">
+                View all {allProducts.length} products in our shop
+              </p>
+            </div>
+          )}
+
+          {/* Show message when no products available */}
+          {!loading && allProducts.length === 0 && (
+            <div className="text-center py-12">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-24 w-24 mx-auto text-gray-300 mb-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                />
+              </svg>
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                No Products Available
+              </h3>
+              <p className="text-gray-500">
+                We're working on adding new products. Check back soon!
+              </p>
             </div>
           )}
         </div>

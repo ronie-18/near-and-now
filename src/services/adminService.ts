@@ -60,7 +60,7 @@ export async function deleteProductImage(imageUrl: string): Promise<boolean> {
     // Extract file path from URL
     const urlParts = imageUrl.split(`${STORAGE_BUCKET}/`);
     if (urlParts.length < 2) return false;
-    
+
     const filePath = urlParts[1];
 
     const { error } = await supabaseAdmin.storage

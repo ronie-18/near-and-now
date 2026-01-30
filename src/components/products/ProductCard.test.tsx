@@ -46,29 +46,29 @@ const renderWithContexts = (ui: React.ReactElement) => {
 describe('ProductCard', () => {
   it('renders product information correctly', () => {
     renderWithContexts(<ProductCard product={mockProduct} />);
-    
+
     // Check if product name is displayed
     expect(screen.getByText('Test Product')).toBeInTheDocument();
-    
+
     // Check if price is displayed (using test-id or other selectors)
     expect(screen.getByText(/100/)).toBeInTheDocument();
-    
+
     // Check if image is rendered with correct src
     const image = screen.getByAltText('Test Product') as HTMLImageElement;
     expect(image).toBeInTheDocument();
     expect(image.src).toContain('/test-image.jpg');
-    
+
     // Check if Add to Cart button is present
     expect(screen.getByText('Add to Cart')).toBeInTheDocument();
   });
 
   it('calls addToCart when Add to Cart button is clicked', () => {
     renderWithContexts(<ProductCard product={mockProduct} />);
-    
+
     // Find and click the Add to Cart button
     const addToCartButton = screen.getByText('Add to Cart');
     fireEvent.click(addToCartButton);
-    
+
     // Check if addToCart was called with the correct product
     expect(mockCartContext.addToCart).toHaveBeenCalledWith(mockProduct);
     
@@ -85,7 +85,7 @@ describe('ProductCard', () => {
       ...mockCartContext,
       cartItems: [{ ...mockProduct, quantity: 2 }]
     };
-    
+
     render(
       <NotificationContext.Provider value={mockNotificationContext}>
         <CartContext.Provider value={updatedCartContext}>
@@ -93,33 +93,33 @@ describe('ProductCard', () => {
         </CartContext.Provider>
       </NotificationContext.Provider>
     );
-    
+
     // Check if quantity is displayed
     expect(screen.getByText('2')).toBeInTheDocument();
-    
+
     // Check if quantity controls are present
     const decreaseButton = screen.getByRole('button', { name: '-' });
     const increaseButton = screen.getByRole('button', { name: '+' });
-    
+
     expect(decreaseButton).toBeInTheDocument();
     expect(increaseButton).toBeInTheDocument();
   });
 
   it('calls onQuickView when Quick View button is clicked', () => {
     const onQuickViewMock = vi.fn();
-    
+
     renderWithContexts(
       <ProductCard product={mockProduct} onQuickView={onQuickViewMock} />
     );
-    
+
     // Simulate hover to show Quick View button
     const productCard = screen.getByText('Test Product').closest('.product-card');
     fireEvent.mouseEnter(productCard!);
-    
+
     // Find and click the Quick View button
     const quickViewButton = screen.getByText('Quick View');
     fireEvent.click(quickViewButton);
-    
+
     // Check if onQuickView was called with the correct product
     expect(onQuickViewMock).toHaveBeenCalledWith(mockProduct);
   });

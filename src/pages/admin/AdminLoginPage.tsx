@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, User, AlertCircle } from 'lucide-react';
-import { authenticateAdmin } from '../../services/adminAuthService';
+import { secureAdminLogin } from '../../services/secureAdminAuth';
+import { checkRateLimit } from '../../utils/rateLimit';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
@@ -16,22 +17,26 @@ const AdminLoginPage = () => {
     setLoading(true);
 
     try {
-      // Authenticate admin using database
-      const result = await authenticateAdmin(email, password);
-
-      if (result) {
-        // Store authentication in localStorage
-        localStorage.setItem('adminAuth', 'true');
-        localStorage.setItem('adminAuthExpiresAt', String(Date.now() + 1000 * 60 * 60 * 12)); // 12 hours
-        localStorage.setItem('adminToken', result.token);
-        localStorage.setItem('adminData', JSON.stringify(result.admin));
-
-        navigate('/admin');
-      } else {
-        setError('Invalid email or password');
+      // Check rate limit
+      if (!checkRateLimit('ADMIN_LOGIN', email)) {
+        setError('Too many login attempts. Please try again in 15 minutes.');
+        setLoading(false);
+        return;
       }
-    } catch (error) {
-      setError('An error occurred. Please try again.');
+
+      // Use secure login with Edge Function
+      const result = await secureAdminLogin(email, password);
+
+      if (!result) {
+        setError('Invalid email or password');
+        setLoading(false);
+        return;
+      }
+
+      // Redirect to dashboard
+      navigate('/admin');
+    } catch (error: any) {
+      setError(error.message || 'An error occurred. Please try again.');
       console.error('Login error:', error);
     } finally {
       setLoading(false);
