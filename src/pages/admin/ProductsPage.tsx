@@ -850,9 +850,6 @@ const ProductsPage = () => {
         case "in_stock":
           comparison = a.in_stock === b.in_stock ? 0 : a.in_stock ? -1 : 1;
           break;
-        case "name":
-          comparison = (a.name || "").localeCompare(b.name || "");
-          break;
         case "created_at":
           comparison =
             new Date(a.created_at || 0).getTime() -
