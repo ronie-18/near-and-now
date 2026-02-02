@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, User, AlertCircle } from 'lucide-react';
-import { secureAdminLogin } from '../../services/secureAdminAuth';
+import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { authenticateAdmin } from '../../services/adminAuthService';
 import { checkRateLimit } from '../../utils/rateLimit';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -17,6 +18,8 @@ const AdminLoginPage = () => {
     setLoading(true);
 
     try {
+      console.log('🔐 Attempting admin login for:', email);
+
       // Check rate limit
       if (!checkRateLimit('ADMIN_LOGIN', email)) {
         setError('Too many login attempts. Please try again in 15 minutes.');
@@ -24,20 +27,35 @@ const AdminLoginPage = () => {
         return;
       }
 
-      // Use secure login with Edge Function
-      const result = await secureAdminLogin(email, password);
+      // Use direct database authentication
+      console.log('📡 Calling authenticateAdmin...');
+      const result = await authenticateAdmin(email, password);
+      console.log('📥 Authentication result:', result ? 'Success' : 'Failed');
 
       if (!result) {
+        console.error('❌ Authentication failed - Invalid credentials');
         setError('Invalid email or password');
         setLoading(false);
         return;
       }
 
+      console.log('✅ Admin authenticated:', result.admin.email);
+
+      // Store admin data and token in sessionStorage
+      sessionStorage.setItem('adminData', JSON.stringify(result.admin));
+      sessionStorage.setItem('adminToken', result.token);
+      sessionStorage.setItem('adminTokenExpiry', (Date.now() + 12 * 60 * 60 * 1000).toString()); // 12 hours
+
       // Redirect to dashboard
       navigate('/admin');
     } catch (error: any) {
+      console.error('❌ Login error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       setError(error.message || 'An error occurred. Please try again.');
-      console.error('Login error:', error);
     } finally {
       setLoading(false);
     }
@@ -89,13 +107,25 @@ const AdminLoginPage = () => {
                 </div>
                 <input
                   id="password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="pl-10 w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
+                  className="pl-10 pr-12 w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
                   placeholder="••••••••"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                  tabIndex={-1}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-5 w-5" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                </button>
               </div>
             </div>
 
