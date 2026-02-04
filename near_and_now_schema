@@ -1,0 +1,1099 @@
+-- ============================================================================
+-- MERGED E-COMMERCE DELIVERY PLATFORM SCHEMA
+-- ============================================================================
+-- Multi-vendor quick commerce platform with centralized admin management
+-- Features: Store-owned inventory, real-time delivery, loose products, RBAC
+-- Total Tables: 32
+-- ============================================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Enable PostGIS for advanced location queries (optional but recommended)
+-- CREATE EXTENSION IF NOT EXISTS "postgis";
+
+-- ============================================================================
+-- SECTION 1: ENUMS & TYPES
+-- ============================================================================
+
+-- User roles enum
+CREATE TYPE user_role AS ENUM ('customer', 'shopkeeper', 'delivery_partner');
+
+-- Order status enum
+CREATE TYPE order_status AS ENUM (
+  'pending_at_store',           -- Waiting for store to accept
+  'store_accepted',             -- Store accepted
+  'preparing_order',            -- Store is preparing order
+  'ready_for_pickup',           -- Ready for delivery partner
+  'delivery_partner_assigned',  -- Delivery partner assigned
+  'order_picked_up',            -- Delivery partner picked up
+  'in_transit',                 -- On the way to customer
+  'order_delivered',            -- Successfully delivered
+  'order_cancelled'             -- Order cancelled
+);
+
+-- Payment status enum
+CREATE TYPE payment_status AS ENUM ('pending', 'completed', 'failed', 'refunded');
+
+-- Admin role enum
+CREATE TYPE admin_role AS ENUM ('super_admin', 'admin');
+
+-- Admin status enum
+CREATE TYPE admin_status AS ENUM ('active', 'inactive', 'suspended');
+
+-- Coupon type enum
+CREATE TYPE coupon_type AS ENUM ('flat', 'percent', 'first_order_discount');
+
+-- Payment method enum
+CREATE TYPE payment_method_type AS ENUM (
+  'cash_on_delivery',
+  'upi',
+  'credit_card',
+  'debit_card',
+  'net_banking',
+  'wallet'
+);
+
+-- ============================================================================
+-- SECTION 2: AUTH & USERS (5 tables)
+-- ============================================================================
+
+-- Base users table for all user types
+CREATE TABLE app_users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  email text,
+  phone text,
+  password_hash text,
+  role user_role NOT NULL,
+  is_activated boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE customers (
+  user_id uuid PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+  
+  -- Personal details
+  name text NOT NULL, -- Customer's full name (from app_users)
+  surname text, -- Optional: Customer's surname/last name
+  phone text NOT NULL UNIQUE,
+  
+  -- Default/primary address details (non-geographic)
+  address text, -- Full address text (formatted from Google Places)
+  city text,
+  state text,
+  pincode text,
+  country text NOT NULL DEFAULT 'India', -- Required: Customer's country
+  
+  -- Delivery details
+  landmark text NOT NULL, -- Required: Nearby landmark for delivery
+  delivery_instructions text NOT NULL, -- Required: Specific delivery instructions
+  
+  -- Google Places API data (structured address from pin)
+  google_place_id text, -- Unique Google Place ID
+  google_formatted_address text, -- Formatted address from Google
+  google_place_data jsonb, -- Full Google Places API response
+  /* Example google_place_data structure:
+    {
+      "place_id": "ChIJ...",
+      "formatted_address": "123 Main St, Kolkata, West Bengal 700001, India",
+      "address_components": [
+        {"long_name": "123", "short_name": "123", "types": ["street_number"]},
+        {"long_name": "Main Street", "short_name": "Main St", "types": ["route"]},
+        {"long_name": "Kolkata", "short_name": "Kolkata", "types": ["locality"]},
+        {"long_name": "West Bengal", "short_name": "WB", "types": ["administrative_area_level_1"]},
+        {"long_name": "India", "short_name": "IN", "types": ["country"]},
+        {"long_name": "700001", "short_name": "700001", "types": ["postal_code"]}
+      ],
+      "geometry": {
+        "location": {"lat": 22.5726, "lng": 88.3639}
+      }
+    }
+  */
+  
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE customer_saved_addresses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  
+  -- Address label and type
+  label text, -- e.g., "Home", "Office", "Mom's place"
+  address text NOT NULL, -- Full address text (formatted from Google Places)
+  city text,
+  state text,
+  pincode text,
+  country text DEFAULT 'India',
+  
+  -- Geographic coordinates for delivery (from Google Places)
+  latitude numeric NOT NULL,
+  longitude numeric NOT NULL,
+  
+  -- Google Places API data (for accurate pin location)
+  google_place_id text, -- Unique Google Place ID
+  google_formatted_address text, -- Formatted address from Google
+  google_place_data jsonb, -- Full Google Places API response
+  /* Example: Customer drops pin on map → Google Places returns structured data
+    {
+      "place_id": "ChIJa1wKFH9kVjkR3kZnLPxRJro",
+      "formatted_address": "456 Park Street, Kolkata, West Bengal 700016, India",
+      "address_components": [...],
+      "geometry": {
+        "location": {"lat": 22.5542, "lng": 88.3516},
+        "location_type": "ROOFTOP"
+      },
+      "plus_code": {
+        "compound_code": "H932+8X Kolkata, West Bengal, India",
+        "global_code": "7MJCH932+8X"
+      }
+    }
+  */
+  
+  -- Contact details at this address
+  contact_name text,
+  contact_phone text,
+  
+  -- Additional delivery instructions
+  landmark text, -- Nearby landmark for delivery partner
+  delivery_instructions text, -- e.g., "Ring bell twice", "Gate code: 1234"
+  
+  -- Address status
+  is_default boolean NOT NULL DEFAULT false,
+  is_active boolean NOT NULL DEFAULT true,
+  
+  -- Delivery recipient details
+  delivery_for text NOT NULL DEFAULT 'self', -- 'self' or 'someone_else'
+  receiver_name text,
+  receiver_address text, -- Full address of receiver if different
+  receiver_phone text,
+  
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE delivery_partners (
+  user_id uuid PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+  name text NOT NULL, -- Delivery partner's full name (required)
+  email text UNIQUE,
+  phone text UNIQUE,
+  address text,
+  
+  -- Verification details (for background checks)
+  verification_document text, -- e.g., "Aadhaar", "PAN Card", "Driving License"
+  verification_number text, -- Document number
+  
+  is_online boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE driver_locations (
+  delivery_partner_id uuid PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+  latitude numeric NOT NULL,
+  longitude numeric NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 3: ADMIN PANEL (8 tables)
+-- ============================================================================
+
+-- Admin authentication
+CREATE TABLE admin_users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  username text NOT NULL UNIQUE,
+  email text NOT NULL UNIQUE,
+  password_hash text NOT NULL,
+  role text DEFAULT 'admin',
+  is_active boolean DEFAULT true,
+  last_login timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE admins (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL UNIQUE,
+  password_hash text NOT NULL,
+  full_name text NOT NULL,
+  
+  -- Role: super_admin has all access, admin has custom permissions
+  role admin_role NOT NULL,
+  
+  -- Granular permissions (JSONB array)
+  permissions jsonb DEFAULT '[]'::jsonb,
+  /* Example permissions structure:
+    [
+      "products:read", "products:write", "products:delete", "products:pricing",
+      "orders:read", "orders:update", "orders:cancel", "orders:refund",
+      "customers:read", "customers:edit", "customers:delete", "customers:export",
+      "stores:read", "stores:approve", "stores:suspend", "stores:inventory",
+      "delivery:track", "delivery:assign", "delivery:manage",
+      "analytics:revenue", "analytics:products", "analytics:customers", "analytics:export",
+      "coupons:manage", "categories:manage", "reviews:moderate", "settings:manage",
+      "admins:create", "admins:permissions", "admins:delete", "audit:full"
+    ]
+  */
+  
+  created_by uuid REFERENCES admins(id), -- Which super_admin created this admin
+  status admin_status NOT NULL DEFAULT 'active',
+  
+  last_login_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE admin_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id uuid REFERENCES admin_users(id) ON DELETE CASCADE,
+  session_token text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  ip_address inet,
+  user_agent text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE admin_refresh_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id uuid NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  token text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz DEFAULT now(),
+  last_used_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE admin_activity_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id uuid REFERENCES admin_users(id),
+  action text NOT NULL, -- 'create', 'update', 'delete', 'view', 'login', 'logout'
+  table_name text, -- Affected table
+  record_id uuid, -- Affected record ID
+  old_values jsonb, -- Before change
+  new_values jsonb, -- After change
+  ip_address inet,
+  user_agent text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id uuid REFERENCES admins(id),
+  user_id uuid REFERENCES app_users(id),
+  action text NOT NULL,
+  resource_type text NOT NULL, -- 'product', 'order', 'user', etc.
+  resource_id uuid,
+  old_values jsonb,
+  new_values jsonb,
+  ip_address inet,
+  user_agent text,
+  status text DEFAULT 'success', -- 'success', 'failure'
+  error_message text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE security_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_type text NOT NULL, -- 'unauthorized_access', 'suspicious_activity', 'brute_force'
+  severity text NOT NULL, -- 'low', 'medium', 'high', 'critical'
+  description text NOT NULL,
+  admin_id uuid REFERENCES admins(id),
+  user_id uuid REFERENCES app_users(id),
+  ip_address inet,
+  user_agent text,
+  metadata jsonb,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE failed_login_attempts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL,
+  ip_address inet NOT NULL,
+  attempted_at timestamptz DEFAULT now(),
+  user_agent text
+);
+
+
+-- ============================================================================
+-- SECTION 4: MASTER CATALOG (6 tables)
+-- ============================================================================
+
+-- Categories (simple, non-hierarchical)
+CREATE TABLE categories (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  description text,
+  image_url text,
+  display_order integer DEFAULT 0,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE master_products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  category text NOT NULL REFERENCES categories(name) ON DELETE RESTRICT,
+  brand text,
+  description text,
+  image_url text,
+  
+  -- Pricing (ADMIN/SUPER_ADMIN ONLY - shopkeepers cannot modify)
+  base_price numeric NOT NULL, -- MRP (Maximum Retail Price)
+  discounted_price numeric NOT NULL, -- Actual selling price set by admin
+  unit text NOT NULL, -- 'kg', 'L', 'piece', 'g', 'ml', '500 gm', '1 ltr', etc.
+  
+  -- Loose product support (sold by weight/volume, not pre-packaged)
+  is_loose boolean DEFAULT false,
+  -- If is_loose = true, customers can buy any quantity (0.5 kg, 1.5 kg)
+  -- If is_loose = false, product is pre-packaged with fixed size (e.g., "Cadbury - 43 gm")
+  
+  min_quantity numeric DEFAULT 1, -- Minimum order quantity (e.g., 0.1 for loose)
+  max_quantity numeric DEFAULT 100, -- Maximum order quantity
+  
+  -- Ratings & metadata
+  rating numeric DEFAULT 4 CHECK (rating >= 0 AND rating <= 5),
+  rating_count integer DEFAULT 0,
+  is_active boolean DEFAULT true,
+  
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  
+  -- Constraint: discounted_price should be <= base_price
+  CONSTRAINT check_discounted_price CHECK (discounted_price <= base_price)
+);
+
+CREATE TABLE product_variants (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid REFERENCES master_products(id) ON DELETE CASCADE,
+  variant_name text NOT NULL, -- "500ml Bottle", "1L Tetra Pack"
+  price numeric NOT NULL,
+  original_price numeric,
+  stock_quantity integer DEFAULT 0,
+  in_stock boolean DEFAULT true,
+  image_url text,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE product_attributes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid REFERENCES master_products(id) ON DELETE CASCADE,
+  attribute_name text NOT NULL, -- "Calories", "Protein", "Organic Certified"
+  attribute_value text NOT NULL,
+  attribute_type text DEFAULT 'text', -- 'text', 'number', 'boolean', 'list'
+  display_order integer DEFAULT 0,
+  is_visible boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE product_images (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid REFERENCES master_products(id) ON DELETE CASCADE,
+  image_url text NOT NULL,
+  alt_text text,
+  caption text,
+  display_order integer DEFAULT 0,
+  is_primary boolean DEFAULT false,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE product_details (
+  product_id uuid PRIMARY KEY REFERENCES master_products(id) ON DELETE CASCADE,
+  description text,
+  ingredients text,
+  storage_info text,
+  shelf_life text,
+  country_of_origin text,
+  manufacturer text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 5: STORES (1 table)
+-- ============================================================================
+
+-- Stores (owned by shopkeepers)
+CREATE TABLE stores (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  phone text NOT NULL UNIQUE,
+  address text,
+  latitude numeric NOT NULL,
+  longitude numeric NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 6: STORE INVENTORY (1 table)
+-- ============================================================================
+
+-- Store inventory (links stores to master_products)
+CREATE TABLE products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  master_product_id uuid NOT NULL REFERENCES master_products(id) ON DELETE RESTRICT,
+  
+  -- Store-specific fields (shopkeeper can modify)
+  quantity numeric NOT NULL DEFAULT 0 CHECK (quantity >= 0), -- Can be decimal for loose products
+  is_active boolean NOT NULL DEFAULT true, -- Store can enable/disable
+  
+  -- Inherited from master_products (read-only for shopkeeper)
+  -- price, name, category, is_loose, product_type, etc. are fetched via JOIN
+  
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  
+  -- Ensure store doesn't add same product twice
+  CONSTRAINT unique_store_product UNIQUE (store_id, master_product_id)
+);
+
+
+-- ============================================================================
+-- SECTION 7: COUPONS (2 tables - BEFORE orders!)
+-- ============================================================================
+
+-- Coupons
+CREATE TABLE coupons (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text NOT NULL UNIQUE,
+  description text,
+  coupon_type coupon_type NOT NULL, -- 'flat', 'percent', 'first_order_discount'
+  
+  -- Discount value
+  discount_value numeric NOT NULL, -- Amount (flat) or percentage (percent)
+  max_discount_amount numeric, -- Maximum discount for percentage type
+  min_order_value numeric DEFAULT 0, -- Minimum order value to apply coupon
+  
+  -- First order discount support
+  applies_to_first_n_orders integer, -- NULL = not a first order discount, 3 = first 3 orders only
+  
+  -- Usage limits
+  usage_limit integer, -- Total times coupon can be used (NULL = unlimited)
+  usage_count integer DEFAULT 0, -- How many times used so far
+  per_user_limit integer DEFAULT 1, -- How many times each user can use it
+  
+  -- Validity
+  valid_from timestamptz NOT NULL DEFAULT now(),
+  valid_until timestamptz,
+  is_active boolean DEFAULT true,
+  
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE coupon_redemptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  coupon_id uuid NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+  customer_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  order_id uuid, -- Will be set when order is placed (can be NULL initially)
+  
+  discount_amount numeric NOT NULL, -- Actual discount applied
+  
+  redeemed_at timestamptz NOT NULL DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 8: ORDERS (4 tables)
+-- ============================================================================
+
+-- Main customer orders (one checkout = one customer_order)
+CREATE TABLE customer_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_code text UNIQUE, -- Human-readable order code (e.g., "ORD-2024-001234")
+  
+  -- Relationships
+  customer_id uuid NOT NULL REFERENCES app_users(id) ON DELETE RESTRICT,
+  -- NOTE: No delivery_partner_id here - each store_order has its own delivery partner
+  
+  -- Overall order status
+  status order_status NOT NULL DEFAULT 'pending_at_store',
+  payment_status text NOT NULL DEFAULT 'pending',
+  payment_method payment_method_type,
+  
+  -- Total pricing (sum of all store_orders)
+  subtotal_amount numeric NOT NULL DEFAULT 0, -- Sum of items from all stores
+  delivery_fee numeric NOT NULL DEFAULT 0, -- Total delivery fee (sum of all store delivery fees)
+  discount_amount numeric DEFAULT 0,
+  total_amount numeric NOT NULL DEFAULT 0, -- Grand total
+  
+  -- Coupon
+  coupon_id uuid REFERENCES coupons(id),
+  
+  -- Delivery details (customer's address - shared by all delivery partners)
+  delivery_address text NOT NULL,
+  delivery_latitude numeric NOT NULL,
+  delivery_longitude numeric NOT NULL,
+  notes text,
+  
+  -- Timestamps
+  placed_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  delivered_at timestamptz, -- When ALL store_orders are delivered
+  cancelled_at timestamptz,
+  
+  -- Export tracking (for reports)
+  export_token text UNIQUE,
+  exported_at timestamptz,
+  
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE store_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_order_id uuid NOT NULL REFERENCES customer_orders(id) ON DELETE CASCADE,
+  store_id uuid NOT NULL REFERENCES stores(id) ON DELETE RESTRICT,
+  delivery_partner_id uuid REFERENCES app_users(id) ON DELETE SET NULL, -- Each store order has its own delivery partner
+  
+  -- Store order status
+  status text NOT NULL DEFAULT 'pending_at_store',
+  /* Status flow:
+    'pending_at_store' -> Store hasn't accepted yet
+    'store_accepted' -> Store accepted the order
+    'preparing_order' -> Store is preparing items
+    'ready_for_pickup' -> Items ready, waiting for delivery partner
+    'delivery_partner_assigned' -> Delivery partner assigned to THIS store order
+    'order_picked_up' -> Delivery partner collected items from THIS store
+    'in_transit' -> Delivery partner on the way to customer
+    'order_delivered' -> Delivered to customer
+    'order_cancelled' -> Store cancelled (out of stock, etc.)
+  */
+  
+  -- Store-specific pricing
+  subtotal_amount numeric NOT NULL DEFAULT 0,
+  delivery_fee numeric NOT NULL DEFAULT 0, -- Delivery fee for THIS store order
+  
+  -- Timestamps
+  accepted_at timestamptz,
+  ready_at timestamptz,
+  assigned_at timestamptz, -- When delivery partner was assigned
+  picked_up_at timestamptz,
+  delivered_at timestamptz, -- When THIS store order was delivered
+  cancelled_at timestamptz,
+  
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE order_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_order_id uuid NOT NULL REFERENCES store_orders(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  
+  -- Product snapshot (in case product changes later)
+  product_name text NOT NULL,
+  unit text,
+  image_url text,
+  
+  -- Pricing & quantity
+  unit_price numeric NOT NULL,
+  quantity numeric NOT NULL CHECK (quantity > 0), -- Can be decimal: 0.5, 1.5 for loose
+  subtotal numeric GENERATED ALWAYS AS (unit_price * quantity) STORED,
+  
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE order_status_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_order_id uuid REFERENCES customer_orders(id) ON DELETE CASCADE,
+  status text NOT NULL,
+  notes text,
+  updated_by uuid REFERENCES app_users(id),
+  created_at timestamptz DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 9: INVENTORY TRACKING (1 table)
+-- ============================================================================
+
+-- Inventory change tracking
+CREATE TABLE inventory_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid REFERENCES products(id) ON DELETE SET NULL,
+  action text NOT NULL, -- 'restock', 'sale', 'adjustment', 'return'
+  quantity_change numeric NOT NULL, -- Positive for increase, negative for decrease
+  quantity_before numeric NOT NULL,
+  quantity_after numeric NOT NULL,
+  store_order_id uuid REFERENCES store_orders(id), -- Link to specific store order
+  admin_id uuid REFERENCES admin_users(id),
+  notes text,
+  created_at timestamptz DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 10: PAYMENTS (2 tables)
+-- ============================================================================
+
+-- Payments (customer pays platform, platform distributes to stores)
+CREATE TABLE payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_order_id uuid NOT NULL UNIQUE REFERENCES customer_orders(id) ON DELETE CASCADE,
+  order_code text NOT NULL,
+  
+  -- Payment breakdown
+  items_total numeric NOT NULL,
+  delivery_fee numeric NOT NULL DEFAULT 0,
+  discount_amount numeric DEFAULT 0,
+  total_amount numeric NOT NULL,
+  
+  status text NOT NULL DEFAULT 'unpaid', -- 'unpaid', 'paid', 'refunded'
+  payment_method payment_method_type,
+  transaction_id text, -- Payment gateway transaction ID
+  
+  created_at timestamptz NOT NULL DEFAULT now(),
+  paid_at timestamptz
+);
+
+CREATE TABLE store_payouts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_order_id uuid NOT NULL REFERENCES store_orders(id) ON DELETE CASCADE,
+  store_id uuid NOT NULL REFERENCES stores(id) ON DELETE RESTRICT,
+  
+  -- Payout details
+  amount numeric NOT NULL, -- Store's share from this order
+  platform_commission numeric DEFAULT 0, -- Platform's cut (e.g., 10%)
+  net_amount numeric NOT NULL, -- Amount paid to store after commission
+  
+  status text NOT NULL DEFAULT 'pending', -- 'pending', 'processing', 'paid', 'failed'
+  
+  created_at timestamptz NOT NULL DEFAULT now(),
+  paid_at timestamptz
+);
+
+
+-- ============================================================================
+-- SECTION 11: PRODUCT REVIEWS (1 table)
+-- ============================================================================
+
+-- Product reviews
+CREATE TABLE product_reviews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid REFERENCES master_products(id) ON DELETE CASCADE,
+  customer_name text NOT NULL,
+  customer_email text,
+  customer_phone text,
+  rating integer CHECK (rating >= 1 AND rating <= 5),
+  title text,
+  review_text text,
+  images text[], -- Array of image URLs
+  is_approved boolean DEFAULT false,
+  is_verified boolean DEFAULT false, -- Verified purchase
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+
+-- ============================================================================
+-- SECTION 12: SECURITY (2 tables)
+-- ============================================================================
+
+-- CSRF tokens
+CREATE TABLE csrf_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  token text NOT NULL UNIQUE,
+  user_id uuid REFERENCES app_users(id),
+  admin_id uuid REFERENCES admins(id),
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE rate_limit_tracking (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  identifier text NOT NULL, -- IP address or user ID
+  action text NOT NULL, -- 'api_call', 'login_attempt', 'order_creation'
+  request_count integer DEFAULT 1,
+  window_start timestamptz DEFAULT now(),
+  window_end timestamptz NOT NULL
+);
+
+
+
+-- ============================================================================
+-- SECTION 8: INDEXES FOR PERFORMANCE
+-- ============================================================================
+
+-- Auth & Users indexes
+CREATE INDEX idx_app_users_email ON app_users(email);
+CREATE INDEX idx_app_users_phone ON app_users(phone);
+CREATE INDEX idx_app_users_role ON app_users(role);
+CREATE INDEX idx_customers_phone ON customers(phone);
+CREATE INDEX idx_customers_google_place_id ON customers(google_place_id) WHERE google_place_id IS NOT NULL;
+CREATE INDEX idx_customer_saved_addresses_customer_id ON customer_saved_addresses(customer_id);
+CREATE INDEX idx_customer_saved_addresses_is_default ON customer_saved_addresses(customer_id, is_default);
+CREATE INDEX idx_customer_saved_addresses_google_place_id ON customer_saved_addresses(google_place_id) WHERE google_place_id IS NOT NULL;
+
+-- Ensure only ONE default address per customer
+CREATE UNIQUE INDEX idx_one_default_address_per_customer 
+ON customer_saved_addresses (customer_id) 
+WHERE is_default = true;
+
+-- Location-based queries (CRITICAL for nearby store discovery)
+CREATE INDEX idx_stores_location ON stores(latitude, longitude);
+CREATE INDEX idx_stores_active ON stores(is_active);
+CREATE INDEX idx_stores_location_active ON stores(latitude, longitude, is_active) WHERE is_active = true;
+CREATE INDEX idx_customer_saved_addresses_location ON customer_saved_addresses(latitude, longitude);
+CREATE INDEX idx_driver_locations_location ON driver_locations(latitude, longitude);
+
+-- Admin indexes
+CREATE INDEX idx_admins_email ON admins(email);
+CREATE INDEX idx_admins_role ON admins(role);
+CREATE INDEX idx_admins_status ON admins(status);
+CREATE INDEX idx_admin_activity_logs_admin_id ON admin_activity_logs(admin_id);
+CREATE INDEX idx_admin_activity_logs_created_at ON admin_activity_logs(created_at DESC);
+CREATE INDEX idx_audit_logs_admin_id ON audit_logs(admin_id);
+CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+CREATE INDEX idx_security_events_severity ON security_events(severity);
+CREATE INDEX idx_failed_login_attempts_email_ip ON failed_login_attempts(email, ip_address, attempted_at DESC);
+
+-- Stores & Products indexes
+CREATE INDEX idx_stores_owner_id ON stores(owner_id);
+CREATE INDEX idx_products_store_id ON products(store_id);
+CREATE INDEX idx_products_master_product_id ON products(master_product_id);
+CREATE INDEX idx_products_active ON products(is_active);
+CREATE INDEX idx_products_store_active ON products(store_id, is_active) WHERE is_active = true;
+CREATE INDEX idx_inventory_logs_product_id ON inventory_logs(product_id);
+
+-- Master catalog indexes
+CREATE INDEX idx_categories_name ON categories(name);
+CREATE INDEX idx_master_products_category ON master_products(category);
+CREATE INDEX idx_master_products_active ON master_products(is_active);
+CREATE INDEX idx_master_products_is_loose ON master_products(is_loose);
+CREATE INDEX idx_master_products_search ON master_products(name, brand, category);
+CREATE INDEX idx_product_variants_product_id ON product_variants(product_id);
+CREATE INDEX idx_product_attributes_product_id ON product_attributes(product_id);
+CREATE INDEX idx_product_images_product_id ON product_images(product_id);
+
+-- Orders indexes
+CREATE INDEX idx_customer_orders_customer_id ON customer_orders(customer_id);
+CREATE INDEX idx_customer_orders_status ON customer_orders(status);
+CREATE INDEX idx_customer_orders_placed_at ON customer_orders(placed_at DESC);
+CREATE INDEX idx_customer_orders_code ON customer_orders(order_code);
+
+CREATE INDEX idx_store_orders_customer_order_id ON store_orders(customer_order_id);
+CREATE INDEX idx_store_orders_store_id ON store_orders(store_id);
+CREATE INDEX idx_store_orders_delivery_partner_id ON store_orders(delivery_partner_id);
+CREATE INDEX idx_store_orders_status ON store_orders(status);
+
+CREATE INDEX idx_order_items_store_order_id ON order_items(store_order_id);
+CREATE INDEX idx_order_items_product_id ON order_items(product_id);
+
+CREATE INDEX idx_order_status_history_customer_order_id ON order_status_history(customer_order_id);
+
+CREATE INDEX idx_payments_customer_order_id ON payments(customer_order_id);
+CREATE INDEX idx_store_payouts_store_order_id ON store_payouts(store_order_id);
+CREATE INDEX idx_store_payouts_store_id ON store_payouts(store_id);
+
+-- Coupons indexes
+CREATE INDEX idx_coupons_code ON coupons(code);
+CREATE INDEX idx_coupons_active ON coupons(is_active) WHERE is_active = true;
+CREATE INDEX idx_coupon_redemptions_coupon_id ON coupon_redemptions(coupon_id);
+CREATE INDEX idx_coupon_redemptions_customer_id ON coupon_redemptions(customer_id);
+
+-- Reviews indexes
+CREATE INDEX idx_product_reviews_product_id ON product_reviews(product_id);
+CREATE INDEX idx_product_reviews_approved ON product_reviews(is_approved) WHERE is_approved = true;
+
+-- Security indexes
+CREATE INDEX idx_csrf_tokens_token ON csrf_tokens(token);
+CREATE INDEX idx_rate_limit_tracking_identifier ON rate_limit_tracking(identifier, action);
+
+-- ============================================================================
+-- SECTION 9: FUNCTIONS & TRIGGERS
+-- ============================================================================
+
+-- Function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Apply updated_at trigger to relevant tables
+CREATE TRIGGER update_app_users_updated_at BEFORE UPDATE ON app_users
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_customers_updated_at BEFORE UPDATE ON customers
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_customer_saved_addresses_updated_at BEFORE UPDATE ON customer_saved_addresses
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_stores_updated_at BEFORE UPDATE ON stores
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_master_products_updated_at BEFORE UPDATE ON master_products
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_categories_updated_at BEFORE UPDATE ON categories
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_customer_orders_updated_at BEFORE UPDATE ON customer_orders
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_store_orders_updated_at BEFORE UPDATE ON store_orders
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trigger_check_order_completion AFTER UPDATE OF status ON store_orders
+  FOR EACH ROW
+  WHEN (NEW.status = 'order_delivered')
+  EXECUTE FUNCTION check_order_completion();
+
+CREATE TRIGGER update_admins_updated_at BEFORE UPDATE ON admins
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Function to calculate customer order total (sum of all store_orders)
+CREATE OR REPLACE FUNCTION calculate_customer_order_total(customer_order_id_param uuid)
+RETURNS numeric AS $$
+DECLARE
+  items_total numeric;
+  delivery_fee numeric;
+  discount numeric;
+BEGIN
+  -- Sum of all store_order subtotals
+  SELECT COALESCE(SUM(subtotal_amount), 0) INTO items_total
+  FROM store_orders WHERE customer_order_id = customer_order_id_param;
+  
+  SELECT delivery_fee, discount_amount INTO delivery_fee, discount
+  FROM customer_orders WHERE id = customer_order_id_param;
+  
+  RETURN items_total + COALESCE(delivery_fee, 0) - COALESCE(discount, 0);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to check if store is within delivery range (used for 1km, 2km, 3km radius search)
+CREATE OR REPLACE FUNCTION is_store_in_range(
+  store_lat numeric,
+  store_lng numeric,
+  customer_lat numeric,
+  customer_lng numeric,
+  radius_km numeric
+)
+RETURNS boolean AS $$
+DECLARE
+  distance_km numeric;
+BEGIN
+  -- Haversine formula for distance calculation
+  distance_km := (
+    6371 * acos(
+      cos(radians(customer_lat)) * 
+      cos(radians(store_lat)) * 
+      cos(radians(store_lng) - radians(customer_lng)) + 
+      sin(radians(customer_lat)) * 
+      sin(radians(store_lat))
+    )
+  );
+  
+  RETURN distance_km <= radius_km;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to check if customer is eligible for first N orders discount
+CREATE OR REPLACE FUNCTION is_eligible_for_first_order_discount(
+  customer_id_param uuid,
+  required_first_n_orders integer
+)
+RETURNS boolean AS $$
+DECLARE
+  completed_orders_count integer;
+BEGIN
+  -- Count completed orders for this customer
+  SELECT COUNT(*) INTO completed_orders_count
+  FROM customer_orders
+  WHERE customer_id = customer_id_param
+    AND status = 'order_delivered';
+  
+  -- Customer is eligible if they have less than N completed orders
+  RETURN completed_orders_count < required_first_n_orders;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to auto-update customer_order status when all store_orders are delivered
+CREATE OR REPLACE FUNCTION check_order_completion()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Only process when a store_order is marked as delivered
+  IF NEW.status = 'order_delivered' THEN
+    -- Check if all store_orders for this customer_order are delivered or cancelled
+    IF NOT EXISTS (
+      SELECT 1 
+      FROM store_orders 
+      WHERE customer_order_id = NEW.customer_order_id 
+        AND status NOT IN ('order_delivered', 'order_cancelled')
+    ) THEN
+      -- All store orders are complete, mark customer_order as delivered
+      UPDATE customer_orders 
+      SET 
+        status = 'order_delivered',
+        delivered_at = now(),
+        updated_at = now()
+      WHERE id = NEW.customer_order_id
+        AND status != 'order_delivered'; -- Only update if not already delivered
+    END IF;
+  END IF;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================================
+-- SECTION 10: VIEWS FOR COMMON QUERIES
+-- ============================================================================
+
+-- View: Products with master product details
+CREATE OR REPLACE VIEW products_with_details AS
+SELECT 
+  p.id,
+  p.store_id,
+  p.quantity AS stock_quantity,
+  p.is_active AS available_in_store,
+  mp.id AS master_product_id,
+  mp.name,
+  mp.category,
+  mp.brand,
+  mp.description,
+  mp.image_url,
+  mp.base_price AS mrp,
+  mp.discounted_price AS price,
+  mp.unit,
+  mp.is_loose,
+  mp.min_quantity,
+  mp.max_quantity,
+  mp.rating,
+  mp.rating_count,
+  s.name AS store_name,
+  s.latitude AS store_latitude,
+  s.longitude AS store_longitude
+FROM products p
+JOIN master_products mp ON p.master_product_id = mp.id
+JOIN stores s ON p.store_id = s.id
+WHERE p.is_active = true AND mp.is_active = true AND s.is_active = true;
+
+-- View: Order summary with details (multi-store aware)
+CREATE OR REPLACE VIEW order_summary AS
+SELECT 
+  co.id,
+  co.order_code,
+  co.status,
+  co.payment_status,
+  co.total_amount,
+  co.placed_at,
+  u.name AS customer_name,
+  u.phone AS customer_phone,
+  COUNT(DISTINCT so.store_id) AS total_stores,
+  COUNT(DISTINCT so.delivery_partner_id) AS total_delivery_partners,
+  COUNT(oi.id) AS total_items
+FROM customer_orders co
+JOIN app_users u ON co.customer_id = u.id
+LEFT JOIN store_orders so ON so.customer_order_id = co.id
+LEFT JOIN order_items oi ON oi.store_order_id = so.id
+GROUP BY co.id, u.name, u.phone;
+
+-- View: Store order details (for shopkeeper dashboard)
+CREATE OR REPLACE VIEW store_order_details AS
+SELECT 
+  so.id AS store_order_id,
+  so.customer_order_id,
+  co.order_code,
+  so.store_id,
+  s.name AS store_name,
+  so.status AS store_status,
+  so.subtotal_amount,
+  so.delivery_fee,
+  so.delivery_partner_id,
+  dp.name AS delivery_partner_name,
+  u.name AS customer_name,
+  u.phone AS customer_phone,
+  co.delivery_address,
+  COUNT(oi.id) AS item_count
+FROM store_orders so
+JOIN customer_orders co ON co.id = so.customer_order_id
+JOIN stores s ON s.id = so.store_id
+JOIN app_users u ON u.id = co.customer_id
+LEFT JOIN app_users dp ON dp.id = so.delivery_partner_id
+LEFT JOIN order_items oi ON oi.store_order_id = so.id
+GROUP BY so.id, co.id, co.order_code, s.name, u.name, u.phone, co.delivery_address, dp.name;
+
+-- ============================================================================
+-- SECTION 11: SAMPLE DATA FOR SUPER ADMIN (OPTIONAL)
+-- ============================================================================
+
+-- Insert default super admin (CHANGE PASSWORD IN PRODUCTION!)
+-- Password: 'SuperAdmin@123' (hashed with bcrypt)
+INSERT INTO admins (email, password_hash, full_name, role, status) VALUES
+('superadmin@platform.com', 
+ '$2a$10$abcdefghijklmnopqrstuvwxyz1234567890ABCDEFG', -- Replace with actual bcrypt hash
+ 'Super Administrator',
+ 'super_admin',
+ 'active'
+) ON CONFLICT (email) DO NOTHING;
+
+-- Insert categories from existing data
+INSERT INTO categories (name, description, image_url, display_order) VALUES
+('Pasta, Noodles and Vermicelli', 'Fresh & Instant Pasta and Noodles', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2Fb3c2c453-048a-4698-ab8a-5cc52f230f5e/watermark:F/width:1200', 9),
+('Personal Care', 'Premium personal care products for your daily hygiene and beauty needs', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F8403ef37-4a30-44d5-a5a7-7dd4df5e599c/watermark:F/width:1200', 8),
+('Vegetables', 'Fresh & Healthy Vegetables', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F5ce4974d-d18f-4a82-8bcd-bc11f46069fc/watermark:F/width:1200', 4),
+('Beverages', 'Refreshing Drinks', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2Fd6f592ce-6d57-4d92-8513-973d3e8cf61d/watermark:F/width:1200', 5),
+('Soft Drinks', '', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F4b1e6cc9-838e-45ac-b11e-4191ab40e11c/watermark:F/width:1200', 0),
+('Snacks', 'Tasty Snacks and Treats', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2Fadf81a91-6728-4462-92d8-5b98319e7c8f/watermark:F/width:1200', 6),
+('Breakfast Cereals', 'Start your day right with healthy breakfast cereals, oats, and muesli', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2Fac523d73-a2ae-4c8a-9f10-c61593bd6894/watermark:F/width:1200', 2),
+('Spices', 'Fresh & Aromatic Spices', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2Fc6ebff31-2e3e-41fb-ab31-4b699ddde136/watermark:F/width:1200', 2),
+('Ketchup and Sauces', 'Delicious ketchups, sauces, mayonnaise, and condiments for every meal', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F6c99d8f7-a6d2-4736-ad54-62f4a9869dd7/watermark:F/width:1200', 7),
+('Dairy', 'Milk, Paneer & more', 'https://media.istockphoto.com/id/544807136/photo/various-fresh-dairy-products.jpg', 3),
+('Bakery', 'Fresh baked goods, biscuits, cookies and delicious treats', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F3a82f8da-4293-4470-8a9c-a35810fd60fd/watermark:F/width:1200', 1),
+('Detergents', 'Powerful detergents and fabric care products for clean, fresh clothes', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F19e12ccb-63d4-4a6e-9d5e-ff4656d42c72/watermark:F/width:1200', 5),
+('Dry Fruits', 'Premium quality dry fruits, nuts, and seeds for healthy snacking', 'https://nutribinge.in/cdn/shop/articles/image3.jpg', 6),
+('Staples', 'Rice, Dal, Atta & Maida', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2Fd7f43bb5-13e1-47b2-b24e-1ca3a8fab17d/watermark:F/width:1200', 1),
+('Oils', 'High-quality cooking oils for all your culinary needs', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F379b9235-390c-414b-a9c8-dc740e75353d/watermark:F/width:1200', 8),
+('Salt and Sugar', 'Essential Cooking Ingredients', 'https://media.canva.com/v2/image-resize/format:JPG/height:1200/quality:92/uri:ifs%3A%2F%2FM%2F7141a6ab-d845-46b1-9165-d3cab0af7a33/watermark:F/width:1200', 10),
+('Chocolates and Candies', 'Indulge in delicious chocolates, candies, and sweet treats', 'https://media.istockphoto.com/id/522735736/photo/chocolate-background.jpg', 3)
+ON CONFLICT (name) DO NOTHING;
+
+-- Insert default first order discount coupon (15% off for first 3 orders)
+INSERT INTO coupons (code, type, value, applies_to_first_n_orders, max_discount, is_active) VALUES
+('FIRST3ORDERS', 'first_order_discount', 15, 3, 100, true)
+ON CONFLICT (code) DO NOTHING;
+
+-- Example usage in application:
+-- 1. Customer applies coupon 'FIRST3ORDERS'
+-- 2. Backend checks: SELECT is_eligible_for_first_order_discount(customer_id, 3)
+-- 3. If true, apply 15% discount (max ₹100)
+-- 4. After order completes, customer has used 1 of their 3 first-order discounts
+
+-- ============================================================================
+-- SCHEMA MIGRATION COMPLETE
+-- ============================================================================
+-- Total tables created: 32
+-- Indexes created: 56+
+-- Views created: 3
+-- Functions created: 6
+-- Triggers created: 11
+-- Enums created: 7
+-- ============================================================================
+
+COMMENT ON SCHEMA public IS 'Multi-vendor quick commerce platform with admin panel';
+COMMENT ON TABLE master_products IS 'Admin-controlled product catalog. Shopkeepers select from this list. Price control is admin-only. base_price = MRP, discounted_price = Selling Price.';
+COMMENT ON TABLE products IS 'Store-owned inventory. Price inherited from master_products. Shopkeepers can only modify quantity and availability.';
+COMMENT ON TABLE admins IS 'Super admin has all permissions. Regular admins have custom RBAC via permissions JSONB.';
+COMMENT ON COLUMN master_products.is_loose IS 'True for products sold by weight/volume (e.g., Loose Atta, Loose Rice). False for pre-packaged products with fixed sizes.';
+COMMENT ON COLUMN master_products.base_price IS 'MRP (Maximum Retail Price) - the printed price on product.';
+COMMENT ON COLUMN master_products.discounted_price IS 'Actual selling price set by admin. Must be <= base_price.';
+COMMENT ON COLUMN order_items.quantity IS 'Can be decimal for loose products (e.g., 0.5 kg tomatoes, 1.5 kg rice).';
+COMMENT ON COLUMN coupons.applies_to_first_n_orders IS 'Apply discount to first N orders only. E.g., 3 = first 3 orders get discount.';
+COMMENT ON FUNCTION is_store_in_range IS 'Check if store is within delivery radius of customer location using Haversine formula. Used for 1km, 2km, 3km radius search.';
