@@ -85,7 +85,7 @@ export async function authenticateAdmin(email: string, password: string): Promis
   try {
     console.log('🔐 Authenticating admin:', email);
 
-    // Fetch admin by email
+    // Fetch admin by email from new schema
     const { data: admin, error } = await supabaseAdmin
       .from('admins')
       .select('*')

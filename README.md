@@ -1,94 +1,178 @@
-# Near & Now - React Grocery App
+# Near and Now - E-Commerce Platform
 
-A modern grocery shopping application built with React, TypeScript, and Tailwind CSS.
+Multi-vendor quick commerce platform with centralized admin management, featuring store-owned inventory, real-time delivery, and support for loose products.
 
-## 🚀 Features
+## Project Structure
 
-- **Responsive Design**: Works on all devices from mobile to desktop
-- **Product Catalog**: Browse products by category
-- **Shopping Cart**: Add, remove, and update quantities
-- **User Authentication**: Login with OTP via Supabase
-- **Search & Filtering**: Find products easily
-- **Product Details**: Detailed product information
-- **Related Products**: Discover similar items
+```
+near-and-now/
+├── frontend/          # React frontend application
+├── backend/           # Express.js API server
+├── docs/              # Documentation and schema files
+│   ├── near_and_now_schema_tables      # Database table definitions
+│   └── near_and_now_schema_functions   # Database functions & triggers
+└── README.md
+```
 
-## 📋 Tech Stack
+## Database Schema
 
-- **Frontend**: React, TypeScript, Tailwind CSS
-- **Routing**: React Router
-- **State Management**: React Context API
-- **Backend & Auth**: Supabase
-- **Build Tool**: Vite
-- **UI Components**: Custom components with Tailwind
+The platform uses a comprehensive PostgreSQL schema with 32 tables, including:
 
-## 🛠️ Installation
+- **User Management**: Multi-role system (customers, shopkeepers, delivery partners)
+- **Admin Panel**: RBAC with super_admin and custom permissions
+- **Product Catalog**: Master products with store-specific inventory
+- **Orders**: Multi-store orders with individual delivery partners
+- **Payments**: Customer payments and store payouts
+- **Location**: Google Places integration for accurate delivery
+- **Coupons**: Flexible discount system with first-order support
 
-### Quick Start (Windows)
+See `docs/near_and_now_schema_tables` and `docs/near_and_now_schema_functions` for complete schema details.
 
-1. Simply double-click the `start.bat` file in the project root directory.
-2. This will install all dependencies and start the development server automatically.
+## Quick Start
 
-### Manual Installation
+### Prerequisites
+- Node.js 18+
+- PostgreSQL database (Supabase recommended)
+- npm or yarn
 
-1. Install dependencies:
+### Setup
+
+1. **Clone and install dependencies**:
 ```bash
+# Install backend dependencies
+cd backend
+npm install
+
+# Install frontend dependencies
+cd ../frontend
 npm install
 ```
 
-2. Update the `.env` file in the root directory with your Google Maps API key:
-```
-VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+2. **Configure environment variables**:
+```bash
+# Copy .env.example to .env in both frontend and backend
+cp .env.example .env
 ```
 
-3. Start the development server:
+Edit `.env` files with your Supabase credentials:
+```
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+3. **Initialize database**:
+Run the SQL files in your Supabase SQL editor:
+```sql
+-- First run:
+docs/near_and_now_schema_tables
+
+-- Then run:
+docs/near_and_now_schema_functions
+```
+
+4. **Start development servers**:
+
+Backend:
 ```bash
+cd backend
 npm run dev
 ```
 
-4. Open your browser and navigate to:
-```
-http://localhost:5173
-```
-
-## 🏗️ Project Structure
-
-```
-near-now-react/
-├── src/
-│   ├── components/
-│   │   ├── auth/        # Authentication components
-│   │   ├── cart/        # Shopping cart components
-│   │   ├── layout/      # Layout components (Header, Footer)
-│   │   ├── products/    # Product-related components
-│   │   └── ui/          # UI components (buttons, modals, etc.)
-│   ├── context/         # React Context providers
-│   ├── hooks/           # Custom React hooks
-│   ├── pages/           # Page components
-│   ├── services/        # API services
-│   └── utils/           # Utility functions
-├── public/              # Static assets
-└── index.html           # HTML entry point
+Frontend (in new terminal):
+```bash
+cd frontend
+npm run dev
 ```
 
-## 🔄 Converted from Vanilla JS
+## Features
 
-This project is a React conversion of the original vanilla JavaScript Near & Now grocery app. The conversion includes:
+### Customer Features
+- Browse products by category
+- Location-based store discovery (1-5km radius)
+- Multi-store shopping cart
+- Multiple saved addresses with Google Places integration
+- Order tracking with real-time status updates
+- Coupon system with first-order discounts
 
-- Component-based architecture
-- React state management
-- TypeScript for type safety
-- Modern build tooling with Vite
+### Shopkeeper Features
+- Store management
+- Inventory control (quantity only, prices set by admin)
+- Order acceptance and preparation
+- Real-time order notifications
 
-## 📱 Screenshots
+### Admin Features
+- Centralized product catalog management
+- Price control (MRP and discounted price)
+- Category management
+- Customer management
+- Order monitoring
+- Analytics and reporting
+- Multi-admin support with RBAC
 
-[Add screenshots of your app here]
+### Delivery Partner Features
+- Real-time order assignments
+- GPS tracking
+- Multi-store pickup support
+- Delivery status updates
 
-## 📄 License
+## Technology Stack
 
-MIT
+### Frontend
+- React 18 with TypeScript
+- React Router for navigation
+- Tailwind CSS for styling
+- Supabase client for real-time data
+- Lucide React for icons
 
-## 🙏 Acknowledgements
+### Backend
+- Node.js with Express
+- TypeScript
+- Supabase for database
+- JWT authentication
+- Helmet for security
 
-- Original vanilla JS project by [Original Author]
-- Icons from Font Awesome
-- UI inspiration from [Mention sources]
+### Database
+- PostgreSQL (via Supabase)
+- PostGIS for location queries
+- Row Level Security (RLS)
+- Real-time subscriptions
+
+## Key Concepts
+
+### Master Products vs Store Inventory
+- **Master Products**: Admin-controlled catalog with pricing
+- **Store Inventory**: Shopkeepers select from master products and manage quantity only
+
+### Loose Products
+Products can be sold by weight/volume (e.g., 0.5 kg rice) or as pre-packaged items (e.g., 1L milk bottle).
+
+### Multi-Store Orders
+A single customer order can contain items from multiple stores, each with its own:
+- Store order status
+- Delivery partner
+- Delivery timeline
+
+### Location System
+Uses Google Places API for:
+- Accurate address geocoding
+- Pin-based location selection
+- Delivery radius calculation (Haversine formula)
+
+## API Documentation
+
+See `backend/README.md` for detailed API endpoint documentation.
+
+## Contributing
+
+1. Follow the existing code structure
+2. Use TypeScript for type safety
+3. Follow the database schema strictly
+4. Test all changes before committing
+
+## License
+
+See LICENSE file for details.
+
+## Support
+
+For issues and questions, please refer to the documentation in the `docs/` folder.

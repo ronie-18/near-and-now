@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { 
-  ArrowLeft, 
-  Save, 
-  AlertCircle, 
-  Image as ImageIcon, 
-  Plus, 
-  X, 
-  Trash2, 
+import {
+  ArrowLeft,
+  Save,
+  AlertCircle,
+  Image as ImageIcon,
+  Plus,
+  X,
+  Trash2,
   GripVertical,
   Check,
   Loader2,
@@ -16,7 +16,6 @@ import {
   Star,
   Sparkles,
   Upload,
-  CloudUpload,
   FileImage
 } from 'lucide-react';
 import { createProduct, createCategory, uploadProductImage } from '../../services/adminService';
@@ -61,7 +60,7 @@ const ImageItem: React.FC<ImageItemProps> = ({
     <div className={`relative group bg-white rounded-xl border-2 transition-all duration-200 overflow-hidden
       ${isPrimary ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-gray-200 hover:border-gray-300'}
       ${image.isUploading ? 'opacity-75' : ''}`}>
-      
+
       {/* Primary Badge */}
       {isPrimary && !image.isUploading && (
         <div className="absolute top-2 left-2 z-10 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-bold px-2 py-1 rounded-lg flex items-center gap-1 shadow-lg">
@@ -224,7 +223,7 @@ const AddProductPage = () => {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
-    
+
     if (type === 'checkbox') {
       const checked = (e.target as HTMLInputElement).checked;
       setFormData(prev => ({ ...prev, [name]: checked }));
@@ -263,7 +262,7 @@ const AddProductPage = () => {
   const uploadFile = async (file: File): Promise<ImageData> => {
     const id = generateId();
     const previewUrl = URL.createObjectURL(file);
-    
+
     // Add to state with uploading status
     const imageData: ImageData = {
       id,
@@ -275,7 +274,7 @@ const AddProductPage = () => {
 
     try {
       const uploadedUrl = await uploadProductImage(file);
-      
+
       if (uploadedUrl) {
         // Revoke the blob URL and use the actual URL
         URL.revokeObjectURL(previewUrl);
@@ -308,7 +307,7 @@ const AddProductPage = () => {
     const validFiles = fileArray.filter(file => {
       const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
       const maxSize = 5 * 1024 * 1024; // 5MB
-      
+
       if (!validTypes.includes(file.type)) {
         setError(`Invalid file type: ${file.name}. Supported: JPG, PNG, WebP, GIF`);
         return false;
@@ -337,10 +336,10 @@ const AddProductPage = () => {
     for (let i = 0; i < validFiles.length; i++) {
       const file = validFiles[i];
       const placeholder = placeholders[i];
-      
+
       try {
         const uploadedUrl = await uploadProductImage(file);
-        
+
         setImages(prev => prev.map(img => {
           if (img.id === placeholder.id) {
             if (uploadedUrl) {
@@ -502,15 +501,15 @@ const AddProductPage = () => {
           color: newCategoryData.color.trim() || undefined,
           display_order: newCategoryData.display_order ? parseInt(newCategoryData.display_order) : undefined,
         };
-        
+
         const newCategory = await createCategory(categoryPayload);
-        
+
         if (!newCategory) {
           setError('Failed to create new category. Please try again.');
           setLoading(false);
           return;
         }
-        
+
         categoryToUse = newCategory.name;
       }
 
@@ -533,7 +532,7 @@ const AddProductPage = () => {
       };
 
       const result = await createProduct(productData);
-      
+
       if (result) {
         setSuccess(true);
         setTimeout(() => {
@@ -650,7 +649,7 @@ const AddProductPage = () => {
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
                   </select>
-                  
+
                   {/* New Category Form */}
                   {showNewCategoryInput && (
                     <div className="mt-4 p-5 border-2 border-dashed border-emerald-300 rounded-xl bg-emerald-50/50">
@@ -796,17 +795,13 @@ const AddProductPage = () => {
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
                 className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 mb-5
-                  ${isDragging 
-                    ? 'border-purple-500 bg-purple-50 scale-[1.02]' 
+                  ${isDragging
+                    ? 'border-purple-500 bg-purple-50 scale-[1.02]'
                     : 'border-gray-300 hover:border-purple-400 hover:bg-purple-50/50'}`}
               >
                 <div className={`w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center transition-colors
                   ${isDragging ? 'bg-purple-200' : 'bg-gray-100'}`}>
-                  {isDragging ? (
-                    <CloudUpload size={32} className="text-purple-600" />
-                  ) : (
-                    <Upload size={32} className="text-gray-400" />
-                  )}
+                  <Upload size={32} className={isDragging ? 'text-purple-600' : 'text-gray-400'} />
                 </div>
                 <h3 className="font-semibold text-gray-700 mb-1">
                   {isDragging ? 'Drop images here' : 'Drag & drop images here'}
