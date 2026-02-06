@@ -3,7 +3,7 @@ import { Product } from './supabase';
 
 // Image Upload Constants
 const STORAGE_BUCKET = 'product-images';
-const SUPABASE_URL = 'https://mpbszymyubxavjoxhzfm.supabase.co';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 
 // Image Upload Functions
 export async function uploadProductImage(file: File): Promise<string | null> {

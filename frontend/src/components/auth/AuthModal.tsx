@@ -15,7 +15,7 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
   const [resendTimer, setResendTimer] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  const { loginWithPhone, verifyOTPCode } = useAuth();
+  const { sendOTPCode, verifyOTPCode } = useAuth();
   const { showNotification } = useNotification();
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -99,7 +99,7 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
     
     try {
       setIsSubmitting(true);
-      await loginWithPhone('+91' + phone);
+      await sendOTPCode('+91' + phone);
       setStep(2);
       setResendTimer(30);
       showNotification('OTP sent to your phone', 'success');
@@ -127,7 +127,11 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
     
     try {
       setIsSubmitting(true);
-      await verifyOTPCode('+91' + phone, otp);
+      await verifyOTPCode('+91' + phone, otp.trim(), {
+        name: name || 'Customer',
+        landmark: 'To be updated',
+        delivery_instructions: 'To be updated'
+      });
       showNotification('Login successful!', 'success');
       onClose();
     } catch (error) {
@@ -144,7 +148,7 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
     
     try {
       setIsSubmitting(true);
-      await loginWithPhone('+91' + phone);
+      await sendOTPCode('+91' + phone);
       setResendTimer(30);
       showNotification('OTP resent to your phone', 'success');
     } catch (error) {

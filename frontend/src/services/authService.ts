@@ -46,8 +46,19 @@ export async function sendOTP(phone: string): Promise<void> {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Failed to send OTP');
+      let message = 'Failed to send OTP';
+      try {
+        const text = await response.text();
+        try {
+          const error = JSON.parse(text);
+          message = error.message || error.error || message;
+        } catch {
+          if (text) message = text;
+        }
+      } catch {
+        // Response body read failed
+      }
+      throw new Error(message);
     }
 
     console.log('✅ OTP sent successfully');
@@ -57,7 +68,7 @@ export async function sendOTP(phone: string): Promise<void> {
   }
 }
 
-// Verify OTP and login/register user
+// Verify OTP and login/register customer (backend handles creation - role: customer only)
 export async function verifyOTP(phone: string, otp: string, userData?: {
   name: string;
   email?: string;
@@ -67,110 +78,43 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
   try {
     console.log('� Verifying OTP for:', phone);
 
-    // Call backend API to verify OTP via Twilio
     const response = await fetch('/api/auth/verify-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, otp })
+      body: JSON.stringify({
+        phone,
+        otp: String(otp).trim(),
+        name: userData?.name || 'Customer'
+      })
     });
 
+    const text = await response.text();
+    let data: any;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = {};
+    }
+
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Invalid OTP');
+      let message = data.message || data.error || 'Invalid OTP';
+      if (typeof message === 'object' || String(message) === '{}' || !String(message).trim()) {
+        message = data.error || 'Something went wrong. Please try again.';
+      }
+      throw new Error(String(message));
     }
 
-    console.log('✅ OTP verified successfully');
-
-    // Check if user exists
-    const { data: existingUser } = await supabase
-      .from('app_users')
-      .select('*')
-      .eq('phone', phone)
-      .eq('role', 'customer')
-      .single();
-
-    let appUser: any;
-    let customer: any;
-
-    if (existingUser) {
-      // User exists - login
-      console.log('👤 Existing user, logging in');
-      appUser = existingUser;
-
-      // Get customer data
-      const { data: customerData } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('user_id', appUser.id)
-        .single();
-
-      customer = customerData;
-    } else {
-      // New user - register
-      if (!userData) {
-        throw new Error('User data required for registration');
-      }
-
-      console.log('📝 New user, registering');
-
-      // Create app_user
-      const { data: newUser, error: userError } = await supabase
-        .from('app_users')
-        .insert({
-          name: userData.name,
-          phone: phone,
-          email: userData.email || null,
-          password_hash: null, // No password for OTP auth
-          role: 'customer',
-          is_activated: true
-        })
-        .select()
-        .single();
-
-      if (userError || !newUser) {
-        console.error('❌ Error creating user:', userError);
-        throw new Error('Failed to create user account');
-      }
-
-      appUser = newUser;
-
-      // Create customer record
-      const { data: newCustomer, error: customerError } = await supabase
-        .from('customers')
-        .insert({
-          user_id: appUser.id,
-          name: userData.name,
-          phone: phone,
-          landmark: userData.landmark,
-          delivery_instructions: userData.delivery_instructions,
-          country: 'India'
-        })
-        .select()
-        .single();
-
-      if (customerError) {
-        console.error('❌ Error creating customer:', customerError);
-        // Rollback user creation
-        await supabase.from('app_users').delete().eq('id', appUser.id);
-        throw new Error('Failed to create customer profile');
-      }
-
-      customer = newCustomer;
+    if (!data.user || !data.token) {
+      throw new Error('Invalid response from server');
     }
-
-    // Generate session token
-    const token = crypto.randomUUID();
-
-    // Remove password_hash from response
-    const { password_hash, ...userDataClean } = appUser;
 
     return {
-      user: userDataClean as AppUser,
-      customer: customer || undefined,
-      token
+      user: data.user as AppUser,
+      customer: data.customer,
+      token: data.token
     };
   } catch (error: any) {
-    console.error('❌ Error in verifyOTP:', error);
+    console.error('Error in verifyOTP:', error);
     throw error;
   }
 }

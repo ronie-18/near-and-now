@@ -1,10 +1,23 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // This file is for Vite build configuration only
 export default defineConfig({
   plugins: [react()],
   base: './', // Use relative paths for cPanel deployment
+  envDir: path.resolve(__dirname, '..'), // Load .env from project root
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      }
+    }
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
