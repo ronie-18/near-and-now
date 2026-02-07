@@ -37,7 +37,7 @@ const HomePage = () => {
     };
 
     fetchData();
-  }, [showNotification]);
+  }, []); // eslint-disable-next-line react-hooks/exhaustive-deps
 
   // Limit displayed products to MAX_PRODUCTS_ON_HOME
   useEffect(() => {

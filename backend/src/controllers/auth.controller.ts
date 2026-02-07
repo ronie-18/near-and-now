@@ -17,7 +17,14 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const serviceSid = process.env.TWILIO_SERVICE_SID;
 
-const client = twilio(accountSid, authToken);
+// Only initialize Twilio client if credentials are provided
+let client: ReturnType<typeof twilio> | null = null;
+if (accountSid && authToken && accountSid.startsWith('AC')) {
+  client = twilio(accountSid, authToken);
+  console.log('✅ Twilio client initialized');
+} else {
+  console.warn('⚠️ Twilio credentials not configured - OTP features will be disabled');
+}
 
 export class AuthController {
   // Send OTP to phone number
@@ -30,6 +37,14 @@ export class AuthController {
       }
 
       console.log('📱 Sending OTP to:', phone);
+
+      // Check if Twilio is configured
+      if (!client) {
+        return res.status(503).json({
+          error: 'OTP service not configured',
+          message: 'SMS OTP is currently unavailable. Please contact support.'
+        });
+      }
 
       // Send OTP via Twilio Verify
       const verification = await client.verify.v2
@@ -65,6 +80,14 @@ export class AuthController {
       }
 
       console.log('🔐 Verifying OTP for:', phone);
+
+      // Check if Twilio is configured
+      if (!client) {
+        return res.status(503).json({
+          error: 'OTP service not configured',
+          message: 'SMS OTP verification is currently unavailable.'
+        });
+      }
 
       // Verify OTP via Twilio
       const verificationCheck = await client.verify.v2

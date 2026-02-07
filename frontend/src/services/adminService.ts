@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin } from './supabase';
+import { supabaseAdmin } from './supabase';
 import { Product } from './supabase';
 
 // Image Upload Constants
@@ -141,7 +141,7 @@ export async function getAdminProducts(): Promise<Product[]> {
     let hasMore = true;
 
     while (hasMore) {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('products')
         .select('*')
         .order('created_at', { ascending: false })
@@ -170,7 +170,7 @@ export async function getAdminProducts(): Promise<Product[]> {
 
 export async function getProductById(id: string): Promise<Product | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('products')
       .select('*')
       .eq('id', id)
@@ -251,7 +251,7 @@ export async function deleteProduct(id: string): Promise<boolean> {
 // Categories Management
 export async function getCategories(): Promise<Category[]> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('categories')
       .select('*')
       .order('name');
@@ -270,7 +270,7 @@ export async function getCategories(): Promise<Category[]> {
 
 export async function getCategoryById(id: string): Promise<Category | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('categories')
       .select('*')
       .eq('id', id)
@@ -358,7 +358,7 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
     let hasMore = true;
 
     while (hasMore) {
-      const { data: batchData, error: batchError } = await supabase
+      const { data: batchData, error: batchError } = await supabaseAdmin
         .from('products')
         .select('category')
         .range(from, from + batchSize - 1);
@@ -395,7 +395,7 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
 // Orders Management
 export async function getOrders(): Promise<Order[]> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('orders')
       .select('*')
       .order('created_at', { ascending: false });
@@ -421,7 +421,7 @@ export async function getOrders(): Promise<Order[]> {
 
 export async function getOrderById(id: string): Promise<Order | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('orders')
       .select('*')
       .eq('id', id)
@@ -471,7 +471,7 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 // Note: Customers table doesn't exist, so we derive customer data from orders
 export async function getCustomers(): Promise<Customer[]> {
   try {
-    const { data: orders, error } = await supabase
+    const { data: orders, error } = await supabaseAdmin
       .from('orders')
       .select('customer_name, customer_email, customer_phone, order_total, created_at')
       .order('created_at', { ascending: false });
@@ -516,7 +516,7 @@ export async function getCustomers(): Promise<Customer[]> {
 export async function getCustomerById(id: string): Promise<Customer | null> {
   try {
     // Since customers table doesn't exist, fetch from orders
-    const { data: orders, error } = await supabase
+    const { data: orders, error } = await supabaseAdmin
       .from('orders')
       .select('*')
       .or(`customer_email.eq.${id},customer_phone.eq.${id},customer_name.eq.${id}`);
@@ -570,7 +570,7 @@ export async function getDashboardStats() {
     let hasMore = true;
 
     while (hasMore) {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('products')
         .select('id')
         .range(from, from + batchSize - 1);
@@ -589,7 +589,7 @@ export async function getDashboardStats() {
     const products = allProducts;
 
     // Get total orders with correct column names
-    const { data: orders, error: ordersError } = await supabase
+    const { data: orders, error: ordersError } = await supabaseAdmin
       .from('orders')
       .select('id, order_status, order_total, customer_email, customer_phone, customer_name');
 

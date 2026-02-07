@@ -44,7 +44,8 @@ const CategoryPage = () => {
     };
 
     fetchProducts();
-  }, [categoryId, showNotification]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryId]);
 
   // Memoized sorting function
   const sortedProducts = useMemo(() => {

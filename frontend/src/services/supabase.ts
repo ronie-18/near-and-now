@@ -8,12 +8,19 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 // Get this from: Supabase Dashboard → Settings → API → service_role key
 const SUPABASE_SERVICE_ROLE_KEY = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || '';
 
+// Debug: Log key status at initialization
+console.log('🔑 Supabase URL:', SUPABASE_URL ? `${SUPABASE_URL.substring(0, 30)}...` : '❌ MISSING');
+console.log('🔑 Anon Key:', SUPABASE_ANON_KEY ? `loaded (${SUPABASE_ANON_KEY.length} chars)` : '❌ MISSING');
+console.log('🔑 Service Role Key:', SUPABASE_SERVICE_ROLE_KEY ? `loaded (${SUPABASE_SERVICE_ROLE_KEY.length} chars)` : '❌ MISSING - will fall back to anon key');
+
 // Create Supabase client for public operations
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Create Supabase admin client for admin operations (bypasses RLS)
 // ⚠️ IMPORTANT: This key has full access to the database. Use ONLY for admin operations.
-export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY, {
+const adminKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+console.log('🔑 Admin client using:', SUPABASE_SERVICE_ROLE_KEY ? 'SERVICE_ROLE key (bypasses RLS)' : '⚠️ ANON key (RLS applies!)');
+export const supabaseAdmin = createClient(SUPABASE_URL, adminKey, {
   auth: {
     autoRefreshToken: false,
     persistSession: false
@@ -22,7 +29,7 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KE
 
 // Product types
 export interface Product {
-  unit: ReactNode;
+  unit: string;
   id: string;
   name: string;
   price: number;
@@ -53,10 +60,9 @@ export async function getAllProducts(): Promise<Product[]> {
     let hasMore = true;
 
     while (hasMore) {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('products')
         .select('*')
-        .eq('in_stock', true)
         .order('created_at', { ascending: false })
         .range(from, from + batchSize - 1);
 
@@ -96,11 +102,10 @@ export async function getProductsByCategory(categoryName: string): Promise<Produ
     let hasMore = true;
 
     while (hasMore) {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('products')
         .select('*')
         .eq('category', categoryName)
-        .eq('in_stock', true)
         .order('rating', { ascending: false })
         .range(from, from + batchSize - 1);
 
@@ -131,10 +136,9 @@ export async function getProductsByCategory(categoryName: string): Promise<Produ
 // Search products
 export async function searchProducts(query: string): Promise<Product[]> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('products')
       .select('*')
-      .eq('in_stock', true)
       .ilike('name', `%${query}%`);
 
     if (error) {

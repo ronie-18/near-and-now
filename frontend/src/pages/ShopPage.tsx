@@ -16,7 +16,7 @@ const ShopPage = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [maxPrice, setMaxPrice] = useState(1000);
-  
+
   const { showNotification } = useNotification();
 
   // Shuffle array function for randomization
@@ -39,13 +39,13 @@ const ShopPage = () => {
         const randomizedProducts = shuffleArray(allProducts);
         setProducts(randomizedProducts);
         setFilteredProducts(randomizedProducts);
-        
+
         // Extract unique categories and sort alphabetically
         const uniqueCategories = Array.from(
           new Set(allProducts.map(product => product.category))
         ).filter(Boolean).sort((a, b) => a.localeCompare(b));
         setCategories(uniqueCategories);
-        
+
         // Find max price for range slider
         const calculatedMaxPrice = Math.max(...allProducts.map(product => product.price), 1000);
         setMaxPrice(calculatedMaxPrice);
@@ -59,31 +59,32 @@ const ShopPage = () => {
     };
 
     fetchProducts();
-  }, [showNotification]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Apply filters and sorting
   useEffect(() => {
     let result = [...products];
-    
+
     // Apply category filter
     if (selectedCategory !== 'all') {
       result = result.filter(product => product.category === selectedCategory);
     }
-    
+
     // Apply price range filter
     result = result.filter(
       product => product.price >= priceRange[0] && product.price <= priceRange[1]
     );
-    
+
     // Apply search query
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       result = result.filter(
-        product => product.name.toLowerCase().includes(query) || 
+        product => product.name.toLowerCase().includes(query) ||
                   product.category.toLowerCase().includes(query)
       );
     }
-    
+
     // Apply sorting
     switch (sortBy) {
       case 'price-asc':
@@ -103,7 +104,7 @@ const ShopPage = () => {
         // No additional sorting needed
         break;
     }
-    
+
     setFilteredProducts(result);
   }, [products, selectedCategory, sortBy, priceRange, searchQuery]);
 
@@ -142,9 +143,9 @@ const ShopPage = () => {
   };
 
   // Check if any filters are active
-  const hasActiveFilters = selectedCategory !== 'all' || 
-                           priceRange[0] !== 0 || 
-                           priceRange[1] !== maxPrice || 
+  const hasActiveFilters = selectedCategory !== 'all' ||
+                           priceRange[0] !== 0 ||
+                           priceRange[1] !== maxPrice ||
                            searchQuery !== '';
 
   return (
@@ -155,7 +156,7 @@ const ShopPage = () => {
           <h1 className="text-4xl font-bold text-gray-800 mb-2">Shop All Products</h1>
           <p className="text-gray-600">Discover our complete collection of quality products</p>
         </div>
-        
+
         {/* Mobile Filter Button */}
         <div className="lg:hidden mb-6">
           <button
@@ -169,7 +170,7 @@ const ShopPage = () => {
             )}
           </button>
         </div>
-        
+
         <div className="flex flex-col lg:flex-row gap-8">
           {/* Sidebar Filters */}
           <div className={`lg:w-1/4 ${showMobileFilters ? 'block' : 'hidden lg:block'}`}>
@@ -215,7 +216,7 @@ const ShopPage = () => {
                   )}
                 </div>
               </div>
-              
+
               {/* Categories Dropdown */}
               <div className="mb-6">
                 <label className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
@@ -249,7 +250,7 @@ const ShopPage = () => {
                   </div>
                 )}
               </div>
-              
+
               {/* Price Range */}
               <div className="mb-6">
                 <label className="text-sm font-semibold text-gray-700 mb-3 block">
@@ -261,7 +262,7 @@ const ShopPage = () => {
                     <span className="text-xs text-gray-500">to</span>
                     <span className="text-sm font-medium text-gray-700">₹{priceRange[1]}</span>
                   </div>
-                  
+
                   {/* Dual Range Slider */}
                   <div className="relative h-2 bg-gray-200 rounded-full">
                     <div
@@ -290,7 +291,7 @@ const ShopPage = () => {
                       style={{ zIndex: 4 }}
                     />
                   </div>
-                  
+
                   <div className="flex gap-3">
                     <div className="flex-1">
                       <label className="block text-xs text-gray-500 mb-1 font-medium">Min Price</label>
@@ -329,7 +330,7 @@ const ShopPage = () => {
               )}
             </div>
           </div>
-          
+
           {/* Product Grid */}
           <div className="lg:w-3/4">
             {/* Sort Bar */}
@@ -337,7 +338,7 @@ const ShopPage = () => {
               <div className="text-gray-600 font-medium">
                 Showing <span className="text-primary font-bold">{filteredProducts.length}</span> products
               </div>
-              
+
               <div className="flex items-center gap-2">
                 <label htmlFor="sort-by" className="text-gray-600 font-medium whitespace-nowrap">
                   Sort:
@@ -356,7 +357,7 @@ const ShopPage = () => {
                 </select>
               </div>
             </div>
-            
+
             {/* No Results Message */}
             {!loading && filteredProducts.length === 0 && (
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
@@ -375,7 +376,7 @@ const ShopPage = () => {
                 </button>
               </div>
             )}
-            
+
             {/* Products Grid */}
             {filteredProducts.length > 0 && (
               <ProductGrid products={filteredProducts} loading={loading} />
