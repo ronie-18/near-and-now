@@ -4,8 +4,9 @@ import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData, getAllProducts, Product } from '../services/supabase';
-import { geocodeAddress } from '../services/placesService';
-import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { geocodeAddress, LocationData } from '../services/placesService';
+import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight, Home, Briefcase } from 'lucide-react';
+import LocationPicker from '../components/location/LocationPicker';
 import ProductCard from '../components/products/ProductCard';
 
 const calculateOrderTotals = (cartTotal: number) => {
@@ -34,6 +35,17 @@ const CheckoutPage = () => {
     addressName: '' // For naming saved addresses
   });
 
+  // Enhanced address fields
+  const [addressLabel, setAddressLabel] = useState<'Home' | 'Work' | 'Other'>('Home');
+  const [landmark, setLandmark] = useState('');
+  const [deliveryInstructions, setDeliveryInstructions] = useState('');
+
+  // Order for others
+  const [orderForOthers, setOrderForOthers] = useState(false);
+  const [receiverName, setReceiverName] = useState('');
+  const [receiverPhone, setReceiverPhone] = useState('');
+  const [receiverAddress, setReceiverAddress] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [tipAmount, setTipAmount] = useState(0);
@@ -47,6 +59,8 @@ const CheckoutPage = () => {
   const [loadingAddresses, setLoadingAddresses] = useState(true);
   const [saveAddress, setSaveAddress] = useState(true); // Save address by default
   const [editAddressId, setEditAddressId] = useState<string | null>(null);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [pickedLocation, setPickedLocation] = useState<LocationData | null>(null);
 
   // Suggested products
   const [suggestedProducts, setSuggestedProducts] = useState<Product[]>([]);
@@ -157,6 +171,31 @@ const CheckoutPage = () => {
     }
   };
 
+  // Handle location picked from LocationPicker modal
+  const handleLocationPicked = (location: LocationData) => {
+    setPickedLocation(location);
+    setFormData(prev => ({
+      ...prev,
+      address: location.address,
+      city: location.city,
+      state: location.state,
+      pincode: location.pincode,
+    }));
+    setShowLocationPicker(false);
+  };
+
+  // Helper function to get address icon
+  const getAddressIcon = (label?: string) => {
+    switch (label?.toLowerCase()) {
+      case 'home':
+        return <Home className="w-5 h-5" />;
+      case 'work':
+        return <Briefcase className="w-5 h-5" />;
+      default:
+        return <MapPin className="w-5 h-5" />;
+    }
+  };
+
   const populateFormWithAddress = (address: DbAddress) => {
     setFormData(prev => ({
       ...prev,
@@ -166,6 +205,21 @@ const CheckoutPage = () => {
       pincode: address.pincode,
       phone: address.phone
     }));
+
+    if (address.label) setAddressLabel(address.label as 'Home' | 'Work' | 'Other');
+    if (address.landmark) setLandmark(address.landmark);
+    if (address.delivery_instructions) setDeliveryInstructions(address.delivery_instructions);
+    if (address.delivery_for === 'others') {
+      setOrderForOthers(true);
+      setReceiverName(address.receiver_name || '');
+      setReceiverPhone(address.receiver_phone || '');
+      setReceiverAddress(address.receiver_address || '');
+    } else {
+      setOrderForOthers(false);
+      setReceiverName('');
+      setReceiverPhone('');
+      setReceiverAddress('');
+    }
   };
 
   const handleAddressSelect = (addressId: string) => {
@@ -190,6 +244,14 @@ const CheckoutPage = () => {
       phone: user?.phone || '',
       addressName: ''
     }));
+    setAddressLabel('Home');
+    setLandmark('');
+    setDeliveryInstructions('');
+    setOrderForOthers(false);
+    setReceiverName('');
+    setReceiverPhone('');
+    setReceiverAddress('');
+    setPickedLocation(null);
     setShowNewAddressForm(true);
     setSaveAddress(true); // Default to saving new addresses
   };
@@ -211,6 +273,20 @@ const CheckoutPage = () => {
         pincode: addr.pincode,
         addressName: addr.name
       }));
+      if (addr.label) setAddressLabel(addr.label as 'Home' | 'Work' | 'Other');
+      if (addr.landmark) setLandmark(addr.landmark);
+      if (addr.delivery_instructions) setDeliveryInstructions(addr.delivery_instructions);
+      if (addr.delivery_for === 'others') {
+        setOrderForOthers(true);
+        setReceiverName(addr.receiver_name || '');
+        setReceiverPhone(addr.receiver_phone || '');
+        setReceiverAddress(addr.receiver_address || '');
+      } else {
+        setOrderForOthers(false);
+        setReceiverName('');
+        setReceiverPhone('');
+        setReceiverAddress('');
+      }
       setSaveAddress(true);
     }
   };
@@ -274,6 +350,13 @@ const CheckoutPage = () => {
           state: formData.state,
           pincode: formData.pincode,
           phone: formData.phone,
+          label: addressLabel,
+          landmark: landmark || undefined,
+          delivery_instructions: deliveryInstructions || undefined,
+          delivery_for: (orderForOthers ? 'others' : 'self') as 'self' | 'others',
+          receiver_name: orderForOthers ? receiverName : undefined,
+          receiver_phone: orderForOthers ? receiverPhone : undefined,
+          receiver_address: orderForOthers ? receiverAddress : undefined,
         };
         if (geocoded) {
           updatePayload.latitude = geocoded.lat;
@@ -347,6 +430,13 @@ const CheckoutPage = () => {
             is_default: savedAddresses.length === 0,
             latitude: geocoded.lat,
             longitude: geocoded.lng,
+            label: addressLabel,
+            landmark: landmark || undefined,
+            delivery_instructions: deliveryInstructions || undefined,
+            delivery_for: (orderForOthers ? 'others' : 'self') as 'self' | 'others',
+            receiver_name: orderForOthers ? receiverName : undefined,
+            receiver_phone: orderForOthers ? receiverPhone : undefined,
+            receiver_address: orderForOthers ? receiverAddress : undefined,
           };
 
           const createdAddress = await createAddress(newAddressData);
@@ -472,6 +562,7 @@ const CheckoutPage = () => {
   const finalTotal = orderTotal + tipAmount;
 
   return (
+    <>
     <div className="min-h-screen bg-gradient-to-br from-primary/5 via-white to-secondary/5 py-8">
       <div className="container mx-auto px-4">
         {/* Progress Steps */}
@@ -571,11 +662,19 @@ const CheckoutPage = () => {
                                 onChange={() => handleAddressSelect(address.id)}
                                 className="mt-1 h-4 w-4 text-primary focus:ring-primary border-gray-300"
                               />
-                              <div className="ml-3 flex-1">
-                                <div className="flex items-center gap-2">
+                              <div className="ml-1 mt-0.5 text-primary">
+                                {getAddressIcon(address.label)}
+                              </div>
+                              <div className="ml-2 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <span className="font-semibold text-gray-800">{address.name}</span>
+                                  {address.label && (
+                                    <span className="bg-primary/10 text-primary text-xs font-medium px-2 py-0.5 rounded-full">
+                                      {address.label}
+                                    </span>
+                                  )}
                                   {address.is_default && (
-                                    <span className="ml-2 bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full">
+                                    <span className="bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full">
                                       Default
                                     </span>
                                   )}
@@ -587,7 +686,15 @@ const CheckoutPage = () => {
                                 <p className="text-sm text-gray-600">
                                   {address.city}, {address.state} - {address.pincode}
                                 </p>
+                                {address.landmark && (
+                                  <p className="text-xs text-gray-500 mt-0.5">Landmark: {address.landmark}</p>
+                                )}
                                 <p className="text-sm text-gray-600">Phone: {address.phone}</p>
+                                {address.delivery_for === 'others' && address.receiver_name && (
+                                  <p className="text-xs text-orange-600 mt-1 font-medium">
+                                    Delivering to: {address.receiver_name}
+                                  </p>
+                                )}
                               </div>
                               <div className="flex flex-col gap-2 ml-2">
                                 <button
@@ -631,6 +738,28 @@ const CheckoutPage = () => {
                             </button>
                           </div>
                         )}
+
+                        {/* Use Location Button */}
+                        <button
+                          type="button"
+                          onClick={() => setShowLocationPicker(true)}
+                          className="w-full flex items-center gap-3 px-4 py-3 mb-4 border-2 border-primary rounded-xl hover:bg-primary/5 transition-all group"
+                        >
+                          <div className="w-10 h-10 bg-gradient-to-br from-primary to-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <MapPin className="w-5 h-5 text-white" />
+                          </div>
+                          <div className="text-left flex-1">
+                            <p className="font-semibold text-gray-800 group-hover:text-primary transition-colors">
+                              {pickedLocation ? 'Change Location' : 'Use Current Location / Search'}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {pickedLocation
+                                ? `${pickedLocation.city}, ${pickedLocation.pincode}`
+                                : 'Detect location or search for address'
+                              }
+                            </p>
+                          </div>
+                        </button>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="group">
@@ -777,6 +906,112 @@ const CheckoutPage = () => {
                                 <option value="Puducherry">Puducherry</option>
                               </optgroup>
                             </select>
+                          </div>
+
+                          {/* Address Type Selector */}
+                          <div className="md:col-span-2">
+                            <label className="block text-gray-700 mb-2 font-medium">Address Type</label>
+                            <div className="flex gap-3">
+                              {(['Home', 'Work', 'Other'] as const).map((type) => (
+                                <button
+                                  key={type}
+                                  type="button"
+                                  onClick={() => setAddressLabel(type)}
+                                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 font-medium transition-all duration-300 ${
+                                    addressLabel === type
+                                      ? 'border-primary bg-primary/10 text-primary shadow-sm'
+                                      : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                                  }`}
+                                >
+                                  {type === 'Home' && <Home className="w-4 h-4" />}
+                                  {type === 'Work' && <Briefcase className="w-4 h-4" />}
+                                  {type === 'Other' && <MapPin className="w-4 h-4" />}
+                                  {type}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Landmark */}
+                          <div className="md:col-span-2 group">
+                            <label htmlFor="landmark" className="block text-gray-700 mb-2 font-medium">Landmark (Optional)</label>
+                            <input
+                              type="text"
+                              id="landmark"
+                              value={landmark}
+                              onChange={(e) => setLandmark(e.target.value)}
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300"
+                              placeholder="e.g., Near City Mall, Opposite Park"
+                            />
+                          </div>
+
+                          {/* Delivery Instructions */}
+                          <div className="md:col-span-2 group">
+                            <label htmlFor="deliveryInstructions" className="block text-gray-700 mb-2 font-medium">Delivery Instructions (Optional)</label>
+                            <textarea
+                              id="deliveryInstructions"
+                              value={deliveryInstructions}
+                              onChange={(e) => setDeliveryInstructions(e.target.value)}
+                              rows={2}
+                              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 group-hover:border-gray-300 resize-none"
+                              placeholder="e.g., Ring the doorbell twice, Leave at the door"
+                            />
+                          </div>
+
+                          {/* Order for Others */}
+                          <div className="md:col-span-2">
+                            <label className="flex items-center p-4 bg-orange-50 border-2 border-orange-200 rounded-xl cursor-pointer hover:bg-orange-100 transition-all duration-300">
+                              <input
+                                type="checkbox"
+                                checked={orderForOthers}
+                                onChange={(e) => setOrderForOthers(e.target.checked)}
+                                className="h-5 w-5 text-orange-500 focus:ring-orange-500 border-gray-300 rounded"
+                              />
+                              <div className="ml-3 flex-1">
+                                <span className="font-semibold text-gray-800">Ordering for someone else?</span>
+                                <p className="text-sm text-gray-600">Add receiver details for this delivery</p>
+                              </div>
+                            </label>
+
+                            {orderForOthers && (
+                              <div className="mt-3 p-4 border-2 border-orange-100 rounded-xl bg-orange-50/50 space-y-3">
+                                <div className="group">
+                                  <label htmlFor="receiverName" className="block text-gray-700 mb-1 font-medium text-sm">Receiver Name *</label>
+                                  <input
+                                    type="text"
+                                    id="receiverName"
+                                    value={receiverName}
+                                    onChange={(e) => setReceiverName(e.target.value)}
+                                    required={orderForOthers}
+                                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300"
+                                    placeholder="Receiver's full name"
+                                  />
+                                </div>
+                                <div className="group">
+                                  <label htmlFor="receiverPhone" className="block text-gray-700 mb-1 font-medium text-sm">Receiver Phone *</label>
+                                  <input
+                                    type="tel"
+                                    id="receiverPhone"
+                                    value={receiverPhone}
+                                    onChange={(e) => setReceiverPhone(e.target.value)}
+                                    required={orderForOthers}
+                                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300"
+                                    placeholder="+91 98765 43210"
+                                  />
+                                </div>
+                                <div className="group">
+                                  <label htmlFor="receiverAddress" className="block text-gray-700 mb-1 font-medium text-sm">Receiver Address (if different)</label>
+                                  <textarea
+                                    id="receiverAddress"
+                                    value={receiverAddress}
+                                    onChange={(e) => setReceiverAddress(e.target.value)}
+                                    rows={2}
+                                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 resize-none"
+                                    placeholder="Leave blank if same as delivery address"
+                                  />
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {/* Save Address Checkbox */}
@@ -1148,6 +1383,15 @@ const CheckoutPage = () => {
         </div>
       </div>
     </div>
+
+      {/* Location Picker Modal */}
+      <LocationPicker
+        isOpen={showLocationPicker}
+        onClose={() => setShowLocationPicker(false)}
+        onLocationSelect={handleLocationPicked}
+        currentLocation={pickedLocation || undefined}
+      />
+    </>
   );
 };
 

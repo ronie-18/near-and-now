@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabaseAdmin } from './supabase';
 
 export interface AppUser {
   id: string;
@@ -173,7 +173,7 @@ export async function updateCustomerProfile(userId: string, updates: {
       if (updates.name) appUserUpdates.name = updates.name;
       if (updates.email) appUserUpdates.email = updates.email;
 
-      await supabase
+      await supabaseAdmin
         .from('app_users')
         .update(appUserUpdates)
         .eq('id', userId);

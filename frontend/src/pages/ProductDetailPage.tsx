@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts, Product } from '../services/supabase';
 import { useCart } from '../context/CartContext';
-import { useNotification } from '../context/NotificationContext';
 import { formatPrice, formatCategoryName } from '../utils/formatters';
 
 const ProductDetailPage = () => {
@@ -12,10 +11,9 @@ const ProductDetailPage = () => {
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
-  
+
   const { addToCart, cartItems } = useCart();
-  const { showNotification } = useNotification();
-  
+
   // Check if product is in cart (consider isLoose when product is loaded)
   const productInCart = product
     ? cartItems.find(
@@ -30,15 +28,15 @@ const ProductDetailPage = () => {
   useEffect(() => {
     const fetchProductDetails = async () => {
       if (!productId) return;
-      
+
       try {
         setLoading(true);
         const allProducts = await getAllProducts();
-        
+
         // Find the current product
         const currentProduct = allProducts.find(p => p.id === productId) || null;
         setProduct(currentProduct);
-        
+
         // Find related products (same category)
         if (currentProduct) {
           const related = allProducts
@@ -69,11 +67,8 @@ const ProductDetailPage = () => {
   // Handle add to cart
   const handleAddToCart = () => {
     if (!product) return;
-    
-    const added = addToCart(product, quantity, product.isLoose ?? false);
-    if (added) {
-      showNotification(`${product.name} added to cart`, 'success');
-    }
+
+    addToCart(product, quantity, product.isLoose ?? false);
   };
 
   if (loading) {
@@ -81,19 +76,19 @@ const ProductDetailPage = () => {
         <div className="container mx-auto px-4 py-8">
           <div className="animate-pulse">
             <div className="h-8 bg-gray-200 rounded w-1/3 mb-6"></div>
-            
+
             <div className="flex flex-col md:flex-row gap-8">
               <div className="md:w-1/2">
                 <div className="bg-gray-200 rounded-lg h-96"></div>
               </div>
-              
+
               <div className="md:w-1/2">
                 <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
                 <div className="h-8 bg-gray-200 rounded w-3/4 mb-4"></div>
                 <div className="h-6 bg-gray-200 rounded w-1/2 mb-6"></div>
-                
+
                 <div className="h-24 bg-gray-200 rounded mb-6"></div>
-                
+
                 <div className="h-10 bg-gray-200 rounded mb-4"></div>
                 <div className="h-12 bg-gray-200 rounded"></div>
               </div>
@@ -151,7 +146,7 @@ const ProductDetailPage = () => {
             </li>
           </ol>
         </nav>
-        
+
         <div className="flex flex-col md:flex-row gap-8 mb-12">
           {/* Product Image */}
           <div className="md:w-1/2">
@@ -163,7 +158,7 @@ const ProductDetailPage = () => {
               />
             </div>
           </div>
-          
+
           {/* Product Details */}
           <div className="md:w-1/2">
             <div className="bg-white rounded-lg shadow-md p-6">
@@ -171,12 +166,12 @@ const ProductDetailPage = () => {
               <div className="text-sm text-primary font-medium mb-2">
                 {formatCategoryName(product.category)}
               </div>
-              
+
               {/* Product Name */}
               <h1 className="text-3xl font-bold text-gray-800 mb-2">
                 {product.name}
               </h1>
-              
+
               {/* Price */}
               <div className="text-2xl font-bold text-primary mb-4">
                 {formatPrice(product.price)}
@@ -186,7 +181,7 @@ const ProductDetailPage = () => {
                   </span>
                 )}
               </div>
-              
+
               {/* Description */}
               {product.description && (
                 <div className="mb-6">
@@ -194,7 +189,7 @@ const ProductDetailPage = () => {
                   <p className="text-gray-600">{product.description}</p>
                 </div>
               )}
-              
+
               {/* Cart Status */}
               {cartQuantity > 0 && (
                 <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-md">
@@ -208,12 +203,12 @@ const ProductDetailPage = () => {
                   </div>
                 </div>
               )}
-              
+
               {/* Quantity Selector */}
               <div className="mb-6">
                 <h3 className="text-lg font-medium text-gray-800 mb-2">Quantity</h3>
                 <div className="flex items-center">
-                  <button 
+                  <button
                     onClick={decrementQuantity}
                     className="w-10 h-10 rounded-l-md border border-gray-300 flex items-center justify-center text-gray-600 hover:bg-gray-100"
                   >
@@ -224,7 +219,7 @@ const ProductDetailPage = () => {
                   <div className="w-14 h-10 border-t border-b border-gray-300 flex items-center justify-center text-gray-800">
                     {quantity}
                   </div>
-                  <button 
+                  <button
                     onClick={incrementQuantity}
                     className="w-10 h-10 rounded-r-md border border-gray-300 flex items-center justify-center text-gray-600 hover:bg-gray-100"
                   >
@@ -234,7 +229,7 @@ const ProductDetailPage = () => {
                   </button>
                 </div>
               </div>
-              
+
               {/* Action Buttons */}
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
@@ -246,7 +241,7 @@ const ProductDetailPage = () => {
                   </svg>
                   Add to Cart
                 </button>
-                
+
                 <button
                   className="flex-1 border border-primary text-primary hover:bg-primary hover:text-white py-3 rounded-md transition-colors flex items-center justify-center"
                 >
@@ -259,7 +254,7 @@ const ProductDetailPage = () => {
             </div>
           </div>
         </div>
-        
+
         {/* Related Products */}
         {relatedProducts.length > 0 && (
           <div className="mb-12">

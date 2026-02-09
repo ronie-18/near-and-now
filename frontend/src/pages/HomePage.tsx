@@ -39,9 +39,19 @@ const HomePage = () => {
     fetchData();
   }, []); // eslint-disable-next-line react-hooks/exhaustive-deps
 
-  // Limit displayed products to MAX_PRODUCTS_ON_HOME
+  // Randomize and limit displayed products to MAX_PRODUCTS_ON_HOME
   useEffect(() => {
-    setDisplayedProducts(allProducts.slice(0, MAX_PRODUCTS_ON_HOME));
+    const shuffleArray = <T,>(array: T[]): T[] => {
+      const shuffled = [...array];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled;
+    };
+    
+    const randomized = shuffleArray(allProducts);
+    setDisplayedProducts(randomized.slice(0, MAX_PRODUCTS_ON_HOME));
   }, [allProducts]);
 
   // Generate background color for categories

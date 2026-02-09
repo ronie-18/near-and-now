@@ -8,7 +8,7 @@ import { getUserOrders, Order } from '../services/supabase';
 const OrderStatusBadge = ({ status }: { status: string }) => {
   let bgColor = '';
   let textColor = '';
-  
+
   switch (status) {
     case 'Delivered':
       bgColor = 'bg-green-100';
@@ -30,7 +30,7 @@ const OrderStatusBadge = ({ status }: { status: string }) => {
       bgColor = 'bg-gray-100';
       textColor = 'text-gray-800';
   }
-  
+
   return (
     <span className={`${bgColor} ${textColor} text-xs font-medium px-2.5 py-0.5 rounded-full`}>
       {status}
@@ -133,7 +133,7 @@ const OrdersPage = () => {
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-2xl font-bold text-gray-800 mb-6">My Orders</h1>
-        
+
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
             {error}
@@ -173,7 +173,7 @@ const OrdersPage = () => {
                       <OrderStatusBadge status={getStatusDisplay(order.order_status)} />
                     </div>
                   </div>
-                  
+
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between mt-3 gap-3">
                     <div className="flex-1">
                       <p className="text-sm text-gray-500">Order Date</p>
@@ -197,7 +197,7 @@ const OrdersPage = () => {
                     </div>
                   </div>
                 </div>
-                
+
                 {/* Order Details Toggle Button */}
                 <button
                   onClick={() => toggleOrderDetails(order.id)}
@@ -218,7 +218,7 @@ const OrdersPage = () => {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
-                
+
                 {/* Order Details */}
                 {expandedOrder === order.id && (
                   <div className="p-4 bg-gray-50">
@@ -236,7 +236,7 @@ const OrdersPage = () => {
                             </div>
                           ))}
                         </div>
-                        
+
                         <div className="mt-4 pt-4 border-t border-gray-200 space-y-2">
                           {order.subtotal && (
                             <div className="flex justify-between text-sm">
@@ -261,7 +261,7 @@ const OrdersPage = () => {
                     ) : (
                       <p className="text-gray-500">No items found for this order.</p>
                     )}
-                    
+
                     {order.shipping_address && (
                       <div className="mt-4 pt-4 border-t border-gray-200">
                         <h4 className="font-medium text-gray-800 mb-2">Shipping Address</h4>
@@ -270,17 +270,14 @@ const OrdersPage = () => {
                         </p>
                       </div>
                     )}
-                    
-                    <div className="mt-6 flex justify-between sm:justify-end gap-3">
+
+                    <div className="mt-6 flex justify-end">
                       <Link
                         to={`/track/${order.id}`}
                         className="bg-primary text-white px-4 py-2 rounded-md hover:bg-secondary transition-colors text-sm font-medium"
                       >
                         Track Order
                       </Link>
-                      <button className="text-primary hover:text-secondary text-sm font-medium">
-                        Download Invoice
-                      </button>
                     </div>
                   </div>
                 )}
@@ -288,7 +285,7 @@ const OrdersPage = () => {
             ))}
           </div>
         )}
-        
+
         <div className="mt-8 text-center">
           <Link to="/profile" className="text-primary hover:text-secondary">
             Back to Profile

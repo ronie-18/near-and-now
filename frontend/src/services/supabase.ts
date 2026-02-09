@@ -838,6 +838,13 @@ export interface Address {
   pincode: string;
   phone: string;
   is_default: boolean;
+  label?: string; // Home, Work, Other
+  landmark?: string;
+  delivery_instructions?: string;
+  delivery_for?: 'self' | 'others';
+  receiver_name?: string;
+  receiver_address?: string;
+  receiver_phone?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -854,6 +861,13 @@ export interface CreateAddressData {
   is_default: boolean;
   latitude: number;
   longitude: number;
+  label?: string; // Home, Work, Other
+  landmark?: string;
+  delivery_instructions?: string;
+  delivery_for?: 'self' | 'others';
+  receiver_name?: string;
+  receiver_address?: string;
+  receiver_phone?: string;
   google_place_id?: string;
   google_formatted_address?: string;
   google_place_data?: Record<string, unknown>;
@@ -870,6 +884,13 @@ export interface UpdateAddressData {
   is_default?: boolean;
   latitude?: number;
   longitude?: number;
+  label?: string;
+  landmark?: string;
+  delivery_instructions?: string;
+  delivery_for?: 'self' | 'others';
+  receiver_name?: string;
+  receiver_address?: string;
+  receiver_phone?: string;
 }
 
 // Transform DB row to Address
@@ -885,6 +906,13 @@ function mapRowToAddress(row: Record<string, unknown>): Address {
     pincode: (row.pincode as string) || '',
     phone: (row.contact_phone as string) || '',
     is_default: Boolean(row.is_default),
+    label: (row.label as string) || undefined,
+    landmark: (row.landmark as string) || undefined,
+    delivery_instructions: (row.delivery_instructions as string) || undefined,
+    delivery_for: (row.delivery_for as 'self' | 'others') || 'self',
+    receiver_name: (row.receiver_name as string) || undefined,
+    receiver_address: (row.receiver_address as string) || undefined,
+    receiver_phone: (row.receiver_phone as string) || undefined,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -895,7 +923,7 @@ export async function getUserAddresses(userId: string): Promise<Address[]> {
   try {
     console.log('📍 Fetching addresses for user:', userId);
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .select('*')
       .eq('customer_id', userId)
@@ -923,7 +951,7 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
 
     const payload = {
       customer_id: addressData.user_id,
-      label: addressData.name,
+      label: addressData.label || addressData.name,
       address: addressData.address_line_1 + (addressData.address_line_2 ? ', ' + addressData.address_line_2 : ''),
       city: addressData.city || null,
       state: addressData.state || null,
@@ -933,11 +961,14 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
       longitude: addressData.longitude,
       contact_name: addressData.name,
       contact_phone: addressData.phone,
-      landmark: addressData.address_line_2 || null,
-      delivery_instructions: '',
+      landmark: addressData.landmark || addressData.address_line_2 || null,
+      delivery_instructions: addressData.delivery_instructions || '',
       is_default: addressData.is_default,
       is_active: true,
-      delivery_for: 'self',
+      delivery_for: addressData.delivery_for || 'self',
+      receiver_name: addressData.receiver_name || null,
+      receiver_address: addressData.receiver_address || null,
+      receiver_phone: addressData.receiver_phone || null,
       google_place_id: addressData.google_place_id || null,
       google_formatted_address: addressData.google_formatted_address || null,
       google_place_data: addressData.google_place_data || null,
@@ -945,13 +976,13 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
 
     // If this is set as default, unset all other default addresses for this user
     if (addressData.is_default) {
-      await supabase
+      await supabaseAdmin
         .from('customer_saved_addresses')
         .update({ is_default: false })
         .eq('customer_id', addressData.user_id);
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .insert([payload])
       .select()
@@ -990,17 +1021,24 @@ export async function updateAddress(addressId: string, userId: string, updateDat
     if (updateData.is_default != null) payload.is_default = updateData.is_default;
     if (updateData.latitude != null) payload.latitude = updateData.latitude;
     if (updateData.longitude != null) payload.longitude = updateData.longitude;
+    if (updateData.label != null) payload.label = updateData.label;
+    if (updateData.landmark != null) payload.landmark = updateData.landmark;
+    if (updateData.delivery_instructions != null) payload.delivery_instructions = updateData.delivery_instructions;
+    if (updateData.delivery_for != null) payload.delivery_for = updateData.delivery_for;
+    if (updateData.receiver_name != null) payload.receiver_name = updateData.receiver_name;
+    if (updateData.receiver_address != null) payload.receiver_address = updateData.receiver_address;
+    if (updateData.receiver_phone != null) payload.receiver_phone = updateData.receiver_phone;
 
     // If setting this as default, unset all other default addresses for this user
-    if (updateData.is_default) {
-      await supabase
+    if (updateData.is_default === true) {
+      await supabaseAdmin
         .from('customer_saved_addresses')
         .update({ is_default: false })
         .eq('customer_id', userId)
         .neq('id', addressId);
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .update(payload)
       .eq('id', addressId)
@@ -1026,7 +1064,7 @@ export async function deleteAddress(addressId: string, userId: string): Promise<
   try {
     console.log('📍 Deleting address:', addressId);
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', addressId)
@@ -1050,13 +1088,13 @@ export async function setDefaultAddress(addressId: string, userId: string): Prom
     console.log('📍 Setting default address:', addressId);
 
     // Unset all other default addresses for this user
-    await supabase
+    await supabaseAdmin
       .from('customer_saved_addresses')
       .update({ is_default: false })
       .eq('customer_id', userId);
 
     // Set this address as default
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .update({
         is_default: true,

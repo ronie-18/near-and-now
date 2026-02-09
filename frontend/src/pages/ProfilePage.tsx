@@ -7,13 +7,13 @@ const ProfilePage = () => {
   const { user, isAuthenticated, isLoading, updateUserProfile, logoutUser } = useAuth();
   const { showNotification } = useNotification();
   const navigate = useNavigate();
-  
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     phone: ''
   });
-  
+
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Redirect if not authenticated
@@ -44,11 +44,12 @@ const ProfilePage = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       setIsSubmitting(true);
       await updateUserProfile({
-        name: formData.name
+        name: formData.name,
+        email: formData.email
       });
       showNotification('Profile updated successfully', 'success');
     } catch (error) {
@@ -91,7 +92,7 @@ const ProfilePage = () => {
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-lg mx-auto bg-white p-8 rounded-lg shadow-md">
         <h1 className="text-2xl font-bold text-gray-800 mb-6">My Profile</h1>
-        
+
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
@@ -106,7 +107,7 @@ const ProfilePage = () => {
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
-          
+
           <div>
             <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
               Phone Number
@@ -121,7 +122,7 @@ const ProfilePage = () => {
             />
             <p className="text-xs text-gray-500 mt-1">Phone number cannot be changed</p>
           </div>
-          
+
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
               Email Address (Optional)
@@ -135,7 +136,7 @@ const ProfilePage = () => {
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
-          
+
           <div className="flex flex-col sm:flex-row sm:justify-between space-y-3 sm:space-y-0 pt-4">
             <button
               type="submit"
@@ -146,7 +147,7 @@ const ProfilePage = () => {
             >
               {isSubmitting ? 'Saving...' : 'Save Changes'}
             </button>
-            
+
             <button
               type="button"
               onClick={handleLogout}
@@ -156,10 +157,10 @@ const ProfilePage = () => {
             </button>
           </div>
         </form>
-        
+
         <div className="mt-8 pt-6 border-t border-gray-200">
           <h2 className="text-lg font-semibold text-gray-800 mb-4">Account Settings</h2>
-          
+
           <div className="space-y-4">
             <button
               onClick={() => navigate('/orders')}
@@ -170,7 +171,7 @@ const ProfilePage = () => {
               </svg>
               My Orders
             </button>
-            
+
             <button
               onClick={() => navigate('/addresses')}
               className="flex items-center text-gray-700 hover:text-primary"

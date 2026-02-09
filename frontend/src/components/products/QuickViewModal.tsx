@@ -13,7 +13,7 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
   const { showNotification } = useNotification();
   const [quantity, setQuantity] = useState(1);
   const [inCart, setInCart] = useState(false);
-  
+
   // Check if product is in cart (non-loose products only in QuickView)
   useEffect(() => {
     const productInCart = cartItems.find(
@@ -38,10 +38,10 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
     };
 
     document.addEventListener('mousedown', handleClickOutside);
-    
+
     // Prevent scrolling when modal is open
     document.body.style.overflow = 'hidden';
-    
+
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.body.style.overflow = 'auto';
@@ -57,15 +57,14 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
     };
 
     document.addEventListener('keydown', handleEscKey);
-    
+
     return () => {
       document.removeEventListener('keydown', handleEscKey);
     };
   }, [onClose]);
 
   const handleAddToCart = () => {
-    const added = addToCart(product, quantity, false);
-    if (added) showNotification(`${product.name} added to cart`, 'success');
+    addToCart(product, quantity, false);
   };
 
   const handleUpdateCart = () => {
@@ -99,7 +98,7 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay bg-black bg-opacity-50 backdrop-blur-sm">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden">
         {/* Close Button */}
-        <button 
+        <button
           onClick={onClose}
           className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
         >
@@ -117,20 +116,20 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
                 -{discount}%
               </div>
             )}
-            <img 
-              src={product.image || 'https://via.placeholder.com/400x400?text=No+Image'} 
+            <img
+              src={product.image || 'https://via.placeholder.com/400x400?text=No+Image'}
               alt={product.name}
               className="max-h-[400px] max-w-full object-contain"
             />
           </div>
-          
+
           {/* Product Details */}
           <div className="w-full md:w-1/2 p-6 overflow-y-auto max-h-[90vh] md:max-h-[600px]">
             {/* Product Name */}
             <h2 className="text-2xl font-bold text-gray-800 mb-2">
               {product.name}
             </h2>
-            
+
             {/* Weight */}
             <div className="mb-4">
               <span className="inline-block bg-gray-200 text-gray-700 text-sm px-2 py-1 rounded">
@@ -149,7 +148,7 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
               </div>
               <span className="text-gray-500 ml-2">0 • 0 reviews</span>
             </div>
-            
+
             {/* Price */}
             <div className="mb-6">
               <div className="flex items-center">
@@ -158,11 +157,11 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
                 <span className="ml-2 text-green-600 font-medium">Save ₹{Math.round((product.original_price || (product.price * 1.35)) - product.price)}</span>
               </div>
             </div>
-            
+
             {/* Quantity Selector */}
             <div className="mb-6">
               <div className="flex items-center">
-                <button 
+                <button
                   onClick={decrementQuantity}
                   className="w-8 h-8 border border-gray-300 flex items-center justify-center text-gray-600 hover:bg-gray-100"
                 >
@@ -173,7 +172,7 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
                 <div className="w-12 h-8 border border-gray-300 mx-2 flex items-center justify-center text-gray-800">
                   {quantity}
                 </div>
-                <button 
+                <button
                   onClick={incrementQuantity}
                   className="w-8 h-8 border border-gray-300 flex items-center justify-center text-gray-600 hover:bg-gray-100"
                 >
@@ -186,7 +185,7 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
                 </div>
               </div>
             </div>
-            
+
             {/* Action Buttons */}
             <div className="mb-6">
               {inCart ? (
@@ -222,12 +221,12 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
                 </button>
               )}
             </div>
-            
+
             {/* Customer Reviews */}
             <div>
               <h3 className="text-lg font-semibold mb-2">Customer Reviews</h3>
               <p className="text-gray-600">No reviews yet. Be the first to review this product!</p>
-              
+
               <div className="mt-4">
                 <button className="text-primary hover:underline font-medium">View All Reviews</button>
               </div>

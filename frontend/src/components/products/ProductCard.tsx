@@ -2,7 +2,6 @@ import { useState, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Product } from '../../services/supabase';
 import { useCart } from '../../context/CartContext';
-import { useNotification } from '../../context/NotificationContext';
 import { truncateText } from '../../utils/formatters';
 
 interface ProductCardProps {
@@ -12,7 +11,6 @@ interface ProductCardProps {
 
 const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
   const { addToCart, cartItems, updateCartQuantity, removeFromCart } = useCart();
-  const { showNotification } = useNotification();
   const [isHovered, setIsHovered] = useState(false);
   const [looseQuantity, setLooseQuantity] = useState(0.25);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -41,17 +39,11 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
 
     if (product.isLoose) {
       if (looseQuantity < 0.25) return;
-      const added = addToCart(product, looseQuantity, true);
-      if (added) {
-        showNotification(`${looseQuantity} kg ${product.name} added to cart`, 'success');
-      }
+      addToCart(product, looseQuantity, true);
     } else {
-      const added = addToCart(product);
-      if (added) {
-        showNotification(`${product.name} added to cart`, 'success');
-      }
+      addToCart(product);
     }
-  }, [product, looseQuantity, addToCart, showNotification]);
+  }, [product, looseQuantity, addToCart]);
 
   const handleIncreaseQuantity = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
