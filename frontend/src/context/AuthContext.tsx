@@ -40,27 +40,51 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
-  // Check for existing session on mount
+  // Restore session from localStorage on mount (no Supabase call - app_users has no anon access)
   useEffect(() => {
-    const checkUser = async () => {
+    const restoreSession = () => {
       try {
         setIsLoading(true);
 
-        // Check for stored session
-        const storedUserId = sessionStorage.getItem('userId');
-        const storedToken = sessionStorage.getItem('userToken');
+        let storedUserId = localStorage.getItem('userId');
+        let storedToken = localStorage.getItem('userToken');
+        let storedUser = localStorage.getItem('userData');
+        let storedCustomer = localStorage.getItem('customerData');
 
-        if (storedUserId && storedToken) {
-          const userData = await getCurrentUserFromSession(storedUserId);
-
-          if (userData) {
-            setUser(userData.user);
-            setCustomer(userData.customer || null);
-            setIsAuthenticated(true);
-          } else {
-            // Invalid session, clear storage
+        // Migrate from sessionStorage if user had old session (one-time)
+        if (!storedUserId && !storedToken) {
+          const ssUserId = sessionStorage.getItem('userId');
+          const ssToken = sessionStorage.getItem('userToken');
+          const ssUser = sessionStorage.getItem('userData');
+          const ssCustomer = sessionStorage.getItem('customerData');
+          if (ssUserId && ssToken) {
+            localStorage.setItem('userId', ssUserId);
+            localStorage.setItem('userToken', ssToken);
+            if (ssUser) localStorage.setItem('userData', ssUser);
+            if (ssCustomer) localStorage.setItem('customerData', ssCustomer);
             sessionStorage.removeItem('userId');
             sessionStorage.removeItem('userToken');
+            sessionStorage.removeItem('userData');
+            sessionStorage.removeItem('customerData');
+            storedUserId = ssUserId;
+            storedToken = ssToken;
+            storedUser = ssUser;
+            storedCustomer = ssCustomer;
+          }
+        }
+
+        if (storedUserId && storedToken && storedUser) {
+          try {
+            const userData = JSON.parse(storedUser) as AppUser;
+            const customerData = storedCustomer ? (JSON.parse(storedCustomer) as Customer) : null;
+            setUser(userData);
+            setCustomer(customerData);
+            setIsAuthenticated(true);
+          } catch {
+            localStorage.removeItem('userId');
+            localStorage.removeItem('userToken');
+            localStorage.removeItem('userData');
+            localStorage.removeItem('customerData');
             setUser(null);
             setCustomer(null);
             setIsAuthenticated(false);
@@ -71,7 +95,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           setIsAuthenticated(false);
         }
       } catch (error) {
-        console.error('Error checking authentication:', error);
+        console.error('Error restoring session:', error);
         setUser(null);
         setCustomer(null);
         setIsAuthenticated(false);
@@ -80,7 +104,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     };
 
-    checkUser();
+    restoreSession();
   }, []);
 
   // Send OTP to phone number
@@ -111,9 +135,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setCustomer(response.customer || null);
       setIsAuthenticated(true);
 
-      // Store session
-      sessionStorage.setItem('userId', response.user.id);
-      sessionStorage.setItem('userToken', response.token);
+      // Store full session in localStorage (persists until user explicitly logs out)
+      localStorage.setItem('userId', response.user.id);
+      localStorage.setItem('userToken', response.token);
+      localStorage.setItem('userData', JSON.stringify(response.user));
+      localStorage.setItem('customerData', response.customer ? JSON.stringify(response.customer) : '');
     } catch (error) {
       console.error('Error verifying OTP:', error);
       throw error;
@@ -127,9 +153,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       setIsLoading(true);
 
-      // Clear session storage
-      sessionStorage.removeItem('userId');
-      sessionStorage.removeItem('userToken');
+      // Clear stored session (user explicitly logged out)
+      localStorage.removeItem('userId');
+      localStorage.removeItem('userToken');
+      localStorage.removeItem('userData');
+      localStorage.removeItem('customerData');
 
       setUser(null);
       setCustomer(null);
@@ -153,11 +181,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       await updateCustomerProfile(user.id, data);
 
-      // Refresh user data
+      // Try to refresh from server; fallback to optimistic update for localStorage persistence
       const userData = await getCurrentUserFromSession(user.id);
       if (userData) {
         setUser(userData.user);
         setCustomer(userData.customer || null);
+        localStorage.setItem('userData', JSON.stringify(userData.user));
+        localStorage.setItem('customerData', userData.customer ? JSON.stringify(userData.customer) : '');
+      } else {
+        // Persist optimistic update (getCurrentUserFromSession may fail if anon lacks DB access)
+        const updatedUser = { ...user, ...(data.name && { name: data.name }), ...(data.email !== undefined && { email: data.email }) };
+        const updatedCustomer = customer ? { ...customer, ...data } : customer;
+        setUser(updatedUser);
+        setCustomer(updatedCustomer);
+        localStorage.setItem('userData', JSON.stringify(updatedUser));
+        localStorage.setItem('customerData', updatedCustomer ? JSON.stringify(updatedCustomer) : '');
       }
     } catch (error) {
       console.error('Error updating profile:', error);

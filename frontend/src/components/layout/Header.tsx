@@ -3,20 +3,12 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
 import CartSidebar from '../cart/CartSidebar';
-import LocationPicker from '../location/LocationPicker';
+import LocationPicker, { LocationData } from '../location/LocationPicker';
 import {
   Search, ShoppingCart, User, MapPin, ChevronDown, Menu, X,
   LogOut, Package, UserCircle, LogIn, UserPlus, Clock, Sparkles
 } from 'lucide-react';
 import { searchProducts, Product } from '../../services/supabase';
-
-interface Location {
-  address: string;
-  city: string;
-  pincode: string;
-  lat: number;
-  lng: number;
-}
 
 const Header = () => {
   const { user, isAuthenticated, logoutUser } = useAuth();
@@ -28,10 +20,10 @@ const Header = () => {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
   const [searchSuggestions, setSearchSuggestions] = useState<Product[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLDivElement>(null);
 
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -160,7 +152,7 @@ const Header = () => {
     }
   };
 
-  const handleLocationSelect = (location: Location) => {
+  const handleLocationSelect = (location: LocationData) => {
     setCurrentLocation(location);
     localStorage.setItem('currentLocation', JSON.stringify(location));
   };

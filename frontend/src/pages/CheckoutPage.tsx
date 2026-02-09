@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
-import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, getAllProducts, Product } from '../services/supabase';
+import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData, getAllProducts, Product } from '../services/supabase';
+import { geocodeAddress } from '../services/placesService';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 import ProductCard from '../components/products/ProductCard';
 
@@ -263,15 +264,22 @@ const CheckoutPage = () => {
       const addressLine2 = addressParts.slice(1).join(',').trim() || undefined;
       try {
         setLoadingAddresses(true);
-        await updateAddress(editAddressId, user.id, {
+        const fullAddress = [formData.address, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
+        const geocoded = await geocodeAddress(fullAddress);
+        const updatePayload: UpdateAddressData = {
           name: formData.addressName,
           address_line_1: addressLine1,
           address_line_2: addressLine2,
           city: formData.city,
           state: formData.state,
           pincode: formData.pincode,
-          phone: formData.phone
-        });
+          phone: formData.phone,
+        };
+        if (geocoded) {
+          updatePayload.latitude = geocoded.lat;
+          updatePayload.longitude = geocoded.lng;
+        }
+        await updateAddress(editAddressId, user.id, updatePayload);
         const updatedAddressId = editAddressId; // Store before clearing
         let addresses = await getUserAddresses(user.id);
         setSavedAddresses(addresses);
@@ -316,21 +324,29 @@ const CheckoutPage = () => {
       // Save new address if checkbox is checked and it's a new address (not from saved addresses)
       if (saveAddress && showNewAddressForm && !editAddressId && user?.id) {
         try {
-          // Parse address into address_line_1 and address_line_2 if possible
+          // Geocode to get latitude/longitude (required by customer_saved_addresses)
+          const fullAddress = [formData.address, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
+          const geocoded = await geocodeAddress(fullAddress);
+          if (!geocoded) {
+            throw new Error('Could not verify address. Please use the location picker or try a different address.');
+          }
+
           const addressParts = formData.address.split(',');
           const addressLine1 = addressParts[0]?.trim() || formData.address;
           const addressLine2 = addressParts.slice(1).join(',').trim() || undefined;
 
           const newAddressData = {
             user_id: user.id,
-            name: formData.addressName || 'Delivery Address', // Use custom name or default
+            name: formData.addressName || 'Delivery Address',
             address_line_1: addressLine1,
             address_line_2: addressLine2,
-            city: formData.city,
-            state: formData.state,
-            pincode: formData.pincode,
+            city: formData.city || geocoded.city,
+            state: formData.state || geocoded.state,
+            pincode: formData.pincode || geocoded.pincode,
             phone: formData.phone,
-            is_default: savedAddresses.length === 0 // Set as default if it's the first address
+            is_default: savedAddresses.length === 0,
+            latitude: geocoded.lat,
+            longitude: geocoded.lng,
           };
 
           const createdAddress = await createAddress(newAddressData);
@@ -361,7 +377,7 @@ const CheckoutPage = () => {
       }));
 
       // Calculate totals
-      const { subtotal, deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
+      const { subtotal, deliveryFee, orderTotal } = calculateOrderTotals(cartTotal);
       const finalOrderTotal = orderTotal + tipAmount;
 
       // Prepare order data
@@ -452,7 +468,7 @@ const CheckoutPage = () => {
     );
   }
 
-  const { deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
+  const { discount, orderTotal } = calculateOrderTotals(cartTotal);
   const finalTotal = orderTotal + tipAmount;
 
   return (

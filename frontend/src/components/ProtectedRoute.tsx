@@ -1,7 +1,7 @@
-import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/router';
 import { useEffect, ReactNode } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
+import { useAuth } from '../context/AuthContext';
 
 interface ProtectedRouteProps {
   children: ReactNode;
@@ -29,14 +29,15 @@ export default function ProtectedRoute({
   loadingComponent,
   unauthorizedComponent,
 }: ProtectedRouteProps) {
-  const { status, data: _session } = useSession();
-  const router = useRouter();
+  const { isAuthenticated, isLoading } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push(`/admin/login?callbackUrl=${encodeURIComponent(router.asPath)}`);
+    if (!isLoading && !isAuthenticated) {
+      navigate(`/login?callbackUrl=${encodeURIComponent(location.pathname)}`);
     }
-  }, [status, router]);
+  }, [isAuthenticated, isLoading, navigate, location.pathname]);
 
   const defaultLoading = (
     <div className="flex items-center justify-center min-h-screen">
@@ -48,29 +49,25 @@ export default function ProtectedRoute({
     <div className="flex items-center justify-center min-h-screen">
       <div className="text-center">
         <h2 className="text-2xl font-semibold text-gray-800">Access Denied</h2>
-        <p className="mt-2 text-gray-600">You don't have permission to view this page.</p>
+        <p className="mt-2 text-gray-600">You don&apos;t have permission to view this page.</p>
       </div>
     </div>
   );
 
-  if (status === 'loading') {
+  if (isLoading) {
     return <>{loadingComponent || defaultLoading}</>;
   }
 
-  if (status === 'unauthenticated') {
+  if (!isAuthenticated) {
     return <>{unauthorizedComponent || defaultUnauthorized}</>;
   }
 
-  if (status === 'authenticated') {
-    return (
-      <ErrorBoundary
-        FallbackComponent={ErrorFallback}
-        onReset={() => window.location.reload()}
-      >
-        {children}
-      </ErrorBoundary>
-    );
-  }
-
-  return null;
+  return (
+    <ErrorBoundary
+      FallbackComponent={ErrorFallback}
+      onReset={() => window.location.reload()}
+    >
+      {children}
+    </ErrorBoundary>
+  );
 }

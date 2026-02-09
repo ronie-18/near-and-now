@@ -7,7 +7,6 @@ import {
   DollarSign,
   ShoppingBag,
   Users,
-  Package,
   Calendar,
   Download,
   RefreshCw,
@@ -23,7 +22,6 @@ import {
   FileText,
   Layers,
   Percent,
-  CreditCard,
   Eye,
   Clock
 } from 'lucide-react';
@@ -437,7 +435,7 @@ const ReportsPage = () => {
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
+  const [_customers, setCustomers] = useState<any[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [period, setPeriod] = useState<'7' | '30' | '90' | '365'>('30');
   const [error, setError] = useState<string | null>(null);

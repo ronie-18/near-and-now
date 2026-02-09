@@ -18,12 +18,14 @@ const mockProduct = {
 const mockCartContext = {
   cartItems: [],
   cartCount: 0,
-  addToCart: vi.fn(),
+  cartTotal: 0,
+  addToCart: vi.fn().mockReturnValue(true),
   removeFromCart: vi.fn(),
   updateCartQuantity: vi.fn(),
   decreaseCartQuantity: vi.fn(),
   clearCart: vi.fn(),
-  getCartTotal: vi.fn()
+  getCartTotal: vi.fn(),
+  isAuthenticated: true
 };
 
 const mockNotificationContext = {
@@ -59,14 +61,14 @@ describe('ProductCard', () => {
     expect(image.src).toContain('/test-image.jpg');
 
     // Check if Add to Cart button is present
-    expect(screen.getByText('Add to Cart')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add to cart' })).toBeInTheDocument();
   });
 
   it('calls addToCart when Add to Cart button is clicked', () => {
     renderWithContexts(<ProductCard product={mockProduct} />);
 
     // Find and click the Add to Cart button
-    const addToCartButton = screen.getByText('Add to Cart');
+    const addToCartButton = screen.getByRole('button', { name: 'Add to cart' });
     fireEvent.click(addToCartButton);
 
     // Check if addToCart was called with the correct product
@@ -80,10 +82,10 @@ describe('ProductCard', () => {
   });
 
   it('renders quantity controls when product is in cart', () => {
-    // Update mock cart context to include the product
+    // Update mock cart context to include the product (isLoose false for regular product)
     const updatedCartContext = {
       ...mockCartContext,
-      cartItems: [{ ...mockProduct, quantity: 2 }]
+      cartItems: [{ ...mockProduct, quantity: 2, isLoose: false }]
     };
 
     render(
@@ -98,8 +100,8 @@ describe('ProductCard', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
 
     // Check if quantity controls are present
-    const decreaseButton = screen.getByRole('button', { name: '-' });
-    const increaseButton = screen.getByRole('button', { name: '+' });
+    const decreaseButton = screen.getByRole('button', { name: 'Decrease quantity' });
+    const increaseButton = screen.getByRole('button', { name: 'Increase quantity' });
 
     expect(decreaseButton).toBeInTheDocument();
     expect(increaseButton).toBeInTheDocument();

@@ -49,14 +49,28 @@ export async function secureCreateProduct(productData: any) {
   // Validate with Zod
   const validated = ProductSchema.parse(sanitized);
 
+  // Map to master_products schema
+  const row = {
+    name: validated.name,
+    category: validated.category,
+    description: validated.description ?? null,
+    image_url: validated.image_url ?? null,
+    base_price: validated.original_price ?? validated.price,
+    discounted_price: validated.price,
+    unit: validated.unit ?? 'piece',
+    is_loose: validated.isLoose ?? false,
+    rating: validated.rating ?? 4,
+    is_active: validated.in_stock
+  };
+
   // Create product with audit logging
   const admin = getCurrentAdmin();
 
   return await withAuditLog(
     async () => {
       const { data, error } = await supabaseAdmin
-        .from('products')
-        .insert(validated)
+        .from('master_products')
+        .insert(row)
         .select()
         .single();
 
@@ -75,7 +89,7 @@ export async function secureCreateProduct(productData: any) {
 export async function secureUpdateProduct(id: string, updates: any) {
   // Get old product data for audit log
   const { data: oldProduct } = await supabaseAdmin
-    .from('products')
+    .from('master_products')
     .select('*')
     .eq('id', id)
     .single();
@@ -99,14 +113,27 @@ export async function secureUpdateProduct(id: string, updates: any) {
   // Validate with Zod
   const validated = ProductUpdateSchema.parse(sanitized);
 
+  // Map to master_products schema
+  const row: Record<string, unknown> = {};
+  if (validated.name !== undefined) row.name = validated.name;
+  if (validated.category !== undefined) row.category = validated.category;
+  if (validated.description !== undefined) row.description = validated.description;
+  if (validated.image_url !== undefined) row.image_url = validated.image_url;
+  if (validated.original_price !== undefined) row.base_price = validated.original_price;
+  if (validated.price !== undefined) row.discounted_price = validated.price;
+  if (validated.unit !== undefined) row.unit = validated.unit;
+  if (validated.isLoose !== undefined) row.is_loose = validated.isLoose;
+  if (validated.in_stock !== undefined) row.is_active = validated.in_stock;
+  if (validated.rating !== undefined) row.rating = validated.rating;
+
   // Update with audit logging
   const admin = getCurrentAdmin();
 
   return await withAuditLog(
     async () => {
       const { data, error } = await supabaseAdmin
-        .from('products')
-        .update(validated)
+        .from('master_products')
+        .update(row)
         .eq('id', id)
         .select()
         .single();
@@ -128,7 +155,7 @@ export async function secureUpdateProduct(id: string, updates: any) {
 export async function secureDeleteProduct(id: string) {
   // Get product data for audit log
   const { data: product } = await supabaseAdmin
-    .from('products')
+    .from('master_products')
     .select('*')
     .eq('id', id)
     .single();
@@ -138,7 +165,7 @@ export async function secureDeleteProduct(id: string) {
   return await withAuditLog(
     async () => {
       const { error } = await supabaseAdmin
-        .from('products')
+        .from('master_products')
         .delete()
         .eq('id', id);
 

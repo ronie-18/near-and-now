@@ -142,7 +142,7 @@ export async function getAdminProducts(): Promise<Product[]> {
 
     while (hasMore) {
       const { data, error } = await supabaseAdmin
-        .from('products')
+        .from('master_products')
         .select('*')
         .order('created_at', { ascending: false })
         .range(from, from + batchSize - 1);
@@ -161,7 +161,7 @@ export async function getAdminProducts(): Promise<Product[]> {
       }
     }
 
-    return allProducts;
+    return allProducts.map(transformMasterProductToProduct);
   } catch (error) {
     console.error('Error in getAdminProducts:', error);
     throw error;
@@ -171,7 +171,7 @@ export async function getAdminProducts(): Promise<Product[]> {
 export async function getProductById(id: string): Promise<Product | null> {
   try {
     const { data, error } = await supabaseAdmin
-      .from('products')
+      .from('master_products')
       .select('*')
       .eq('id', id)
       .single();
@@ -181,18 +181,49 @@ export async function getProductById(id: string): Promise<Product | null> {
       return null;
     }
 
-    return data;
+    return data ? transformMasterProductToProduct(data) : null;
   } catch (error) {
     console.error('Error in getProductById:', error);
     return null;
   }
 }
 
+function toMasterProduct(product: Partial<Product>): Record<string, unknown> {
+  const p = product as any;
+  return {
+    name: p.name,
+    category: p.category,
+    brand: p.brand || null,
+    description: p.description || null,
+    image_url: p.image_url || p.image || null,
+    base_price: p.base_price ?? p.original_price ?? p.price ?? 0,
+    discounted_price: p.discounted_price ?? p.price ?? 0,
+    unit: p.unit || 'piece',
+    is_loose: p.is_loose ?? p.isLoose ?? false,
+    min_quantity: p.min_quantity ?? 1,
+    max_quantity: p.max_quantity ?? 100,
+    rating: p.rating ?? 4,
+    is_active: p.is_active ?? p.in_stock ?? true
+  };
+}
+
+function transformMasterProductToProduct(row: any): Product {
+  return {
+    ...row,
+    price: row.discounted_price ?? row.price,
+    original_price: row.base_price ?? row.original_price,
+    in_stock: row.is_active ?? row.in_stock ?? true,
+    image: row.image_url ?? row.image,
+    isLoose: row.is_loose ?? row.isLoose
+  };
+}
+
 export async function createProduct(product: Omit<Product, 'id'>): Promise<Product | null> {
   try {
+    const row = toMasterProduct(product);
     const { data, error } = await supabaseAdmin
-      .from('products')
-      .insert([product])
+      .from('master_products')
+      .insert([row])
       .select()
       .single();
 
@@ -201,7 +232,7 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
       throw error;
     }
 
-    return data;
+    return transformMasterProductToProduct(data);
   } catch (error) {
     console.error('Error in createProduct:', error);
     throw error;
@@ -210,9 +241,22 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
 
 export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product | null> {
   try {
+    const row: Record<string, unknown> = {};
+    const u = updates as any;
+    if (u.name !== undefined) row.name = u.name;
+    if (u.category !== undefined) row.category = u.category;
+    if (u.brand !== undefined) row.brand = u.brand;
+    if (u.description !== undefined) row.description = u.description;
+    if (u.image_url !== undefined || u.image !== undefined) row.image_url = u.image_url ?? u.image;
+    if (u.base_price !== undefined || u.original_price !== undefined) row.base_price = u.base_price ?? u.original_price;
+    if (u.discounted_price !== undefined || u.price !== undefined) row.discounted_price = u.discounted_price ?? u.price;
+    if (u.unit !== undefined) row.unit = u.unit;
+    if (u.is_loose !== undefined || u.isLoose !== undefined) row.is_loose = u.is_loose ?? u.isLoose;
+    if (u.is_active !== undefined || u.in_stock !== undefined) row.is_active = u.is_active ?? u.in_stock;
+
     const { data, error } = await supabaseAdmin
-      .from('products')
-      .update(updates)
+      .from('master_products')
+      .update(row)
       .eq('id', id)
       .select()
       .single();
@@ -222,7 +266,7 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
       throw error;
     }
 
-    return data;
+    return transformMasterProductToProduct(data);
   } catch (error) {
     console.error('Error in updateProduct:', error);
     throw error;
@@ -232,7 +276,7 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
 export async function deleteProduct(id: string): Promise<boolean> {
   try {
     const { error } = await supabaseAdmin
-      .from('products')
+      .from('master_products')
       .delete()
       .eq('id', id);
 
@@ -359,7 +403,7 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
 
     while (hasMore) {
       const { data: batchData, error: batchError } = await supabaseAdmin
-        .from('products')
+        .from('master_products')
         .select('category')
         .range(from, from + batchSize - 1);
 
@@ -571,7 +615,7 @@ export async function getDashboardStats() {
 
     while (hasMore) {
       const { data, error } = await supabaseAdmin
-        .from('products')
+        .from('master_products')
         .select('id')
         .range(from, from + batchSize - 1);
 

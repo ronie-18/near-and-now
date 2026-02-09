@@ -222,7 +222,7 @@ const CreateAdminPage = () => {
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                       formData.role === value ? 'bg-violet-100 text-violet-600' : 'bg-gray-100 text-gray-600'
                     }`}>
-                      <Icon size={20} />
+                      <Icon className="w-5 h-5" />
                     </div>
                     <div className="flex-1">
                       <p className={`font-semibold ${formData.role === value ? 'text-violet-700' : 'text-gray-800'}`}>

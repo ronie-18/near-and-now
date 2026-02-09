@@ -13,13 +13,14 @@ const CartPage = () => {
   const deliveryFee = cartTotal > 500 ? 0 : 40;
   const orderTotal = cartTotal + deliveryFee - discount;
 
-  const handleQuantityChange = (id: string, quantity: number) => {
-    if (quantity < 1) return;
-    updateCartQuantity(id, quantity);
+  const handleQuantityChange = (id: string, quantity: number, isLoose?: boolean) => {
+    const minQty = isLoose ? 0.25 : 1;
+    if (quantity < minQty) return;
+    updateCartQuantity(id, quantity, isLoose);
   };
 
-  const handleRemove = (id: string) => {
-    removeFromCart(id);
+  const handleRemove = (id: string, isLoose?: boolean) => {
+    removeFromCart(id, isLoose);
   };
 
   const handleApplyCoupon = () => {
@@ -96,7 +97,7 @@ const CartPage = () => {
                           <p className="text-xs text-gray-500">{item.size}</p>
                         )}
                         <button
-                          onClick={() => handleRemove(item.id)}
+                          onClick={() => handleRemove(item.id, item.isLoose)}
                           className="text-xs text-red-500 hover:text-red-700 mt-1"
                         >
                           Remove
@@ -113,18 +114,30 @@ const CartPage = () => {
                     <div className="w-1/5 text-center">
                       <div className="flex items-center justify-center">
                         <button
-                          onClick={() => handleQuantityChange(item.id, item.quantity - 1)}
+                          onClick={() => {
+                            const dec = item.isLoose ? 0.25 : 1;
+                            const newQty = item.isLoose
+                              ? parseFloat((item.quantity - dec).toFixed(2))
+                              : item.quantity - 1;
+                            handleQuantityChange(item.id, newQty, item.isLoose);
+                          }}
                           className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded-l-md border border-gray-300"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
                           </svg>
                         </button>
-                        <div className="w-10 h-8 flex items-center justify-center border-t border-b border-gray-300 text-gray-800 text-sm">
-                          {item.quantity}
+                        <div className="w-10 h-8 flex items-center justify-center border-t border-b border-gray-300 text-gray-800 text-sm min-w-[2.5rem]">
+                          {item.isLoose ? `${item.quantity} kg` : item.quantity}
                         </div>
                         <button
-                          onClick={() => handleQuantityChange(item.id, item.quantity + 1)}
+                          onClick={() => {
+                            const inc = item.isLoose ? 0.25 : 1;
+                            const newQty = item.isLoose
+                              ? parseFloat((item.quantity + inc).toFixed(2))
+                              : item.quantity + 1;
+                            handleQuantityChange(item.id, newQty, item.isLoose);
+                          }}
                           className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded-r-md border border-gray-300"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

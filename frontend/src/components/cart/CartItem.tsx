@@ -10,19 +10,28 @@ const CartItem = ({ item }: CartItemProps) => {
   const { updateCartQuantity, removeFromCart } = useCart();
 
   const handleIncreaseQuantity = () => {
-    updateCartQuantity(item.id, item.quantity + 1);
+    const increment = item.isLoose ? 0.25 : 1;
+    const newQty = item.isLoose
+      ? parseFloat((item.quantity + increment).toFixed(2))
+      : item.quantity + 1;
+    updateCartQuantity(item.id, newQty, item.isLoose);
   };
 
   const handleDecreaseQuantity = () => {
-    if (item.quantity > 1) {
-      updateCartQuantity(item.id, item.quantity - 1);
+    const minQty = item.isLoose ? 0.25 : 1;
+    if (item.quantity > minQty) {
+      const decrement = item.isLoose ? 0.25 : 1;
+      const newQty = item.isLoose
+        ? parseFloat((item.quantity - decrement).toFixed(2))
+        : item.quantity - 1;
+      updateCartQuantity(item.id, newQty, item.isLoose);
     } else {
-      removeFromCart(item.id);
+      removeFromCart(item.id, item.isLoose);
     }
   };
 
   const handleRemove = () => {
-    removeFromCart(item.id);
+    removeFromCart(item.id, item.isLoose);
   };
 
   return (
@@ -71,8 +80,8 @@ const CartItem = ({ item }: CartItemProps) => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
               </svg>
             </button>
-            <div className="w-8 h-8 flex items-center justify-center text-gray-800 text-sm">
-              {item.quantity}
+            <div className="px-2 h-8 flex items-center justify-center text-gray-800 text-sm min-w-[3rem]">
+              {item.isLoose ? `${item.quantity} kg` : item.quantity}
             </div>
             <button 
               onClick={handleIncreaseQuantity}

@@ -7,9 +7,9 @@ import {
   createAddress,
   updateAddress,
   deleteAddress,
-  setDefaultAddress,
-  Address as DbAddress
+  setDefaultAddress
 } from '../services/supabase';
+import { geocodeAddress } from '../services/placesService';
 
 interface Address {
   id: string;
@@ -158,6 +158,13 @@ const AddressesPage = () => {
     }
 
     try {
+      const fullAddress = [formData.addressLine1, formData.addressLine2, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
+      const geocoded = await geocodeAddress(fullAddress);
+      if (!geocoded) {
+        showNotification('Could not verify address. Please try a different address.', 'error');
+        return;
+      }
+
       if (editingAddress) {
         // Update existing address
         const updateData = {
@@ -168,7 +175,9 @@ const AddressesPage = () => {
           state: formData.state,
           pincode: formData.pincode,
           phone: formData.phone,
-          is_default: formData.isDefault
+          is_default: formData.isDefault,
+          latitude: geocoded.lat,
+          longitude: geocoded.lng,
         };
 
         await updateAddress(editingAddress.id, user.id, updateData);
@@ -200,7 +209,9 @@ const AddressesPage = () => {
           state: formData.state,
           pincode: formData.pincode,
           phone: formData.phone,
-          is_default: formData.isDefault
+          is_default: formData.isDefault,
+          latitude: geocoded.lat,
+          longitude: geocoded.lng,
         };
 
         await createAddress(createData);

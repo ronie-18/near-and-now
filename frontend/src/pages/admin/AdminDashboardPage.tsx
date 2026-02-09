@@ -15,7 +15,6 @@ import {
   ArrowDownRight,
   RefreshCw,
   X,
-  Calendar,
   BarChart3,
   Layers
 } from 'lucide-react';

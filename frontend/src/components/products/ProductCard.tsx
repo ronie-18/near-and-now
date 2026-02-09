@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Product } from '../../services/supabase';
 import { useCart } from '../../context/CartContext';
+import { useNotification } from '../../context/NotificationContext';
 import { truncateText } from '../../utils/formatters';
 
 interface ProductCardProps {
@@ -11,12 +12,15 @@ interface ProductCardProps {
 
 const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
   const { addToCart, cartItems, updateCartQuantity, removeFromCart } = useCart();
+  const { showNotification } = useNotification();
   const [isHovered, setIsHovered] = useState(false);
   const [looseQuantity, setLooseQuantity] = useState(0.25);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Memoize cart item lookup
-  const cartItem = cartItems.find(item => item.id === product.id);
+  const cartItem = cartItems.find(
+    item => item.id === product.id && (product.isLoose ? item.isLoose : !item.isLoose)
+  );
   const inCart = Boolean(cartItem);
   const quantity = cartItem?.quantity ?? 0;
 
@@ -36,17 +40,18 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
     e.stopPropagation();
 
     if (product.isLoose) {
-      if (looseQuantity < 0.25) {
-        // Minimum quantity validation without notification
-        return;
+      if (looseQuantity < 0.25) return;
+      const added = addToCart(product, looseQuantity, true);
+      if (added) {
+        showNotification(`${looseQuantity} kg ${product.name} added to cart`, 'success');
       }
-      addToCart(product, looseQuantity, true);
-      // No notification when adding loose products
     } else {
-      addToCart(product);
-      // No notification when adding regular products
+      const added = addToCart(product);
+      if (added) {
+        showNotification(`${product.name} added to cart`, 'success');
+      }
     }
-  }, [product, looseQuantity, addToCart]);
+  }, [product, looseQuantity, addToCart, showNotification]);
 
   const handleIncreaseQuantity = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -57,7 +62,7 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
       ? parseFloat((quantity + increment).toFixed(2))
       : quantity + increment;
 
-    updateCartQuantity(product.id, newQuantity);
+    updateCartQuantity(product.id, newQuantity, product.isLoose);
   }, [product, quantity, updateCartQuantity]);
 
   const handleDecreaseQuantity = useCallback((e: React.MouseEvent) => {
@@ -71,9 +76,9 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
       const newQuantity = product.isLoose
         ? parseFloat((quantity - decrement).toFixed(2))
         : quantity - decrement;
-      updateCartQuantity(product.id, newQuantity);
+      updateCartQuantity(product.id, newQuantity, product.isLoose);
     } else {
-      removeFromCart(product.id);
+      removeFromCart(product.id, product.isLoose);
     }
   }, [product, quantity, updateCartQuantity, removeFromCart]);
 

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts, Product } from '../services/supabase';
 import { useCart } from '../context/CartContext';
+import { useNotification } from '../context/NotificationContext';
 import { formatPrice, formatCategoryName } from '../utils/formatters';
 
 const ProductDetailPage = () => {
@@ -13,9 +14,16 @@ const ProductDetailPage = () => {
   const [loading, setLoading] = useState(true);
   
   const { addToCart, cartItems } = useCart();
+  const { showNotification } = useNotification();
   
-  // Check if product is in cart
-  const productInCart = cartItems.find(item => item.id === productId);
+  // Check if product is in cart (consider isLoose when product is loaded)
+  const productInCart = product
+    ? cartItems.find(
+        item =>
+          item.id === product.id &&
+          (product.isLoose ? item.isLoose : !item.isLoose)
+      )
+    : null;
   const cartQuantity = productInCart?.quantity || 0;
 
   // Fetch product details
@@ -62,8 +70,10 @@ const ProductDetailPage = () => {
   const handleAddToCart = () => {
     if (!product) return;
     
-    addToCart(product, quantity);
-    // No notification when adding to cart
+    const added = addToCart(product, quantity, product.isLoose ?? false);
+    if (added) {
+      showNotification(`${product.name} added to cart`, 'success');
+    }
   };
 
   if (loading) {

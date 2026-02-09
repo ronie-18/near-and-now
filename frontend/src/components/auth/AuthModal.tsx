@@ -68,7 +68,7 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
 
   // Resend timer
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     
     if (resendTimer > 0) {
       interval = setInterval(() => {

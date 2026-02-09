@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Product } from '../../services/supabase';
 import { useCart } from '../../context/CartContext';
+import { useNotification } from '../../context/NotificationContext';
 
 interface QuickViewModalProps {
   product: Product;
@@ -9,12 +10,15 @@ interface QuickViewModalProps {
 
 const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
   const { addToCart, cartItems, updateCartQuantity, removeFromCart } = useCart();
+  const { showNotification } = useNotification();
   const [quantity, setQuantity] = useState(1);
   const [inCart, setInCart] = useState(false);
   
-  // Check if product is in cart
+  // Check if product is in cart (non-loose products only in QuickView)
   useEffect(() => {
-    const productInCart = cartItems.find(item => item.id === product.id);
+    const productInCart = cartItems.find(
+      item => item.id === product.id && !item.isLoose
+    );
     if (productInCart) {
       setInCart(true);
       setQuantity(productInCart.quantity); // Set initial quantity to match cart
@@ -60,18 +64,18 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
   }, [onClose]);
 
   const handleAddToCart = () => {
-    addToCart(product, quantity);
-    // No notification when adding to cart
+    const added = addToCart(product, quantity, false);
+    if (added) showNotification(`${product.name} added to cart`, 'success');
   };
 
   const handleUpdateCart = () => {
-    updateCartQuantity(product.id, quantity);
-    // No notification when updating cart
+    updateCartQuantity(product.id, quantity, false);
+    showNotification('Cart updated', 'success');
   };
 
   const handleRemoveFromCart = () => {
-    removeFromCart(product.id);
-    // No notification when removing from cart
+    removeFromCart(product.id, false);
+    showNotification('Removed from cart', 'info');
   };
 
   const incrementQuantity = () => {

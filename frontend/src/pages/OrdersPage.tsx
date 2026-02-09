@@ -64,7 +64,7 @@ const OrdersPage = () => {
       try {
         setLoading(true);
         setError(null);
-        const userOrders = await getUserOrders(user.id, user.phone, user.email);
+        const userOrders = await getUserOrders(user.id, user.phone ?? undefined, user.email ?? undefined);
         setOrders(userOrders);
       } catch (err: any) {
         console.error('Error fetching orders:', err);

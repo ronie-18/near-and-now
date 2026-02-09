@@ -18,8 +18,8 @@ interface NotificationContextType {
   removeNotification: (id: string) => void;
 }
 
-// Create context
-const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
+// Create context (exported for testing)
+export const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
 // Notification provider props
 interface NotificationProviderProps {

@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   Save,
   AlertCircle,
-  Image as ImageIcon,
   Plus,
   X,
   Trash2,
@@ -258,49 +257,6 @@ const AddProductPage = () => {
   // Generate unique ID
   const generateId = () => `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-  // Handle file upload
-  const uploadFile = async (file: File): Promise<ImageData> => {
-    const id = generateId();
-    const previewUrl = URL.createObjectURL(file);
-
-    // Add to state with uploading status
-    const imageData: ImageData = {
-      id,
-      url: previewUrl,
-      file,
-      isUploading: true,
-      isUploaded: false
-    };
-
-    try {
-      const uploadedUrl = await uploadProductImage(file);
-
-      if (uploadedUrl) {
-        // Revoke the blob URL and use the actual URL
-        URL.revokeObjectURL(previewUrl);
-        return {
-          ...imageData,
-          url: uploadedUrl,
-          isUploading: false,
-          isUploaded: true
-        };
-      } else {
-        return {
-          ...imageData,
-          isUploading: false,
-          error: 'Upload failed'
-        };
-      }
-    } catch (err) {
-      console.error('Upload error:', err);
-      return {
-        ...imageData,
-        isUploading: false,
-        error: 'Upload failed'
-      };
-    }
-  };
-
   // Handle files selection
   const handleFiles = useCallback(async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
@@ -529,6 +485,7 @@ const AddProductPage = () => {
         in_stock: formData.in_stock,
         rating: formData.rating ? parseFloat(formData.rating) : undefined,
         size: formData.size.trim() || undefined,
+        unit: formData.size?.trim() || 'piece',
       };
 
       const result = await createProduct(productData);

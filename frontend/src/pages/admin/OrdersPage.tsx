@@ -64,17 +64,6 @@ const getStatusStyle = (status: string) => {
   }
 };
 
-const getStatusIcon = (status: string) => {
-  switch (status) {
-    case 'delivered': return <CheckCircle className="w-4 h-4" />;
-    case 'placed': return <Clock className="w-4 h-4" />;
-    case 'confirmed': return <Package className="w-4 h-4" />;
-    case 'shipped': return <Truck className="w-4 h-4" />;
-    case 'cancelled': return <XCircle className="w-4 h-4" />;
-    default: return <Clock className="w-4 h-4" />;
-  }
-};
-
 const getPaymentStyle = (status: string) => {
   switch (status) {
     case 'paid': return 'bg-emerald-100 text-emerald-700';
