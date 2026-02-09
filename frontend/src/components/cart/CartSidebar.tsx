@@ -15,7 +15,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
   
   const cartTotal = getCartTotal();
   const deliveryFee = cartTotal > 0 ? 40 : 0;
-  const orderTotal = cartTotal + deliveryFee;
+  const orderTotal = Math.round(cartTotal + deliveryFee);
 
   // Handle click outside to close
   useEffect(() => {

@@ -177,10 +177,14 @@ const CheckoutPage = () => {
     setFormData(prev => ({
       ...prev,
       address: location.address,
-      city: location.city,
-      state: location.state,
-      pincode: location.pincode,
+      city: location.city || '',
+      state: location.state || '',
+      pincode: location.pincode || '',
     }));
+    // Show the new address form when location is picked
+    setShowNewAddressForm(true);
+    setSelectedAddressId(null);
+    setEditAddressId(null);
     setShowLocationPicker(false);
   };
 
@@ -407,11 +411,20 @@ const CheckoutPage = () => {
       // Save new address if checkbox is checked and it's a new address (not from saved addresses)
       if (saveAddress && showNewAddressForm && !editAddressId && user?.id) {
         try {
-          // Geocode to get latitude/longitude (required by customer_saved_addresses)
-          const fullAddress = [formData.address, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
-          const geocoded = await geocodeAddress(fullAddress);
-          if (!geocoded) {
-            throw new Error('Could not verify address. Please use the location picker or try a different address.');
+          // Use picked location if available, otherwise geocode
+          let lat: number, lng: number;
+          if (pickedLocation) {
+            lat = pickedLocation.lat;
+            lng = pickedLocation.lng;
+          } else {
+            // Geocode to get latitude/longitude (required by customer_saved_addresses)
+            const fullAddress = [formData.address, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
+            const geocoded = await geocodeAddress(fullAddress);
+            if (!geocoded) {
+              throw new Error('Could not verify address. Please use the location picker or try a different address.');
+            }
+            lat = geocoded.lat;
+            lng = geocoded.lng;
           }
 
           const addressParts = formData.address.split(',');
@@ -420,16 +433,16 @@ const CheckoutPage = () => {
 
           const newAddressData = {
             user_id: user.id,
-            name: formData.addressName || 'Delivery Address',
+            name: formData.addressName || addressLabel || 'Delivery Address',
             address_line_1: addressLine1,
             address_line_2: addressLine2,
-            city: formData.city || geocoded.city,
-            state: formData.state || geocoded.state,
-            pincode: formData.pincode || geocoded.pincode,
+            city: formData.city || pickedLocation?.city || '',
+            state: formData.state || pickedLocation?.state || '',
+            pincode: formData.pincode || pickedLocation?.pincode || '',
             phone: formData.phone,
             is_default: savedAddresses.length === 0,
-            latitude: geocoded.lat,
-            longitude: geocoded.lng,
+            latitude: lat,
+            longitude: lng,
             label: addressLabel,
             landmark: landmark || undefined,
             delivery_instructions: deliveryInstructions || undefined,
@@ -437,6 +450,9 @@ const CheckoutPage = () => {
             receiver_name: orderForOthers ? receiverName : undefined,
             receiver_phone: orderForOthers ? receiverPhone : undefined,
             receiver_address: orderForOthers ? receiverAddress : undefined,
+            google_place_id: pickedLocation?.placeId || undefined,
+            google_formatted_address: pickedLocation?.formattedAddress || undefined,
+            google_place_data: pickedLocation?.placeData || undefined,
           };
 
           const createdAddress = await createAddress(newAddressData);
@@ -468,7 +484,7 @@ const CheckoutPage = () => {
 
       // Calculate totals
       const { subtotal, deliveryFee, orderTotal } = calculateOrderTotals(cartTotal);
-      const finalOrderTotal = orderTotal + tipAmount;
+      const finalOrderTotal = Math.round(orderTotal + tipAmount);
 
       // Prepare order data
       const orderData: CreateOrderData = {
@@ -559,7 +575,7 @@ const CheckoutPage = () => {
   }
 
   const { discount, orderTotal } = calculateOrderTotals(cartTotal);
-  const finalTotal = orderTotal + tipAmount;
+  const finalTotal = Math.round(orderTotal + tipAmount);
 
   return (
     <>
@@ -1229,7 +1245,7 @@ const CheckoutPage = () => {
                         ) : (
                           <>
                             <CheckCircle className="w-5 h-5 mr-2" />
-                            {`Place Order - ₹${finalTotal.toFixed(2)}`}
+                            {`Place Order - ₹${Math.round(finalTotal)}`}
                           </>
                         )}
                       </>
@@ -1332,7 +1348,7 @@ const CheckoutPage = () => {
                           <p className="text-gray-800 font-semibold truncate">{item.name}</p>
                           <p className="text-gray-500 text-sm">Qty: {item.quantity}</p>
                         </div>
-                        <p className="text-gray-800 font-bold">₹{(item.price * item.quantity).toFixed(2)}</p>
+                        <p className="text-gray-800 font-bold">₹{Math.round(item.price * item.quantity)}</p>
                       </div>
                     ))}
                   </div>
@@ -1340,24 +1356,24 @@ const CheckoutPage = () => {
                   <div className="border-t-2 border-gray-100 pt-4 space-y-3">
                     <div className="flex justify-between text-gray-600">
                       <span>Subtotal</span>
-                      <span className="font-semibold">₹{cartTotal.toFixed(2)}</span>
+                      <span className="font-semibold">₹{Math.round(cartTotal)}</span>
                     </div>
 
                     {discount > 0 && (
                       <div className="flex justify-between text-green-600">
                         <span>Discount (10%)</span>
-                        <span className="font-semibold">-₹{discount.toFixed(2)}</span>
+                        <span className="font-semibold">-₹{Math.round(discount)}</span>
                       </div>
                     )}
 
                     <div className="flex justify-between text-gray-600">
                       <span>Tip</span>
-                      <span className="font-semibold">₹{tipAmount.toFixed(2)}</span>
+                      <span className="font-semibold">₹{Math.round(tipAmount)}</span>
                     </div>
 
                     <div className="flex justify-between text-lg font-bold text-gray-800 pt-3 border-t-2 border-gray-100">
                       <span>Total</span>
-                      <span className="text-primary">₹{finalTotal.toFixed(2)}</span>
+                      <span className="text-primary">₹{Math.round(finalTotal)}</span>
                     </div>
                   </div>
 

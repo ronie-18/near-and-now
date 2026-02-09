@@ -43,7 +43,7 @@ const ITEMS_PER_PAGE = 10;
 
 // Helper functions
 const truncateId = (id: string) => id.substring(0, 8);
-const formatPrice = (price: number) => `₹${price.toLocaleString("en-IN")}`;
+const formatPrice = (price: number) => `₹${Math.round(price).toLocaleString("en-IN")}`;
 
 type SortField = "name" | "price" | "category" | "in_stock" | "created_at";
 type SortDirection = "asc" | "desc";

@@ -1,12 +1,14 @@
 /**
- * Format price to Indian Rupees
+ * Format price to Indian Rupees (rounded to nearest whole number)
  */
 export function formatPrice(price: number): string {
+  const rounded = Math.round(price);
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
-    maximumFractionDigits: 0
-  }).format(price);
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0
+  }).format(rounded);
 }
 
 /**

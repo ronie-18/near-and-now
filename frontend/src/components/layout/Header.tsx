@@ -197,7 +197,7 @@ const Header = () => {
         {/* Main Header */}
         <div className="border-b border-gray-100/50">
           <div className="container mx-auto px-4 py-4">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center justify-between gap-4 h-16">
               {/* Logo - Enhanced */}
               <Link to="/" className="flex items-center flex-shrink-0 group">
                 <div className="relative">
@@ -232,14 +232,9 @@ const Header = () => {
                       Deliver to
                     </p>
                     {currentLocation ? (
-                      <>
-                        <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line1}
-                        </p>
-                        <p className="text-xs text-gray-600 truncate leading-tight mt-0.5 whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line2}
-                        </p>
-                      </>
+                      <p className="text-sm font-bold text-gray-900 truncate leading-tight whitespace-nowrap">
+                        {currentLocation.address}
+                      </p>
                     ) : (
                       <p className="text-sm font-bold text-gray-900 flex items-center gap-1">
                         Select Location
@@ -253,17 +248,17 @@ const Header = () => {
 
               {/* Search Bar - Enhanced Desktop */}
               <div className="hidden md:block flex-1 max-w-2xl" ref={searchRef}>
-                <form onSubmit={handleSearch} className="relative">
-                  <div className={`relative transition-all duration-300 ${
+                <form onSubmit={handleSearch} className="relative h-full flex items-center">
+                  <div className={`relative w-full transition-all duration-300 ${
                     isSearchFocused ? 'transform scale-[1.02]' : ''
                   }`}>
                     <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-secondary/20 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                    <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-2xl focus-within:border-primary/50 focus-within:shadow-xl focus-within:shadow-primary/10 transition-all duration-300 overflow-hidden">
-                      <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors z-10" />
+                    <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-2xl focus-within:border-primary/50 focus-within:shadow-xl focus-within:shadow-primary/10 transition-all duration-300 overflow-hidden flex items-center py-4 px-4">
+                      <Search className="w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors z-10 flex-shrink-0" />
                       <input
                         type="text"
                         placeholder="Search for products, brands and more..."
-                        className="w-full pl-12 pr-12 py-3.5 bg-transparent focus:outline-none text-sm text-gray-900 placeholder-gray-400 relative z-10"
+                        className="w-full pl-3 pr-3 bg-transparent focus:outline-none text-sm text-gray-900 placeholder-gray-400 relative z-10"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onFocus={() => setIsSearchFocused(true)}
@@ -736,14 +731,9 @@ const Header = () => {
                       Deliver to
                     </p>
                     {currentLocation ? (
-                      <>
-                        <p className="text-sm font-bold text-gray-800 line-clamp-1 leading-tight whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line1}
-                        </p>
-                        <p className="text-xs text-gray-600 line-clamp-1 leading-tight mt-1 whitespace-nowrap">
-                          {formatAddressLines(currentLocation.address).line2}
-                        </p>
-                      </>
+                      <p className="text-sm font-bold text-gray-800 truncate whitespace-nowrap">
+                        {currentLocation.address}
+                      </p>
                     ) : (
                       <p className="text-sm font-bold text-gray-800 flex items-center gap-1.5">
                         Select Location

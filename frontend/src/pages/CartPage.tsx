@@ -11,7 +11,7 @@ const CartPage = () => {
   const navigate = useNavigate();
 
   const deliveryFee = cartTotal > 500 ? 0 : 40;
-  const orderTotal = cartTotal + deliveryFee - discount;
+  const orderTotal = Math.round(cartTotal + deliveryFee - discount);
 
   const handleQuantityChange = (id: string, quantity: number, isLoose?: boolean) => {
     const minQty = isLoose ? 0.25 : 1;

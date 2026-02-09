@@ -60,6 +60,18 @@ const LocationPicker = ({
     }
   }, [isOpen]);
 
+  // Trigger map resize when map picker is shown
+  useEffect(() => {
+    if (showMapPicker && mapInitialLocation) {
+      // Small delay to ensure DOM is updated
+      setTimeout(() => {
+        if (window.google?.maps?.event) {
+          window.google.maps.event.trigger(window, 'resize');
+        }
+      }, 300);
+    }
+  }, [showMapPicker, mapInitialLocation]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleEscape = (e: KeyboardEvent) => {
@@ -94,7 +106,9 @@ const LocationPicker = ({
       const { latitude, longitude } = position.coords;
       const location = await reverseGeocode(latitude, longitude);
       if (location) {
-        handleLocationSelect(location);
+        // Instead of directly selecting, open map picker for adjustment
+        setMapInitialLocation(location);
+        setShowMapPicker(true);
       } else {
         setError('Could not find an address for your location. Please try searching manually.');
       }
@@ -186,7 +200,10 @@ const LocationPicker = ({
   };
 
   const handleMapLocationConfirmed = (location: LocationData) => {
+    // Return to search view first (original size)
     setShowMapPicker(false);
+    setMapInitialLocation(null);
+    // Then select the location (which will close the modal)
     handleLocationSelect(location);
   };
 
@@ -198,8 +215,10 @@ const LocationPicker = ({
       onClick={onClose}
     >
       <div
-        className={`bg-white rounded-2xl shadow-2xl w-full max-h-[90vh] overflow-hidden flex flex-col transition-all ${
-          showMapPicker && mapInitialLocation ? 'max-w-4xl' : 'max-w-2xl'
+        className={`bg-white rounded-2xl shadow-2xl w-full overflow-hidden flex flex-col transition-all duration-300 ${
+          showMapPicker && mapInitialLocation 
+            ? 'max-w-6xl' 
+            : 'max-w-2xl max-h-[90vh]'
         }`}
         onClick={(e) => e.stopPropagation()}
       >
@@ -238,7 +257,7 @@ const LocationPicker = ({
 
         {/* Content - map or search/addresses */}
         {showMapPicker && mapInitialLocation ? (
-          <div className="flex-1 flex flex-col min-h-[480px]">
+          <div className="flex flex-col overflow-hidden" style={{ height: '750px', minHeight: '750px' }}>
             <MapLocationPicker
               initialLocation={mapInitialLocation}
               onLocationConfirmed={handleMapLocationConfirmed}
@@ -337,39 +356,21 @@ const LocationPicker = ({
                         <MapPin className="w-4 h-4 text-gray-600 group-hover:text-primary" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-800 group-hover:text-primary transition-colors truncate">
+                        <p className="font-medium text-gray-800 group-hover:text-primary transition-colors truncate whitespace-nowrap">
                           {location.city} {location.pincode}
                         </p>
-                        <p className="text-sm text-gray-500 line-clamp-2">{location.address}</p>
+                        <p className="text-sm text-gray-500 truncate whitespace-nowrap">{location.address}</p>
                       </div>
                       {currentLocation?.address === location.address && (
                         <Check className="w-5 h-5 text-primary flex-shrink-0" />
                       )}
                     </button>
-                    {currentLocation?.address === location.address && (
-                      <button
-                        onClick={() => handleAdjustOnMap(location)}
-                        className="text-xs text-primary hover:underline ml-12 -mt-1"
-                      >
-                        Adjust on map
-                      </button>
-                    )}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {currentLocation && savedAddresses.length > 0 && (
-            <div className="px-6 py-2">
-              <button
-                onClick={() => handleAdjustOnMap(currentLocation)}
-                className="text-sm text-primary font-medium hover:underline"
-              >
-                Adjust current location on map
-              </button>
-            </div>
-          )}
 
           {!searchQuery && savedAddresses.length === 0 && suggestions.length === 0 && (
             <div className="px-6 py-12 text-center">

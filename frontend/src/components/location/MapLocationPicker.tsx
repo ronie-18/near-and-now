@@ -4,14 +4,14 @@
  * reverse geocoding on camera idle, and confirm location flow.
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useJsApiLoader, GoogleMap } from '@react-google-maps/api';
-import { ArrowLeft, MapPin, Info, Navigation } from 'lucide-react';
-import { reverseGeocode, LocationData } from '../../services/placesService';
+import { ArrowLeft, MapPin, Info, Navigation, Search } from 'lucide-react';
+import { reverseGeocode, LocationData, searchPlaces, getPlaceDetails, PlaceSuggestion } from '../../services/placesService';
 import APP_CONFIG from '../../config/app-config';
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
-const MAP_CONTAINER_EMBEDDED_STYLE = { width: '100%', height: '420px' };
+const MAP_CONTAINER_EMBEDDED_STYLE = { width: '100%', height: '100%' };
 const MAP_OPTIONS = {
   zoomControl: false,
   mapTypeControl: false,
@@ -37,8 +37,13 @@ export default function MapLocationPicker({
   const [selectedLocation, setSelectedLocation] = useState<LocationData>(initialLocation);
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   const [reverseGeocodeError, setReverseGeocodeError] = useState<string | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchSuggestions, setSearchSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [isLoadingSearch, setIsLoadingSearch] = useState(false);
   const mapRef = useRef<google.maps.Map | null>(null);
   const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const apiKey = APP_CONFIG.getApiKey();
   const { isLoaded, loadError } = useJsApiLoader({
@@ -46,16 +51,33 @@ export default function MapLocationPicker({
     id: 'map-location-picker',
   });
 
+  // Debug logging
+  useEffect(() => {
+    if (embedded) {
+      console.log('🗺️ MapLocationPicker embedded mode:', {
+        apiKey: apiKey ? 'Present' : 'Missing',
+        isLoaded,
+        loadError: loadError?.message,
+        initialLocation
+      });
+    }
+  }, [embedded, apiKey, isLoaded, loadError, initialLocation]);
+
   const onMapLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
     map.setCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
     map.setZoom(16);
     // Trigger resize so map renders properly when embedded in a modal
     if (embedded) {
+      // Multiple resize triggers to ensure map renders
       setTimeout(() => {
         google.maps.event.trigger(map, 'resize');
         map.setCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
       }, 100);
+      setTimeout(() => {
+        google.maps.event.trigger(map, 'resize');
+        map.setCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
+      }, 500);
     }
     map.addListener('idle', () => {
       const center = map.getCenter();
@@ -102,8 +124,54 @@ export default function MapLocationPicker({
     }
   };
 
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (!value.trim()) {
+      setSearchSuggestions([]);
+      return;
+    }
+
+    searchTimeoutRef.current = setTimeout(async () => {
+      setIsLoadingSearch(true);
+      try {
+        const results = await searchPlaces(value);
+        setSearchSuggestions(results);
+      } catch (err) {
+        console.error('Search error:', err);
+        setSearchSuggestions([]);
+      } finally {
+        setIsLoadingSearch(false);
+      }
+    }, 300);
+  };
+
+  const handleSuggestionClick = async (suggestion: PlaceSuggestion) => {
+    setIsLoadingSearch(true);
+    try {
+      const location = await getPlaceDetails(suggestion.placeId);
+      if (location && mapRef.current) {
+        setSelectedLocation(location);
+        mapRef.current.panTo({ lat: location.lat, lng: location.lng });
+        mapRef.current.setZoom(16);
+        setShowSearch(false);
+        setSearchQuery('');
+        setSearchSuggestions([]);
+      }
+    } catch (err) {
+      console.error('Place details error:', err);
+    } finally {
+      setIsLoadingSearch(false);
+    }
+  };
+
   const wrapperClass = embedded
-    ? 'flex flex-col flex-1 min-h-0'
+    ? 'flex flex-col flex-1 h-full'
     : 'fixed inset-0 z-50 bg-white flex flex-col';
 
   if (loadError) {
@@ -149,17 +217,34 @@ export default function MapLocationPicker({
       {/* Map container - explicit pixel height required for Google Maps to render */}
       <div
         className={`relative w-full ${embedded ? '' : 'flex-1 min-h-0'}`}
-        style={embedded ? { height: 420 } : undefined}
+        style={embedded ? { 
+          width: '100%', 
+          height: '100%',
+          minHeight: '500px',
+          position: 'relative'
+        } : undefined}
       >
-        <GoogleMap
-          mapContainerStyle={embedded ? MAP_CONTAINER_EMBEDDED_STYLE : MAP_CONTAINER_STYLE}
-          options={MAP_OPTIONS}
-          onLoad={onMapLoad}
-          onUnmount={() => {
-            if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-            mapRef.current = null;
-          }}
-        />
+        {isLoaded ? (
+          <GoogleMap
+            mapContainerStyle={embedded ? { width: '100%', height: '100%' } : MAP_CONTAINER_STYLE}
+            options={MAP_OPTIONS}
+            onLoad={onMapLoad}
+            onUnmount={() => {
+              if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+              mapRef.current = null;
+            }}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-gray-100">
+            <div className="text-center">
+              <div className="animate-spin w-10 h-10 border-2 border-primary border-t-transparent rounded-full mx-auto mb-4" />
+              <p className="text-gray-600">Loading map...</p>
+              {!apiKey && (
+                <p className="text-red-600 text-sm mt-2">⚠️ Google Maps API key is missing!</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Center pin (fixed) */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
@@ -171,25 +256,84 @@ export default function MapLocationPicker({
           </div>
         </div>
 
-        {/* Address card */}
-        <div className="absolute top-4 left-4 right-4 p-4 bg-white rounded-xl shadow-lg">
-          {reverseGeocodeError && (
-            <p className="text-xs text-amber-600 mb-2">{reverseGeocodeError}</p>
-          )}
-          {isLoadingAddress ? (
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-gray-500">Getting address...</span>
+        {/* Address card with search */}
+        <div className="absolute top-4 left-4 right-4 space-y-2">
+          {showSearch ? (
+            <div className="p-4 bg-white rounded-xl shadow-lg">
+              <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search for area, street name, pincode..."
+                  className="w-full pl-10 pr-10 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary"
+                  value={searchQuery}
+                  onChange={handleSearchChange}
+                  autoFocus
+                />
+                <button
+                  onClick={() => {
+                    setShowSearch(false);
+                    setSearchQuery('');
+                    setSearchSuggestions([]);
+                  }}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+                {isLoadingSearch && (
+                  <div className="absolute right-10 top-1/2 transform -translate-y-1/2">
+                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+              </div>
+              {searchSuggestions.length > 0 && (
+                <div className="max-h-48 overflow-y-auto space-y-1 mt-2">
+                  {searchSuggestions.map((suggestion) => (
+                    <button
+                      key={suggestion.placeId}
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      className="w-full flex items-start gap-2 px-3 py-2 border border-gray-200 rounded-lg hover:border-primary hover:bg-primary/5 transition-all text-left"
+                    >
+                      <MapPin className="w-4 h-4 text-gray-600 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-800 truncate">{suggestion.mainText}</p>
+                        {suggestion.secondaryText && (
+                          <p className="text-sm text-gray-500 truncate">{suggestion.secondaryText}</p>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
-            <div>
-              <div className="flex items-center gap-2">
-                <MapPin className="w-5 h-5 text-primary flex-shrink-0" />
-                <p className="font-bold text-gray-800">{selectedLocation.city}</p>
-              </div>
-              {selectedLocation.address && (
-                <p className="text-sm text-gray-600 mt-1 line-clamp-2">{selectedLocation.address}</p>
+            <div className="p-4 bg-white rounded-xl shadow-lg">
+              {reverseGeocodeError && (
+                <p className="text-xs text-amber-600 mb-2">{reverseGeocodeError}</p>
               )}
+              {isLoadingAddress ? (
+                <div className="flex items-center gap-3">
+                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm text-gray-500">Getting address...</span>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-primary flex-shrink-0" />
+                    <p className="font-bold text-gray-800">{selectedLocation.city}</p>
+                  </div>
+                  {selectedLocation.address && (
+                    <p className="text-sm text-gray-600 mt-1 truncate whitespace-nowrap">{selectedLocation.address}</p>
+                  )}
+                </div>
+              )}
+              <button
+                onClick={() => setShowSearch(true)}
+                className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 border-2 border-primary rounded-lg text-primary hover:bg-primary/5 transition-colors"
+              >
+                <Search className="w-4 h-4" />
+                <span className="text-sm font-medium">Search Location</span>
+              </button>
             </div>
           )}
         </div>

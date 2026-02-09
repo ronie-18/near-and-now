@@ -47,9 +47,19 @@ const CategoryPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryId]);
 
-  // Memoized sorting function
+  // Memoized sorting function with randomization for default
   const sortedProducts = useMemo(() => {
-    return [...products].sort((a, b) => {
+    const shuffled = [...products];
+    if (sortBy === 'default') {
+      // Randomize products for default sort
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled;
+    }
+    
+    return shuffled.sort((a, b) => {
       switch (sortBy) {
         case 'price-asc':
           return a.price - b.price;
@@ -59,9 +69,8 @@ const CategoryPage = () => {
           return a.name.localeCompare(b.name);
         case 'name-desc':
           return b.name.localeCompare(a.name);
-        case 'default':
         default:
-          return b.id.localeCompare(a.id);
+          return 0;
       }
     });
   }, [products, sortBy]);

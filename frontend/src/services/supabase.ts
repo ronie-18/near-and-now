@@ -895,12 +895,18 @@ export interface UpdateAddressData {
 
 // Transform DB row to Address
 function mapRowToAddress(row: Record<string, unknown>): Address {
+  // Split address into lines if it contains commas
+  const fullAddress = (row.address as string) || '';
+  const addressParts = fullAddress.split(',').map(s => s.trim()).filter(Boolean);
+  const addressLine1 = addressParts[0] || fullAddress;
+  const addressLine2 = addressParts.length > 1 ? addressParts.slice(1).join(', ') : undefined;
+  
   return {
     id: row.id as string,
     user_id: row.customer_id as string,
     name: (row.contact_name as string) || (row.label as string) || 'Address',
-    address_line_1: row.address as string,
-    address_line_2: (row.landmark as string) || undefined,
+    address_line_1: addressLine1,
+    address_line_2: addressLine2,
     city: (row.city as string) || '',
     state: (row.state as string) || '',
     pincode: (row.pincode as string) || '',

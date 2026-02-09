@@ -27,7 +27,20 @@ const HomePage = () => {
           getCategories()
         ]);
         setAllProducts(products);
-        setCategories(categoriesData);
+        
+        // Filter categories: only show categories that have products and remove duplicates
+        const productCategories = new Set(products.map(p => p.category).filter(Boolean));
+        const uniqueCategories = categoriesData.filter((category, index, self) => {
+          // Remove duplicates by name (case-insensitive)
+          const isUnique = index === self.findIndex(c => 
+            c.name.toLowerCase() === category.name.toLowerCase()
+          );
+          // Only include categories that have products
+          const hasProducts = productCategories.has(category.name);
+          return isUnique && hasProducts;
+        });
+        
+        setCategories(uniqueCategories);
       } catch (error) {
         console.error('Error fetching data:', error);
         showNotification('Failed to load data. Please try again.', 'error');

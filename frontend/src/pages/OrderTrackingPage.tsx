@@ -375,7 +375,7 @@ const OrderTrackingPage = () => {
                     <p className="text-sm text-gray-500">Qty: {item.quantity} {item.unit || ''}</p>
                   </div>
                 </div>
-                <p className="font-medium text-gray-800">₹{item.unit_price * item.quantity}</p>
+                <p className="font-medium text-gray-800">₹{Math.round(item.unit_price * item.quantity)}</p>
               </div>
             ))}
           </div>
@@ -383,7 +383,7 @@ const OrderTrackingPage = () => {
           <div className="mt-4 pt-4 border-t">
             <div className="flex justify-between items-center">
               <p className="text-lg font-bold text-gray-800">Total Amount</p>
-              <p className="text-2xl font-bold text-primary">₹{order.total_amount}</p>
+              <p className="text-2xl font-bold text-primary">₹{Math.round(order.total_amount)}</p>
             </div>
             <p className="text-sm text-gray-500 mt-1">Payment Method: {order.payment_method}</p>
           </div>
