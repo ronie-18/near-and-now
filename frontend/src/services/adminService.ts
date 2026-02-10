@@ -439,22 +439,83 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
 // Orders Management
 export async function getOrders(): Promise<Order[]> {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // Fetch customer_orders with related store_orders and order_items
+    const { data: customerOrders, error } = await supabaseAdmin
+      .from('customer_orders')
+      .select(`
+        *,
+        store_orders (
+          id,
+          store_id,
+          status,
+          subtotal_amount,
+          delivery_fee,
+          order_items (
+            id,
+            product_id,
+            product_name,
+            unit,
+            image_url,
+            unit_price,
+            quantity
+          )
+        )
+      `)
+      .order('placed_at', { ascending: false });
 
     if (error) {
       console.error('Error fetching orders:', error);
       throw error;
     }
 
-    // Transform order data to match expected format
-    const transformedOrders = (data || []).map(order => ({
-      ...order,
-      // Add items_count for backward compatibility
-      items_count: order.items?.length || 0
-    }));
+    // Transform to match expected Order format
+    const transformedOrders: Order[] = (customerOrders || []).map(co => {
+      // Aggregate items from all store_orders
+      const allItems: any[] = [];
+      let itemsCount = 0;
+      
+      (co.store_orders || []).forEach((so: any) => {
+        if (so.order_items) {
+          allItems.push(...so.order_items);
+          itemsCount += so.order_items.length;
+        }
+      });
+
+      // Get customer info from app_users
+      const customerId = co.customer_id;
+
+      return {
+        id: co.id,
+        user_id: customerId,
+        customer_name: '', // Will be populated from app_users if needed
+        customer_email: '',
+        customer_phone: '',
+        order_status: co.status as Order['order_status'],
+        payment_status: co.payment_status as Order['payment_status'],
+        payment_method: co.payment_method || '',
+        order_total: Number(co.total_amount),
+        subtotal: Number(co.subtotal_amount),
+        delivery_fee: Number(co.delivery_fee || 0),
+        items: allItems.map(item => ({
+          product_id: item.product_id,
+          name: item.product_name,
+          price: item.unit_price,
+          quantity: item.quantity,
+          image: item.image_url,
+          unit: item.unit
+        })),
+        items_count: itemsCount,
+        shipping_address: {
+          address: co.delivery_address || '',
+          city: '',
+          state: '',
+          pincode: ''
+        },
+        created_at: co.placed_at || co.created_at || '',
+        order_number: co.order_code,
+        updated_at: co.updated_at
+      };
+    });
 
     return transformedOrders;
   } catch (error) {
@@ -465,9 +526,27 @@ export async function getOrders(): Promise<Order[]> {
 
 export async function getOrderById(id: string): Promise<Order | null> {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('orders')
-      .select('*')
+    const { data: customerOrder, error } = await supabaseAdmin
+      .from('customer_orders')
+      .select(`
+        *,
+        store_orders (
+          id,
+          store_id,
+          status,
+          subtotal_amount,
+          delivery_fee,
+          order_items (
+            id,
+            product_id,
+            product_name,
+            unit,
+            image_url,
+            unit_price,
+            quantity
+          )
+        )
+      `)
       .eq('id', id)
       .single();
 
@@ -476,7 +555,57 @@ export async function getOrderById(id: string): Promise<Order | null> {
       return null;
     }
 
-    return data;
+    if (!customerOrder) return null;
+
+    // Aggregate items from all store_orders
+    const allItems: any[] = [];
+    let itemsCount = 0;
+    
+    (customerOrder.store_orders || []).forEach((so: any) => {
+      if (so.order_items) {
+        allItems.push(...so.order_items);
+        itemsCount += so.order_items.length;
+      }
+    });
+
+    // Get customer info from app_users
+    const { data: customer } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone')
+      .eq('id', customerOrder.customer_id)
+      .single();
+
+    return {
+      id: customerOrder.id,
+      user_id: customerOrder.customer_id,
+      customer_name: customer?.name || '',
+      customer_email: customer?.email || '',
+      customer_phone: customer?.phone || '',
+      order_status: customerOrder.status as Order['order_status'],
+      payment_status: customerOrder.payment_status as Order['payment_status'],
+      payment_method: customerOrder.payment_method || '',
+      order_total: Number(customerOrder.total_amount),
+      subtotal: Number(customerOrder.subtotal_amount),
+      delivery_fee: Number(customerOrder.delivery_fee || 0),
+      items: allItems.map(item => ({
+        product_id: item.product_id,
+        name: item.product_name,
+        price: item.unit_price,
+        quantity: item.quantity,
+        image: item.image_url,
+        unit: item.unit
+      })),
+      items_count: itemsCount,
+      shipping_address: {
+        address: customerOrder.delivery_address || '',
+        city: '',
+        state: '',
+        pincode: ''
+      },
+      created_at: customerOrder.placed_at || customerOrder.created_at || '',
+      order_number: customerOrder.order_code,
+      updated_at: customerOrder.updated_at
+    };
   } catch (error) {
     console.error('Error in getOrderById:', error);
     return null;
@@ -487,9 +616,22 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
   try {
     console.log(`Updating order ${id} to status: ${status}`);
 
+    // Map frontend order_status to database status
+    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup', 
+    // 'delivery_partner_assigned', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
+    const statusMap: Record<Order['order_status'], string> = {
+      'placed': 'pending_at_store',
+      'confirmed': 'store_accepted',
+      'shipped': 'in_transit',
+      'delivered': 'order_delivered',
+      'cancelled': 'order_cancelled'
+    };
+
+    const dbStatus = statusMap[status] || status;
+
     const { data, error } = await supabaseAdmin
-      .from('orders')
-      .update({ order_status: status, updated_at: new Date().toISOString() })
+      .from('customer_orders')
+      .update({ status: dbStatus, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select()
       .single();
@@ -504,7 +646,9 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
     }
 
     console.log('Order status updated successfully:', data);
-    return data;
+    
+    // Return full order data
+    return await getOrderById(id);
   } catch (error: any) {
     console.error('Error in updateOrderStatus:', error);
     throw error;
@@ -512,45 +656,60 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 }
 
 // Customers Management
-// Note: Customers table doesn't exist, so we derive customer data from orders
+// Use app_users table and aggregate order data
 export async function getCustomers(): Promise<Customer[]> {
   try {
-    const { data: orders, error } = await supabaseAdmin
-      .from('orders')
-      .select('customer_name, customer_email, customer_phone, order_total, created_at')
+    // Fetch all app_users
+    const { data: users, error: usersError } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone, created_at')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching orders for customers:', error);
-      throw error;
+    if (usersError) {
+      console.error('Error fetching users:', usersError);
+      throw usersError;
     }
 
-    // Group orders by customer email/phone to create customer list
-    const customerMap = new Map<string, Customer>();
+    // Fetch all customer_orders to aggregate order counts and totals
+    const { data: orders, error: ordersError } = await supabaseAdmin
+      .from('customer_orders')
+      .select('customer_id, total_amount, placed_at')
+      .order('placed_at', { ascending: false });
 
+    if (ordersError) {
+      console.error('Error fetching orders for customers:', ordersError);
+      throw ordersError;
+    }
+
+    // Aggregate order data by customer_id
+    const orderStats = new Map<string, { count: number; total: number }>();
     orders?.forEach(order => {
-      const key = order.customer_email || order.customer_phone || order.customer_name;
-
-      if (customerMap.has(key)) {
-        const customer = customerMap.get(key)!;
-        customer.orders_count += 1;
-        customer.total_spent += order.order_total || 0;
-      } else {
-        customerMap.set(key, {
-          id: key,
-          name: order.customer_name,
-          email: order.customer_email,
-          phone: order.customer_phone,
-          status: 'Active',
-          orders_count: 1,
-          total_spent: order.order_total || 0,
-          created_at: order.created_at,
-          location: ''
-        });
+      const customerId = order.customer_id;
+      if (!orderStats.has(customerId)) {
+        orderStats.set(customerId, { count: 0, total: 0 });
       }
+      const stats = orderStats.get(customerId)!;
+      stats.count += 1;
+      stats.total += Number(order.total_amount || 0);
     });
 
-    return Array.from(customerMap.values());
+    // Combine user data with order stats
+    const customers: Customer[] = (users || []).map(user => {
+      const stats = orderStats.get(user.id) || { count: 0, total: 0 };
+      return {
+        id: user.id,
+        name: user.name || '',
+        email: user.email || '',
+        phone: user.phone || '',
+        status: 'Active' as Customer['status'],
+        orders_count: stats.count,
+        total_spent: Math.round(stats.total),
+        created_at: user.created_at || '',
+        location: ''
+      };
+    });
+
+    return customers;
   } catch (error) {
     console.error('Error in getCustomers:', error);
     throw error;
@@ -559,32 +718,39 @@ export async function getCustomers(): Promise<Customer[]> {
 
 export async function getCustomerById(id: string): Promise<Customer | null> {
   try {
-    // Since customers table doesn't exist, fetch from orders
-    const { data: orders, error } = await supabaseAdmin
-      .from('orders')
-      .select('*')
-      .or(`customer_email.eq.${id},customer_phone.eq.${id},customer_name.eq.${id}`);
+    // Fetch user from app_users
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone, created_at')
+      .eq('id', id)
+      .single();
 
-    if (error) {
-      console.error('Error fetching customer orders:', error);
+    if (userError || !user) {
+      console.error('Error fetching customer:', userError);
       return null;
     }
 
-    if (!orders || orders.length === 0) {
-      return null;
+    // Fetch customer orders
+    const { data: orders, error: ordersError } = await supabaseAdmin
+      .from('customer_orders')
+      .select('total_amount, placed_at')
+      .eq('customer_id', id)
+      .order('placed_at', { ascending: false });
+
+    if (ordersError) {
+      console.error('Error fetching customer orders:', ordersError);
+      // Still return user data even if orders fail
     }
 
-    // Aggregate customer data from orders
-    const firstOrder = orders[0];
     return {
-      id,
-      name: firstOrder.customer_name,
-      email: firstOrder.customer_email,
-      phone: firstOrder.customer_phone,
+      id: user.id,
+      name: user.name || '',
+      email: user.email || '',
+      phone: user.phone || '',
       status: 'Active',
-      orders_count: orders.length,
-      total_spent: orders.reduce((sum, order) => sum + (order.order_total || 0), 0),
-      created_at: orders[orders.length - 1].created_at,
+      orders_count: orders?.length || 0,
+      total_spent: Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0),
+      created_at: user.created_at || '',
       location: ''
     };
   } catch (error) {
@@ -632,32 +798,33 @@ export async function getDashboardStats() {
 
     const products = allProducts;
 
-    // Get total orders with correct column names
+    // Get total orders from customer_orders
     const { data: orders, error: ordersError } = await supabaseAdmin
-      .from('orders')
-      .select('id, order_status, order_total, customer_email, customer_phone, customer_name');
+      .from('customer_orders')
+      .select('id, status, total_amount, customer_id');
 
     if (ordersError) throw ordersError;
 
     // Calculate unique customers from orders
-    const uniqueCustomers = new Set();
+    const uniqueCustomers = new Set<string>();
     orders?.forEach(order => {
-      const key = order.customer_email || order.customer_phone || order.customer_name;
-      if (key) uniqueCustomers.add(key);
+      if (order.customer_id) uniqueCustomers.add(order.customer_id);
     });
 
     // Calculate statistics
     const totalProducts = products?.length || 0;
     const totalOrders = orders?.length || 0;
     const totalCustomers = uniqueCustomers.size;
-    const totalSales = orders?.reduce((sum, order) => sum + (order.order_total || 0), 0) || 0;
+    const totalSales = Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0);
 
-    // Order status counts (using actual allowed status values from database)
-    const placedOrders = orders?.filter(order => order.order_status === 'placed').length || 0;
-    const confirmedOrders = orders?.filter(order => order.order_status === 'confirmed').length || 0;
-    const shippedOrders = orders?.filter(order => order.order_status === 'shipped').length || 0;
-    const deliveredOrders = orders?.filter(order => order.order_status === 'delivered').length || 0;
-    const cancelledOrders = orders?.filter(order => order.order_status === 'cancelled').length || 0;
+    // Order status counts (mapping database statuses to frontend statuses)
+    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup', 
+    // 'delivery_partner_assigned', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
+    const placedOrders = orders?.filter(order => order.status === 'pending_at_store' || order.status === 'store_accepted').length || 0;
+    const confirmedOrders = orders?.filter(order => order.status === 'preparing_order' || order.status === 'ready_for_pickup').length || 0;
+    const shippedOrders = orders?.filter(order => order.status === 'delivery_partner_assigned' || order.status === 'order_picked_up' || order.status === 'in_transit').length || 0;
+    const deliveredOrders = orders?.filter(order => order.status === 'order_delivered').length || 0;
+    const cancelledOrders = orders?.filter(order => order.status === 'order_cancelled').length || 0;
 
     return {
       totalProducts,
