@@ -224,10 +224,38 @@ export function getCurrentAdmin(): any | null {
 
 /**
  * Check if admin is authenticated
+ * Supports both secureAdminLogin (adminAccessToken) and authenticateAdmin (adminToken) methods
  */
 export async function isAdminAuthenticated(): Promise<boolean> {
-  const token = await getAccessToken();
-  return token !== null;
+  // Check for secureAdminLogin token (adminAccessToken)
+  const secureToken = await getAccessToken();
+  if (secureToken) {
+    return true;
+  }
+  
+  // Check for authenticateAdmin token (adminToken) - fallback for direct DB auth
+  const adminToken = sessionStorage.getItem('adminToken');
+  const adminData = sessionStorage.getItem('adminData');
+  const adminTokenExpiry = sessionStorage.getItem('adminTokenExpiry');
+  
+  if (adminToken && adminData) {
+    // Check if token is expired
+    if (adminTokenExpiry) {
+      const expiry = parseInt(adminTokenExpiry);
+      if (Date.now() < expiry) {
+        return true;
+      } else {
+        // Token expired, clear it
+        sessionStorage.removeItem('adminToken');
+        sessionStorage.removeItem('adminData');
+        sessionStorage.removeItem('adminTokenExpiry');
+        return false;
+      }
+    }
+    return true;
+  }
+  
+  return false;
 }
 
 /**

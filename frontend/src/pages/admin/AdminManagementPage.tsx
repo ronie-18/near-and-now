@@ -121,8 +121,8 @@ const AdminManagementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
-  // Get current admin from localStorage
-  const currentAdminData = localStorage.getItem('adminData');
+  // Get current admin from sessionStorage (where login stores it)
+  const currentAdminData = sessionStorage.getItem('adminData');
   const currentAdmin: Admin | null = currentAdminData ? JSON.parse(currentAdminData) : null;
 
   const fetchAdmins = async () => {

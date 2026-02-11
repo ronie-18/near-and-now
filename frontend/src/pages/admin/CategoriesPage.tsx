@@ -201,9 +201,14 @@ const CategoriesPage = () => {
     }
   };
 
-  // Filtered categories
+  // Filtered categories - Only show categories that have products
   const filteredCategories = useMemo(() => {
     return categories.filter(category => {
+      // Only include categories that have products
+      const productCount = productCounts[category.id] || 0;
+      if (productCount === 0) return false;
+      
+      // Apply search filter
       const searchLower = searchTerm.toLowerCase();
       return (
         category.name.toLowerCase().includes(searchLower) ||
@@ -211,13 +216,19 @@ const CategoriesPage = () => {
         category.id.toLowerCase().includes(searchLower)
       );
     });
-  }, [categories, searchTerm]);
+  }, [categories, searchTerm, productCounts]);
 
-  // Stats
-  const stats = useMemo(() => ({
-    totalCategories: categories.length,
-    totalProducts: Object.values(productCounts).reduce((sum, count) => sum + count, 0),
-  }), [categories, productCounts]);
+  // Stats - Only count categories that have products
+  const stats = useMemo(() => {
+    const categoriesWithProducts = categories.filter(category => {
+      const productCount = productCounts[category.id] || 0;
+      return productCount > 0;
+    });
+    return {
+      totalCategories: categoriesWithProducts.length,
+      totalProducts: Object.values(productCounts).reduce((sum, count) => sum + count, 0),
+    };
+  }, [categories, productCounts]);
 
   // Pagination
   const totalPages = Math.ceil(filteredCategories.length / ITEMS_PER_PAGE);

@@ -591,13 +591,6 @@ const ProductRow: React.FC<{
     <td className="px-5 py-4">
       <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <Link
-          to={`/admin/products/${product.id}`}
-          className="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-all"
-          title="View"
-        >
-          <Eye size={18} />
-        </Link>
-        <Link
           to={`/admin/products/edit/${product.id}`}
           className="p-2.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-all"
           title="Edit"

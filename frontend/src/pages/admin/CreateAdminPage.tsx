@@ -29,8 +29,8 @@ const CreateAdminPage = () => {
     role: 'admin' as Admin['role']
   });
 
-  // Get current admin from localStorage
-  const currentAdminData = localStorage.getItem('adminData');
+  // Get current admin from sessionStorage
+  const currentAdminData = sessionStorage.getItem('adminData');
   const currentAdmin: Admin | null = currentAdminData ? JSON.parse(currentAdminData) : null;
 
   // Check permission

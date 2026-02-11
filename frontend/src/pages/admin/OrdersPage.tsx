@@ -328,9 +328,12 @@ const OrdersPage = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div>
-                          <p className="font-semibold text-gray-800">{order.customer_name}</p>
+                          <p className="font-semibold text-gray-800">{order.customer_name || 'Unknown Customer'}</p>
                           {order.customer_email && (
                             <p className="text-xs text-gray-500">{order.customer_email}</p>
+                          )}
+                          {order.customer_phone && !order.customer_email && (
+                            <p className="text-xs text-gray-500">{order.customer_phone}</p>
                           )}
                         </div>
                       </td>

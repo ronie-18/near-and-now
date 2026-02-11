@@ -474,6 +474,7 @@ const ReportsPage = () => {
     setRefreshing(false);
   };
 
+
   // Filter orders by period
   const filteredOrders = useMemo(() => {
     const days = parseInt(period);
@@ -715,6 +716,43 @@ const ReportsPage = () => {
 
   const periodLabel = period === '7' ? 'Last 7 Days' : period === '30' ? 'Last 30 Days' : period === '90' ? 'Last 90 Days' : 'Last Year';
 
+  const handleExportReport = () => {
+    try {
+      // Prepare report data using the computed stats
+      const reportData = {
+        period: periodLabel,
+        generatedAt: new Date().toISOString(),
+        summary: {
+          totalRevenue: Math.round(stats.totalRevenue),
+          totalOrders: stats.totalOrders,
+          totalProducts: stats.totalProducts,
+          totalCustomers: stats.totalCustomers,
+          avgOrderValue: Math.round(stats.avgOrderValue)
+        },
+        topProducts: topProducts.slice(0, 10),
+        categorySales: categorySales,
+        dailySales: dailySales
+      };
+
+      // Convert to JSON string
+      const jsonString = JSON.stringify(reportData, null, 2);
+      
+      // Create blob and download
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `report-${periodLabel.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting report:', err);
+      setError('Failed to export report. Please try again.');
+    }
+  };
+
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -746,7 +784,10 @@ const ReportsPage = () => {
                 <option value="365">Last Year</option>
               </select>
             </div>
-            <button className="inline-flex items-center px-4 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all shadow-lg font-medium">
+            <button 
+              onClick={handleExportReport}
+              className="inline-flex items-center px-4 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all shadow-lg font-medium"
+            >
               <Download size={18} className="mr-2" />
               Export Report
             </button>

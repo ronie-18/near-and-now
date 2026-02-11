@@ -298,8 +298,12 @@ const CustomersPage = () => {
                       <td className="px-6 py-4">
                         <div className="flex justify-end">
                           <button
+                            onClick={() => {
+                              // TODO: Navigate to customer detail page when implemented
+                              console.log('View customer:', customer.id);
+                            }}
                             className="p-2.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                            title="View Details"
+                            title="View Details (Coming Soon)"
                           >
                             <Eye size={18} />
                           </button>

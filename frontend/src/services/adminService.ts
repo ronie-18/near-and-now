@@ -436,6 +436,16 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
   }
 }
 
+// Helper function to map database status to frontend status
+function mapDbStatusToFrontend(dbStatus: string): Order['order_status'] {
+  if (dbStatus === 'pending_at_store' || dbStatus === 'store_accepted') return 'placed';
+  if (dbStatus === 'preparing_order' || dbStatus === 'ready_for_pickup') return 'confirmed';
+  if (dbStatus === 'delivery_partner_assigned' || dbStatus === 'order_picked_up' || dbStatus === 'in_transit') return 'shipped';
+  if (dbStatus === 'order_delivered') return 'delivered';
+  if (dbStatus === 'order_cancelled') return 'cancelled';
+  return 'placed'; // default
+}
+
 // Orders Management
 export async function getOrders(): Promise<Order[]> {
   try {
@@ -468,8 +478,31 @@ export async function getOrders(): Promise<Order[]> {
       throw error;
     }
 
+    if (!customerOrders || customerOrders.length === 0) {
+      return [];
+    }
+
+    // Get all unique customer IDs
+    const customerIds = [...new Set(customerOrders.map(co => co.customer_id).filter(Boolean))];
+    
+    // Fetch customer info for all orders in one query
+    const { data: customers } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone')
+      .in('id', customerIds);
+
+    // Create a map for quick lookup
+    const customerMap = new Map<string, { name?: string; email?: string; phone?: string }>();
+    (customers || []).forEach(customer => {
+      customerMap.set(customer.id, {
+        name: customer.name || undefined,
+        email: customer.email || undefined,
+        phone: customer.phone || undefined
+      });
+    });
+
     // Transform to match expected Order format
-    const transformedOrders: Order[] = (customerOrders || []).map(co => {
+    const transformedOrders: Order[] = customerOrders.map(co => {
       // Aggregate items from all store_orders
       const allItems: any[] = [];
       let itemsCount = 0;
@@ -481,21 +514,21 @@ export async function getOrders(): Promise<Order[]> {
         }
       });
 
-      // Get customer info from app_users
-      const customerId = co.customer_id;
+      // Get customer info from map
+      const customer = customerMap.get(co.customer_id) || {};
 
       return {
         id: co.id,
-        user_id: customerId,
-        customer_name: '', // Will be populated from app_users if needed
-        customer_email: '',
-        customer_phone: '',
-        order_status: co.status as Order['order_status'],
+        user_id: co.customer_id,
+        customer_name: customer.name || 'Unknown Customer',
+        customer_email: customer.email || '',
+        customer_phone: customer.phone || '',
+        order_status: mapDbStatusToFrontend(co.status),
         payment_status: co.payment_status as Order['payment_status'],
         payment_method: co.payment_method || '',
-        order_total: Number(co.total_amount),
-        subtotal: Number(co.subtotal_amount),
-        delivery_fee: Number(co.delivery_fee || 0),
+        order_total: Math.round(Number(co.total_amount) || 0),
+        subtotal: Math.round(Number(co.subtotal_amount) || 0),
+        delivery_fee: Math.round(Number(co.delivery_fee || 0)),
         items: allItems.map(item => ({
           product_id: item.product_id,
           name: item.product_name,
@@ -578,15 +611,15 @@ export async function getOrderById(id: string): Promise<Order | null> {
     return {
       id: customerOrder.id,
       user_id: customerOrder.customer_id,
-      customer_name: customer?.name || '',
+      customer_name: customer?.name || 'Unknown Customer',
       customer_email: customer?.email || '',
       customer_phone: customer?.phone || '',
-      order_status: customerOrder.status as Order['order_status'],
+      order_status: mapDbStatusToFrontend(customerOrder.status),
       payment_status: customerOrder.payment_status as Order['payment_status'],
       payment_method: customerOrder.payment_method || '',
-      order_total: Number(customerOrder.total_amount),
-      subtotal: Number(customerOrder.subtotal_amount),
-      delivery_fee: Number(customerOrder.delivery_fee || 0),
+      order_total: Math.round(Number(customerOrder.total_amount) || 0),
+      subtotal: Math.round(Number(customerOrder.subtotal_amount) || 0),
+      delivery_fee: Math.round(Number(customerOrder.delivery_fee || 0)),
       items: allItems.map(item => ({
         product_id: item.product_id,
         name: item.product_name,
@@ -782,7 +815,7 @@ export async function getDashboardStats() {
     while (hasMore) {
       const { data, error } = await supabaseAdmin
         .from('master_products')
-        .select('id')
+        .select('id, category')
         .range(from, from + batchSize - 1);
 
       if (error) throw error;
@@ -797,6 +830,15 @@ export async function getDashboardStats() {
     }
 
     const products = allProducts;
+    
+    // Calculate unique categories from products (only categories that have products)
+    const uniqueCategories = new Set<string>();
+    products?.forEach(product => {
+      if (product.category) {
+        uniqueCategories.add(product.category);
+      }
+    });
+    const totalCategories = uniqueCategories.size;
 
     // Get total orders from customer_orders
     const { data: orders, error: ordersError } = await supabaseAdmin
@@ -831,6 +873,7 @@ export async function getDashboardStats() {
       totalOrders,
       totalCustomers,
       totalSales,
+      totalCategories,
       processingOrders: placedOrders + confirmedOrders, // Combine placed and confirmed for "processing" display
       shippedOrders,
       deliveredOrders,

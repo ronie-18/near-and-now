@@ -34,8 +34,8 @@ const EditAdminPage = () => {
     status: 'active' as Admin['status']
   });
 
-  // Get current admin from localStorage
-  const currentAdminData = localStorage.getItem('adminData');
+  // Get current admin from sessionStorage
+  const currentAdminData = sessionStorage.getItem('adminData');
   const currentAdmin: Admin | null = currentAdminData ? JSON.parse(currentAdminData) : null;
 
   // Check permission

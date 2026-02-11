@@ -1,4 +1,4 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   ShoppingBag, 
@@ -13,6 +13,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { useState } from 'react';
+import { secureAdminLogout } from '../../../services/secureAdminAuth';
 
 interface AdminSidebarProps {
   isOpen: boolean;
@@ -27,7 +28,23 @@ interface NavItem {
 
 const AdminSidebar = ({ isOpen }: AdminSidebarProps) => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({});
+
+  const handleLogout = async () => {
+    try {
+      await secureAdminLogout();
+      // Also clear direct DB auth tokens
+      sessionStorage.removeItem('adminToken');
+      sessionStorage.removeItem('adminTokenExpiry');
+      navigate('/admin/login');
+    } catch (error) {
+      console.error('Error during logout:', error);
+      // Clear session storage anyway
+      sessionStorage.clear();
+      navigate('/admin/login');
+    }
+  };
 
   const toggleSubmenu = (title: string) => {
     setExpandedMenus(prev => ({
@@ -49,23 +66,23 @@ const AdminSidebar = ({ isOpen }: AdminSidebarProps) => {
       submenu: [
         { title: 'All Products', path: '/admin/products' },
         { title: 'Add Product', path: '/admin/products/add' },
-        { title: 'Categories', path: '/admin/products/categories' }
+        { title: 'Categories', path: '/admin/categories' }
       ]
     },
     {
       title: 'Orders',
       path: '/admin/orders',
-      icon: <ClipboardList size={20} />,
-      submenu: [
-        { title: 'All Orders', path: '/admin/orders' },
-        { title: 'Pending', path: '/admin/orders/pending' },
-        { title: 'Delivered', path: '/admin/orders/delivered' }
-      ]
+      icon: <ClipboardList size={20} />
     },
     {
       title: 'Customers',
       path: '/admin/customers',
       icon: <Users size={20} />
+    },
+    {
+      title: 'Reports',
+      path: '/admin/reports',
+      icon: <BarChart3 size={20} />
     },
     {
       title: 'Delivery',
@@ -78,9 +95,9 @@ const AdminSidebar = ({ isOpen }: AdminSidebarProps) => {
       icon: <Tag size={20} />
     },
     {
-      title: 'Reports',
-      path: '/admin/reports',
-      icon: <BarChart3 size={20} />
+      title: 'Admins',
+      path: '/admin/admins',
+      icon: <Users size={20} />
     },
     {
       title: 'Settings',
@@ -172,6 +189,7 @@ const AdminSidebar = ({ isOpen }: AdminSidebarProps) => {
       {/* Logout Button */}
       <div className="absolute bottom-0 w-full p-4 border-t">
         <button 
+          onClick={handleLogout}
           className={`flex items-center p-3 rounded-lg text-red-600 hover:bg-red-50 transition-colors w-full
             ${!isOpen && 'justify-center'}`}
         >

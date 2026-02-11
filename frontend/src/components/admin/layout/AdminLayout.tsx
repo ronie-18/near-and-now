@@ -112,6 +112,15 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
             </li>
             <li>
               <Link
+                to="/admin/reports"
+                className={`flex items-center p-3 rounded-lg transition-colors ${isActive('/admin/reports') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+              >
+                <BarChart3 className="h-5 w-5 mr-3" />
+                {sidebarOpen && <span>Reports</span>}
+              </Link>
+            </li>
+            <li>
+              <Link
                 to="/admin/delivery"
                 className={`flex items-center p-3 rounded-lg transition-colors ${isActive('/admin/delivery') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'}`}
               >
@@ -126,15 +135,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               >
                 <Tag className="h-5 w-5 mr-3" />
                 {sidebarOpen && <span>Offers</span>}
-              </Link>
-            </li>
-            <li>
-              <Link
-                to="/admin/reports"
-                className={`flex items-center p-3 rounded-lg transition-colors ${isActive('/admin/reports') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'}`}
-              >
-                <BarChart3 className="h-5 w-5 mr-3" />
-                {sidebarOpen && <span>Reports</span>}
               </Link>
             </li>
             <li>

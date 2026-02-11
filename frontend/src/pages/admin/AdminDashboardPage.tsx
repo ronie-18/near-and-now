@@ -292,7 +292,6 @@ const AdminDashboardPage = () => {
   const [topProducts, setTopProducts] = useState<any[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [salesPeriod, setSalesPeriod] = useState<'7' | '30' | '90'>('7');
-  const [totalCategories, setTotalCategories] = useState(0);
 
   const fetchDashboardData = async () => {
     try {
@@ -306,23 +305,55 @@ const AdminDashboardPage = () => {
       setAllOrders(orders);
       setRecentOrders(orders.slice(0, 5));
 
-      const [products, categories] = await Promise.all([
-        getAdminProducts(),
-        getCategories()
+      const [products] = await Promise.all([
+        getAdminProducts()
       ]);
       
-      setTotalCategories(categories.length);
+      // Calculate real sales data from orders
+      // Use normalized product names (lowercase, trimmed) as keys for matching
+      const productSales: Record<string, { sold: number; revenue: number }> = {};
       
-      const topProds = products
-        .sort(() => 0.5 - Math.random())
-        .slice(0, 5)
-        .map(product => ({
+      // Aggregate sales from all delivered/confirmed orders
+      orders
+        .filter(order => order.order_status !== 'cancelled')
+        .forEach(order => {
+          if (order.items && order.items.length > 0) {
+            order.items.forEach((item: any) => {
+              // Use normalized product name as key for matching
+              const productName = (item.name || item.product_name || '').trim().toLowerCase();
+              if (productName) {
+                if (!productSales[productName]) {
+                  productSales[productName] = { sold: 0, revenue: 0 };
+                }
+                const quantity = Number(item.quantity) || 1;
+                const price = Number(item.price) || 0;
+                productSales[productName].sold += quantity;
+                productSales[productName].revenue += price * quantity;
+              }
+            });
+          }
+        });
+      
+      // Map products with their sales data
+      const productsWithSales = products.map(product => {
+        // Match by normalized product name (case-insensitive, trimmed)
+        const normalizedName = (product.name || '').trim().toLowerCase();
+        const sales = productSales[normalizedName] || { sold: 0, revenue: 0 };
+        
+        return {
           name: product.name,
           image: product.image,
-          sold: Math.floor(Math.random() * 200) + 50,
-          revenue: product.price * (Math.floor(Math.random() * 200) + 50),
-          stock: Math.floor(Math.random() * 100) + 20
-        }));
+          sold: Math.round(sales.sold),
+          revenue: Math.round(sales.revenue),
+          stock: product.in_stock ? 100 : 0 // Placeholder - could fetch from database
+        };
+      });
+      
+      // Sort by revenue and take top 5
+      const topProds = productsWithSales
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5);
+      
       setTopProducts(topProds);
     } catch (err) {
       setError('Failed to load dashboard data. Please try again.');
@@ -462,7 +493,7 @@ const AdminDashboardPage = () => {
                 icon={Layers}
                 gradient="bg-gradient-to-br from-violet-500 to-purple-600"
                 label="Total Categories"
-                value={totalCategories}
+                value={dashboardStats.totalCategories || 0}
                 change="+2.1%"
                 changeType="positive"
                 href="/admin/categories"
@@ -580,7 +611,7 @@ const AdminDashboardPage = () => {
                           </div>
                           <div>
                             <p className="font-semibold text-gray-800">#{order.id.substring(0, 8)}</p>
-                            <p className="text-sm text-gray-500">{order.customer_name}</p>
+                            <p className="text-sm text-gray-500">{order.customer_name || 'Unknown Customer'}</p>
                           </div>
                         </div>
                         <div className="text-right">

@@ -1,16 +1,40 @@
 import { useState, useRef, useEffect } from 'react';
 import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
 
 interface AdminHeaderProps {
   toggleSidebar: () => void;
 }
 
 const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
+  const navigate = useNavigate();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationRef = useRef<HTMLDivElement>(null);
+
+  // Get current admin data
+  useEffect(() => {
+    const admin = getCurrentAdmin();
+    setCurrentAdmin(admin);
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await secureAdminLogout();
+      // Also clear direct DB auth tokens
+      sessionStorage.removeItem('adminToken');
+      sessionStorage.removeItem('adminTokenExpiry');
+      navigate('/admin/login');
+    } catch (error) {
+      console.error('Error during logout:', error);
+      // Clear session storage anyway
+      sessionStorage.clear();
+      navigate('/admin/login');
+    }
+  };
 
   // Handle click outside to close menus
   useEffect(() => {
@@ -107,14 +131,20 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
               <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center">
                 <User size={18} />
               </div>
-              <span className="hidden md:block text-sm font-medium text-gray-700">Admin User</span>
+              <span className="hidden md:block text-sm font-medium text-gray-700">
+                {currentAdmin?.full_name || currentAdmin?.email || 'Admin User'}
+              </span>
             </button>
             
             {showUserMenu && (
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg py-2 z-50 border border-gray-200">
                 <div className="px-4 py-2 border-b border-gray-200">
-                  <p className="text-sm font-medium text-gray-800">Admin User</p>
-                  <p className="text-xs text-gray-500">admin@nearnow.com</p>
+                  <p className="text-sm font-medium text-gray-800">
+                    {currentAdmin?.full_name || 'Admin User'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {currentAdmin?.email || 'admin@nearnow.com'}
+                  </p>
                 </div>
                 <Link to="/admin/profile" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                   <div className="flex items-center">
@@ -135,7 +165,10 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
                   </div>
                 </Link>
                 <div className="border-t border-gray-200 mt-1 pt-1">
-                  <button className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+                  <button 
+                    onClick={handleLogout}
+                    className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                  >
                     <div className="flex items-center">
                       <LogOut size={16} className="mr-2" />
                       Logout
