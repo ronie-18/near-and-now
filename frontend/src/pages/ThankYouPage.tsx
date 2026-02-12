@@ -1,14 +1,99 @@
-  import { Link, useLocation } from 'react-router-dom';
+  import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { formatPrice } from '../utils/formatters';
 import { Order, OrderItem } from '../services/supabase';
+import axios from 'axios';
 
 const ThankYouPage = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const orderData = location.state as { order?: Order; orderId?: string; orderNumber?: string } | null;
-  
+
   const order = orderData?.order;
   const orderNumber = orderData?.orderNumber || order?.order_number;
   const orderId = orderData?.orderId || order?.id;
+
+  const [timeRemaining, setTimeRemaining] = useState<number>(120);
+  const [canCancel, setCanCancel] = useState<boolean>(true);
+  const [isCancelling, setIsCancelling] = useState<boolean>(false);
+  const [cancelError, setCancelError] = useState<string>('');
+  const [cancelSuccess, setCancelSuccess] = useState<boolean>(false);
+  const [hasDeliveryPartner, setHasDeliveryPartner] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!orderId) return;
+
+    const timer = setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          setCanCancel(false);
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    const checkDeliveryPartner = async () => {
+      try {
+        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+        const response = await axios.get(`${API_URL}/api/orders/${orderId}`);
+
+        if (response.data?.store_orders) {
+          const hasPartner = response.data.store_orders.some(
+            (so: any) => so.delivery_partner_id !== null
+          );
+          setHasDeliveryPartner(hasPartner);
+          if (hasPartner) {
+            setCanCancel(false);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking delivery partner status:', error);
+      }
+    };
+
+    checkDeliveryPartner();
+    const partnerCheckInterval = setInterval(checkDeliveryPartner, 5000);
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(partnerCheckInterval);
+    };
+  }, [orderId]);
+
+  const handleCancelOrder = async () => {
+    if (!orderId) return;
+
+    setIsCancelling(true);
+    setCancelError('');
+
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      const response = await axios.post(`${API_URL}/api/orders/${orderId}/cancel`);
+
+      if (response.data.success) {
+        setCancelSuccess(true);
+        setCanCancel(false);
+        setTimeout(() => {
+          navigate('/orders');
+        }, 2000);
+      }
+    } catch (error: any) {
+      console.error('Error cancelling order:', error);
+      setCancelError(
+        error.response?.data?.error || 'Failed to cancel order. Please try again.'
+      );
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Generate a stable key for order items
   const getItemKey = (item: OrderItem & { id?: string; sku?: string }, index: number): string => {
@@ -27,7 +112,7 @@ const ThankYouPage = () => {
     ].filter(Boolean);
     return fields.join('-');
   };
-  
+
   return (
     <div className="container mx-auto px-4 py-16">
       <div className="max-w-2xl mx-auto bg-white p-8 rounded-lg shadow-md">
@@ -37,13 +122,13 @@ const ThankYouPage = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          
+
           <h1 className="text-3xl font-bold text-gray-800 mb-4">Thank You for Your Order!</h1>
-          
+
           <p className="text-gray-600 mb-6">
             Your order has been placed successfully. We've sent a confirmation email with your order details.
           </p>
-          
+
           <div className="bg-gray-50 p-4 rounded-md mb-6">
             <p className="text-gray-500 mb-1">Order {orderNumber ? 'Number' : 'ID'}</p>
             <p className="text-lg font-semibold">{orderNumber || orderId?.substring(0, 8) || 'N/A'}</p>
@@ -53,7 +138,7 @@ const ThankYouPage = () => {
         {order && (
           <div className="border-t border-gray-200 pt-6 mb-6">
             <h2 className="text-xl font-semibold text-gray-800 mb-4">Order Summary</h2>
-            
+
             {order.items && order.items.length > 0 && (
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Items ({order.items.length})</h3>
@@ -112,12 +197,50 @@ const ThankYouPage = () => {
             </div>
           </div>
         )}
-        
+
         <div className="text-center">
+          {cancelSuccess ? (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+              <p className="text-green-800 font-medium">✓ Order cancelled successfully</p>
+              <p className="text-green-600 text-sm mt-1">Redirecting to orders page...</p>
+            </div>
+          ) : canCancel && !hasDeliveryPartner && timeRemaining > 0 ? (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center space-x-2">
+                  <svg className="w-5 h-5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-yellow-800 font-medium">Time to cancel: {formatTime(timeRemaining)}</span>
+                </div>
+              </div>
+              <p className="text-yellow-700 text-sm mb-3">
+                You can cancel this order until a delivery partner is assigned or the timer expires.
+              </p>
+              {cancelError && (
+                <div className="bg-red-50 border border-red-200 rounded p-2 mb-3">
+                  <p className="text-red-600 text-sm">{cancelError}</p>
+                </div>
+              )}
+              <button
+                onClick={handleCancelOrder}
+                disabled={isCancelling}
+                className="bg-red-500 text-white hover:bg-red-600 px-6 py-2 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isCancelling ? 'Cancelling...' : 'Cancel Order'}
+              </button>
+            </div>
+          ) : hasDeliveryPartner ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <p className="text-blue-800 font-medium">✓ Delivery partner assigned</p>
+              <p className="text-blue-600 text-sm mt-1">Your order is being prepared for delivery.</p>
+            </div>
+          ) : null}
+
           <p className="text-gray-600 mb-8">
             You will receive an SMS notification when your order is out for delivery.
           </p>
-          
+
           <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 justify-center">
             <Link
               to="/orders"
@@ -125,14 +248,14 @@ const ThankYouPage = () => {
             >
               View My Orders
             </Link>
-            
+
             <Link
               to="/shop"
               className="border border-primary text-primary hover:bg-primary hover:text-white px-6 py-3 rounded-md font-medium transition-colors"
             >
               Continue Shopping
             </Link>
-            
+
             <Link
               to="/"
               className="text-gray-600 hover:text-gray-800 px-6 py-3 rounded-md font-medium transition-colors"

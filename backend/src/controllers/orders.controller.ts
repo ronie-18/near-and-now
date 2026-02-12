@@ -30,7 +30,7 @@ export class OrdersController {
       });
 
       const storeOrdersMap = new Map();
-      
+
       for (const item of cart_items) {
         if (!storeOrdersMap.has(item.store_id)) {
           storeOrdersMap.set(item.store_id, []);
@@ -39,12 +39,12 @@ export class OrdersController {
       }
 
       const storeOrders = [];
-      
+
       for (const [storeId, items] of storeOrdersMap) {
-        const subtotal = items.reduce((sum: number, item: any) => 
+        const subtotal = items.reduce((sum: number, item: any) =>
           sum + (item.unit_price * item.quantity), 0
         );
-        
+
         const storeOrder = await databaseService.createStoreOrder({
           customer_order_id: customerOrder.id,
           store_id: storeId,
@@ -91,7 +91,8 @@ export class OrdersController {
   async getOrderById(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
-      res.status(501).json({ error: 'Not implemented yet' });
+      const order = await databaseService.getOrderById(orderId);
+      res.json(order);
     } catch (error) {
       console.error('Error fetching order:', error);
       res.status(500).json({ error: 'Failed to fetch order' });
@@ -106,6 +107,24 @@ export class OrdersController {
     } catch (error) {
       console.error('Error updating order status:', error);
       res.status(500).json({ error: 'Failed to update order status' });
+    }
+  }
+
+  async cancelOrder(req: Request, res: Response) {
+    try {
+      const { orderId } = req.params;
+      const order = await databaseService.cancelOrder(orderId);
+      res.json({
+        success: true,
+        message: 'Order cancelled successfully',
+        order
+      });
+    } catch (error: any) {
+      console.error('Error cancelling order:', error);
+      if (error.message?.includes('delivery partner')) {
+        return res.status(400).json({ error: error.message });
+      }
+      res.status(500).json({ error: 'Failed to cancel order' });
     }
   }
 }
