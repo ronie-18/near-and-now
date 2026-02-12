@@ -12,7 +12,6 @@ import {
   Package,
   ShoppingCart,
   AlertTriangle,
-  Eye,
   X,
   Grid3X3,
   List,

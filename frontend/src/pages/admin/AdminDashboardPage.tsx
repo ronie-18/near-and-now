@@ -19,7 +19,7 @@ import {
   Layers
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getDashboardStats, getAdminProducts, getOrders, getCategories, Order } from '../../services/adminService';
+import { getDashboardStats, getAdminProducts, getOrders, Order } from '../../services/adminService';
 
 // Modern Stat Card (with optional link)
 interface StatCardProps {
@@ -283,6 +283,7 @@ const AdminDashboardPage = () => {
     totalOrders: 0,
     totalCustomers: 0,
     totalSales: 0,
+    totalCategories: 0,
     processingOrders: 0,
     shippedOrders: 0,
     deliveredOrders: 0,

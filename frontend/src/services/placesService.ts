@@ -12,6 +12,9 @@ export interface LocationData {
   state: string;
   lat: number;
   lng: number;
+  placeId?: string;
+  formattedAddress?: string;
+  placeData?: unknown;
 }
 
 export interface PlaceSuggestion {

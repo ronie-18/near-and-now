@@ -373,11 +373,13 @@ export async function logout() {
 
 // Order types
 export interface OrderItem {
-  product_id: string;
+  product_id?: string;
+  id?: string;
   name: string;
   price: number;
   quantity: number;
   image?: string;
+  unit?: string;
 }
 
 export interface ShippingAddress {
@@ -710,8 +712,8 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
             name: i.product_name,
             price: i.unit_price,
             quantity: i.quantity,
-            unit: i.unit,
-            image: i.image_url
+            image: i.image_url,
+            unit: i.unit
           });
         }
       }
@@ -870,7 +872,7 @@ export interface CreateAddressData {
   receiver_phone?: string;
   google_place_id?: string;
   google_formatted_address?: string;
-  google_place_data?: Record<string, unknown>;
+  google_place_data?: unknown;
 }
 
 export interface UpdateAddressData {

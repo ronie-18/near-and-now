@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, Save, Store, Mail, CreditCard, Truck as TruckIcon, Bell } from 'lucide-react';
+import { Settings, Store, Mail, CreditCard, Truck as TruckIcon, Bell } from 'lucide-react';
 
 const SettingsPage = () => {
   const [activeTab, setActiveTab] = useState('general');

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Truck, Search, Plus, MapPin, Phone, Mail } from 'lucide-react';
+import { Truck, Search, Plus } from 'lucide-react';
 
 const DeliveryPage = () => {
   const [searchTerm, setSearchTerm] = useState('');

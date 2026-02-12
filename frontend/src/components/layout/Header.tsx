@@ -161,31 +161,6 @@ const Header = () => {
     setIsLocationPickerOpen(!isLocationPickerOpen);
   };
 
-  // Format address to show first 2 lines
-  const formatAddressLines = (address: string): { line1: string; line2: string } => {
-    if (!address) return { line1: '', line2: '' };
-
-    let cleanAddress = address;
-    cleanAddress = cleanAddress.split('\\n').join(' ');
-    cleanAddress = cleanAddress.split('\\r').join(' ');
-    cleanAddress = cleanAddress.replace(/\n/g, ' ');
-    cleanAddress = cleanAddress.replace(/\r/g, ' ');
-    cleanAddress = cleanAddress.replace(/\t/g, ' ');
-    cleanAddress = cleanAddress.replace(/\s+/g, ' ').trim();
-
-    const parts = cleanAddress.split(',').map(part => part.trim());
-
-    if (parts.length <= 2) {
-      return { line1: parts[0] || '', line2: parts[1] || '' };
-    }
-
-    const line1 = parts[0].length > 40 ? parts[0].substring(0, 37) + '...' : parts[0];
-    const line2Full = parts.slice(1, 3).join(', ');
-    const line2 = line2Full.length > 50 ? line2Full.substring(0, 47) + '...' : line2Full;
-
-    return { line1, line2 };
-  };
-
   const popularSearches = ['Rice', 'Milk', 'Vegetables', 'Atta', 'Oil'];
 
   return (

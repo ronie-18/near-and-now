@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
-import { User, Mail, Phone, Shield, Save, Edit } from 'lucide-react';
+import { Mail, Phone, Shield, Edit } from 'lucide-react';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { useNavigate } from 'react-router-dom';
 
 const ProfilePage = () => {
   const navigate = useNavigate();
   const [admin, setAdmin] = useState<any>(null);
-  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     const currentAdmin = getCurrentAdmin();

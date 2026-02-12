@@ -11,7 +11,6 @@ import { reverseGeocode, LocationData, searchPlaces, getPlaceDetails, PlaceSugge
 import APP_CONFIG from '../../config/app-config';
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
-const MAP_CONTAINER_EMBEDDED_STYLE = { width: '100%', height: '100%' };
 const MAP_OPTIONS = {
   zoomControl: false,
   mapTypeControl: false,

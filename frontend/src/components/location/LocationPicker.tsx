@@ -194,11 +194,6 @@ const LocationPicker = ({
     onClose();
   };
 
-  const handleAdjustOnMap = (location: LocationData) => {
-    setMapInitialLocation(location);
-    setShowMapPicker(true);
-  };
-
   const handleMapLocationConfirmed = (location: LocationData) => {
     // Return to search view first (original size)
     setShowMapPicker(false);

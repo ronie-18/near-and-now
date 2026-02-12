@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bell, Check, X, Filter, Search } from 'lucide-react';
+import { Bell, Check, Filter, Search } from 'lucide-react';
 
 const NotificationsPage = () => {
   const [filter, setFilter] = useState('all');
@@ -96,6 +96,11 @@ const NotificationsPage = () => {
         <h2 className="text-2xl font-semibold text-gray-900 mb-2">Notifications System</h2>
         <p className="text-gray-600 mb-6">
           This page will display all system notifications including new orders, stock alerts, user registrations, and other important events.
+          {filteredNotifications.length > 0 && (
+            <span className="block mt-2 text-sm text-gray-500">
+              {filteredNotifications.length} sample notification(s) ready for when the system is connected.
+            </span>
+          )}
         </p>
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 max-w-2xl mx-auto">
           <p className="text-sm text-blue-800">

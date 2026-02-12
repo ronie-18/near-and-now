@@ -1,11 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Package, MapPin, Truck, CheckCircle, Clock, Phone, User } from 'lucide-react';
+import { Package, MapPin, Truck, CheckCircle, Clock, Phone, User, XCircle, Radio } from 'lucide-react';
+import { supabaseAdmin } from '../services/supabase';
+import { useOrderTrackingRealtime } from '../hooks/useOrderTrackingRealtime';
+import DeliveryMap from '../components/tracking/DeliveryMap';
+
+// DB statuses: pending_at_store, store_accepted, preparing_order, ready_for_pickup,
+// delivery_partner_assigned, order_picked_up, in_transit, order_delivered, order_cancelled
+const STATUS_DESCRIPTIONS: Record<string, string> = {
+  pending_at_store: 'Your order has been placed and is waiting for store confirmation',
+  store_accepted: 'Store has accepted your order',
+  preparing_order: 'Your order is being prepared at the store',
+  ready_for_pickup: 'Order is ready and waiting for delivery partner',
+  delivery_partner_assigned: 'Delivery partner has been assigned',
+  order_picked_up: 'Order picked up by delivery partner',
+  in_transit: 'Order is out for delivery',
+  order_delivered: 'Order delivered successfully',
+  order_cancelled: 'Order was cancelled',
+};
+
+const STATUS_ORDER = [
+  'pending_at_store',
+  'store_accepted',
+  'preparing_order',
+  'ready_for_pickup',
+  'delivery_partner_assigned',
+  'order_picked_up',
+  'in_transit',
+  'order_delivered',
+  'order_cancelled',
+];
 
 interface OrderStatus {
   status: string;
   timestamp: string;
   description: string;
+  notes?: string;
 }
 
 interface Order {
@@ -18,11 +48,14 @@ interface Order {
   payment_method: string;
   items: any[];
   delivery_agent?: {
+    id: string;
     name: string;
     phone: string;
-    vehicle_number: string;
+    vehicle_number?: string;
   };
   estimated_delivery?: string;
+  delivery_latitude?: number;
+  delivery_longitude?: number;
 }
 
 const OrderTrackingPage = () => {
@@ -30,6 +63,7 @@ const OrderTrackingPage = () => {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [trackingHistory, setTrackingHistory] = useState<OrderStatus[]>([]);
+  const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number; updated_at: string } | null>(null);
 
   useEffect(() => {
     const fetchOrderTracking = async () => {
@@ -37,41 +71,71 @@ const OrderTrackingPage = () => {
 
       try {
         setLoading(true);
-        
+
         // Fetch order details from customer_orders
-        const { data: orderData, error: orderError } = await (await import('../services/supabase')).supabaseAdmin
+        const { data: orderData, error: orderError } = await supabaseAdmin
           .from('customer_orders')
-          .select(`
+          .select(
+            `
             *,
             store_orders (
               *,
               order_items (*)
             )
-          `)
+          `
+          )
           .eq('id', orderId)
           .single();
 
         if (orderError) throw orderError;
 
-        // Transform the data
+        // Fetch real tracking history from order_status_history
+        const { data: statusHistory } = await supabaseAdmin
+          .from('order_status_history')
+          .select('status, notes, created_at')
+          .eq('customer_order_id', orderData.id)
+          .order('created_at', { ascending: true });
+
         const transformedOrder: Order = {
           id: orderData.id,
           order_number: orderData.order_code || orderData.id.substring(0, 8).toUpperCase(),
-          status: orderData.status || 'order_placed',
-          created_at: orderData.created_at,
+          status: orderData.status || 'pending_at_store',
+          created_at: orderData.placed_at || orderData.created_at,
           delivery_address: orderData.delivery_address,
           total_amount: orderData.total_amount || 0,
           payment_method: orderData.payment_method || 'COD',
           items: orderData.store_orders?.flatMap((so: any) => so.order_items || []) || [],
           estimated_delivery: orderData.estimated_delivery_time,
+          delivery_latitude: orderData.delivery_latitude,
+          delivery_longitude: orderData.delivery_longitude,
         };
+
+        // Get delivery partner from first store_order that has one
+        const storeOrderWithPartner = (orderData.store_orders || []).find(
+          (so: any) => so.delivery_partner_id
+        );
+        if (storeOrderWithPartner?.delivery_partner_id) {
+          const { data: partner } = await supabaseAdmin
+            .from('app_users')
+            .select('id, name, phone')
+            .eq('id', storeOrderWithPartner.delivery_partner_id)
+            .single();
+          if (partner) {
+            transformedOrder.delivery_agent = {
+              id: partner.id,
+              name: partner.name || 'Delivery Partner',
+              phone: partner.phone || '',
+            };
+          }
+        }
 
         setOrder(transformedOrder);
 
-        // Create tracking history based on order status
-        const history = generateTrackingHistory(transformedOrder);
+        const history = buildTrackingHistory(
+          transformedOrder,
+          statusHistory || []
+        );
         setTrackingHistory(history);
-
       } catch (error) {
         console.error('Error fetching order tracking:', error);
       } finally {
@@ -82,96 +146,79 @@ const OrderTrackingPage = () => {
     fetchOrderTracking();
   }, [orderId]);
 
-  const generateTrackingHistory = (order: Order): OrderStatus[] => {
+  const formatStatusForDisplay = useCallback((status: string) =>
+    status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()), []);
+
+  // Build timeline from real order_status_history, with fallback for current status
+  const buildTrackingHistory = useCallback((
+    order: Order,
+    statusHistory: { status: string; notes?: string; created_at: string }[]
+  ): OrderStatus[] => {
+    const currentStatus = order.status;
+    const createdAt = order.created_at;
+
+    if (statusHistory.length > 0) {
+      return statusHistory.map((h) => ({
+        status: h.status,
+        timestamp: h.created_at,
+        description: STATUS_DESCRIPTIONS[h.status] || h.notes || formatStatusForDisplay(h.status),
+        notes: h.notes,
+      }));
+    }
+
+    // Fallback: build timeline up to current status from STATUS_ORDER
+    const currentIndex = STATUS_ORDER.indexOf(currentStatus);
+    const effectiveIndex = currentIndex >= 0 ? currentIndex : 0;
     const history: OrderStatus[] = [];
-    const createdDate = new Date(order.created_at);
 
-    // Order Placed
-    history.push({
-      status: 'order_placed',
-      timestamp: order.created_at,
-      description: 'Your order has been placed successfully',
-    });
-
-    // Order Confirmed (2 hours after placed)
-    if (['order_confirmed', 'order_preparing', 'order_ready', 'order_picked_up', 'order_in_transit', 'order_delivered'].includes(order.status)) {
-      const confirmedDate = new Date(createdDate.getTime() + 2 * 60 * 60 * 1000);
+    for (let i = 0; i <= effectiveIndex; i++) {
+      const status = STATUS_ORDER[i];
+      if (status === 'order_cancelled' && currentStatus !== 'order_cancelled') continue;
+      if (status === 'order_cancelled') {
+        history.push({
+          status,
+          timestamp: createdAt,
+          description: STATUS_DESCRIPTIONS[status],
+        });
+        break;
+      }
       history.push({
-        status: 'order_confirmed',
-        timestamp: confirmedDate.toISOString(),
-        description: 'Order confirmed by the store',
+        status,
+        timestamp:
+          i === 0
+            ? createdAt
+            : new Date(Date.now() - (effectiveIndex - i) * 60000).toISOString(),
+        description: STATUS_DESCRIPTIONS[status],
       });
     }
-
-    // Order Preparing (4 hours after placed)
-    if (['order_preparing', 'order_ready', 'order_picked_up', 'order_in_transit', 'order_delivered'].includes(order.status)) {
-      const preparingDate = new Date(createdDate.getTime() + 4 * 60 * 60 * 1000);
-      history.push({
-        status: 'order_preparing',
-        timestamp: preparingDate.toISOString(),
-        description: 'Your order is being prepared',
-      });
-    }
-
-    // Order Ready (6 hours after placed)
-    if (['order_ready', 'order_picked_up', 'order_in_transit', 'order_delivered'].includes(order.status)) {
-      const readyDate = new Date(createdDate.getTime() + 6 * 60 * 60 * 1000);
-      history.push({
-        status: 'order_ready',
-        timestamp: readyDate.toISOString(),
-        description: 'Order is ready for pickup',
-      });
-    }
-
-    // Order Picked Up (7 hours after placed)
-    if (['order_picked_up', 'order_in_transit', 'order_delivered'].includes(order.status)) {
-      const pickedUpDate = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
-      history.push({
-        status: 'order_picked_up',
-        timestamp: pickedUpDate.toISOString(),
-        description: 'Order picked up by delivery partner',
-      });
-    }
-
-    // Order In Transit (8 hours after placed)
-    if (['order_in_transit', 'order_delivered'].includes(order.status)) {
-      const transitDate = new Date(createdDate.getTime() + 8 * 60 * 60 * 1000);
-      history.push({
-        status: 'order_in_transit',
-        timestamp: transitDate.toISOString(),
-        description: 'Order is out for delivery',
-      });
-    }
-
-    // Order Delivered (10 hours after placed)
-    if (order.status === 'order_delivered') {
-      const deliveredDate = new Date(createdDate.getTime() + 10 * 60 * 60 * 1000);
-      history.push({
-        status: 'order_delivered',
-        timestamp: deliveredDate.toISOString(),
-        description: 'Order delivered successfully',
-      });
-    }
-
     return history;
-  };
+  }, [formatStatusForDisplay]);
+
+  // Real-time subscriptions for order status and delivery partner
+  useOrderTrackingRealtime(
+    orderId,
+    order,
+    setOrder,
+    setTrackingHistory,
+    setDriverLocation,
+    buildTrackingHistory
+  );
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'order_placed':
-        return <Package className="w-6 h-6" />;
-      case 'order_confirmed':
-        return <CheckCircle className="w-6 h-6" />;
-      case 'order_preparing':
-        return <Clock className="w-6 h-6" />;
-      case 'order_ready':
-        return <Package className="w-6 h-6" />;
-      case 'order_picked_up':
-        return <Truck className="w-6 h-6" />;
-      case 'order_in_transit':
-        return <Truck className="w-6 h-6" />;
       case 'order_delivered':
         return <CheckCircle className="w-6 h-6" />;
+      case 'order_cancelled':
+        return <XCircle className="w-6 h-6" />;
+      case 'in_transit':
+      case 'order_picked_up':
+      case 'delivery_partner_assigned':
+        return <Truck className="w-6 h-6" />;
+      case 'ready_for_pickup':
+      case 'preparing_order':
+      case 'store_accepted':
+        return <Clock className="w-6 h-6" />;
+      case 'pending_at_store':
       default:
         return <Package className="w-6 h-6" />;
     }
@@ -179,20 +226,25 @@ const OrderTrackingPage = () => {
 
   const getStatusColor = (status: string, isCompleted: boolean) => {
     if (!isCompleted) return 'bg-gray-200 text-gray-400';
-    
-    switch (status) {
-      case 'order_delivered':
-        return 'bg-green-500 text-white';
-      case 'order_in_transit':
-      case 'order_picked_up':
-        return 'bg-blue-500 text-white';
-      default:
-        return 'bg-primary text-white';
-    }
+    if (status === 'order_cancelled') return 'bg-red-500 text-white';
+    if (status === 'order_delivered') return 'bg-green-500 text-white';
+    if (['in_transit', 'order_picked_up', 'delivery_partner_assigned'].includes(status))
+      return 'bg-blue-500 text-white';
+    return 'bg-primary text-white';
   };
 
-  const formatStatus = (status: string) => {
-    return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  const formatStatus = (status: string) => formatStatusForDisplay(status);
+
+  const formatPaymentMethod = (method: string) => {
+    const map: Record<string, string> = {
+      cash_on_delivery: 'Cash on Delivery',
+      upi: 'UPI',
+      credit_card: 'Credit Card',
+      debit_card: 'Debit Card',
+      net_banking: 'Net Banking',
+      wallet: 'Wallet',
+    };
+    return map[method] || method?.replace(/_/g, ' ') || 'COD';
   };
 
   const formatDate = (dateString: string) => {
@@ -260,6 +312,16 @@ const OrderTrackingPage = () => {
           <p className="text-gray-600">Order #{order.order_number}</p>
         </div>
 
+        {/* Live indicator */}
+        <div className="flex items-center gap-2 mb-4 text-sm text-green-600">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+          </span>
+          <Radio className="w-4 h-4" />
+          <span>Live tracking active</span>
+        </div>
+
         {/* Order Status Card */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
@@ -323,6 +385,16 @@ const OrderTrackingPage = () => {
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Delivery Information</h2>
           
+          {order.delivery_latitude != null && order.delivery_longitude != null && (
+            <div className="mb-4">
+              <DeliveryMap
+                deliveryLat={order.delivery_latitude}
+                deliveryLng={order.delivery_longitude}
+                driverLocation={driverLocation}
+              />
+            </div>
+          )}
+          
           <div className="space-y-4">
             <div className="flex items-start">
               <MapPin className="w-5 h-5 text-primary mr-3 mt-1" />
@@ -385,7 +457,7 @@ const OrderTrackingPage = () => {
               <p className="text-lg font-bold text-gray-800">Total Amount</p>
               <p className="text-2xl font-bold text-primary">₹{Math.round(order.total_amount)}</p>
             </div>
-            <p className="text-sm text-gray-500 mt-1">Payment Method: {order.payment_method}</p>
+            <p className="text-sm text-gray-500 mt-1">Payment Method: {formatPaymentMethod(order.payment_method)}</p>
           </div>
         </div>
 

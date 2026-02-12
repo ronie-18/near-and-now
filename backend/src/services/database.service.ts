@@ -390,6 +390,203 @@ export class DatabaseService {
   private deg2rad(deg: number): number {
     return deg * (Math.PI / 180);
   }
+
+  // Delivery
+  async getDeliveryPartners() {
+    const { data, error } = await supabase
+      .from('delivery_partners')
+      .select('*');
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async getDeliveryAgents(_partnerId: string) {
+    const { data, error } = await supabase
+      .from('app_users')
+      .select('*')
+      .eq('role', 'delivery_partner');
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async assignDeliveryAgent(orderId: string, agentId: string, _partnerId: string) {
+    const { data: storeOrders } = await supabase
+      .from('store_orders')
+      .select('id')
+      .eq('customer_order_id', orderId);
+    if (!storeOrders?.length) throw new Error('Order not found');
+    const { data, error } = await supabaseAdmin
+      .from('store_orders')
+      .update({
+        delivery_partner_id: agentId,
+        status: 'delivery_partner_assigned',
+        assigned_at: new Date().toISOString()
+      })
+      .eq('customer_order_id', orderId)
+      .select()
+      .single();
+    if (error) throw error;
+    await supabaseAdmin.from('order_status_history').insert({
+      customer_order_id: orderId,
+      status: 'delivery_partner_assigned',
+      notes: 'Delivery partner assigned'
+    });
+    return data;
+  }
+
+  async getAgentSchedule(_agentId: string, _date?: string) {
+    return [];
+  }
+
+  async updateDeliveryStatus(orderId: string, params: { status: string; location?: string; notes?: string }) {
+    const { data: co } = await supabase
+      .from('customer_orders')
+      .select('id')
+      .eq('id', orderId)
+      .single();
+    if (!co) throw new Error('Order not found');
+    const { error: coError } = await supabaseAdmin
+      .from('customer_orders')
+      .update({
+        status: params.status,
+        notes: params.notes ?? undefined,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId);
+    if (coError) throw coError;
+    await supabaseAdmin
+      .from('store_orders')
+      .update({ status: params.status })
+      .eq('customer_order_id', orderId);
+    await supabaseAdmin.from('order_status_history').insert({
+      customer_order_id: orderId,
+      status: params.status,
+      notes: params.notes ?? params.location
+    });
+    return { success: true };
+  }
+
+  // Notifications (stubs - implement when notifications table exists)
+  async getUserNotifications(_userId: string, _unreadOnly?: boolean) {
+    return [];
+  }
+
+  async markNotificationAsRead(_notificationId: string) {
+    return { success: true };
+  }
+
+  async markAllNotificationsAsRead(_userId: string) {
+    return { success: true };
+  }
+
+  async getNotificationPreferences(_userId: string) {
+    return { email: true, sms: true, push: true };
+  }
+
+  async updateNotificationPreferences(_userId: string, preferences: Record<string, unknown>) {
+    return preferences;
+  }
+
+  // Payment
+  async updateOrderPaymentStatus(orderId: string, status: string, _paymentId?: string) {
+    const { error } = await supabaseAdmin
+      .from('customer_orders')
+      .update({
+        payment_status: status,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId);
+    if (error) throw error;
+    return { success: true };
+  }
+
+  // Tracking
+  async getOrderTracking(orderId: string) {
+    const { data, error } = await supabase
+      .from('customer_orders')
+      .select(`
+        *,
+        store_orders (
+          *,
+          order_items (*)
+        )
+      `)
+      .eq('id', orderId)
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async getTrackingHistory(orderId: string) {
+    const { data, error } = await supabase
+      .from('order_status_history')
+      .select('*')
+      .eq('customer_order_id', orderId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async addTrackingUpdate(params: {
+    order_id: string;
+    status: string;
+    location?: string;
+    latitude?: number;
+    longitude?: number;
+    notes?: string;
+  }) {
+    const { data, error } = await supabaseAdmin
+      .from('order_status_history')
+      .insert({
+        customer_order_id: params.order_id,
+        status: params.status,
+        notes: params.notes ?? params.location
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    const { error: coError } = await supabaseAdmin
+      .from('customer_orders')
+      .update({
+        status: params.status,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', params.order_id);
+    if (coError) throw coError;
+    await supabaseAdmin
+      .from('store_orders')
+      .update({ status: params.status })
+      .eq('customer_order_id', params.order_id);
+    return data;
+  }
+
+  async getAgentLocation(agentId: string) {
+    const { data, error } = await supabase
+      .from('driver_locations')
+      .select('*')
+      .eq('delivery_partner_id', agentId)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+
+  async updateAgentLocation(agentId: string, latitude: number, longitude: number) {
+    const { data, error } = await supabaseAdmin
+      .from('driver_locations')
+      .upsert(
+        {
+          delivery_partner_id: agentId,
+          latitude,
+          longitude,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'delivery_partner_id' }
+      )
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
 }
 
 export const databaseService = new DatabaseService();

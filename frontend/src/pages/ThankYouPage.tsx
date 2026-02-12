@@ -241,24 +241,36 @@ const ThankYouPage = () => {
             You will receive an SMS notification when your order is out for delivery.
           </p>
 
-          <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 justify-center">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-3 justify-center">
+            {orderId && (
+              <Link
+                to={`/track/${orderId}`}
+                className="inline-flex items-center justify-center gap-2 bg-primary text-white hover:bg-opacity-90 px-6 py-3 rounded-md font-medium transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Track Order
+              </Link>
+            )}
             <Link
               to="/orders"
-              className="bg-primary text-white hover:bg-opacity-90 px-6 py-3 rounded-md font-medium transition-colors"
+              className="inline-flex items-center justify-center border border-primary text-primary hover:bg-primary hover:text-white px-6 py-3 rounded-md font-medium transition-colors"
             >
               View My Orders
             </Link>
 
             <Link
               to="/shop"
-              className="border border-primary text-primary hover:bg-primary hover:text-white px-6 py-3 rounded-md font-medium transition-colors"
+              className="inline-flex items-center justify-center text-gray-600 hover:text-gray-800 border border-gray-300 hover:border-gray-400 px-6 py-3 rounded-md font-medium transition-colors"
             >
               Continue Shopping
             </Link>
 
             <Link
               to="/"
-              className="text-gray-600 hover:text-gray-800 px-6 py-3 rounded-md font-medium transition-colors"
+              className="inline-flex items-center justify-center text-gray-600 hover:text-gray-800 px-6 py-3 rounded-md font-medium transition-colors"
             >
               Back to Home
             </Link>

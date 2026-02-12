@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Tag, Search, Plus, Percent, Calendar, Users } from 'lucide-react';
+import { Tag, Search, Plus } from 'lucide-react';
 
 const OffersPage = () => {
   const [searchTerm, setSearchTerm] = useState('');

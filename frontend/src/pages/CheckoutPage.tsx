@@ -450,9 +450,9 @@ const CheckoutPage = () => {
             receiver_name: orderForOthers ? receiverName : undefined,
             receiver_phone: orderForOthers ? receiverPhone : undefined,
             receiver_address: orderForOthers ? receiverAddress : undefined,
-            google_place_id: pickedLocation?.placeId || undefined,
-            google_formatted_address: pickedLocation?.formattedAddress || undefined,
-            google_place_data: pickedLocation?.placeData || undefined,
+            google_place_id: pickedLocation?.placeId ?? undefined,
+            google_formatted_address: pickedLocation?.formattedAddress ?? undefined,
+            google_place_data: pickedLocation?.placeData ?? undefined,
           };
 
           const createdAddress = await createAddress(newAddressData);
