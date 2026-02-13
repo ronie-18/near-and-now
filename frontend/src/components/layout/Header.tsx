@@ -8,7 +8,7 @@ import {
   Search, ShoppingCart, User, MapPin, ChevronDown, Menu, X,
   LogOut, Package, UserCircle, LogIn, UserPlus, Clock, Sparkles
 } from 'lucide-react';
-import { searchProducts, Product } from '../../services/supabase';
+import { searchProducts, Product, getUserAddresses, Address as DbAddress } from '../../services/supabase';
 
 const Header = () => {
   const { user, isAuthenticated, logoutUser } = useAuth();
@@ -21,6 +21,7 @@ const Header = () => {
   const [scrolled, setScrolled] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
+  const [userSavedAddresses, setUserSavedAddresses] = useState<DbAddress[]>([]);
   const [searchSuggestions, setSearchSuggestions] = useState<Product[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -29,17 +30,44 @@ const Header = () => {
   const userMenuRef = useRef<HTMLDivElement>(null);
   const mobileUserMenuRef = useRef<HTMLDivElement>(null);
 
-  // Load saved location from localStorage
+  // Load location and saved addresses: for logged-in users prefer saved address from DB
   useEffect(() => {
-    const savedLocation = localStorage.getItem('currentLocation');
-    if (savedLocation) {
-      try {
-        setCurrentLocation(JSON.parse(savedLocation));
-      } catch (e) {
-        console.error('Error loading saved location:', e);
+    const loadLocation = async () => {
+      if (isAuthenticated && user?.id) {
+        try {
+          const addresses = await getUserAddresses(user.id);
+          setUserSavedAddresses(addresses);
+          const defaultAddr = addresses.find((a) => a.is_default) || addresses[0];
+          if (defaultAddr?.latitude != null && defaultAddr?.longitude != null) {
+            const loc: LocationData = {
+              address: defaultAddr.address_line_1 + (defaultAddr.address_line_2 ? ', ' + defaultAddr.address_line_2 : ''),
+              city: defaultAddr.city,
+              pincode: defaultAddr.pincode,
+              state: defaultAddr.state,
+              lat: defaultAddr.latitude,
+              lng: defaultAddr.longitude,
+            };
+            setCurrentLocation(loc);
+            localStorage.setItem('currentLocation', JSON.stringify(loc));
+            return;
+          }
+        } catch (e) {
+          console.error('Error loading user addresses:', e);
+        }
+      } else {
+        setUserSavedAddresses([]);
       }
-    }
-  }, []);
+      const savedLocation = localStorage.getItem('currentLocation');
+      if (savedLocation) {
+        try {
+          setCurrentLocation(JSON.parse(savedLocation));
+        } catch (e) {
+          console.error('Error loading saved location:', e);
+        }
+      }
+    };
+    loadLocation();
+  }, [isAuthenticated, user?.id]);
 
   // Handle scroll effect
   useEffect(() => {
@@ -733,6 +761,7 @@ const Header = () => {
         onClose={() => setIsLocationPickerOpen(false)}
         onLocationSelect={handleLocationSelect}
         currentLocation={currentLocation || undefined}
+        userSavedAddresses={userSavedAddresses}
       />
     </>
   );

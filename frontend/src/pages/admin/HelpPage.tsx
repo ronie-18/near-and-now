@@ -1,5 +1,32 @@
 import { HelpCircle, Book, MessageCircle, FileText, Video, Mail } from 'lucide-react';
 
+const faqs = [
+  {
+    q: 'How do I add a new product?',
+    a: 'Go to Products → Add Product. Fill in the product details (name, price, category, images), set stock status, and save. You can also use Quick Add from the product list.',
+  },
+  {
+    q: 'How do I update order status?',
+    a: 'Open Orders, click on an order to view details, then use the status dropdown to change it (e.g. pending → store_accepted → preparing → ready_for_pickup → in_transit → delivered).',
+  },
+  {
+    q: 'How do I manage categories?',
+    a: 'Go to Categories to add, edit, or delete categories. Categories control how products are grouped. Only categories with products are shown to customers.',
+  },
+  {
+    q: 'How do I export reports?',
+    a: 'In Reports, select the time period (7/30/90/365 days), then click Export to download the report as JSON with revenue, orders, and product data.',
+  },
+  {
+    q: 'How do I create admin accounts?',
+    a: 'Super admins can go to Admin Management → Create Admin. Set email, password, role (super_admin or admin), and permissions. Admins can have granular permissions like products:read, orders:update, etc.',
+  },
+  {
+    q: 'How do I assign a delivery partner?',
+    a: 'Delivery assignment is managed from the Delivery page (coming soon). Currently, delivery partners can be configured in the database and linked to store orders.',
+  },
+];
+
 const HelpPage = () => {
   const helpSections = [
     {
@@ -30,13 +57,7 @@ const HelpPage = () => {
       icon: <FileText size={32} className="text-primary" />,
       title: 'FAQs',
       description: 'Frequently asked questions',
-      items: [
-        'How to add a new product?',
-        'How to update order status?',
-        'How to manage categories?',
-        'How to export reports?',
-        'How to create admin accounts?'
-      ]
+      items: faqs.map(f => f.q)
     },
     {
       icon: <MessageCircle size={32} className="text-primary" />,
@@ -85,20 +106,31 @@ const HelpPage = () => {
         ))}
       </div>
 
-      {/* Coming Soon Notice */}
+      {/* FAQ with Answers */}
+      <div className="bg-white rounded-lg shadow-sm p-6">
+        <h3 className="text-xl font-semibold text-gray-900 mb-4">FAQ with Answers</h3>
+        <div className="space-y-4">
+          {faqs.map((faq, i) => (
+            <details key={i} className="group border border-gray-200 rounded-lg p-4">
+              <summary className="font-medium text-gray-800 cursor-pointer list-none flex justify-between items-center">
+                {faq.q}
+                <span className="text-gray-400 text-sm group-open:rotate-180">▼</span>
+              </summary>
+              <p className="text-gray-600 mt-2 text-sm">{faq.a}</p>
+            </details>
+          ))}
+        </div>
+      </div>
+
+      {/* Contact Support */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
         <div className="flex items-start space-x-4">
           <HelpCircle size={24} className="text-blue-600 flex-shrink-0 mt-1" />
           <div>
-            <h3 className="text-lg font-semibold text-blue-900 mb-2">Help Center Under Development</h3>
+            <h3 className="text-lg font-semibold text-blue-900 mb-2">Need More Help?</h3>
             <p className="text-blue-800 text-sm">
-              Our comprehensive help center is currently under development. In the meantime, you can:
+              Contact our support team for assistance:
             </p>
-            <ul className="text-blue-700 text-sm mt-2 list-disc list-inside space-y-1">
-              <li>Contact support via email for immediate assistance</li>
-              <li>Refer to the admin panel tooltips and inline help text</li>
-              <li>Check the documentation files in the project repository</li>
-            </ul>
             <div className="mt-4">
               <a
                 href="mailto:support@nearandnow.com"
@@ -108,6 +140,9 @@ const HelpPage = () => {
                 support@nearandnow.com
               </a>
             </div>
+            <p className="text-blue-700 text-sm mt-2">
+              Refer to the docs/ folder in the project repository for schema details and setup guides.
+            </p>
           </div>
         </div>
       </div>

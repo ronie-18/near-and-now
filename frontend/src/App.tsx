@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { NotificationProvider, useNotification } from './context/NotificationContext';
+import { GoogleMapsProvider } from './context/GoogleMapsContext';
 import Layout from './components/layout/Layout';
 import AdminLoginPage from './pages/admin/AdminLoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -22,6 +23,7 @@ import OrderTrackingPage from './pages/OrderTrackingPage';
 import AddressesPage from './pages/AddressesPage';
 import CartPage from './pages/CartPage';
 import AboutPage from './pages/AboutPage';
+import HelpPage from './pages/HelpPage';
 import TestPage from './pages/TestPage';
 
 // Policy pages
@@ -64,10 +66,12 @@ const AppContent: React.FC = () => {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/orders" element={<OrdersPage />} />
+            <Route path="/track" element={<OrderTrackingPage />} />
             <Route path="/track/:orderId" element={<OrderTrackingPage />} />
             <Route path="/addresses" element={<AddressesPage />} />
             <Route path="/cart" element={<CartPage />} />
             <Route path="/about" element={<AboutPage />} />
+            <Route path="/help" element={<HelpPage />} />
             {/* Policy Pages */}
             <Route path="/terms" element={<TermsOfServicePage />} />
             <Route path="/shipping" element={<ShippingPolicyPage />} />
@@ -95,7 +99,9 @@ function App() {
         <AuthProvider>
           <CartProvider>
             <NotificationProvider>
-              <AppContent />
+              <GoogleMapsProvider>
+                <AppContent />
+              </GoogleMapsProvider>
             </NotificationProvider>
           </CartProvider>
         </AuthProvider>

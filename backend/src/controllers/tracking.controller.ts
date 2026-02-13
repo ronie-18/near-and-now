@@ -19,6 +19,35 @@ export class TrackingController {
     }
   }
 
+  // Get full tracking data (order + status history + store locations) - bypasses RLS via backend
+  async getOrderTrackingFull(req: Request, res: Response) {
+    try {
+      const { orderId } = req.params;
+      const data = await databaseService.getOrderTrackingFull(orderId);
+      
+      if (!data) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      res.json(data);
+    } catch (error) {
+      console.error('Error fetching order tracking (full):', error);
+      res.status(500).json({ error: 'Failed to fetch order tracking' });
+    }
+  }
+
+  // Get driver locations for an order (all assigned partners)
+  async getDriverLocations(req: Request, res: Response) {
+    try {
+      const { orderId } = req.params;
+      const locations = await databaseService.getDriverLocationsForOrder(orderId);
+      res.json(locations);
+    } catch (error) {
+      console.error('Error fetching driver locations:', error);
+      res.status(500).json({ error: 'Failed to fetch driver locations' });
+    }
+  }
+
   // Get tracking history for an order
   async getTrackingHistory(req: Request, res: Response) {
     try {

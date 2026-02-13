@@ -10,10 +10,12 @@ import {
   setDefaultAddress
 } from '../services/supabase';
 import { geocodeAddress } from '../services/placesService';
+import { Home, Briefcase, MapPin } from 'lucide-react';
 
 interface Address {
   id: string;
   name: string;
+  label?: string;
   addressLine1: string;
   addressLine2?: string;
   city: string;
@@ -21,6 +23,18 @@ interface Address {
   pincode: string;
   phone: string;
   isDefault: boolean;
+}
+
+function getAddressIcon(label?: string) {
+  switch (label?.toLowerCase()) {
+    case 'home':
+      return <Home className="w-5 h-5 text-primary" />;
+    case 'work':
+    case 'office':
+      return <Briefcase className="w-5 h-5 text-primary" />;
+    default:
+      return <MapPin className="w-5 h-5 text-primary" />;
+  }
 }
 
 const AddressesPage = () => {
@@ -67,6 +81,7 @@ const AddressesPage = () => {
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
+          label: addr.label,
           addressLine1: addr.address_line_1,
           addressLine2: addr.address_line_2,
           city: addr.city,
@@ -187,6 +202,7 @@ const AddressesPage = () => {
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
+          label: addr.label,
           addressLine1: addr.address_line_1,
           addressLine2: addr.address_line_2,
           city: addr.city,
@@ -221,6 +237,7 @@ const AddressesPage = () => {
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
+          label: addr.label,
           addressLine1: addr.address_line_1,
           addressLine2: addr.address_line_2,
           city: addr.city,
@@ -260,20 +277,21 @@ const AddressesPage = () => {
       
       // Refresh addresses list
       const data = await getUserAddresses(user.id);
-      const transformedAddresses = data.map(addr => ({
-        id: addr.id,
-        name: addr.name,
-        addressLine1: addr.address_line_1,
-        addressLine2: addr.address_line_2,
-        city: addr.city,
-        state: addr.state,
-        pincode: addr.pincode,
-        phone: addr.phone,
-        isDefault: addr.is_default
-      }));
-      setAddresses(transformedAddresses);
-      
-      showNotification('Address deleted successfully', 'success');
+        const transformedAddresses = data.map(addr => ({
+          id: addr.id,
+          name: addr.name,
+          label: addr.label,
+          addressLine1: addr.address_line_1,
+          addressLine2: addr.address_line_2,
+          city: addr.city,
+          state: addr.state,
+          pincode: addr.pincode,
+          phone: addr.phone,
+          isDefault: addr.is_default
+        }));
+        setAddresses(transformedAddresses);
+        
+        showNotification('Address deleted successfully', 'success');
     } catch (error) {
       console.error('Error deleting address:', error);
       showNotification('Failed to delete address. Please try again.', 'error');
@@ -291,20 +309,21 @@ const AddressesPage = () => {
       
       // Refresh addresses list
       const data = await getUserAddresses(user.id);
-      const transformedAddresses = data.map(addr => ({
-        id: addr.id,
-        name: addr.name,
-        addressLine1: addr.address_line_1,
-        addressLine2: addr.address_line_2,
-        city: addr.city,
-        state: addr.state,
-        pincode: addr.pincode,
-        phone: addr.phone,
-        isDefault: addr.is_default
-      }));
-      setAddresses(transformedAddresses);
-      
-      showNotification('Default address updated', 'success');
+        const transformedAddresses = data.map(addr => ({
+          id: addr.id,
+          name: addr.name,
+          label: addr.label,
+          addressLine1: addr.address_line_1,
+          addressLine2: addr.address_line_2,
+          city: addr.city,
+          state: addr.state,
+          pincode: addr.pincode,
+          phone: addr.phone,
+          isDefault: addr.is_default
+        }));
+        setAddresses(transformedAddresses);
+        
+        showNotification('Default address updated', 'success');
     } catch (error) {
       console.error('Error setting default address:', error);
       showNotification('Failed to set default address. Please try again.', 'error');
@@ -573,7 +592,8 @@ const AddressesPage = () => {
               <div key={address.id} className="bg-white p-6 rounded-lg shadow-md">
                 <div className="flex justify-between items-start">
                   <div>
-                    <div className="flex items-center">
+                    <div className="flex items-center gap-2">
+                      {getAddressIcon(address.label || address.name)}
                       <h3 className="font-medium text-gray-800">{address.name}</h3>
                       {address.isDefault && (
                         <span className="ml-2 bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full">

@@ -1,7 +1,24 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
+import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 
 export class DeliveryController {
+  /** Start mock delivery simulation (driver follows road routes). Runs in background. */
+  async startSimulation(req: Request, res: Response) {
+    try {
+      const { orderId } = req.params;
+      if (!orderId) {
+        return res.status(400).json({ error: 'Order ID required' });
+      }
+      res.status(202).json({ status: 'simulation_started', orderId });
+      runDeliverySimulation(orderId).catch((err) =>
+        console.error('Delivery simulation error:', err)
+      );
+    } catch (error) {
+      console.error('Error starting simulation:', error);
+      res.status(500).json({ error: 'Failed to start simulation' });
+    }
+  }
   // Get all delivery partners
   async getDeliveryPartners(req: Request, res: Response) {
     try {

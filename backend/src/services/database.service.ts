@@ -1,4 +1,5 @@
 import { supabase, supabaseAdmin } from '../config/database.js';
+import { reverseGeocode } from './geocoding.service.js';
 import type {
   AppUser,
   Customer,
@@ -201,7 +202,7 @@ export class DatabaseService {
   }
 
   async getOrderById(orderId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .select(`
         *,
@@ -502,7 +503,7 @@ export class DatabaseService {
 
   // Tracking
   async getOrderTracking(orderId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .select(`
         *,
@@ -518,13 +519,62 @@ export class DatabaseService {
   }
 
   async getTrackingHistory(orderId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('order_status_history')
-      .select('*')
+      .select('status, notes, created_at')
       .eq('customer_order_id', orderId)
       .order('created_at', { ascending: true });
     if (error) throw error;
     return data ?? [];
+  }
+
+  /** Full tracking data for tracking page: order + status history + store locations + delivery partner */
+  async getOrderTrackingFull(orderId: string) {
+    const order = await this.getOrderTracking(orderId);
+    if (!order) return null;
+    const statusHistory = await this.getTrackingHistory(orderId);
+    const storeIds = [...new Set((order.store_orders || []).map((so: { store_id: string }) => so.store_id).filter(Boolean))];
+    let storeLocations: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[] = [];
+    if (storeIds.length > 0) {
+      const { data: stores } = await supabaseAdmin
+        .from('stores')
+        .select('id, latitude, longitude, name, address, phone')
+        .in('id', storeIds);
+      const storeRows = stores || [];
+      for (const s of storeRows) {
+        const row = s as { id: string; latitude: number; longitude: number; name?: string; address?: string; phone?: string };
+        let address = row.address?.trim() || undefined;
+        const isGeneric = !address || /^Pickup point/i.test(address) || /^Local store/i.test(address);
+        if (isGeneric && row.latitude != null && row.longitude != null) {
+          const geocoded = await reverseGeocode(Number(row.latitude), Number(row.longitude));
+          if (geocoded) {
+            address = geocoded;
+            await supabaseAdmin.from('stores').update({ address: geocoded, updated_at: new Date().toISOString() }).eq('id', row.id);
+          }
+        }
+        storeLocations.push({
+          lat: Number(row.latitude),
+          lng: Number(row.longitude),
+          label: row.name || 'Store',
+          address: address || undefined,
+          phone: row.phone || undefined,
+          store_id: row.id,
+        });
+      }
+    }
+    let deliveryAgent: { id: string; name: string; phone: string } | undefined;
+    const storeOrderWithPartner = (order.store_orders || []).find((so: { delivery_partner_id?: string }) => so.delivery_partner_id);
+    if (storeOrderWithPartner?.delivery_partner_id) {
+      const { data: partner } = await supabaseAdmin
+        .from('app_users')
+        .select('id, name, phone')
+        .eq('id', storeOrderWithPartner.delivery_partner_id)
+        .single();
+      if (partner) {
+        deliveryAgent = { id: partner.id, name: partner.name || 'Delivery Partner', phone: partner.phone || '' };
+      }
+    }
+    return { order, statusHistory, storeLocations, deliveryAgent };
   }
 
   async addTrackingUpdate(params: {
@@ -561,7 +611,7 @@ export class DatabaseService {
   }
 
   async getAgentLocation(agentId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('driver_locations')
       .select('*')
       .eq('delivery_partner_id', agentId)
@@ -586,6 +636,30 @@ export class DatabaseService {
       .single();
     if (error) throw error;
     return data;
+  }
+
+  async getDriverLocationsForOrder(orderId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }>> {
+    const { data: storeOrders } = await supabaseAdmin
+      .from('store_orders')
+      .select('delivery_partner_id')
+      .eq('customer_order_id', orderId)
+      .not('delivery_partner_id', 'is', null);
+    const partnerIds = [...new Set((storeOrders || []).map((r: { delivery_partner_id: string }) => r.delivery_partner_id).filter(Boolean))];
+    if (partnerIds.length === 0) return {};
+    const { data: locations } = await supabaseAdmin
+      .from('driver_locations')
+      .select('delivery_partner_id, latitude, longitude, updated_at')
+      .in('delivery_partner_id', partnerIds);
+    const result: Record<string, { latitude: number; longitude: number; updated_at: string }> = {};
+    for (const row of locations || []) {
+      const id = (row as { delivery_partner_id: string }).delivery_partner_id;
+      result[id] = {
+        latitude: Number((row as { latitude: number }).latitude),
+        longitude: Number((row as { longitude: number }).longitude),
+        updated_at: (row as { updated_at: string }).updated_at || new Date().toISOString(),
+      };
+    }
+    return result;
   }
 }
 

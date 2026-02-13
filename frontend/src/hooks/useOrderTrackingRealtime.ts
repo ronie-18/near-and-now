@@ -6,6 +6,7 @@
 
 import { useEffect, useRef } from 'react';
 import { supabaseAdmin } from '../services/supabase';
+import { fetchOrderTrackingFull, fetchDriverLocations } from '../services/trackingApi';
 
 export interface Order {
   id: string;
@@ -25,6 +26,8 @@ export interface Order {
   estimated_delivery?: string;
   delivery_latitude?: number;
   delivery_longitude?: number;
+  store_locations?: { lat: number; lng: number; label?: string }[];
+  store_orders?: { delivery_partner_id?: string; store_id?: string; status?: string }[];
 }
 
 export interface OrderStatus {
@@ -43,31 +46,15 @@ export interface DriverLocation {
 type SetOrder = React.Dispatch<React.SetStateAction<Order | null>>;
 type SetTrackingHistory = React.Dispatch<React.SetStateAction<OrderStatus[]>>;
 type SetDriverLocation = React.Dispatch<React.SetStateAction<DriverLocation | null>>;
-
-async function fetchDeliveryPartner(partnerId: string) {
-  const { data } = await supabaseAdmin
-    .from('app_users')
-    .select('id, name, phone')
-    .eq('id', partnerId)
-    .single();
-  return data ? { id: data.id, name: data.name || 'Delivery Partner', phone: data.phone || '' } : null;
-}
-
-async function fetchStatusHistory(orderId: string) {
-  const { data } = await supabaseAdmin
-    .from('order_status_history')
-    .select('status, notes, created_at')
-    .eq('customer_order_id', orderId)
-    .order('created_at', { ascending: true });
-  return data || [];
-}
+type SetDriverLocations = React.Dispatch<React.SetStateAction<Record<string, DriverLocation>>>;
 
 export function useOrderTrackingRealtime(
   orderId: string | undefined,
   order: Order | null,
   setOrder: SetOrder,
   setTrackingHistory: SetTrackingHistory,
-  setDriverLocation: SetDriverLocation,
+  _setDriverLocation: SetDriverLocation,
+  setDriverLocations: SetDriverLocations,
   buildTrackingHistory: (order: Order, statusHistory: { status: string; notes?: string; created_at: string }[]) => OrderStatus[]
 ) {
   const buildRef = useRef(buildTrackingHistory);
@@ -77,46 +64,36 @@ export function useOrderTrackingRealtime(
     if (!orderId || !order) return;
     const build = buildRef.current;
 
-    const { data: co } = await supabaseAdmin
-      .from('customer_orders')
-      .select('*')
-      .eq('id', orderId)
-      .single();
-    if (!co) return;
+    // Use backend API (bypasses Supabase RLS 403)
+    const data = await fetchOrderTrackingFull(orderId);
+    if (!data) return;
 
-    const { data: storeOrders } = await supabaseAdmin
-      .from('store_orders')
-      .select('*, order_items(*)')
-      .eq('customer_order_id', orderId);
+    const { order: co, statusHistory, storeLocations, deliveryAgent } = data;
+    const storeOrders = co.store_orders || [];
 
-    const statusHistory = await fetchStatusHistory(orderId);
-    const storeOrderWithPartner = (storeOrders || []).find((so: any) => so.delivery_partner_id);
-    let deliveryAgent = order.delivery_agent;
-    if (storeOrderWithPartner?.delivery_partner_id) {
-      const partner = await fetchDeliveryPartner(storeOrderWithPartner.delivery_partner_id);
-      if (partner) deliveryAgent = { ...partner, vehicle_number: order.delivery_agent?.vehicle_number };
-    }
-
+    const orderIdVal = co.id || order.id || '';
     const updatedOrder: Order = {
       ...order,
-      id: co.id,
-      order_number: co.order_code || co.id?.substring(0, 8)?.toUpperCase(),
+      id: orderIdVal,
+      order_number: co.order_code || co.id?.substring(0, 8)?.toUpperCase() || '',
       status: co.status || 'pending_at_store',
-      created_at: co.placed_at || co.created_at,
-      delivery_address: co.delivery_address,
+      created_at: co.placed_at || co.created_at || '',
+      delivery_address: co.delivery_address || '',
       total_amount: co.total_amount ?? 0,
-      delivery_agent: deliveryAgent,
+      delivery_agent: deliveryAgent || order.delivery_agent,
       estimated_delivery: co.estimated_delivery_time,
       delivery_latitude: co.delivery_latitude,
       delivery_longitude: co.delivery_longitude,
-      items: (storeOrders || []).flatMap((so: any) => so.order_items || []),
+      items: storeOrders.flatMap((so: any) => so.order_items || []),
+      store_locations: storeLocations.length > 0 ? storeLocations : order.store_locations,
+      store_orders: storeOrders,
     };
 
     setOrder(updatedOrder);
     setTrackingHistory(build(updatedOrder, statusHistory));
   };
 
-  // Subscribe to order and store_orders changes
+  // Subscribe to order/store_orders/status changes + polling fallback (runs when order loads)
   useEffect(() => {
     if (!orderId || !order) return;
 
@@ -158,57 +135,30 @@ export function useOrderTrackingRealtime(
         }
       });
 
+    // Poll every 3 sec as fallback (simulation updates may not trigger realtime)
+    const pollInterval = setInterval(refreshOrderAndHistory, 3000);
+
     return () => {
+      clearInterval(pollInterval);
       supabaseAdmin.removeChannel(channel);
     };
-  }, [orderId]);
+  }, [orderId, !!order]);
 
-  // Subscribe to driver location when delivery partner is assigned
-  const deliveryPartnerId = order?.delivery_agent?.id;
+  // Driver locations: poll backend API every 2 sec (backend gets partner IDs from DB)
+  // Poll whenever we have orderId - no need to wait for order.store_orders to have delivery_partner_id
   useEffect(() => {
-    if (!deliveryPartnerId) return;
+    if (!orderId) return;
 
-    // Fetch initial driver location
-    supabaseAdmin
-      .from('driver_locations')
-      .select('latitude, longitude, updated_at')
-      .eq('delivery_partner_id', deliveryPartnerId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) {
-          setDriverLocation({
-            latitude: data.latitude,
-            longitude: data.longitude,
-            updated_at: data.updated_at,
-          });
-        }
-      });
-
-    const locChannel = supabaseAdmin
-      .channel(`driver-location-${deliveryPartnerId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'driver_locations',
-          filter: `delivery_partner_id=eq.${deliveryPartnerId}`,
-        },
-        (payload) => {
-          const row = (payload.new || payload.old) as { latitude?: number; longitude?: number; updated_at?: string } | null;
-          if (row && typeof row.latitude === 'number' && typeof row.longitude === 'number') {
-            setDriverLocation({
-              latitude: row.latitude,
-              longitude: row.longitude,
-              updated_at: row.updated_at || new Date().toISOString(),
-            });
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabaseAdmin.removeChannel(locChannel);
+    const pollDriverLocations = async () => {
+      const locations = await fetchDriverLocations(orderId);
+      if (Object.keys(locations).length > 0) {
+        setDriverLocations((prev) => ({ ...prev, ...locations }));
+      }
     };
-  }, [deliveryPartnerId, setDriverLocation]);
+
+    pollDriverLocations();
+
+    const pollInterval = setInterval(pollDriverLocations, 2000);
+    return () => clearInterval(pollInterval);
+  }, [orderId]);
 }

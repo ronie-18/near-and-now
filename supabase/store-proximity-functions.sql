@@ -82,7 +82,7 @@ BEGIN
     RETURNING id INTO owner_id;
   END IF;
 
-  -- Create 6 stores around grid center (unique phones via sequence)
+  -- Create 6 stores around grid center (unique phones via sequence, full details)
   FOR i IN 1..6 LOOP
     ph := '+919' || lpad(nextval('store_phone_seq')::text, 9, '0');
     INSERT INTO stores (owner_id, name, phone, address, latitude, longitude, is_active)
@@ -90,7 +90,7 @@ BEGIN
       owner_id,
       'Near & Now Store #' || i,
       ph,
-      'Local store near your area',
+      'Pickup point #' || i || ', serving your delivery area.',
       grid_lat + offsets[i][1],
       grid_lng + offsets[i][2],
       true

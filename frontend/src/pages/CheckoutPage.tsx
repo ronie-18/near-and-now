@@ -66,6 +66,7 @@ const CheckoutPage = () => {
   const [suggestedProducts, setSuggestedProducts] = useState<Product[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const suggestionsScrollRef = useRef<HTMLDivElement>(null);
+  const lastCreatedAddressRef = useRef<DbAddress | null>(null);
 
   // Fetch saved addresses on component mount
   useEffect(() => {
@@ -456,6 +457,7 @@ const CheckoutPage = () => {
           };
 
           const createdAddress = await createAddress(newAddressData);
+          lastCreatedAddressRef.current = createdAddress;
 
           // Refresh the addresses list to include the newly added address
           const updatedAddresses = await getUserAddresses(user.id);
@@ -486,6 +488,22 @@ const CheckoutPage = () => {
       const { subtotal, deliveryFee, orderTotal } = calculateOrderTotals(cartTotal);
       const finalOrderTotal = Math.round(orderTotal + tipAmount);
 
+      // Resolve lat/lng from saved address, just-created address, or map picker (avoids geocoding failures)
+      let shippingLat: number | undefined;
+      let shippingLng: number | undefined;
+      if (selectedAddressId) {
+        const recent = lastCreatedAddressRef.current?.id === selectedAddressId ? lastCreatedAddressRef.current : null;
+        const savedAddr = recent ?? savedAddresses.find((a) => a.id === selectedAddressId);
+        if (savedAddr?.latitude != null && savedAddr?.longitude != null) {
+          shippingLat = savedAddr.latitude;
+          shippingLng = savedAddr.longitude;
+        }
+      }
+      if ((shippingLat == null || shippingLng == null) && pickedLocation) {
+        shippingLat = pickedLocation.lat;
+        shippingLng = pickedLocation.lng;
+      }
+
       // Prepare order data
       const orderData: CreateOrderData = {
         user_id: user?.id,
@@ -503,7 +521,8 @@ const CheckoutPage = () => {
           address: formData.address,
           city: formData.city,
           state: formData.state,
-          pincode: formData.pincode
+          pincode: formData.pincode,
+          ...(shippingLat != null && shippingLng != null && { latitude: shippingLat, longitude: shippingLng })
         }
       };
 
@@ -512,6 +531,7 @@ const CheckoutPage = () => {
 
       showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
+      lastCreatedAddressRef.current = null;
 
       // Navigate to thank you page with order data
       navigate('/thank-you', {

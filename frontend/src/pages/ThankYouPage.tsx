@@ -1,8 +1,10 @@
   import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { formatPrice } from '../utils/formatters';
 import { Order, OrderItem } from '../services/supabase';
 import axios from 'axios';
+
+const THANK_YOU_DISPLAY_SEC = 7;
 
 const ThankYouPage = () => {
   const location = useLocation();
@@ -13,12 +15,42 @@ const ThankYouPage = () => {
   const orderNumber = orderData?.orderNumber || order?.order_number;
   const orderId = orderData?.orderId || order?.id;
 
+  const [redirectCountdown, setRedirectCountdown] = useState<number>(THANK_YOU_DISPLAY_SEC);
+  const redirectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [timeRemaining, setTimeRemaining] = useState<number>(120);
   const [canCancel, setCanCancel] = useState<boolean>(true);
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
   const [cancelError, setCancelError] = useState<string>('');
   const [cancelSuccess, setCancelSuccess] = useState<boolean>(false);
   const [hasDeliveryPartner, setHasDeliveryPartner] = useState<boolean>(false);
+
+  // Auto-redirect to track page after 7 seconds
+  useEffect(() => {
+    if (!orderId) return;
+
+    setRedirectCountdown(THANK_YOU_DISPLAY_SEC);
+    redirectTimerRef.current = setInterval(() => {
+      setRedirectCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+
+    return () => {
+      if (redirectTimerRef.current) {
+        clearInterval(redirectTimerRef.current);
+        redirectTimerRef.current = null;
+      }
+    };
+  }, [orderId]);
+
+  useEffect(() => {
+    if (redirectCountdown === 0 && orderId) {
+      if (redirectTimerRef.current) {
+        clearInterval(redirectTimerRef.current);
+        redirectTimerRef.current = null;
+      }
+      navigate(`/track/${orderId}`, { replace: true });
+    }
+  }, [redirectCountdown, orderId, navigate]);
 
   useEffect(() => {
     if (!orderId) return;
@@ -128,6 +160,14 @@ const ThankYouPage = () => {
           <p className="text-gray-600 mb-6">
             Your order has been placed successfully. We've sent a confirmation email with your order details.
           </p>
+
+          {orderId && redirectCountdown > 0 && (
+            <div className="bg-primary/10 border border-primary/30 rounded-lg px-4 py-3 mb-6 text-center">
+              <p className="text-primary font-medium">
+                Redirecting to live tracking in {redirectCountdown} second{redirectCountdown !== 1 ? 's' : ''}...
+              </p>
+            </div>
+          )}
 
           <div className="bg-gray-50 p-4 rounded-md mb-6">
             <p className="text-gray-500 mb-1">Order {orderNumber ? 'Number' : 'ID'}</p>

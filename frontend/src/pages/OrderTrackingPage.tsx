@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { Package, MapPin, Truck, CheckCircle, Clock, Phone, User, XCircle, Radio } from 'lucide-react';
+import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { Package, MapPin, Truck, CheckCircle, Clock, Phone, User, XCircle, Radio, ChevronDown, ChevronUp, Store } from 'lucide-react';
 import { supabaseAdmin } from '../services/supabase';
 import { useOrderTrackingRealtime } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
+import { SIMULATION_STORAGE_KEY } from '../services/deliverySimulation';
+import { geocodeAddress } from '../services/placesService';
+import { fetchOrderTrackingFull } from '../services/trackingApi';
 
 // DB statuses: pending_at_store, store_accepted, preparing_order, ready_for_pickup,
 // delivery_partner_assigned, order_picked_up, in_transit, order_delivered, order_cancelled
@@ -31,6 +34,49 @@ const STATUS_ORDER = [
   'order_cancelled',
 ];
 
+function TrackByNumberForm({
+  loading,
+  initialNumber,
+}: {
+  loading: boolean;
+  initialNumber: string;
+}) {
+  const navigate = useNavigate();
+  const [number, setNumber] = useState(initialNumber);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = number.trim();
+    if (trimmed) navigate(`/track?number=${encodeURIComponent(trimmed)}`);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <input
+        type="text"
+        value={number}
+        onChange={(e) => setNumber(e.target.value)}
+        placeholder="Enter order number (e.g. ORD-2024-0001)"
+        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary"
+      />
+      <button
+        type="submit"
+        disabled={loading || !number.trim()}
+        className="w-full py-3 bg-primary text-white font-medium rounded-lg hover:bg-secondary disabled:opacity-50 transition-colors"
+      >
+        {loading ? (
+          <span className="flex items-center justify-center gap-2">
+            <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            Looking up...
+          </span>
+        ) : (
+          'Track Order'
+        )}
+      </button>
+    </form>
+  );
+}
+
 interface OrderStatus {
   status: string;
   timestamp: string;
@@ -56,14 +102,51 @@ interface Order {
   estimated_delivery?: string;
   delivery_latitude?: number;
   delivery_longitude?: number;
+  store_locations?: { lat: number; lng: number; label?: string; address?: string; phone?: string }[];
+  store_orders?: { delivery_partner_id?: string; store_id?: string; status?: string }[];
 }
 
 const OrderTrackingPage = () => {
-  const { orderId } = useParams<{ orderId: string }>();
+  const { orderId } = useParams<{ orderId?: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const trackingNumberParam = searchParams.get('number');
+
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [trackingHistory, setTrackingHistory] = useState<OrderStatus[]>([]);
-  const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number; updated_at: string } | null>(null);
+  const [, setDriverLocation] = useState<{ latitude: number; longitude: number; updated_at: string } | null>(null);
+  const [driverLocations, setDriverLocations] = useState<Record<string, { latitude: number; longitude: number; updated_at: string }>>({});
+  const [geocodedCoords, setGeocodedCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [showTrackingHistory, setShowTrackingHistory] = useState(false);
+  const [showOrderItems, setShowOrderItems] = useState(false);
+
+  // Track by order number (for /track?number=XXX) - resolve order_code to order id and redirect
+  useEffect(() => {
+    if (orderId || !trackingNumberParam?.trim()) return;
+
+    const resolveOrderByNumber = async () => {
+      try {
+        setLoading(true);
+        const { data, error } = await supabaseAdmin
+          .from('customer_orders')
+          .select('id')
+          .eq('order_code', trackingNumberParam.trim())
+          .maybeSingle();
+
+        if (!error && data?.id) {
+          navigate(`/track/${data.id}`, { replace: true });
+          return;
+        }
+      } catch {
+        // Fall through to show lookup form
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    resolveOrderByNumber();
+  }, [orderId, trackingNumberParam, navigate]);
 
   useEffect(() => {
     const fetchOrderTracking = async () => {
@@ -72,62 +155,32 @@ const OrderTrackingPage = () => {
       try {
         setLoading(true);
 
-        // Fetch order details from customer_orders
-        const { data: orderData, error: orderError } = await supabaseAdmin
-          .from('customer_orders')
-          .select(
-            `
-            *,
-            store_orders (
-              *,
-              order_items (*)
-            )
-          `
-          )
-          .eq('id', orderId)
-          .single();
+        // Use backend API (bypasses Supabase RLS 403)
+        const data = await fetchOrderTrackingFull(orderId);
+        if (!data) {
+          setLoading(false);
+          return;
+        }
 
-        if (orderError) throw orderError;
+        const { order: orderData, statusHistory, storeLocations, deliveryAgent } = data;
 
-        // Fetch real tracking history from order_status_history
-        const { data: statusHistory } = await supabaseAdmin
-          .from('order_status_history')
-          .select('status, notes, created_at')
-          .eq('customer_order_id', orderData.id)
-          .order('created_at', { ascending: true });
-
+        const orderIdVal = orderData.id ?? orderId ?? '';
         const transformedOrder: Order = {
-          id: orderData.id,
-          order_number: orderData.order_code || orderData.id.substring(0, 8).toUpperCase(),
+          id: orderIdVal,
+          order_number: orderData.order_code || orderIdVal.substring(0, 8).toUpperCase(),
           status: orderData.status || 'pending_at_store',
-          created_at: orderData.placed_at || orderData.created_at,
-          delivery_address: orderData.delivery_address,
+          created_at: orderData.placed_at || orderData.created_at || '',
+          delivery_address: orderData.delivery_address || '',
           total_amount: orderData.total_amount || 0,
           payment_method: orderData.payment_method || 'COD',
           items: orderData.store_orders?.flatMap((so: any) => so.order_items || []) || [],
           estimated_delivery: orderData.estimated_delivery_time,
           delivery_latitude: orderData.delivery_latitude,
           delivery_longitude: orderData.delivery_longitude,
+          store_locations: storeLocations,
+          store_orders: orderData.store_orders,
+          delivery_agent: deliveryAgent,
         };
-
-        // Get delivery partner from first store_order that has one
-        const storeOrderWithPartner = (orderData.store_orders || []).find(
-          (so: any) => so.delivery_partner_id
-        );
-        if (storeOrderWithPartner?.delivery_partner_id) {
-          const { data: partner } = await supabaseAdmin
-            .from('app_users')
-            .select('id, name, phone')
-            .eq('id', storeOrderWithPartner.delivery_partner_id)
-            .single();
-          if (partner) {
-            transformedOrder.delivery_agent = {
-              id: partner.id,
-              name: partner.name || 'Delivery Partner',
-              phone: partner.phone || '',
-            };
-          }
-        }
 
         setOrder(transformedOrder);
 
@@ -145,6 +198,34 @@ const OrderTrackingPage = () => {
 
     fetchOrderTracking();
   }, [orderId]);
+
+  // Geocode delivery address when coords are missing (e.g. older orders)
+  useEffect(() => {
+    if (!order?.delivery_address) return;
+    if (order.delivery_latitude != null && order.delivery_longitude != null) {
+      setGeocodedCoords(null);
+      return;
+    }
+    let cancelled = false;
+    geocodeAddress(order.delivery_address).then((loc) => {
+      if (!cancelled && loc) setGeocodedCoords({ lat: loc.lat, lng: loc.lng });
+    });
+    return () => { cancelled = true; };
+  }, [order?.delivery_address, order?.delivery_latitude, order?.delivery_longitude]);
+
+  // Start mock delivery simulation (backend: driver follows road routes)
+  useEffect(() => {
+    if (!orderId || !order) return;
+    const status = order.status;
+    if (status !== 'pending_at_store' && status !== 'store_accepted') return;
+    if (sessionStorage.getItem(`${SIMULATION_STORAGE_KEY}-${orderId}`)) return;
+
+    sessionStorage.setItem(`${SIMULATION_STORAGE_KEY}-${orderId}`, '1');
+    const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).toString().replace(/\/$/, '');
+    fetch(`${apiBase}/api/delivery/simulate/${orderId}`, { method: 'POST' }).catch((err) =>
+      console.error('Delivery simulation error:', err)
+    );
+  }, [orderId, order?.status]);
 
   const formatStatusForDisplay = useCallback((status: string) =>
     status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()), []);
@@ -194,13 +275,14 @@ const OrderTrackingPage = () => {
     return history;
   }, [formatStatusForDisplay]);
 
-  // Real-time subscriptions for order status and delivery partner
+  // Real-time subscriptions for order status and delivery partner(s)
   useOrderTrackingRealtime(
     orderId,
     order,
     setOrder,
     setTrackingHistory,
     setDriverLocation,
+    setDriverLocations,
     buildTrackingHistory
   );
 
@@ -277,16 +359,38 @@ const OrderTrackingPage = () => {
     );
   }
 
+  // Track by order number form - when no orderId and no number param (or resolving)
+  if (!orderId) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="max-w-md mx-auto">
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Track Your Order</h1>
+          <p className="text-gray-600 mb-6">Enter your order number to view tracking details.</p>
+          <TrackByNumberForm
+            loading={loading && !!trackingNumberParam}
+            initialNumber={trackingNumberParam || ''}
+          />
+          <div className="mt-6 text-center">
+            <Link to="/orders" className="text-primary hover:text-secondary">
+              View My Orders
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!order) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto text-center">
           <Package className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <h1 className="text-2xl font-bold text-gray-800 mb-2">Order Not Found</h1>
-          <p className="text-gray-600 mb-6">We couldn't find the order you're looking for.</p>
+          <p className="text-gray-600 mb-6">We couldn't find the order you're looking for. Check your order number and try again.</p>
+          <TrackByNumberForm loading={false} initialNumber="" />
           <Link
             to="/orders"
-            className="inline-block bg-primary text-white px-6 py-3 rounded-md hover:bg-secondary transition-colors"
+            className="mt-6 inline-block text-primary hover:text-secondary"
           >
             View All Orders
           </Link>
@@ -322,80 +426,147 @@ const OrderTrackingPage = () => {
           <span>Live tracking active</span>
         </div>
 
-        {/* Order Status Card */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <div className="flex items-center justify-between mb-4">
+        {/* Current Status + Tracking History - one box */}
+        <div className="bg-white rounded-lg shadow-md p-5 mb-6 border border-gray-200">
+          <h2 className="text-lg font-bold text-gray-800 mb-3">Current Status</h2>
+          <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl font-bold text-gray-800">Current Status</h2>
-              <p className="text-2xl font-bold text-primary mt-1">{formatStatus(order.status)}</p>
+              <p className="text-2xl font-bold text-primary">{formatStatus(order.status)}</p>
+              {order.estimated_delivery && order.status !== 'order_delivered' && (
+                <div className="flex items-center text-gray-600 mt-2">
+                  <Clock className="w-5 h-5 mr-2" />
+                  <span>Estimated: {formatDate(order.estimated_delivery)}</span>
+                </div>
+              )}
             </div>
-            <div className={`p-4 rounded-full ${getStatusColor(order.status, true)}`}>
+            <div className={`p-3 rounded-full ${getStatusColor(order.status, true)}`}>
               {getStatusIcon(order.status)}
             </div>
           </div>
-          
-          {order.estimated_delivery && (
-            <div className="flex items-center text-gray-600 mt-4">
-              <Clock className="w-5 h-5 mr-2" />
-              <span>Estimated Delivery: {formatDate(order.estimated_delivery)}</span>
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setShowTrackingHistory((v) => !v)}
+              className="px-4 py-2 text-sm font-medium text-primary border border-primary rounded-lg hover:bg-primary/5 transition-colors"
+            >
+              {showTrackingHistory ? 'Hide' : 'Tracking History'}
+            </button>
+          </div>
+
+          {showTrackingHistory && (
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="mt-4 border-2 border-black rounded-lg p-4">
+              <h3 className="text-base font-bold text-gray-800 mb-3">Tracking History</h3>
+              <div className="relative">
+                {trackingHistory.map((item, index) => {
+                  const isCompleted = index <= currentStatusIndex;
+                  const isLast = index === trackingHistory.length - 1;
+                  return (
+                    <div key={item.status} className="flex mb-5 last:mb-0">
+                      <div className="flex flex-col items-center mr-3">
+                        <div className={`p-2 rounded-full ${getStatusColor(item.status, isCompleted)}`}>
+                          {getStatusIcon(item.status)}
+                        </div>
+                        {!isLast && (
+                          <div className={`w-0.5 h-full mt-1 ${isCompleted ? 'bg-primary' : 'bg-gray-200'}`}></div>
+                        )}
+                      </div>
+                      <div className="flex-1 pb-5">
+                        <h3 className={`font-bold ${isCompleted ? 'text-gray-800' : 'text-gray-400'}`}>
+                          {formatStatus(item.status)}
+                        </h3>
+                        <p className={`text-sm ${isCompleted ? 'text-gray-600' : 'text-gray-400'}`}>
+                          {item.description}
+                        </p>
+                        {isCompleted && (
+                          <p className="text-xs text-gray-500 mt-1">{formatDate(item.timestamp)}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              </div>
             </div>
           )}
         </div>
 
-        {/* Tracking Timeline */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-6">Tracking History</h2>
+        {/* Delivery Information */}
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6 border border-gray-200">
+          <h2 className="text-xl font-bold text-gray-800 mb-4">Delivery Information</h2>
           
-          <div className="relative">
-            {trackingHistory.map((item, index) => {
-              const isCompleted = index <= currentStatusIndex;
-              const isLast = index === trackingHistory.length - 1;
-              
-              return (
-                <div key={item.status} className="flex mb-8 last:mb-0">
-                  {/* Timeline Line */}
-                  <div className="flex flex-col items-center mr-4">
-                    <div className={`p-3 rounded-full ${getStatusColor(item.status, isCompleted)}`}>
-                      {getStatusIcon(item.status)}
-                    </div>
-                    {!isLast && (
-                      <div className={`w-0.5 h-full mt-2 ${isCompleted ? 'bg-primary' : 'bg-gray-200'}`}></div>
-                    )}
-                  </div>
-                  
-                  {/* Content */}
-                  <div className="flex-1 pb-8">
-                    <h3 className={`font-bold ${isCompleted ? 'text-gray-800' : 'text-gray-400'}`}>
-                      {formatStatus(item.status)}
-                    </h3>
-                    <p className={`text-sm ${isCompleted ? 'text-gray-600' : 'text-gray-400'}`}>
-                      {item.description}
-                    </p>
-                    {isCompleted && (
-                      <p className="text-xs text-gray-500 mt-1">{formatDate(item.timestamp)}</p>
+          {order.status === 'order_delivered' ? (
+            <div className="mb-4 p-6 bg-green-50 rounded-lg border border-gray-200">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-3 rounded-full bg-green-500 text-white">
+                  <CheckCircle className="w-8 h-8" />
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-green-800">Order Delivered</p>
+                  <p className="text-gray-600">
+                    {trackingHistory.find((h) => h.status === 'order_delivered')?.timestamp
+                      ? formatDate(trackingHistory.find((h) => h.status === 'order_delivered')!.timestamp)
+                      : 'Delivered'}
+                  </p>
+                </div>
+              </div>
+              {order.delivery_agent && (
+                <div className="flex items-start gap-3 pt-4 border-t border-green-200">
+                  <User className="w-5 h-5 text-primary mt-0.5" />
+                  <div>
+                    <p className="font-medium text-gray-800">Delivered by {order.delivery_agent.name}</p>
+                    <a href={`tel:${order.delivery_agent.phone}`} className="text-primary hover:underline flex items-center gap-1 mt-1">
+                      <Phone className="w-4 h-4" />
+                      {order.delivery_agent.phone}
+                    </a>
+                    {order.delivery_agent.vehicle_number && (
+                      <p className="text-sm text-gray-500 mt-1">Vehicle: {order.delivery_agent.vehicle_number}</p>
                     )}
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Delivery Information */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Delivery Information</h2>
-          
-          {order.delivery_latitude != null && order.delivery_longitude != null && (
-            <div className="mb-4">
+              )}
+            </div>
+          ) : (order.delivery_latitude != null && order.delivery_longitude != null) || geocodedCoords ? (
+            <div className="mb-4" style={{ minHeight: 420 }}>
               <DeliveryMap
-                deliveryLat={order.delivery_latitude}
-                deliveryLng={order.delivery_longitude}
-                driverLocation={driverLocation}
+                deliveryLat={order.delivery_latitude ?? geocodedCoords!.lat}
+                deliveryLng={order.delivery_longitude ?? geocodedCoords!.lng}
+                driverLocations={driverLocations}
+                storeLocations={order.store_locations || []}
+                storeOrders={order.store_orders || []}
+                orderStatus={order.status}
               />
+            </div>
+          ) : (
+            <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200 flex items-center gap-3">
+              <MapPin className="w-10 h-10 text-gray-400 flex-shrink-0" />
+              <div>
+                <p className="font-medium text-gray-800">{order.delivery_address}</p>
+                <p className="text-sm text-gray-500 mt-1">Map unavailable for this address.</p>
+              </div>
             </div>
           )}
           
           <div className="space-y-4">
+            {(order.store_locations?.length ?? 0) > 0 && (
+              <div className="flex items-start">
+                <Store className="w-5 h-5 text-primary mr-3 mt-1 flex-shrink-0" />
+                <div>
+                  <p className="font-medium text-gray-800">Order from</p>
+                  {order.store_locations!.map((s, idx) => (
+                    <div key={idx} className={idx > 0 ? 'mt-3 pt-3 border-t border-gray-100' : ''}>
+                      <p className="font-medium text-gray-800">{s.label || `Store ${idx + 1}`}</p>
+                      {s.address && <p className="text-sm text-gray-600 mt-0.5">{s.address}</p>}
+                      {s.phone && (
+                        <a href={`tel:${s.phone}`} className="text-sm text-primary hover:underline inline-block mt-1">
+                          {s.phone}
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex items-start">
               <MapPin className="w-5 h-5 text-primary mr-3 mt-1" />
               <div>
@@ -403,8 +574,7 @@ const OrderTrackingPage = () => {
                 <p className="text-gray-600">{order.delivery_address}</p>
               </div>
             </div>
-
-            {order.delivery_agent && (
+            {order.delivery_agent && order.status !== 'order_delivered' && (
               <div className="flex items-start">
                 <User className="w-5 h-5 text-primary mr-3 mt-1" />
                 <div>
@@ -427,38 +597,56 @@ const OrderTrackingPage = () => {
           </div>
         </div>
 
-        {/* Order Items */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Order Items</h2>
+        {/* Order Items - collapsible */}
+        <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-gray-800">Order Items</h2>
+            <button
+              type="button"
+              onClick={() => setShowOrderItems((v) => !v)}
+              className="p-1 rounded hover:bg-gray-100 transition-colors"
+              aria-label={showOrderItems ? 'Collapse' : 'Expand'}
+            >
+              {showOrderItems ? (
+                <ChevronUp className="w-6 h-6 text-gray-600" />
+              ) : (
+                <ChevronDown className="w-6 h-6 text-gray-600" />
+              )}
+            </button>
+          </div>
           
-          <div className="space-y-3">
-            {order.items.map((item: any, index: number) => (
-              <div key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
-                <div className="flex items-center">
-                  {item.image_url && (
-                    <img
-                      src={item.image_url}
-                      alt={item.product_name}
-                      className="w-12 h-12 object-cover rounded mr-3"
-                    />
-                  )}
-                  <div>
-                    <p className="font-medium text-gray-800">{item.product_name}</p>
-                    <p className="text-sm text-gray-500">Qty: {item.quantity} {item.unit || ''}</p>
+          {showOrderItems && (
+            <>
+              <div className="space-y-3 mt-4">
+                {order.items.map((item: any, index: number) => (
+                  <div key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
+                    <div className="flex items-center">
+                      {item.image_url && (
+                        <img
+                          src={item.image_url}
+                          alt={item.product_name}
+                          className="w-12 h-12 object-cover rounded mr-3"
+                        />
+                      )}
+                      <div>
+                        <p className="font-medium text-gray-800">{item.product_name}</p>
+                        <p className="text-sm text-gray-500">Qty: {item.quantity} {item.unit || ''}</p>
+                      </div>
+                    </div>
+                    <p className="font-medium text-gray-800">₹{Math.round(item.unit_price * item.quantity)}</p>
                   </div>
-                </div>
-                <p className="font-medium text-gray-800">₹{Math.round(item.unit_price * item.quantity)}</p>
+                ))}
               </div>
-            ))}
-          </div>
 
-          <div className="mt-4 pt-4 border-t">
-            <div className="flex justify-between items-center">
-              <p className="text-lg font-bold text-gray-800">Total Amount</p>
-              <p className="text-2xl font-bold text-primary">₹{Math.round(order.total_amount)}</p>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">Payment Method: {formatPaymentMethod(order.payment_method)}</p>
-          </div>
+              <div className="mt-4 pt-4 border-t">
+                <div className="flex justify-between items-center">
+                  <p className="text-lg font-bold text-gray-800">Total Amount</p>
+                  <p className="text-2xl font-bold text-primary">₹{Math.round(order.total_amount)}</p>
+                </div>
+                <p className="text-sm text-gray-500 mt-1">Payment Method: {formatPaymentMethod(order.payment_method)}</p>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Help Section */}

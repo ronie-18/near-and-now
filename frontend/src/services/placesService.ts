@@ -3,7 +3,8 @@
  * Direct browser calls to Google REST APIs fail due to CORS.
  */
 
-const API_BASE = '/api/places';
+const API_ORIGIN = (import.meta.env.VITE_API_URL || window.location.origin).toString().replace(/\/$/, '');
+const API_BASE = `${API_ORIGIN}/api/places`;
 
 export interface LocationData {
   address: string;
@@ -166,4 +167,115 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Location
     return parseGeocodeResult(data.results[0]);
   }
   return null;
+}
+
+/**
+ * Decode Google polyline encoding.
+ */
+function decodePolyline(encoded: string): { lat: number; lng: number }[] {
+  const points: { lat: number; lng: number }[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  while (index < encoded.length) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = (result & 1) ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = (result & 1) ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
+/**
+ * Extract road points from legs/steps (turn-by-turn) for accurate road-following.
+ * Google Directions REST API returns { lat, lng } as plain numbers.
+ */
+function pointsFromLegsSteps(route: {
+  legs?: Array<{
+    steps?: Array<{
+      start_location?: { lat: number; lng: number };
+      end_location?: { lat: number; lng: number };
+    }>;
+  }>;
+}): { lat: number; lng: number }[] {
+  const result: { lat: number; lng: number }[] = [];
+  for (const leg of route?.legs ?? []) {
+    const steps = leg?.steps ?? [];
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const start = step?.start_location;
+      const end = step?.end_location;
+      if (i === 0 && start) result.push({ lat: start.lat, lng: start.lng });
+      if (end) result.push({ lat: end.lat, lng: end.lng });
+    }
+  }
+  return result;
+}
+
+/**
+ * Fetch road route via backend - Uses Directions API + Roads API (snap to roads) fallback.
+ * Returns points along actual roads; falls back to straight line only if both fail.
+ */
+export async function fetchDirections(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): Promise<{ lat: number; lng: number }[]> {
+  const o = `${origin.lat},${origin.lng}`;
+  const d = `${destination.lat},${destination.lng}`;
+
+  try {
+    const roadUrl = `${API_BASE}/road-route?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`;
+    const roadRes = await fetch(roadUrl);
+    const roadData = await roadRes.json();
+    if (roadRes.ok && roadData.points?.length >= 2) {
+      return roadData.points;
+    }
+  } catch {
+    // Fall through to legacy directions
+  }
+
+  try {
+    const url = `${API_BASE}/directions?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (!response.ok || data.status !== 'OK') {
+      return straightLineFallback(origin, destination);
+    }
+
+    const route = data.routes?.[0];
+    if (!route) return straightLineFallback(origin, destination);
+
+    if (route.overview_polyline?.points) {
+      const poly = decodePolyline(route.overview_polyline.points);
+      if (poly.length > 1) return poly;
+    }
+
+    const stepPoints = pointsFromLegsSteps(route);
+    if (stepPoints.length > 1) return stepPoints;
+
+    return straightLineFallback(origin, destination);
+  } catch {
+    return straightLineFallback(origin, destination);
+  }
+}
+
+function straightLineFallback(a: { lat: number; lng: number }, b: { lat: number; lng: number }): { lat: number; lng: number }[] {
+  return [a, b];
 }

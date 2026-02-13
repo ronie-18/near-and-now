@@ -4,13 +4,19 @@
  * reverse geocoding on camera idle, and confirm location flow.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { useJsApiLoader, GoogleMap } from '@react-google-maps/api';
+import { useState, useCallback, useRef } from 'react';
+import { GoogleMap } from '@react-google-maps/api';
 import { ArrowLeft, MapPin, Info, Navigation, Search } from 'lucide-react';
 import { reverseGeocode, LocationData, searchPlaces, getPlaceDetails, PlaceSuggestion } from '../../services/placesService';
+import { useGoogleMaps } from '../../context/GoogleMapsContext';
 import APP_CONFIG from '../../config/app-config';
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
+const FALLBACK_ADDRESS = 'Address unavailable — move map or search to get address';
+const COORD_TOLERANCE = 1e-5; // ~1m - treat as same location
+const isSameLocation = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) =>
+  Math.abs(a.lat - b.lat) < COORD_TOLERANCE && Math.abs(a.lng - b.lng) < COORD_TOLERANCE;
+
 const MAP_OPTIONS = {
   zoomControl: false,
   mapTypeControl: false,
@@ -43,24 +49,9 @@ export default function MapLocationPicker({
   const mapRef = useRef<google.maps.Map | null>(null);
   const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reverseGeocodeRequestIdRef = useRef(0);
 
-  const apiKey = APP_CONFIG.getApiKey();
-  const { isLoaded, loadError } = useJsApiLoader({
-    googleMapsApiKey: apiKey || '',
-    id: 'map-location-picker',
-  });
-
-  // Debug logging
-  useEffect(() => {
-    if (embedded) {
-      console.log('🗺️ MapLocationPicker embedded mode:', {
-        apiKey: apiKey ? 'Present' : 'Missing',
-        isLoaded,
-        loadError: loadError?.message,
-        initialLocation
-      });
-    }
-  }, [embedded, apiKey, isLoaded, loadError, initialLocation]);
+  const { isLoaded, loadError } = useGoogleMaps();
 
   const onMapLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -88,26 +79,54 @@ export default function MapLocationPicker({
       if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
       idleTimeoutRef.current = setTimeout(async () => {
         idleTimeoutRef.current = null;
+        const requestId = ++reverseGeocodeRequestIdRef.current;
         setIsLoadingAddress(true);
         setReverseGeocodeError(null);
         try {
           const location = await reverseGeocode(lat, lng);
+          if (requestId !== reverseGeocodeRequestIdRef.current) return; // stale response
           if (location) {
             setSelectedLocation(location);
           } else {
-            setSelectedLocation((prev) => ({
-              ...prev,
-              lat,
-              lng,
-              address: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
-            }));
+            setSelectedLocation((prev) => {
+              const hasValidAddress = prev.address && prev.address !== FALLBACK_ADDRESS;
+              if (hasValidAddress && isSameLocation(prev, { lat, lng })) {
+                return prev; // keep existing address
+              }
+              return {
+                ...prev,
+                lat,
+                lng,
+                address: FALLBACK_ADDRESS,
+                city: '',
+                pincode: '',
+                state: '',
+              };
+            });
           }
         } catch (e) {
           console.error('Reverse geocode error:', e);
+          if (requestId !== reverseGeocodeRequestIdRef.current) return; // stale response
           setReverseGeocodeError(e instanceof Error ? e.message : 'Could not get address');
-          setSelectedLocation((prev) => ({ ...prev, lat, lng }));
+          setSelectedLocation((prev) => {
+            const hasValidAddress = prev.address && prev.address !== FALLBACK_ADDRESS;
+            if (hasValidAddress && isSameLocation(prev, { lat, lng })) {
+              return prev; // keep existing address
+            }
+            return {
+              ...prev,
+              lat,
+              lng,
+              address: FALLBACK_ADDRESS,
+              city: '',
+              pincode: '',
+              state: '',
+            };
+          });
         } finally {
-          setIsLoadingAddress(false);
+          if (requestId === reverseGeocodeRequestIdRef.current) {
+            setIsLoadingAddress(false);
+          }
         }
       }, 400);
     });
@@ -238,7 +257,7 @@ export default function MapLocationPicker({
             <div className="text-center">
               <div className="animate-spin w-10 h-10 border-2 border-primary border-t-transparent rounded-full mx-auto mb-4" />
               <p className="text-gray-600">Loading map...</p>
-              {!apiKey && (
+              {!APP_CONFIG.getApiKey() && (
                 <p className="text-red-600 text-sm mt-2">⚠️ Google Maps API key is missing!</p>
               )}
             </div>
@@ -317,13 +336,20 @@ export default function MapLocationPicker({
                 </div>
               ) : (
                 <div>
-                  <div className="flex items-center gap-2">
-                    <MapPin className="w-5 h-5 text-primary flex-shrink-0" />
-                    <p className="font-bold text-gray-800">{selectedLocation.city}</p>
+                  <div className="flex items-start gap-2">
+                    <MapPin className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      {selectedLocation.address && (
+                        <p className="font-bold text-gray-800 break-words">{selectedLocation.address}</p>
+                      )}
+                      {(selectedLocation.city || selectedLocation.pincode) && (
+                        <p className="text-sm text-gray-600 mt-1">
+                          {[selectedLocation.city, selectedLocation.state].filter(Boolean).join(', ')}
+                          {selectedLocation.pincode ? ` - ${selectedLocation.pincode}` : ''}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  {selectedLocation.address && (
-                    <p className="text-sm text-gray-600 mt-1 truncate whitespace-nowrap">{selectedLocation.address}</p>
-                  )}
                 </div>
               )}
               <button

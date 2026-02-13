@@ -16,11 +16,36 @@ import {
 } from '../../services/placesService';
 import MapLocationPicker from './MapLocationPicker';
 
+interface DbAddress {
+  id: string;
+  address_line_1: string;
+  address_line_2?: string;
+  city: string;
+  state: string;
+  pincode: string;
+  latitude?: number;
+  longitude?: number;
+  label?: string;
+}
+
+function dbAddressToLocationData(a: DbAddress): LocationData {
+  const address = a.address_line_1 + (a.address_line_2 ? ', ' + a.address_line_2 : '');
+  return {
+    address,
+    city: a.city,
+    pincode: a.pincode,
+    state: a.state,
+    lat: a.latitude ?? 0,
+    lng: a.longitude ?? 0,
+  };
+}
+
 interface LocationPickerProps {
   isOpen: boolean;
   onClose: () => void;
   onLocationSelect: (location: LocationData) => void;
   currentLocation?: LocationData | null;
+  userSavedAddresses?: DbAddress[];
 }
 
 const LocationPicker = ({
@@ -28,6 +53,7 @@ const LocationPicker = ({
   onClose,
   onLocationSelect,
   currentLocation,
+  userSavedAddresses = [],
 }: LocationPickerProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
@@ -94,24 +120,15 @@ const LocationPicker = ({
       return;
     }
 
+    let position: GeolocationPosition;
     try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      position = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
-          timeout: 10000,
+          timeout: 15000,
           maximumAge: 0,
         });
       });
-
-      const { latitude, longitude } = position.coords;
-      const location = await reverseGeocode(latitude, longitude);
-      if (location) {
-        // Instead of directly selecting, open map picker for adjustment
-        setMapInitialLocation(location);
-        setShowMapPicker(true);
-      } else {
-        setError('Could not find an address for your location. Please try searching manually.');
-      }
     } catch (err: unknown) {
       const e = err as GeolocationPositionError;
       switch (e?.code) {
@@ -125,8 +142,33 @@ const LocationPicker = ({
           setError('Location request timed out. Please try again.');
           break;
         default:
-          setError('Failed to get location. Please try searching manually.');
+          setError('Could not get your location. Please try again or search for your address.');
       }
+      setIsLoadingLocation(false);
+      return;
+    }
+
+    const { latitude, longitude } = position.coords;
+    try {
+      const location = await reverseGeocode(latitude, longitude);
+      const locToUse = location ?? {
+        address: 'Your current location (adjust pin on map)',
+        city: '',
+        pincode: '',
+        state: '',
+        lat: latitude,
+        lng: longitude,
+      };
+      setMapInitialLocation(locToUse);
+      setShowMapPicker(true);
+    } catch (err) {
+      console.error('Reverse geocode error:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(
+        msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')
+          ? 'Could not reach the server. Ensure the backend is running and try again.'
+          : 'Could not get address for your location. Please search for your address instead.'
+      );
     } finally {
       setIsLoadingLocation(false);
     }
@@ -262,7 +304,42 @@ const LocationPicker = ({
           </div>
         ) : (
           <>
-        {/* Current Location Button */}
+        {/* Saved Addresses (from user's DB) - shown first for logged-in users */}
+        {userSavedAddresses.length > 0 && (
+          <div className="px-6 py-4 border-b border-gray-200">
+            <p className="text-xs font-semibold text-gray-500 uppercase mb-3">Your Saved Addresses</p>
+            <div className="space-y-2">
+              {userSavedAddresses.map((addr) => {
+                const loc = dbAddressToLocationData(addr);
+                if (loc.lat === 0 && loc.lng === 0) return null;
+                return (
+                  <button
+                    key={addr.id}
+                    onClick={() => handleLocationSelect(loc)}
+                    className="w-full flex items-start gap-3 px-4 py-3 border border-gray-200 rounded-xl hover:border-primary hover:bg-primary/5 transition-all text-left group"
+                  >
+                    <div className="w-8 h-8 bg-gray-100 group-hover:bg-primary/10 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <MapPin className="w-4 h-4 text-gray-600 group-hover:text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-800 group-hover:text-primary transition-colors truncate">
+                        {addr.label || addr.address_line_1}
+                      </p>
+                      <p className="text-sm text-gray-500 truncate">
+                        {addr.address_line_1}{addr.address_line_2 ? `, ${addr.address_line_2}` : ''} · {addr.city} {addr.pincode}
+                      </p>
+                    </div>
+                    {currentLocation?.address === loc.address && (
+                      <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Use Current Location - or prompt to add address for new users */}
         <div className="px-6 py-4 border-b border-gray-200">
           <button
             onClick={getCurrentLocation}
@@ -337,9 +414,9 @@ const LocationPicker = ({
             </div>
           )}
 
-          {savedAddresses.length > 0 && !searchQuery && (
+          {savedAddresses.length > 0 && !searchQuery && userSavedAddresses.length === 0 && (
             <div className="px-6 py-4">
-              <p className="text-xs font-semibold text-gray-500 uppercase mb-3">Saved Addresses</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase mb-3">Recently Used</p>
               <div className="space-y-2">
                 {savedAddresses.map((location, idx) => (
                   <div key={`${location.address}-${idx}`} className="flex flex-col gap-1">
@@ -367,14 +444,14 @@ const LocationPicker = ({
           )}
 
 
-          {!searchQuery && savedAddresses.length === 0 && suggestions.length === 0 && (
+          {!searchQuery && savedAddresses.length === 0 && userSavedAddresses.length === 0 && suggestions.length === 0 && (
             <div className="px-6 py-12 text-center">
               <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <MapPin className="w-8 h-8 text-gray-400" />
               </div>
-              <p className="text-gray-500 font-medium">No saved addresses</p>
+              <p className="text-gray-500 font-medium">Add your delivery address</p>
               <p className="text-sm text-gray-400 mt-1">
-                Search for a location or use current location
+                Search for your address or use current location
               </p>
             </div>
           )}

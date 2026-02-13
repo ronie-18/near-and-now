@@ -6,6 +6,10 @@ const trackingController = new TrackingController();
 
 // Get order tracking information
 router.get('/orders/:orderId', trackingController.getOrderTracking.bind(trackingController));
+// Full tracking data (order + status history + store locations) - use for tracking page
+router.get('/orders/:orderId/full', trackingController.getOrderTrackingFull.bind(trackingController));
+// Driver locations for order (all assigned partners) - for map + polling
+router.get('/orders/:orderId/driver-locations', trackingController.getDriverLocations.bind(trackingController));
 
 // Get tracking history for an order
 router.get('/orders/:orderId/history', trackingController.getTrackingHistory.bind(trackingController));

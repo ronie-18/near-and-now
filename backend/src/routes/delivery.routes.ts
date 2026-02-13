@@ -13,6 +13,9 @@ router.get('/partners/:partnerId/agents', deliveryController.getDeliveryAgents.b
 // Assign delivery agent to order
 router.post('/orders/:orderId/assign', deliveryController.assignDeliveryAgent.bind(deliveryController));
 
+// Start mock delivery simulation (driver follows road routes)
+router.post('/simulate/:orderId', deliveryController.startSimulation.bind(deliveryController));
+
 // Get agent schedule
 router.get('/agents/:agentId/schedule', deliveryController.getAgentSchedule.bind(deliveryController));
 

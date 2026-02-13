@@ -1,257 +1,194 @@
-# Project Status Summary
+# Near and Now - Project Status
 
-## 📊 Current State Overview
-
-### ✅ What's Working Well
-
-1. **Core Infrastructure**
-   - ✅ React + TypeScript + Vite setup complete
-   - ✅ Tailwind CSS configured
-   - ✅ Supabase integration working
-   - ✅ Authentication system (OTP-based) functional
-   - ✅ Cart functionality working
-   - ✅ Product browsing and search working
-   - ✅ Category pages working
-   - ✅ Admin panel functional (products, categories, orders management)
-
-2. **Pages Implemented**
-   - ✅ HomePage with dynamic categories carousel
-   - ✅ ShopPage with filtering
-   - ✅ CategoryPage
-   - ✅ ProductDetailPage
-   - ✅ CartPage
-   - ✅ CheckoutPage (UI complete, but doesn't save orders)
-   - ✅ LoginPage
-   - ✅ ProfilePage
-   - ✅ OrdersPage (UI complete, but uses mock data)
-   - ✅ AddressesPage
-   - ✅ SearchPage
-   - ✅ Admin pages (Dashboard, Products, Categories, Orders, Customers)
-
-3. **Components**
-   - ✅ Layout components (Header, Footer, Layout)
-   - ✅ Product components (ProductCard, ProductGrid, QuickViewModal)
-   - ✅ Cart components (CartSidebar, CartItem)
-   - ✅ Auth components (AuthModal, UserDropdown)
-   - ✅ Location components (LocationPicker)
-   - ✅ UI components (Button, NotificationsContainer)
-
-4. **Data Management**
-   - ✅ Products loaded from Supabase
-   - ✅ Categories loaded from Supabase
-   - ✅ Bulk product import scripts created
-   - ✅ Admin CRUD operations working
+**Last Updated:** February 13, 2026  
+**Overall Completion:** ~84%
 
 ---
 
-## ❌ Critical Missing Features
+## 📊 Completion Overview
 
-### 1. Order Creation & Persistence
-**Priority:** 🔴 CRITICAL  
-**Status:** Not implemented
-
-**Problem:**
-- Checkout page only simulates order placement
-- Orders are NOT saved to database
-- No way to track actual orders
-
-**Impact:**
-- Users can't see their order history
-- Admin can't manage real orders
-- No order tracking possible
-
-**Solution Needed:**
-- Create `createOrder()` function in `src/services/supabase.ts`
-- Update `CheckoutPage.tsx` to save orders
-- Pass real order ID to ThankYouPage
+| Area | Completion | Status |
+|------|------------|--------|
+| Core Shopping (browse, cart, checkout) | ~95% | ✅ Production Ready |
+| Order Management & Tracking | ~80% | ⚠️ Good, Needs Partner Flow |
+| Admin Panel | ~93% | ✅ Production Ready |
+| Customer Features (addresses, profile, help) | ~97% | ✅ Complete |
+| Delivery Partner Infrastructure | ~25% | ❌ Significant Work Needed |
+| **Overall Project** | **~84%** | ⚠️ In Progress |
 
 ---
 
-### 2. Orders Page - Real Data
-**Priority:** 🔴 CRITICAL  
-**Status:** Using mock data
+## ✅ What's Done
 
-**Problem:**
-- OrdersPage shows hardcoded mock orders
-- Doesn't fetch from database
-- Users can't see their actual orders
+### Customer-Facing
+- **Home, Shop, Category, Product Detail** – Browse, filtering, search, product randomization
+- **Cart** – CartSidebar, CartItem, add/remove, totals
+- **Checkout** – Order creation, saved addresses, payment method, location picker, order-for-others; uses saved-address or map-picker coords when present (avoids geocoding failures); ShippingAddress accepts optional lat/lng
+- **Orders Page** – Real orders from DB, "Track Order" links
+- **Order Tracking Page** – Timeline, status history, delivery info, real-time subscriptions; current status + collapsible tracking history; delivery person details; order items collapsible (initially collapsed); map hidden on delivery, replaced by delivery status box
+- **Mock Delivery Simulation** – Auto-runs on track page: store accepts → driver spawns → picks up → delivers (~5 min single-store, ~7 min multi-store). Demo rule: >6 items = multi-store. Driver movement follows road routes (Directions API, bicycling). 5 s buffer at store before in_transit.
+- **Tracking by Order Number** – `/track` lookup form, `/track?number=XXX` for guests
+- **DeliveryMap** – Google Maps with delivery pin, driver marker, polyline (when coords exist); driver→shop before pickup, driver→customer after; bounds update with driver; pan to customer when within ~35 m; hide store after pickup; 420px height, no legends/zoom/fullscreen
+- **Driver Location Polling** – Runs when orderId exists; backend supplies partner IDs for live driver position
+- **Map Fallback** – "Map unavailable" message + "View address in Google Maps" link when no coords
+- **Open in Google Maps** – Button to open delivery destination in Maps
+- **Addresses** – Saved addresses, LocationPicker, MapLocationPicker with search, address type icons (Home/Work/Other); logged-in users default to saved address; layout: saved addresses → Use Current Location → search; geolocation vs reverse-geocode errors handled separately
+- **Help Page** – `/help` with FAQs, order/delivery info, contact support
+- **Profile** – View/edit profile, email update
+- **Auth** – Login, signup, session management
+- **Policy Pages** – Terms, Shipping, Privacy, Refund
 
-**Solution Needed:**
-- Create `getUserOrders(userId)` function
-- Update OrdersPage to fetch real data
-- Filter orders by authenticated user
+### Admin Panel
+- **Dashboard** – Stats, charts, recent orders, top products (real data)
+- **Products** – CRUD, search, filter, sort, image upload
+- **Categories** – CRUD, product count
+- **Orders** – List, detail view, status updates
+- **Customers** – List, search, filter
+- **Reports** – Revenue, orders, products, charts, export
+- **Admin Management** – Create, edit, delete admins, RBAC
+- **Admin Help Page** – FAQ with answers, contact info, documentation references
+- **Placeholder Pages** – Delivery, Offers, Settings, Profile, Notifications (structure only)
 
----
+### Backend & Infrastructure
+- **Supabase** – Database, RLS, real-time subscriptions
+- **Orders** – createOrder, status workflow, order_status_history
+- **Tracking** – Realtime for customer_orders, store_orders, order_status_history, driver_locations; getOrderTrackingFull enriches store addresses via reverse geocode
+- **Places API** – Geocoding, reverse geocoding, search, place details
+- **Store Proximity** – Generic placeholder (no Bangalore hardcode)
+- **Payments** – Basic flow (COD only)
 
-### 3. Thank You Page - Real Order Details
-**Priority:** 🟡 HIGH  
-**Status:** Using random order ID
-
-**Problem:**
-- Generates fake order ID
-- Doesn't show actual order details
-- No connection to real order
-
-**Solution Needed:**
-- Pass order data from CheckoutPage
-- Display real order information
-- Show order items and totals
-
----
-
-## ⚠️ Important Missing Features
-
-### 4. Environment Variables Template
-**Priority:** 🟡 HIGH  
-**Status:** Missing .env.example
-
-**Problem:**
-- No template file for environment variables
-- Users may not know what variables are needed
-- SETUP.md references it but file doesn't exist
-
-**Solution Needed:**
-- Create `.env.example` with all required variables:
-  - VITE_GOOGLE_MAPS_API_KEY
-  - VITE_SUPABASE_SERVICE_ROLE_KEY
-  - VITE_LOCATION_CACHE_DURATION
-  - VITE_SEARCH_RADIUS_KM
-  - VITE_MAX_SAVED_ADDRESSES
+### Data & Schema
+- **customer_orders, store_orders, order_items** – Multi-store order model
+- **order_status_history** – Status timeline
+- **driver_locations** – GPS tracking table (exists; needs partner app to populate)
+- **customer_saved_addresses** – Full address fields, Google Places integration
+- **master_products, store_inventory** – Product catalog model
 
 ---
 
-### 5. Newsletter Subscription
-**Priority:** 🟡 MEDIUM  
-**Status:** TODO comment exists
+## ❌ Critical Issues (Open)
 
-**Problem:**
-- Footer has newsletter form but doesn't work
-- TODO comment in code: `// TODO: Implement actual newsletter subscription logic`
+| # | Issue | Impact | Effort |
+|---|-------|--------|--------|
+| 1 | **Delivery partner location updates** – No app/UI for partners to push GPS to `driver_locations` | Map cannot show live driver position; real-time tracking incomplete | High |
 
-**Solution Needed:**
-- Create newsletter_subscriptions table in Supabase
-- Implement subscription API call
-- Add success/error notifications
+### Critical Issues (Resolved ✅)
+- ~~Customer /help route missing~~ – Added `/help` route and HelpPage
+- ~~Map hidden when no coords~~ – Map fallback + "View in Google Maps" link
+- ~~MapLocationPicker showing "Address unavailable" when address exists~~ – Preserve valid address; ignore stale reverse geocode responses
 
 ---
 
-### 6. Wishlist Feature
-**Priority:** 🟢 LOW  
-**Status:** Not implemented
+## ⚠️ Moderate Issues
 
-**Problem:**
-- Mentioned in PROJECT_SUMMARY.md but not built
-- No way for users to save favorite products
-
-**Solution Needed:**
-- Create wishlist table or use user metadata
-- Add "Add to Wishlist" functionality
-- Create WishlistPage
-- Add wishlist icon to header
-
----
-
-## 📝 Nice-to-Have Enhancements
-
-### 7. Location Features
-- Map view for location selection
-- Edit/delete saved addresses
-- Location categories (Home, Work, etc.)
-
-### 8. Loading States
-- Skeleton loaders for better UX
-- Consistent loading indicators across pages
-
-### 9. Error Handling
-- Better error boundaries
-- User-friendly error messages
-- Retry mechanisms
-
-### 10. Testing
-- More unit tests
-- Component tests
-- Integration tests for critical flows
-
-### 11. Performance
-- Code splitting
-- Lazy loading
-- Image optimization
-
-### 12. SEO
-- Meta tags
-- Open Graph tags
-- Structured data
-- Sitemap
+| # | Issue | Impact | Effort |
+|---|-------|--------|--------|
+| 1 | **Multi-store order tracking** – Single view; no per-store status/ETA | Confusing for multi-store orders | Medium |
+| 2 | **ETA calculation** – Static estimated_delivery_time; no dynamic ETA from driver | Less accurate expectations | Medium |
+| 3 | **Admin Delivery Page** – Placeholder; no partner management/assignment | Can't manage delivery partners | High |
+| 4 | **Admin Offers Page** – Placeholder; no coupon/offer management | No discount/coupon system | High |
+| 5 | **Payment gateway** – COD only; no Razorpay/Stripe | Limited payment options | High |
+| 6 | **Customer Detail Page** – Admin "View Details" is placeholder | No full customer info/history | Low |
+| 7 | **Dashboard growth percentages** – Hardcoded | Misleading metrics | Low |
+| 8 | **Real-time admin notifications** – Static; not from DB | No live admin alerts | Medium |
 
 ---
 
-## 🎯 Recommended Next Steps
+## 🟢 Easy Issues
 
-### Immediate (This Week)
-1. ✅ **Implement order creation** - Save orders to database
-2. ✅ **Fix Orders page** - Show real user orders
-3. ✅ **Update Thank You page** - Show real order details
-4. ✅ **Create .env.example** - Template for environment variables
+### Completed ✅
+- Address type icons – Home/Work/Other in AddressesPage and CheckoutPage
+- Order for others – Form wiring confirmed
+- Tracking by tracking number – `/track?number=XXX` and lookup form
+- "Open in Google Maps" button – On tracking page when coords exist
+- Map fallback message – "Map unavailable" + link to view address in Maps
+- Admin Help Page content – FAQ with answers, contact info
+- Customer Help page – `/help` route, HelpPage with FAQs and contact
+- **MapLocationPicker address display** – Shows real address when available; preserves existing valid address when reverse geocode fails for same coords; ignores stale responses; only shows "Address unavailable" when no address and reverse geocode fails
 
-### Short Term (Next Week)
-5. ✅ **Newsletter subscription** - Make footer form functional
-6. ✅ **Enhanced error handling** - Better user experience
-7. ✅ **Loading states** - Skeleton loaders
-
-### Medium Term (Next Month)
-8. ✅ **Wishlist feature** - Save favorite products
-9. ✅ **Location enhancements** - Edit/delete addresses
-10. ✅ **Performance optimization** - Code splitting, lazy loading
-11. ✅ **SEO improvements** - Meta tags, structured data
-12. ✅ **Comprehensive testing** - Unit, component, integration tests
+### Pending
+- **Admin Settings Page** – Add real configuration (store, payment, notifications)
+- **Global search in Admin Header** – Search input has no behavior
 
 ---
 
-## 📋 Database Schema Checklist
+## 📋 What's Left (Summary)
 
-Verify these tables exist in Supabase:
+### Tracking & Delivery (High Priority)
+- Delivery partner app/UI for GPS updates
+- Dynamic ETA from driver location
+- Multi-store order tracking view
 
-- ✅ `products` - Product catalog
-- ✅ `categories` - Product categories
-- ✅ `orders` - Customer orders
-- ❓ `order_items` - Individual order items (may be in orders.items JSONB)
-- ❓ `newsletter_subscriptions` - For newsletter feature
-- ❓ `wishlist` or user metadata - For wishlist feature
+### Admin Placeholder Pages
+- **Delivery** – Partner CRUD, status, assignment, map view
+- **Offers** – Coupon CRUD, rules, expiry, usage
+- **Settings** – Store config, payment, delivery, notifications
+- **Notifications** – Real-time notifications from DB
 
----
-
-## 🔍 Quick Action Items
-
-- [ ] Create `createOrder()` function
-- [ ] Update CheckoutPage to save orders
-- [ ] Create `getUserOrders()` function
-- [ ] Update OrdersPage to use real data
-- [ ] Update ThankYouPage to show real order
-- [ ] Create .env.example file
-- [ ] Implement newsletter subscription
-- [ ] Add comprehensive error handling
-- [ ] Add skeleton loaders
-- [ ] Write tests for critical flows
+### Other
+- Customer Detail Page (admin) – Full view for customers
+- Dashboard growth percentages – Real calculations
+- Payment gateway – Razorpay/Stripe integration
+- Email/SMS notifications for order updates
 
 ---
 
-## 📚 Documentation Status
+## 📁 Key Files Reference
 
-- ✅ README.md - Project overview
-- ✅ SETUP.md - Setup instructions
-- ✅ PROJECT_SUMMARY.md - What's been done
-- ✅ BUG_FIXES.md - Bug fix log
-- ✅ NEXT_STEPS.md - Detailed next steps
-- ✅ PROJECT_STATUS.md - This file
+| Feature | File(s) |
+|---------|---------|
+| Order Tracking | `frontend/src/pages/OrderTrackingPage.tsx` |
+| Delivery Map | `frontend/src/components/tracking/DeliveryMap.tsx` |
+| Realtime Tracking | `frontend/src/hooks/useOrderTrackingRealtime.ts` |
+| Checkout | `frontend/src/pages/CheckoutPage.tsx` |
+| Help (Customer) | `frontend/src/pages/HelpPage.tsx` |
+| Help (Admin) | `frontend/src/pages/admin/HelpPage.tsx` |
+| Location Picker | `frontend/src/components/location/MapLocationPicker.tsx`, `LocationPicker.tsx` |
+| Admin Dashboard | `frontend/src/pages/admin/AdminDashboardPage.tsx` |
+| Admin Delivery | `frontend/src/pages/admin/DeliveryPage.tsx` (placeholder) |
+| Driver Locations | `driver_locations` table, `supabase/realtime-tracking-tables.sql` |
+
+---
+
+## 🎯 Recommended Priorities
+
+### Phase 1: Remaining Quick Wins (~1 day)
+1. Fix Customer Detail page placeholder
+2. Admin Settings Page – basic store config
+3. Dashboard growth percentages – real calculations
+
+### Phase 2: Tracking & Delivery (1–2 weeks)
+1. Delivery partner location update flow (web or mobile)
+2. Multi-store tracking view
+3. Dynamic ETA from driver location
+
+### Phase 3: Admin & Business (2–4 weeks)
+1. Admin Delivery page – partner management
+2. Admin Offers page – coupon management
+3. Payment gateway integration
+4. Real-time admin notifications
+
+---
+
+## 📚 Related Documentation
+
+- `docs/ADMIN_PANEL_STATUS.md` – Admin panel details
+- `docs/IMPLEMENTATION_PROGRESS.md` – Feature implementation log
+- `docs/ECOMMERCE_ROADMAP.txt` – Full roadmap
+- `IMPLEMENTATION_STATUS_FINAL.md` – Implementation status
+- `docs/DEPLOYMENT_CHECKLIST.md` – Deployment steps
 
 ---
 
 ## 💡 Notes
 
-- The project is in a good state with most core features working
-- The main blocker is order creation/persistence
-- Once orders are working, the app will be functionally complete for MVP
-- All other features are enhancements that can be added incrementally
-
-
-
+- **Demo setup**: Run `supabase/seed-mock-delivery-partners.sql` before testing the delivery simulation.
+- Thank You page auto-redirects to track page after 7 seconds; simulation runs on track page load.
+- Core shopping and admin flows are production-ready.
+- Order tracking UX: lookup by number, map fallback, Open in Maps; driver polling; route polyline (Directions API); store pin hides after pickup; map hides on delivery.
+- Location picker: logged-in users default to saved address; MapLocationPicker shows dropped-pin address correctly (preserves valid address when reverse geocode fails for same coords).
+- Checkout uses lat/lng from saved address or map picker to avoid geocoding failures.
+- Customer Help and Admin Help pages are live with content.
+- Main gap: delivery partner infrastructure (no app to push GPS).
+- `driver_locations` table and realtime subscriptions exist; partner app needed.
+- Admin panel ~93% complete; Delivery, Offers, Settings, Notifications need implementation.

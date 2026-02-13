@@ -94,7 +94,7 @@ const Footer = () => {
 
   const customerService = [
     { name: 'Help Center', path: '/help' },
-    { name: 'Track Order', path: '/track-order' },
+    { name: 'Track Order', path: '/track' },
     { name: 'Returns & Refunds', path: '/returns' },
     { name: 'Payment Options', path: '/payment-options' },
     { name: 'Delivery Info', path: '/delivery-info' },

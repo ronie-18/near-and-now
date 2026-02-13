@@ -387,6 +387,9 @@ export interface ShippingAddress {
   city: string;
   state: string;
   pincode: string;
+  /** Use existing coordinates when available (from saved address or map picker) to skip geocoding */
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface CreateOrderData {
@@ -471,7 +474,6 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
       throw new Error('User ID is required to place an order');
     }
 
-    // Geocode shipping address for delivery coordinates
     const fullAddress = [
       orderData.shipping_address.address,
       orderData.shipping_address.city,
@@ -480,15 +482,25 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
     ]
       .filter(Boolean)
       .join(', ');
-    const geocoded = await geocodeAddress(fullAddress);
-    if (!geocoded) {
-      throw new Error('Could not verify delivery address. Please try a different address.');
+
+    // Use existing coordinates if provided (saved address or map picker); otherwise geocode
+    let geocoded: { lat: number; lng: number };
+    const lat = orderData.shipping_address.latitude;
+    const lng = orderData.shipping_address.longitude;
+    if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+      geocoded = { lat, lng };
+    } else {
+      const result = await geocodeAddress(fullAddress);
+      if (!result) {
+        throw new Error('Could not verify delivery address. Please use the map to pick your location or try a different address.');
+      }
+      geocoded = { lat: result.lat, lng: result.lng };
     }
 
     const orderCode = await generateOrderNumber();
     console.log('📝 Generated order code:', orderCode);
 
-    // Ensure stores exist near delivery address (creates 5-6 on-demand); pick first one
+    // Ensure stores exist near delivery address (creates 5-6 on-demand)
     const { data: storeIds, error: ensureErr } = await supabaseAdmin.rpc('ensure_stores_near_location', {
       p_lat: geocoded.lat,
       p_lng: geocoded.lng
@@ -496,7 +508,20 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
     if (ensureErr || !storeIds?.length) {
       throw new Error('No store available for your delivery address. Please contact support.');
     }
-    const storeId = storeIds[0];
+
+    // Demo rule: >6 items = split across 2 stores (multi delivery partner); ≤6 = single store
+    const items = orderData.items;
+    const useMultiStore = items.length > 6;
+    const storesToUse: string[] = useMultiStore && storeIds.length >= 2
+      ? [storeIds[0], storeIds[1]]
+      : [storeIds[0]];
+
+    const itemChunks: typeof items[] = useMultiStore && storesToUse.length >= 2
+      ? [
+          items.slice(0, Math.ceil(items.length / 2)),
+          items.slice(Math.ceil(items.length / 2))
+        ]
+      : [items];
 
     // Map display names to DB enum (payment_method_type: cash_on_delivery, upi, credit_card, etc.)
     const paymentMethodEnum =
@@ -530,75 +555,79 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
       throw new Error(coError?.message || 'Failed to create order');
     }
 
-    // Create store_order
-    const { data: storeOrder, error: soError } = await supabaseAdmin
-      .from('store_orders')
-      .insert({
-        customer_order_id: customerOrder.id,
-        store_id: storeId,
-        subtotal_amount: orderData.subtotal,
-        delivery_fee: orderData.delivery_fee,
-        status: 'pending_at_store'
-      })
-      .select()
-      .single();
+    for (let i = 0; i < itemChunks.length; i++) {
+      const chunk = itemChunks[i];
+      const storeId = storesToUse[i];
+      if (!chunk.length || !storeId) continue;
 
-    if (soError || !storeOrder) {
-      console.error('❌ Error creating store_order:', soError);
-      throw new Error(soError?.message || 'Failed to create store order');
-    }
+      const chunkSubtotal = chunk.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      const chunkDeliveryFee = itemChunks.length > 1 ? orderData.delivery_fee / itemChunks.length : orderData.delivery_fee;
 
-    // Resolve product_ids (products table links store + master_product)
-    // items use product_id (master_product id) or id
-    const masterProductIds = orderData.items
-      .map((item) => item.product_id || item.id)
-      .filter((id): id is string => id != null && id !== '');
+      const { data: storeOrder, error: soError } = await supabaseAdmin
+        .from('store_orders')
+        .insert({
+          customer_order_id: customerOrder.id,
+          store_id: storeId,
+          subtotal_amount: chunkSubtotal,
+          delivery_fee: chunkDeliveryFee,
+          status: 'pending_at_store'
+        })
+        .select()
+        .single();
 
-    if (masterProductIds.length === 0) {
-      throw new Error('No valid products in cart.');
-    }
-
-    const { data: products, error: productsError } = await supabaseAdmin
-      .from('products')
-      .select('id, master_product_id')
-      .eq('store_id', storeId)
-      .in('master_product_id', masterProductIds)
-      .eq('is_active', true);
-
-    if (productsError) {
-      console.error('❌ Error fetching products:', productsError);
-      throw new Error('Failed to verify product availability');
-    }
-
-    const masterToProduct = new Map<string, string>();
-    for (const p of products || []) {
-      masterToProduct.set(p.master_product_id, p.id);
-    }
-
-    const orderItemsPayload = orderData.items.map((item) => {
-      const masterId = item.product_id || item.id;
-      const productId = masterId ? masterToProduct.get(masterId) : null;
-      if (!productId) {
-        throw new Error(`Product "${item.name}" is not available from the store.`);
+      if (soError || !storeOrder) {
+        console.error('❌ Error creating store_order:', soError);
+        throw new Error(soError?.message || 'Failed to create store order');
       }
-      return {
-        store_order_id: storeOrder.id,
-        product_id: productId,
-        product_name: item.name,
-        unit: item.unit || null,
-        image_url: item.image || null,
-        unit_price: item.price,
-        quantity: item.quantity
-      };
-    });
 
-    const { error: itemsError } = await supabaseAdmin
-      .from('order_items')
-      .insert(orderItemsPayload);
+      const masterProductIds = chunk
+        .map((item) => item.product_id || item.id)
+        .filter((id): id is string => id != null && id !== '');
 
-    if (itemsError) {
-      console.error('❌ Error creating order_items:', itemsError);
-      throw new Error(itemsError.message || 'Failed to create order items');
+      if (masterProductIds.length === 0) continue;
+
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from('products')
+        .select('id, master_product_id')
+        .eq('store_id', storeId)
+        .in('master_product_id', masterProductIds)
+        .eq('is_active', true);
+
+      if (productsError) {
+        console.error('❌ Error fetching products:', productsError);
+        throw new Error('Failed to verify product availability');
+      }
+
+      const masterToProduct = new Map<string, string>();
+      for (const p of products || []) {
+        masterToProduct.set(p.master_product_id, p.id);
+      }
+
+      const orderItemsPayload = chunk.map((item) => {
+        const masterId = item.product_id || item.id;
+        const productId = masterId ? masterToProduct.get(masterId) : null;
+        if (!productId) {
+          throw new Error(`Product "${item.name}" is not available from the store.`);
+        }
+        return {
+          store_order_id: storeOrder.id,
+          product_id: productId,
+          product_name: item.name,
+          unit: item.unit || null,
+          image_url: item.image || null,
+          unit_price: item.price,
+          quantity: item.quantity
+        };
+      });
+
+      const { error: itemsError } = await supabaseAdmin
+        .from('order_items')
+        .insert(orderItemsPayload);
+
+      if (itemsError) {
+        console.error('❌ Error creating order_items:', itemsError);
+        throw new Error(itemsError.message || 'Failed to create order items');
+      }
     }
 
     // Add initial status to order_status_history
@@ -840,6 +869,8 @@ export interface Address {
   pincode: string;
   phone: string;
   is_default: boolean;
+  latitude?: number;
+  longitude?: number;
   label?: string; // Home, Work, Other
   landmark?: string;
   delivery_instructions?: string;
@@ -914,6 +945,8 @@ function mapRowToAddress(row: Record<string, unknown>): Address {
     pincode: (row.pincode as string) || '',
     phone: (row.contact_phone as string) || '',
     is_default: Boolean(row.is_default),
+    latitude: row.latitude != null ? Number(row.latitude) : undefined,
+    longitude: row.longitude != null ? Number(row.longitude) : undefined,
     label: (row.label as string) || undefined,
     landmark: (row.landmark as string) || undefined,
     delivery_instructions: (row.delivery_instructions as string) || undefined,
