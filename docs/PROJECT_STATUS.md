@@ -1,6 +1,6 @@
 # Near and Now - Project Status
 
-**Last Updated:** February 13, 2026  
+**Last Updated:** February 19, 2026  
 **Overall Completion:** ~84%
 
 ---
@@ -39,23 +39,25 @@
 - **Policy Pages** – Terms, Shipping, Privacy, Refund
 
 ### Admin Panel
-- **Dashboard** – Stats, charts, recent orders, top products (real data)
+- **Dashboard** – Stats, charts, recent orders, top products (real data); growth % calculated from chart period (first half vs second half)
 - **Products** – CRUD, search, filter, sort, image upload
 - **Categories** – CRUD, product count
 - **Orders** – List, detail view, status updates
-- **Customers** – List, search, filter
+- **Customers** – List, search, filter (View Details still placeholder)
 - **Reports** – Revenue, orders, products, charts, export
 - **Admin Management** – Create, edit, delete admins, RBAC
 - **Admin Help Page** – FAQ with answers, contact info, documentation references
-- **Placeholder Pages** – Delivery, Offers, Settings, Profile, Notifications (structure only)
+- **Placeholder Pages** – Delivery, Offers, Settings, Profile, Notifications (structure/UI only; Delivery/Offers/Settings show "Coming Soon"; Notifications uses mock data)
 
 ### Backend & Infrastructure
+- **Express API** – `/api/auth`, `/api/products`, `/api/orders`, `/api/customers`, `/api/coupons`, `/api/places`, `/api/delivery`, `/api/tracking`, `/api/notifications`, `/api/payment`
 - **Supabase** – Database, RLS, real-time subscriptions
 - **Orders** – createOrder, status workflow, order_status_history
 - **Tracking** – Realtime for customer_orders, store_orders, order_status_history, driver_locations; getOrderTrackingFull enriches store addresses via reverse geocode
 - **Places API** – Geocoding, reverse geocoding, search, place details
 - **Store Proximity** – Generic placeholder (no Bangalore hardcode)
 - **Payments** – Basic flow (COD only)
+- **Coupons** – validateCoupon implemented; getActiveCoupons returns 501 Not Implemented
 
 ### Data & Schema
 - **customer_orders, store_orders, order_items** – Multi-store order model
@@ -89,8 +91,10 @@
 | 4 | **Admin Offers Page** – Placeholder; no coupon/offer management | No discount/coupon system | High |
 | 5 | **Payment gateway** – COD only; no Razorpay/Stripe | Limited payment options | High |
 | 6 | **Customer Detail Page** – Admin "View Details" is placeholder | No full customer info/history | Low |
-| 7 | **Dashboard growth percentages** – Hardcoded | Misleading metrics | Low |
-| 8 | **Real-time admin notifications** – Static; not from DB | No live admin alerts | Medium |
+| 7 | **Real-time admin notifications** – Static mock data; not from DB | No live admin alerts | Medium |
+
+### Moderate Issues (Resolved ✅)
+- ~~Dashboard growth percentages – Hardcoded~~ – Growth now calculated from chart period (first half vs second half of selected range)
 
 ---
 
@@ -121,13 +125,12 @@
 
 ### Admin Placeholder Pages
 - **Delivery** – Partner CRUD, status, assignment, map view
-- **Offers** – Coupon CRUD, rules, expiry, usage
+- **Offers** – Coupon CRUD, rules, expiry, usage (backend validateCoupon exists; getActiveCoupons not implemented)
 - **Settings** – Store config, payment, delivery, notifications
-- **Notifications** – Real-time notifications from DB
+- **Notifications** – Real-time notifications from DB (currently mock data)
 
 ### Other
 - Customer Detail Page (admin) – Full view for customers
-- Dashboard growth percentages – Real calculations
 - Payment gateway – Razorpay/Stripe integration
 - Email/SMS notifications for order updates
 
@@ -146,16 +149,19 @@
 | Location Picker | `frontend/src/components/location/MapLocationPicker.tsx`, `LocationPicker.tsx` |
 | Admin Dashboard | `frontend/src/pages/admin/AdminDashboardPage.tsx` |
 | Admin Delivery | `frontend/src/pages/admin/DeliveryPage.tsx` (placeholder) |
+| Admin Offers | `frontend/src/pages/admin/OffersPage.tsx` (placeholder) |
+| Admin Settings | `frontend/src/pages/admin/SettingsPage.tsx` (placeholder) |
 | Driver Locations | `driver_locations` table, `supabase/realtime-tracking-tables.sql` |
+| Backend API | `backend/src/server.ts`, `backend/src/controllers/*`, `backend/src/routes/*` |
 
 ---
 
 ## 🎯 Recommended Priorities
 
 ### Phase 1: Remaining Quick Wins (~1 day)
-1. Fix Customer Detail page placeholder
+1. Fix Customer Detail page (admin) – full customer view
 2. Admin Settings Page – basic store config
-3. Dashboard growth percentages – real calculations
+3. Admin Header global search – wire to products/orders/customers
 
 ### Phase 2: Tracking & Delivery (1–2 weeks)
 1. Delivery partner location update flow (web or mobile)
@@ -164,9 +170,9 @@
 
 ### Phase 3: Admin & Business (2–4 weeks)
 1. Admin Delivery page – partner management
-2. Admin Offers page – coupon management
+2. Admin Offers page – coupon management (backend validateCoupon exists)
 3. Payment gateway integration
-4. Real-time admin notifications
+4. Real-time admin notifications from DB
 
 ---
 
@@ -175,7 +181,6 @@
 - `docs/ADMIN_PANEL_STATUS.md` – Admin panel details
 - `docs/IMPLEMENTATION_PROGRESS.md` – Feature implementation log
 - `docs/ECOMMERCE_ROADMAP.txt` – Full roadmap
-- `IMPLEMENTATION_STATUS_FINAL.md` – Implementation status
 - `docs/DEPLOYMENT_CHECKLIST.md` – Deployment steps
 
 ---
@@ -191,4 +196,4 @@
 - Customer Help and Admin Help pages are live with content.
 - Main gap: delivery partner infrastructure (no app to push GPS).
 - `driver_locations` table and realtime subscriptions exist; partner app needed.
-- Admin panel ~93% complete; Delivery, Offers, Settings, Notifications need implementation.
+- Admin panel ~93% complete; Delivery, Offers, Settings are placeholders; Notifications uses mock data.
