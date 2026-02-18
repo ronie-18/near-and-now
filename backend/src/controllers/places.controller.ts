@@ -12,7 +12,9 @@ const PLACE_DETAILS_URL = 'https://maps.googleapis.com/maps/api/place/details/js
 const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
 
 function getApiKey(): string {
-  return process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
+  // Prefer server-side API key (no referrer restrictions)
+  // Fallback to VITE_ key for backward compatibility
+  return process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_SERVER_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || '';
 }
 
 export async function autocomplete(req: Request, res: Response) {

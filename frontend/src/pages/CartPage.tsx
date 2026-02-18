@@ -4,13 +4,13 @@ import { useCart } from '../context/CartContext';
 import { formatPrice } from '../utils/formatters';
 
 const CartPage = () => {
-  const { cartItems, cartTotal, updateCartQuantity, removeFromCart, clearCart } = useCart();
+  const { cartItems, cartTotal, getDeliveryFee, updateCartQuantity, removeFromCart, clearCart } = useCart();
   const [couponCode, setCouponCode] = useState('');
   const [couponApplied, setCouponApplied] = useState(false);
   const [discount, setDiscount] = useState(0);
   const navigate = useNavigate();
 
-  const deliveryFee = cartTotal > 500 ? 0 : 40;
+  const deliveryFee = getDeliveryFee();
   const orderTotal = Math.round(cartTotal + deliveryFee - discount);
 
   const handleQuantityChange = (id: string, quantity: number, isLoose?: boolean) => {

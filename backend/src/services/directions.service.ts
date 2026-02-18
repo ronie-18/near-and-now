@@ -7,7 +7,9 @@ const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
 import { getRoadPathViaSnap } from './roads.service.js';
 
 function getApiKey(): string {
-  return process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
+  // Prefer server-side API key (no referrer restrictions)
+  // Fallback to VITE_ key for backward compatibility
+  return process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_SERVER_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || '';
 }
 
 function decodePolyline(encoded: string): { lat: number; lng: number }[] {
@@ -73,7 +75,8 @@ export async function fetchRoadRoute(
 ): Promise<{ lat: number; lng: number }[]> {
   const apiKey = getApiKey();
   if (!apiKey) {
-    console.warn('Directions: API key not configured. Set VITE_GOOGLE_MAPS_API_KEY or GOOGLE_MAPS_API_KEY in .env');
+    console.warn('Directions: API key not configured. Set GOOGLE_MAPS_API_KEY (recommended) or GOOGLE_MAPS_SERVER_API_KEY in backend/.env');
+    console.warn('Note: Server-side API keys should NOT have HTTP referrer restrictions');
     return [];
   }
 
@@ -95,20 +98,43 @@ export async function fetchRoadRoute(
 
     if (response.ok && data.status === 'OK') {
       const route = data.routes?.[0];
-      if (route?.overview_polyline?.points) {
-        const poly = decodePolyline(route.overview_polyline.points);
-        if (poly.length > 1) return poly;
+      if (route) {
+        // Prefer overview_polyline (most accurate road geometry)
+        if (route.overview_polyline?.points) {
+          const poly = decodePolyline(route.overview_polyline.points);
+          if (poly.length > 1) {
+            console.log(`Directions API successful: ${poly.length} points from polyline`);
+            return poly;
+          }
+        }
+        // Fallback to step points
+        const stepPoints = pointsFromLegsSteps(route);
+        if (stepPoints.length > 1) {
+          console.log(`Directions API successful: ${stepPoints.length} points from steps`);
+          return stepPoints;
+        }
       }
-      const stepPoints = pointsFromLegsSteps(route || {});
-      if (stepPoints.length > 1) return stepPoints;
+    } else {
+      console.warn(`Directions API failed: ${data.status || response.status}`, data.error_message || '');
     }
   } catch (err) {
-    console.error('Directions fetch error:', err);
+    console.error('Directions API fetch error:', err);
   }
 
   // 2. Fallback: Roads API (snap to roads - uses same API key)
-  const snapped = await getRoadPathViaSnap(origin, destination);
-  if (snapped.length >= 2) return snapped;
+  console.log('Falling back to Roads API (snap to roads)');
+  try {
+    const snapped = await getRoadPathViaSnap(origin, destination);
+    if (snapped.length >= 2) {
+      console.log(`Roads API successful: ${snapped.length} snapped points`);
+      return snapped;
+    } else {
+      console.warn('Roads API returned insufficient points');
+    }
+  } catch (err) {
+    console.error('Roads API fallback error:', err);
+  }
 
+  console.warn('All routing APIs failed, returning empty array');
   return [];
 }

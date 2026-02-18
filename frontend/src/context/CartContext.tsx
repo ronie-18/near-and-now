@@ -14,6 +14,10 @@ export interface CartItem {
   isLoose?: boolean;
 }
 
+// Delivery: free above ₹500, else ₹40. Single source of truth for cart/checkout.
+export const getDeliveryFeeForSubtotal = (subtotal: number): number =>
+  subtotal > 500 ? 0 : subtotal > 0 ? 40 : 0;
+
 // Define cart context interface
 interface CartContextType {
   cartItems: CartItem[];
@@ -25,6 +29,7 @@ interface CartContextType {
   decreaseCartQuantity: (id: string, isLoose?: boolean) => boolean;
   clearCart: () => void;
   getCartTotal: () => number;
+  getDeliveryFee: () => number;
   isAuthenticated: boolean;
 }
 
@@ -184,6 +189,9 @@ export function CartProvider({ children }: CartProviderProps) {
     );
   };
 
+  // Delivery fee: free above ₹500, else ₹40 (matches CartPage / Checkout)
+  const getDeliveryFee = () => getDeliveryFeeForSubtotal(cartTotal);
+
   // Context value
   const value = {
     cartItems,
@@ -195,6 +203,7 @@ export function CartProvider({ children }: CartProviderProps) {
     decreaseCartQuantity,
     clearCart,
     getCartTotal,
+    getDeliveryFee,
     isAuthenticated
   };
 

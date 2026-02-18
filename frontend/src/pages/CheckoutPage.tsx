@@ -5,14 +5,16 @@ import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData, getAllProducts, Product } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
+import { getDeliveryFeeForSubtotal } from '../context/CartContext';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight, Home, Briefcase } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import ProductCard from '../components/products/ProductCard';
 
+// Same totals as cart: subtotal + delivery (free above ₹500) - discount. No auto discount.
 const calculateOrderTotals = (cartTotal: number) => {
   const subtotal = cartTotal;
-  const deliveryFee = 0;
-  const discount = cartTotal > 1000 ? cartTotal * 0.1 : 0;
+  const deliveryFee = getDeliveryFeeForSubtotal(cartTotal);
+  const discount = 0;
   const orderTotal = subtotal + deliveryFee - discount;
   return { subtotal, deliveryFee, discount, orderTotal };
 };
@@ -594,7 +596,7 @@ const CheckoutPage = () => {
     );
   }
 
-  const { discount, orderTotal } = calculateOrderTotals(cartTotal);
+  const { deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
   const finalTotal = Math.round(orderTotal + tipAmount);
 
   return (
@@ -1379,9 +1381,16 @@ const CheckoutPage = () => {
                       <span className="font-semibold">₹{Math.round(cartTotal)}</span>
                     </div>
 
+                    <div className="flex justify-between text-gray-600">
+                      <span>Delivery</span>
+                      <span className="font-semibold">
+                        {deliveryFee === 0 ? 'Free' : `₹${deliveryFee}`}
+                      </span>
+                    </div>
+
                     {discount > 0 && (
                       <div className="flex justify-between text-green-600">
-                        <span>Discount (10%)</span>
+                        <span>Discount</span>
                         <span className="font-semibold">-₹{Math.round(discount)}</span>
                       </div>
                     )}

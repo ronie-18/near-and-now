@@ -10,11 +10,10 @@ interface CartSidebarProps {
 }
 
 const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
-  const { cartItems, getCartTotal, clearCart } = useCart();
+  const { cartItems, cartTotal, getDeliveryFee, clearCart } = useCart();
   const sidebarRef = useRef<HTMLDivElement>(null);
   
-  const cartTotal = getCartTotal();
-  const deliveryFee = cartTotal > 0 ? 40 : 0;
+  const deliveryFee = getDeliveryFee();
   const orderTotal = Math.round(cartTotal + deliveryFee);
 
   // Handle click outside to close

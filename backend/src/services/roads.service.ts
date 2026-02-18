@@ -7,7 +7,9 @@
 const ROADS_SNAP_URL = 'https://roads.googleapis.com/v1/snapToRoads';
 
 function getApiKey(): string {
-  return process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
+  // Prefer server-side API key (no referrer restrictions)
+  // Fallback to VITE_ key for backward compatibility
+  return process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_SERVER_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || '';
 }
 
 /** Sample points along straight line, spaced ~250m for optimal snap quality */
@@ -48,7 +50,8 @@ export async function snapToRoads(
 ): Promise<{ lat: number; lng: number }[]> {
   const apiKey = getApiKey();
   if (!apiKey) {
-    console.warn('Roads API: API key not configured');
+    console.warn('Roads API: API key not configured. Set GOOGLE_MAPS_API_KEY in backend/.env');
+    console.warn('Note: Server-side API keys should NOT have HTTP referrer restrictions');
     return [];
   }
   if (path.length < 2) return path;
@@ -68,19 +71,23 @@ export async function snapToRoads(
     const data = await response.json();
 
     if (!response.ok) {
-      console.warn('Roads API error:', response.status, data?.error?.message);
+      const errorMsg = data?.error?.message || 'Unknown error';
+      console.warn(`Roads API error (${response.status}):`, errorMsg);
       return [];
     }
 
     const snapped = data.snappedPoints as Array<{ location: { latitude: number; longitude: number } }> | undefined;
-    if (!snapped || snapped.length < 2) return [];
+    if (!snapped || snapped.length < 2) {
+      console.warn(`Roads API returned insufficient points: ${snapped?.length || 0}`);
+      return [];
+    }
 
     return snapped.map((p) => ({
       lat: p.location.latitude,
       lng: p.location.longitude,
     }));
   } catch (err) {
-    console.error('Roads API fetch error:', err);
+    console.error('Roads API fetch error:', err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -93,6 +100,21 @@ export async function getRoadPathViaSnap(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number }
 ): Promise<{ lat: number; lng: number }[]> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.warn('Roads API: API key not configured for snap fallback');
+    return [];
+  }
+  
   const path = sampleStraightPath(origin, destination);
-  return snapToRoads(path, true);
+  console.log(`Snapping ${path.length} sampled points to roads`);
+  const snapped = await snapToRoads(path, true);
+  
+  if (snapped.length >= 2) {
+    console.log(`Roads API snap successful: ${snapped.length} points`);
+  } else {
+    console.warn('Roads API snap returned insufficient points');
+  }
+  
+  return snapped;
 }

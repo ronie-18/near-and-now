@@ -239,41 +239,61 @@ export async function fetchDirections(
   const o = `${origin.lat},${origin.lng}`;
   const d = `${destination.lat},${destination.lng}`;
 
+  // Try road-route endpoint first (uses Directions API + Roads API fallback)
   try {
     const roadUrl = `${API_BASE}/road-route?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`;
     const roadRes = await fetch(roadUrl);
-    const roadData = await roadRes.json();
-    if (roadRes.ok && roadData.points?.length >= 2) {
-      return roadData.points;
+    
+    if (!roadRes.ok) {
+      console.warn(`Road route API returned ${roadRes.status}, trying fallback`);
+    } else {
+      const roadData = await roadRes.json();
+      if (roadData.points && Array.isArray(roadData.points) && roadData.points.length >= 2) {
+        console.log(`Road route successful: ${roadData.points.length} points`);
+        return roadData.points;
+      } else {
+        console.warn('Road route returned empty or invalid points, trying fallback');
+      }
     }
-  } catch {
+  } catch (err) {
+    console.warn('Road route request failed:', err);
     // Fall through to legacy directions
   }
 
+  // Fallback: Try legacy directions endpoint
   try {
     const url = `${API_BASE}/directions?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`;
     const response = await fetch(url);
     const data = await response.json();
 
-    if (!response.ok || data.status !== 'OK') {
-      return straightLineFallback(origin, destination);
+    if (response.ok && data.status === 'OK') {
+      const route = data.routes?.[0];
+      if (route) {
+        // Try overview_polyline first (most accurate)
+        if (route.overview_polyline?.points) {
+          const poly = decodePolyline(route.overview_polyline.points);
+          if (poly.length > 1) {
+            console.log(`Directions polyline successful: ${poly.length} points`);
+            return poly;
+          }
+        }
+        // Fallback to step points
+        const stepPoints = pointsFromLegsSteps(route);
+        if (stepPoints.length > 1) {
+          console.log(`Directions steps successful: ${stepPoints.length} points`);
+          return stepPoints;
+        }
+      }
+    } else {
+      console.warn(`Directions API failed: ${data.status || response.status}`, data.error_message || '');
     }
-
-    const route = data.routes?.[0];
-    if (!route) return straightLineFallback(origin, destination);
-
-    if (route.overview_polyline?.points) {
-      const poly = decodePolyline(route.overview_polyline.points);
-      if (poly.length > 1) return poly;
-    }
-
-    const stepPoints = pointsFromLegsSteps(route);
-    if (stepPoints.length > 1) return stepPoints;
-
-    return straightLineFallback(origin, destination);
-  } catch {
-    return straightLineFallback(origin, destination);
+  } catch (err) {
+    console.error('Directions request failed:', err);
   }
+
+  // Last resort: straight line fallback (should rarely happen)
+  console.warn('All route APIs failed, using straight line fallback');
+  return straightLineFallback(origin, destination);
 }
 
 function straightLineFallback(a: { lat: number; lng: number }, b: { lat: number; lng: number }): { lat: number; lng: number }[] {
