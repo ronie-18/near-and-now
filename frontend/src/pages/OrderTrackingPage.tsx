@@ -4,6 +4,7 @@ import { Package, MapPin, Truck, CheckCircle, Clock, Phone, User, XCircle, Radio
 import { supabaseAdmin } from '../services/supabase';
 import { useOrderTrackingRealtime } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
+import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { SIMULATION_STORAGE_KEY } from '../services/deliverySimulation';
 import { geocodeAddress } from '../services/placesService';
 import { fetchOrderTrackingFull } from '../services/trackingApi';
@@ -99,11 +100,18 @@ interface Order {
     phone: string;
     vehicle_number?: string;
   };
+  delivery_agents?: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }>;
   estimated_delivery?: string;
   delivery_latitude?: number;
   delivery_longitude?: number;
-  store_locations?: { lat: number; lng: number; label?: string; address?: string; phone?: string }[];
-  store_orders?: { delivery_partner_id?: string; store_id?: string; status?: string }[];
+  store_locations?: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[];
+  store_orders?: Array<{
+    id: string;
+    store_id: string;
+    status?: string;
+    delivery_partner_id?: string;
+    order_items?: Array<{ product_name: string; quantity: number; unit_price: number; image_url?: string; unit?: string }>;
+  }>;
 }
 
 const OrderTrackingPage = () => {
@@ -162,7 +170,7 @@ const OrderTrackingPage = () => {
           return;
         }
 
-        const { order: orderData, statusHistory, storeLocations, deliveryAgent } = data;
+        const { order: orderData, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
 
         const orderIdVal = orderData.id ?? orderId ?? '';
         const transformedOrder: Order = {
@@ -180,6 +188,7 @@ const OrderTrackingPage = () => {
           store_locations: storeLocations,
           store_orders: orderData.store_orders,
           delivery_agent: deliveryAgent,
+          delivery_agents: deliveryAgents,
         };
 
         setOrder(transformedOrder);
@@ -400,6 +409,11 @@ const OrderTrackingPage = () => {
   }
 
   const currentStatusIndex = trackingHistory.findIndex(h => h.status === order.status);
+  
+  // Check if multi-store order
+  const storeOrders = order.store_orders || [];
+  const isMultiStore = storeOrders.length > 1;
+  const storeLocationsMap = new Map((order.store_locations || []).map((s) => [s.store_id || '', s]));
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -414,6 +428,9 @@ const OrderTrackingPage = () => {
           </Link>
           <h1 className="text-3xl font-bold text-gray-800">Track Order</h1>
           <p className="text-gray-600">Order #{order.order_number}</p>
+          {isMultiStore && (
+            <p className="text-sm text-gray-500 mt-1">Multi-store order ({storeOrders.length} stores)</p>
+          )}
         </div>
 
         {/* Live indicator */}
@@ -426,7 +443,40 @@ const OrderTrackingPage = () => {
           <span>Live tracking active</span>
         </div>
 
-        {/* Current Status + Tracking History - one box */}
+        {/* Multi-store: Show separate tracking boxes for each store */}
+        {isMultiStore ? (
+          <>
+            {storeOrders.map((storeOrder) => {
+              const storeLocation = storeLocationsMap.get(storeOrder.store_id) || order.store_locations?.[0];
+              if (!storeLocation) return null;
+              
+              const deliveryAgent = storeOrder.delivery_partner_id && order.delivery_agents
+                ? order.delivery_agents[storeOrder.delivery_partner_id]
+                : undefined;
+              
+              const driverLocation = storeOrder.delivery_partner_id && driverLocations[storeOrder.delivery_partner_id]
+                ? driverLocations[storeOrder.delivery_partner_id]
+                : undefined;
+
+              return (
+                <StoreTrackingBox
+                  key={storeOrder.id}
+                  storeOrder={storeOrder}
+                  storeLocation={storeLocation}
+                  deliveryAddress={order.delivery_address}
+                  deliveryLat={order.delivery_latitude}
+                  deliveryLng={order.delivery_longitude}
+                  driverLocation={driverLocation}
+                  statusHistory={trackingHistory}
+                  deliveryAgent={deliveryAgent}
+                />
+              );
+            })}
+          </>
+        ) : (
+          /* Single store: Show original tracking box */
+          <>
+            {/* Current Status + Tracking History - one box */}
         <div className="bg-white rounded-lg shadow-md p-5 mb-6 border border-gray-200">
           <h2 className="text-lg font-bold text-gray-800 mb-3">Current Status</h2>
           <div className="flex items-center justify-between">
@@ -596,11 +646,13 @@ const OrderTrackingPage = () => {
             )}
           </div>
         </div>
+          </>
+        )}
 
-        {/* Order Items - collapsible */}
+        {/* Order Items - collapsible (shown for both single and multi-store) */}
         <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold text-gray-800">Order Items</h2>
+            <h2 className="text-xl font-bold text-gray-800">All Order Items</h2>
             <button
               type="button"
               onClick={() => setShowOrderItems((v) => !v)}

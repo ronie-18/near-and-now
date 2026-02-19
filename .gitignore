@@ -11,12 +11,24 @@ lerna-debug.log*
 node_modules
 frontend/node_modules
 backend/node_modules
+customer-app/node_modules
+shopkeeper-app/node_modules
+delivery-app/node_modules
 
 # Build outputs
 dist
 dist-ssr
 frontend/dist
 backend/dist
+customer-app/dist
+customer-app/build
+customer-app/.expo
+shopkeeper-app/dist
+shopkeeper-app/build
+shopkeeper-app/.expo
+delivery-app/dist
+delivery-app/build
+delivery-app/.expo
 
 # Environment variables
 .env
@@ -26,6 +38,22 @@ frontend/.env
 frontend/.env.local
 backend/.env
 backend/.env.local
+customer-app/.env
+customer-app/.env.local
+shopkeeper-app/.env
+shopkeeper-app/.env.local
+delivery-app/.env
+delivery-app/.env.local
+
+# Mobile App Specific
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+.metro-health-check*
 
 # Local files
 *.local

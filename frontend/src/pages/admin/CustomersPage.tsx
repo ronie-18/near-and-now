@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { 
   Search, 
@@ -297,16 +298,13 @@ const CustomersPage = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex justify-end">
-                          <button
-                            onClick={() => {
-                              // TODO: Navigate to customer detail page when implemented
-                              console.log('View customer:', customer.id);
-                            }}
+                          <Link
+                            to={`/admin/customers/${customer.id}`}
                             className="p-2.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                            title="View Details (Coming Soon)"
+                            title="View Details"
                           >
                             <Eye size={18} />
-                          </button>
+                          </Link>
                         </div>
                       </td>
                     </tr>

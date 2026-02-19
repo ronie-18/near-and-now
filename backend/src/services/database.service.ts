@@ -296,8 +296,112 @@ export class DatabaseService {
     return data as CustomerSavedAddress;
   }
 
+  // Coupons - CRUD operations
+  async getCoupons() {
+    const { data, error } = await supabaseAdmin
+      .from('coupons')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async getCouponById(couponId: string) {
+    const { data, error } = await supabaseAdmin
+      .from('coupons')
+      .select('*')
+      .eq('id', couponId)
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async createCoupon(data: {
+    code: string;
+    description?: string;
+    coupon_type: 'flat' | 'percent' | 'first_order_discount';
+    discount_value: number;
+    max_discount_amount?: number;
+    min_order_value?: number;
+    applies_to_first_n_orders?: number;
+    usage_limit?: number;
+    per_user_limit?: number;
+    valid_from: string;
+    valid_until?: string;
+    is_active?: boolean;
+  }) {
+    const { data: coupon, error } = await supabaseAdmin
+      .from('coupons')
+      .insert({
+        code: data.code,
+        description: data.description || null,
+        coupon_type: data.coupon_type,
+        discount_value: data.discount_value,
+        max_discount_amount: data.max_discount_amount || null,
+        min_order_value: data.min_order_value || 0,
+        applies_to_first_n_orders: data.applies_to_first_n_orders || null,
+        usage_limit: data.usage_limit || null,
+        per_user_limit: data.per_user_limit || 1,
+        valid_from: data.valid_from,
+        valid_until: data.valid_until || null,
+        is_active: data.is_active !== false,
+        usage_count: 0,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return coupon;
+  }
+
+  async updateCoupon(couponId: string, data: Partial<{
+    code: string;
+    description: string;
+    coupon_type: 'flat' | 'percent' | 'first_order_discount';
+    discount_value: number;
+    max_discount_amount: number;
+    min_order_value: number;
+    applies_to_first_n_orders: number;
+    usage_limit: number;
+    per_user_limit: number;
+    valid_from: string;
+    valid_until: string;
+    is_active: boolean;
+  }>) {
+    const update: any = { ...data, updated_at: new Date().toISOString() };
+    const { data: coupon, error } = await supabaseAdmin
+      .from('coupons')
+      .update(update)
+      .eq('id', couponId)
+      .select()
+      .single();
+    if (error) throw error;
+    return coupon;
+  }
+
+  async deleteCoupon(couponId: string) {
+    const { error } = await supabaseAdmin
+      .from('coupons')
+      .delete()
+      .eq('id', couponId);
+    if (error) throw error;
+    return { success: true };
+  }
+
+  async getActiveCoupons() {
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('coupons')
+      .select('*')
+      .eq('is_active', true)
+      .lte('valid_from', now)
+      .or(`valid_until.is.null,valid_until.gte.${now}`)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  }
+
   async validateCoupon(code: string, customerId: string) {
-    const { data: coupon, error } = await supabase
+    const { data: coupon, error } = await supabaseAdmin
       .from('coupons')
       .select('*')
       .eq('code', code)
@@ -322,7 +426,7 @@ export class DatabaseService {
       throw new Error('Coupon usage limit reached');
     }
 
-    const { data: redemptions, error: redemptionError } = await supabase
+    const { data: redemptions, error: redemptionError } = await supabaseAdmin
       .from('coupon_redemptions')
       .select('*')
       .eq('coupon_id', coupon.id)
@@ -335,7 +439,7 @@ export class DatabaseService {
     }
 
     if (coupon.applies_to_first_n_orders) {
-      const { data: orders, error: orderError } = await supabase
+      const { data: orders, error: orderError } = await supabaseAdmin
         .from('customer_orders')
         .select('id')
         .eq('customer_id', customerId)
@@ -392,17 +496,155 @@ export class DatabaseService {
     return deg * (Math.PI / 180);
   }
 
-  // Delivery
+  // Delivery Partners - CRUD operations
   async getDeliveryPartners() {
-    const { data, error } = await supabase
+    // Get all delivery partners with their extended profile data
+    const { data: users, error: usersError } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone, role, is_activated, created_at, updated_at')
+      .eq('role', 'delivery_partner')
+      .order('created_at', { ascending: false });
+    if (usersError) throw usersError;
+    
+    const userIds = (users || []).map((u) => u.id);
+    const { data: profiles } = await supabaseAdmin
       .from('delivery_partners')
-      .select('*');
+      .select('*')
+      .in('user_id', userIds);
+    
+    const profilesMap = new Map((profiles || []).map((p: any) => [p.user_id, p]));
+    
+    return (users || []).map((user) => ({
+      ...user,
+      profile: profilesMap.get(user.id) || null,
+      is_online: profilesMap.get(user.id)?.is_online || false,
+      vehicle_number: profilesMap.get(user.id)?.vehicle_number || null,
+      address: profilesMap.get(user.id)?.address || null,
+    }));
+  }
+
+  async getDeliveryPartnerById(partnerId: string) {
+    const { data: user, error } = await supabaseAdmin
+      .from('app_users')
+      .select('*')
+      .eq('id', partnerId)
+      .eq('role', 'delivery_partner')
+      .single();
     if (error) throw error;
-    return data ?? [];
+    
+    const { data: profile } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('*')
+      .eq('user_id', partnerId)
+      .maybeSingle();
+    
+    return { ...user, profile: profile || null };
+  }
+
+  async createDeliveryPartner(data: {
+    name: string;
+    email?: string;
+    phone: string;
+    password_hash?: string;
+    address?: string;
+    vehicle_number?: string;
+    verification_document?: string;
+    verification_number?: string;
+  }) {
+    // Create app_user first
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('app_users')
+      .insert({
+        name: data.name,
+        email: data.email || null,
+        phone: data.phone,
+        password_hash: data.password_hash || null,
+        role: 'delivery_partner',
+        is_activated: true,
+      })
+      .select()
+      .single();
+    if (userError) throw userError;
+    
+    // Create delivery_partners profile
+    const { error: profileError } = await supabaseAdmin
+      .from('delivery_partners')
+      .insert({
+        user_id: user.id,
+        name: data.name,
+        email: data.email || null,
+        phone: data.phone,
+        address: data.address || null,
+        vehicle_number: data.vehicle_number || null,
+        verification_document: data.verification_document || null,
+        verification_number: data.verification_number || null,
+        is_online: false,
+      });
+    if (profileError) throw profileError;
+    
+    return user;
+  }
+
+  async updateDeliveryPartner(partnerId: string, data: {
+    name?: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    vehicle_number?: string;
+    is_online?: boolean;
+    verification_document?: string;
+    verification_number?: string;
+  }) {
+    // Update app_user
+    const userUpdate: any = {};
+    if (data.name) userUpdate.name = data.name;
+    if (data.email !== undefined) userUpdate.email = data.email;
+    if (data.phone) userUpdate.phone = data.phone;
+    userUpdate.updated_at = new Date().toISOString();
+    
+    if (Object.keys(userUpdate).length > 0) {
+      const { error: userError } = await supabaseAdmin
+        .from('app_users')
+        .update(userUpdate)
+        .eq('id', partnerId);
+      if (userError) throw userError;
+    }
+    
+    // Update delivery_partners profile
+    const profileUpdate: any = {};
+    if (data.name) profileUpdate.name = data.name;
+    if (data.email !== undefined) profileUpdate.email = data.email;
+    if (data.phone) profileUpdate.phone = data.phone;
+    if (data.address !== undefined) profileUpdate.address = data.address;
+    if (data.vehicle_number !== undefined) profileUpdate.vehicle_number = data.vehicle_number;
+    if (data.is_online !== undefined) profileUpdate.is_online = data.is_online;
+    if (data.verification_document !== undefined) profileUpdate.verification_document = data.verification_document;
+    if (data.verification_number !== undefined) profileUpdate.verification_number = data.verification_number;
+    
+    if (Object.keys(profileUpdate).length > 0) {
+      const { error: profileError } = await supabaseAdmin
+        .from('delivery_partners')
+        .upsert({
+          user_id: partnerId,
+          ...profileUpdate,
+        }, { onConflict: 'user_id' });
+      if (profileError) throw profileError;
+    }
+    
+    return { success: true };
+  }
+
+  async deleteDeliveryPartner(partnerId: string) {
+    // Delete from delivery_partners first (foreign key constraint)
+    await supabaseAdmin.from('delivery_partners').delete().eq('user_id', partnerId);
+    // Delete from app_users (cascade will handle related records)
+    const { error } = await supabaseAdmin.from('app_users').delete().eq('id', partnerId);
+    if (error) throw error;
+    return { success: true };
   }
 
   async getDeliveryAgents(_partnerId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('app_users')
       .select('*')
       .eq('role', 'delivery_partner');
@@ -562,19 +804,34 @@ export class DatabaseService {
         });
       }
     }
-    let deliveryAgent: { id: string; name: string; phone: string } | undefined;
-    const storeOrderWithPartner = (order.store_orders || []).find((so: { delivery_partner_id?: string }) => so.delivery_partner_id);
-    if (storeOrderWithPartner?.delivery_partner_id) {
-      const { data: partner } = await supabaseAdmin
+    // Get delivery agents per store_order
+    const partnerIds = [...new Set((order.store_orders || [])
+      .map((so: { delivery_partner_id?: string }) => so.delivery_partner_id)
+      .filter(Boolean))];
+    
+    const deliveryAgents: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }> = {};
+    if (partnerIds.length > 0) {
+      const { data: partners } = await supabaseAdmin
         .from('app_users')
-        .select('id, name, phone')
-        .eq('id', storeOrderWithPartner.delivery_partner_id)
-        .single();
-      if (partner) {
-        deliveryAgent = { id: partner.id, name: partner.name || 'Delivery Partner', phone: partner.phone || '' };
+        .select('id, name, phone, vehicle_number')
+        .in('id', partnerIds);
+      for (const partner of partners || []) {
+        deliveryAgents[partner.id] = {
+          id: partner.id,
+          name: partner.name || 'Delivery Partner',
+          phone: partner.phone || '',
+          vehicle_number: partner.vehicle_number || undefined,
+        };
       }
     }
-    return { order, statusHistory, storeLocations, deliveryAgent };
+
+    // Legacy single deliveryAgent for backward compatibility
+    const storeOrderWithPartner = (order.store_orders || []).find((so: { delivery_partner_id?: string }) => so.delivery_partner_id);
+    const deliveryAgent = storeOrderWithPartner?.delivery_partner_id
+      ? deliveryAgents[storeOrderWithPartner.delivery_partner_id]
+      : undefined;
+
+    return { order, statusHistory, storeLocations, deliveryAgent, deliveryAgents };
   }
 
   async addTrackingUpdate(params: {

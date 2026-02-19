@@ -4,8 +4,12 @@ import { DeliveryController } from '../controllers/delivery.controller.js';
 const router = Router();
 const deliveryController = new DeliveryController();
 
-// Get all delivery partners
+// Delivery Partners CRUD
 router.get('/partners', deliveryController.getDeliveryPartners.bind(deliveryController));
+router.get('/partners/:partnerId', deliveryController.getDeliveryPartnerById.bind(deliveryController));
+router.post('/partners', deliveryController.createDeliveryPartner.bind(deliveryController));
+router.put('/partners/:partnerId', deliveryController.updateDeliveryPartner.bind(deliveryController));
+router.delete('/partners/:partnerId', deliveryController.deleteDeliveryPartner.bind(deliveryController));
 
 // Get delivery agents for a partner
 router.get('/partners/:partnerId/agents', deliveryController.getDeliveryAgents.bind(deliveryController));

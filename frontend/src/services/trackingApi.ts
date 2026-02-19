@@ -21,13 +21,21 @@ export interface TrackingFullResponse {
     store_orders?: Array<{
       id: string;
       store_id: string;
+      status?: string;
       delivery_partner_id?: string;
-      order_items?: unknown[];
+      order_items?: Array<{
+        product_name: string;
+        quantity: number;
+        unit_price: number;
+        image_url?: string;
+        unit?: string;
+      }>;
     }>;
   };
   statusHistory: Array<{ status: string; notes?: string; created_at: string }>;
   storeLocations: Array<{ lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }>;
-  deliveryAgent?: { id: string; name: string; phone: string };
+  deliveryAgent?: { id: string; name: string; phone: string; vehicle_number?: string };
+  deliveryAgents?: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }>;
 }
 
 export async function fetchOrderTrackingFull(orderId: string): Promise<TrackingFullResponse | null> {

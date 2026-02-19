@@ -1,7 +1,7 @@
 # Near and Now - Project Status
 
-**Last Updated:** February 19, 2026  
-**Overall Completion:** ~84%
+**Last Updated:** February 18, 2026  
+**Overall Completion:** ~87%
 
 ---
 
@@ -9,12 +9,28 @@
 
 | Area | Completion | Status |
 |------|------------|--------|
-| Core Shopping (browse, cart, checkout) | ~95% | ✅ Production Ready |
-| Order Management & Tracking | ~80% | ⚠️ Good, Needs Partner Flow |
+| Core Shopping (browse, cart, checkout) | ~98% | ✅ Production Ready |
+| Order Management & Tracking | ~88% | ✅ Good, Needs Partner Flow |
 | Admin Panel | ~93% | ✅ Production Ready |
 | Customer Features (addresses, profile, help) | ~97% | ✅ Complete |
 | Delivery Partner Infrastructure | ~25% | ❌ Significant Work Needed |
-| **Overall Project** | **~84%** | ⚠️ In Progress |
+| **Overall Project** | **~87%** | ⚠️ In Progress |
+
+---
+
+## 🆕 Recent Updates (February 2026)
+
+### Map & Route Improvements
+- ✅ **Road-following routes** – Fixed API key configuration; routes now use Directions API + Roads API fallback to follow actual roads instead of straight lines
+- ✅ **Route visibility logic** – Shows driver→store path only before pickup; driver→customer path only after pickup (no premature store→customer line)
+- ✅ **Swiggy/Zomato-style map bounds** – Map always shows full route; bounds shrink smoothly as driver approaches destination
+- ✅ **Custom map icons** – Customer (pin), shopkeeper (store), driver (bike) with white circular backgrounds matching page theme; black border on driver icon
+- ✅ **Zoom-based icon scaling** – Icons scale from 32px to 112px based on map zoom level, staying visible when panned out
+- ✅ **POI markers hidden** – Restaurants, shops, hospitals, and other POI markers removed for cleaner map view (geographic features remain)
+
+### Cart & Checkout Fixes
+- ✅ **Unified pricing** – Fixed cart/checkout price mismatch; single source of truth for delivery fee calculation (`getDeliveryFeeForSubtotal`)
+- ✅ **Consistent totals** – Cart, CartSidebar, and CheckoutPage now all use same delivery fee logic (free above ₹500, else ₹40)
 
 ---
 
@@ -22,13 +38,13 @@
 
 ### Customer-Facing
 - **Home, Shop, Category, Product Detail** – Browse, filtering, search, product randomization
-- **Cart** – CartSidebar, CartItem, add/remove, totals
-- **Checkout** – Order creation, saved addresses, payment method, location picker, order-for-others; uses saved-address or map-picker coords when present (avoids geocoding failures); ShippingAddress accepts optional lat/lng
+- **Cart** – CartSidebar, CartItem, add/remove, totals; unified delivery fee calculation (free above ₹500, else ₹40) across cart, sidebar, and checkout
+- **Checkout** – Order creation, saved addresses, payment method, location picker, order-for-others; uses saved-address or map-picker coords when present (avoids geocoding failures); ShippingAddress accepts optional lat/lng; totals match cart (unified delivery fee calculation)
 - **Orders Page** – Real orders from DB, "Track Order" links
 - **Order Tracking Page** – Timeline, status history, delivery info, real-time subscriptions; current status + collapsible tracking history; delivery person details; order items collapsible (initially collapsed); map hidden on delivery, replaced by delivery status box
 - **Mock Delivery Simulation** – Auto-runs on track page: store accepts → driver spawns → picks up → delivers (~5 min single-store, ~7 min multi-store). Demo rule: >6 items = multi-store. Driver movement follows road routes (Directions API, bicycling). 5 s buffer at store before in_transit.
 - **Tracking by Order Number** – `/track` lookup form, `/track?number=XXX` for guests
-- **DeliveryMap** – Google Maps with delivery pin, driver marker, polyline (when coords exist); driver→shop before pickup, driver→customer after; bounds update with driver; pan to customer when within ~35 m; hide store after pickup; 420px height, no legends/zoom/fullscreen
+- **DeliveryMap** – Google Maps with custom icons (customer pin, shopkeeper store, driver bike) on white circular badges; routes follow actual roads (Directions API + Roads API fallback); driver→store path only before pickup, driver→customer path only after pickup; Swiggy/Zomato-style bounds (always shows full route, shrinks as driver approaches); zoom-based icon scaling (32-112px); POI markers hidden (restaurants, shops, hospitals, etc.); 420px height, no legends/zoom/fullscreen
 - **Driver Location Polling** – Runs when orderId exists; backend supplies partner IDs for live driver position
 - **Map Fallback** – "Map unavailable" message + "View address in Google Maps" link when no coords
 - **Open in Google Maps** – Button to open delivery destination in Maps
@@ -54,7 +70,7 @@
 - **Supabase** – Database, RLS, real-time subscriptions
 - **Orders** – createOrder, status workflow, order_status_history
 - **Tracking** – Realtime for customer_orders, store_orders, order_status_history, driver_locations; getOrderTrackingFull enriches store addresses via reverse geocode
-- **Places API** – Geocoding, reverse geocoding, search, place details
+- **Places API** – Geocoding, reverse geocoding, search, place details; Directions API + Roads API for road-following routes; server-side API key configuration (no referrer restrictions)
 - **Store Proximity** – Generic placeholder (no Bangalore hardcode)
 - **Payments** – Basic flow (COD only)
 - **Coupons** – validateCoupon implemented; getActiveCoupons returns 501 Not Implemented
@@ -78,6 +94,8 @@
 - ~~Customer /help route missing~~ – Added `/help` route and HelpPage
 - ~~Map hidden when no coords~~ – Map fallback + "View in Google Maps" link
 - ~~MapLocationPicker showing "Address unavailable" when address exists~~ – Preserve valid address; ignore stale reverse geocode responses
+- ~~Routes showing as straight lines instead of actual roads~~ – Fixed API key configuration (server-side key without referrer restrictions); routes now use Directions API + Roads API fallback for road-following paths
+- ~~Cart and checkout prices don't match~~ – Unified delivery fee calculation (`getDeliveryFeeForSubtotal`) used across CartPage, CartSidebar, and CheckoutPage; free delivery above ₹500, else ₹40
 
 ---
 
@@ -95,6 +113,8 @@
 
 ### Moderate Issues (Resolved ✅)
 - ~~Dashboard growth percentages – Hardcoded~~ – Growth now calculated from chart period (first half vs second half of selected range)
+- ~~Map route visibility logic~~ – Routes now show driver→store only before pickup, driver→customer only after pickup (no store→customer path until driver picks up)
+- ~~Map icons not displaying~~ – Fixed icon rendering using canvas-based badges (white circle + icon art) instead of SVG with external image refs; icons now display correctly
 
 ---
 
@@ -109,6 +129,8 @@
 - Admin Help Page content – FAQ with answers, contact info
 - Customer Help page – `/help` route, HelpPage with FAQs and contact
 - **MapLocationPicker address display** – Shows real address when available; preserves existing valid address when reverse geocode fails for same coords; ignores stale responses; only shows "Address unavailable" when no address and reverse geocode fails
+- **Map icon improvements** – Custom icons (customer pin, shopkeeper store, driver bike) with white circular backgrounds matching page theme; black border on driver icon; zoom-based scaling (32-112px) so icons stay visible when panned out; POI markers hidden (restaurants, shops, hospitals, etc.) for cleaner map view
+- **Map bounds behavior** – Swiggy/Zomato-style: map always shows full route path; bounds shrink as driver approaches destination; smooth updates as driver moves
 
 ### Pending
 - **Admin Settings Page** – Add real configuration (store, payment, notifications)
@@ -141,7 +163,10 @@
 | Feature | File(s) |
 |---------|---------|
 | Order Tracking | `frontend/src/pages/OrderTrackingPage.tsx` |
-| Delivery Map | `frontend/src/components/tracking/DeliveryMap.tsx` |
+| Delivery Map | `frontend/src/components/tracking/DeliveryMap.tsx` (custom icons, road routes, zoom scaling, POI hiding) |
+| Cart Context | `frontend/src/context/CartContext.tsx` (unified delivery fee calculation) |
+| Directions Service | `backend/src/services/directions.service.ts`, `roads.service.ts` (road-following routes) |
+| API Key Setup | `docs/API_KEY_SETUP.md` (server-side key configuration) |
 | Realtime Tracking | `frontend/src/hooks/useOrderTrackingRealtime.ts` |
 | Checkout | `frontend/src/pages/CheckoutPage.tsx` |
 | Help (Customer) | `frontend/src/pages/HelpPage.tsx` |
@@ -190,10 +215,12 @@
 - **Demo setup**: Run `supabase/seed-mock-delivery-partners.sql` before testing the delivery simulation.
 - Thank You page auto-redirects to track page after 7 seconds; simulation runs on track page load.
 - Core shopping and admin flows are production-ready.
-- Order tracking UX: lookup by number, map fallback, Open in Maps; driver polling; route polyline (Directions API); store pin hides after pickup; map hides on delivery.
+- Order tracking UX: lookup by number, map fallback, Open in Maps; driver polling; route polyline follows actual roads (Directions API + Roads API); custom icons with zoom scaling; Swiggy-style bounds; store pin hides after pickup; map hides on delivery.
 - Location picker: logged-in users default to saved address; MapLocationPicker shows dropped-pin address correctly (preserves valid address when reverse geocode fails for same coords).
-- Checkout uses lat/lng from saved address or map picker to avoid geocoding failures.
+- Checkout uses lat/lng from saved address or map picker to avoid geocoding failures; totals match cart (unified delivery fee).
 - Customer Help and Admin Help pages are live with content.
+- **Map improvements**: Routes follow actual roads; custom icons (pin/store/bike) with white backgrounds; zoom-based scaling; POI markers hidden; route visibility logic (driver→store before pickup, driver→customer after).
+- **API configuration**: Server-side Google Maps API key required (no HTTP referrer restrictions) for Directions/Roads API to work; see `docs/API_KEY_SETUP.md`.
 - Main gap: delivery partner infrastructure (no app to push GPS).
 - `driver_locations` table and realtime subscriptions exist; partner app needed.
 - Admin panel ~93% complete; Delivery, Offers, Settings are placeholders; Notifications uses mock data.

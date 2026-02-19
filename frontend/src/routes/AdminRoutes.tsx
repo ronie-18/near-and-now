@@ -7,6 +7,7 @@ import EditProductPage from '../pages/admin/EditProductPage';
 import OrdersPage from '../pages/admin/OrdersPage';
 import OrderDetailPage from '../pages/admin/OrderDetailPage';
 import CustomersPage from '../pages/admin/CustomersPage';
+import CustomerDetailPage from '../pages/admin/CustomerDetailPage';
 import CategoriesPage from '../pages/admin/CategoriesPage';
 import AddCategoryPage from '../pages/admin/AddCategoryPage';
 import EditCategoryPage from '../pages/admin/EditCategoryPage';
@@ -104,6 +105,14 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <CustomersPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/customers/:id"
+        element={
+          <AdminAuthGuard>
+            <CustomerDetailPage />
           </AdminAuthGuard>
         }
       />

@@ -30,6 +30,56 @@ export class DeliveryController {
     }
   }
 
+  // Get single delivery partner by ID
+  async getDeliveryPartnerById(req: Request, res: Response) {
+    try {
+      const { partnerId } = req.params;
+      const partner = await databaseService.getDeliveryPartnerById(partnerId);
+      if (!partner) {
+        return res.status(404).json({ error: 'Delivery partner not found' });
+      }
+      res.json(partner);
+    } catch (error) {
+      console.error('Error fetching delivery partner:', error);
+      res.status(500).json({ error: 'Failed to fetch delivery partner' });
+    }
+  }
+
+  // Create new delivery partner
+  async createDeliveryPartner(req: Request, res: Response) {
+    try {
+      const partner = await databaseService.createDeliveryPartner(req.body);
+      res.status(201).json(partner);
+    } catch (error) {
+      console.error('Error creating delivery partner:', error);
+      res.status(500).json({ error: 'Failed to create delivery partner' });
+    }
+  }
+
+  // Update delivery partner
+  async updateDeliveryPartner(req: Request, res: Response) {
+    try {
+      const { partnerId } = req.params;
+      const result = await databaseService.updateDeliveryPartner(partnerId, req.body);
+      res.json(result);
+    } catch (error) {
+      console.error('Error updating delivery partner:', error);
+      res.status(500).json({ error: 'Failed to update delivery partner' });
+    }
+  }
+
+  // Delete delivery partner
+  async deleteDeliveryPartner(req: Request, res: Response) {
+    try {
+      const { partnerId } = req.params;
+      const result = await databaseService.deleteDeliveryPartner(partnerId);
+      res.json(result);
+    } catch (error) {
+      console.error('Error deleting delivery partner:', error);
+      res.status(500).json({ error: 'Failed to delete delivery partner' });
+    }
+  }
+
   // Get delivery agents for a partner
   async getDeliveryAgents(req: Request, res: Response) {
     try {
