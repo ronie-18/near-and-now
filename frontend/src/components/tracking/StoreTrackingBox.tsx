@@ -58,7 +58,7 @@ interface StoreTrackingBoxProps {
 export default function StoreTrackingBox({
   storeOrder,
   storeLocation,
-  deliveryAddress,
+  deliveryAddress: _deliveryAddress,
   deliveryLat,
   deliveryLng,
   driverLocation,

@@ -23,11 +23,12 @@ export interface Order {
     phone: string;
     vehicle_number?: string;
   };
+  delivery_agents?: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }>;
   estimated_delivery?: string;
   delivery_latitude?: number;
   delivery_longitude?: number;
-  store_locations?: { lat: number; lng: number; label?: string }[];
-  store_orders?: { delivery_partner_id?: string; store_id?: string; status?: string }[];
+  store_locations?: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[];
+  store_orders?: { id: string; store_id: string; status?: string; delivery_partner_id?: string; order_items?: { product_name: string; quantity: number; unit_price: number; image_url?: string; unit?: string }[] }[];
 }
 
 export interface OrderStatus {
@@ -68,7 +69,7 @@ export function useOrderTrackingRealtime(
     const data = await fetchOrderTrackingFull(orderId);
     if (!data) return;
 
-    const { order: co, statusHistory, storeLocations, deliveryAgent } = data;
+    const { order: co, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
     const storeOrders = co.store_orders || [];
 
     const orderIdVal = co.id || order.id || '';
@@ -81,6 +82,7 @@ export function useOrderTrackingRealtime(
       delivery_address: co.delivery_address || '',
       total_amount: co.total_amount ?? 0,
       delivery_agent: deliveryAgent || order.delivery_agent,
+      delivery_agents: deliveryAgents ?? order.delivery_agents,
       estimated_delivery: co.estimated_delivery_time,
       delivery_latitude: co.delivery_latitude,
       delivery_longitude: co.delivery_longitude,

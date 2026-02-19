@@ -94,7 +94,11 @@ export async function fetchRoadRoute(
     url.searchParams.set('region', 'in');
 
     const response = await fetch(url.toString());
-    const data = await response.json();
+    const data = (await response.json()) as {
+      status?: string;
+      routes?: Array<{ overview_polyline?: { points: string }; legs?: Array<{ steps?: Array<{ start_location: { lat: number; lng: number }; end_location: { lat: number; lng: number } }> }> }>;
+      error_message?: string;
+    };
 
     if (response.ok && data.status === 'OK') {
       const route = data.routes?.[0];
@@ -115,7 +119,7 @@ export async function fetchRoadRoute(
         }
       }
     } else {
-      console.warn(`Directions API failed: ${data.status || response.status}`, data.error_message || '');
+      console.warn(`Directions API failed: ${data?.status ?? response.status}`, data?.error_message ?? '');
     }
   } catch (err) {
     console.error('Directions API fetch error:', err);

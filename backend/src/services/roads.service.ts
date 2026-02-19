@@ -68,10 +68,13 @@ export async function snapToRoads(
     url.searchParams.set('key', apiKey);
 
     const response = await fetch(url.toString());
-    const data = await response.json();
+    const data = (await response.json()) as {
+      error?: { message?: string };
+      snappedPoints?: Array<{ location: { latitude: number; longitude: number } }>;
+    };
 
     if (!response.ok) {
-      const errorMsg = data?.error?.message || 'Unknown error';
+      const errorMsg = data?.error?.message ?? 'Unknown error';
       console.warn(`Roads API error (${response.status}):`, errorMsg);
       return [];
     }

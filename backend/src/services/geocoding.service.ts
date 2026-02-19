@@ -24,7 +24,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string |
     url.searchParams.set('key', apiKey);
 
     const response = await fetch(url.toString());
-    const data = await response.json();
+    const data = (await response.json()) as { status?: string; results?: Array<{ formatted_address?: string }> };
 
     if (data.status === 'OK' && data.results?.[0]?.formatted_address) {
       return String(data.results[0].formatted_address).trim();

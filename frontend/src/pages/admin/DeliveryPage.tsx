@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Truck, Search, Plus, Edit, Trash2, MapPin, Phone, Mail, User, CheckCircle, XCircle, Map } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, MapPin, Phone, Mail, User, CheckCircle, XCircle, Map } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 
 interface DeliveryPartner {
@@ -28,7 +28,7 @@ const DeliveryPage = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingPartner, setEditingPartner] = useState<DeliveryPartner | null>(null);
   const [showMap, setShowMap] = useState(false);
-  const [selectedPartner, setSelectedPartner] = useState<DeliveryPartner | null>(null);
+  const [_selectedPartner, _setSelectedPartner] = useState<DeliveryPartner | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     email: '',

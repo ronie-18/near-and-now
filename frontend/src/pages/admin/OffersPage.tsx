@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Tag, Search, Plus, Edit, Trash2, CheckCircle, XCircle, Calendar, Users } from 'lucide-react';
+import { Tag, Search, Plus, CheckCircle, XCircle, Calendar, Users } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 
 interface Coupon {
@@ -305,10 +305,10 @@ const OffersPage = () => {
                     )}
                   </span>
                 </div>
-                {coupon.min_order_value > 0 && (
+                {(coupon.min_order_value ?? 0) > 0 && (
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Min Order:</span>
-                    <span className="font-medium text-gray-900">₹{coupon.min_order_value}</span>
+                    <span className="font-medium text-gray-900">₹{coupon.min_order_value ?? 0}</span>
                   </div>
                 )}
                 {coupon.applies_to_first_n_orders && (

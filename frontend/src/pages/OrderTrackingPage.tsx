@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { Package, MapPin, Truck, CheckCircle, Clock, Phone, User, XCircle, Radio, ChevronDown, ChevronUp, Store } from 'lucide-react';
 import { supabaseAdmin } from '../services/supabase';
-import { useOrderTrackingRealtime } from '../hooks/useOrderTrackingRealtime';
+import { useOrderTrackingRealtime, type Order, type OrderStatus } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
 import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { SIMULATION_STORAGE_KEY } from '../services/deliverySimulation';
@@ -76,42 +76,6 @@ function TrackByNumberForm({
       </button>
     </form>
   );
-}
-
-interface OrderStatus {
-  status: string;
-  timestamp: string;
-  description: string;
-  notes?: string;
-}
-
-interface Order {
-  id: string;
-  order_number: string;
-  status: string;
-  created_at: string;
-  delivery_address: string;
-  total_amount: number;
-  payment_method: string;
-  items: any[];
-  delivery_agent?: {
-    id: string;
-    name: string;
-    phone: string;
-    vehicle_number?: string;
-  };
-  delivery_agents?: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }>;
-  estimated_delivery?: string;
-  delivery_latitude?: number;
-  delivery_longitude?: number;
-  store_locations?: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[];
-  store_orders?: Array<{
-    id: string;
-    store_id: string;
-    status?: string;
-    delivery_partner_id?: string;
-    order_items?: Array<{ product_name: string; quantity: number; unit_price: number; image_url?: string; unit?: string }>;
-  }>;
 }
 
 const OrderTrackingPage = () => {
@@ -461,7 +425,7 @@ const OrderTrackingPage = () => {
               return (
                 <StoreTrackingBox
                   key={storeOrder.id}
-                  storeOrder={storeOrder}
+                  storeOrder={{ ...storeOrder, status: storeOrder.status ?? 'pending_at_store' }}
                   storeLocation={storeLocation}
                   deliveryAddress={order.delivery_address}
                   deliveryLat={order.delivery_latitude}
