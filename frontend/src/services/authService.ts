@@ -33,13 +33,18 @@ export interface AuthResponse {
   token: string;
 }
 
+// Base URL for backend API (use VITE_API_URL in production so requests hit your backend, not the frontend host)
+const getApiBase = () =>
+  (import.meta.env.VITE_API_URL || '').toString().replace(/\/$/, '');
+
 // Send OTP to phone number via Twilio
 export async function sendOTP(phone: string): Promise<void> {
   try {
     console.log('📱 Sending OTP to:', phone);
 
-    // Call backend API to send OTP via Twilio
-    const response = await fetch('/api/auth/send-otp', {
+    const apiBase = getApiBase();
+    const url = apiBase ? `${apiBase}/api/auth/send-otp` : '/api/auth/send-otp';
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone })
@@ -78,7 +83,9 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
   try {
     console.log('� Verifying OTP for:', phone);
 
-    const response = await fetch('/api/auth/verify-otp', {
+    const apiBase = getApiBase();
+    const url = apiBase ? `${apiBase}/api/auth/verify-otp` : '/api/auth/verify-otp';
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
