@@ -54,6 +54,11 @@ const CheckoutPage = () => {
   const [customTip, setCustomTip] = useState('');
   const [selectedTip, setSelectedTip] = useState<string | null>(null);
 
+  // Split payment (Cash + UPI)
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [splitCashAmount, setSplitCashAmount] = useState('');
+  const [splitUpiAmount, setSplitUpiAmount] = useState('');
+
   // Address management
   const [savedAddresses, setSavedAddresses] = useState<DbAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
@@ -572,6 +577,38 @@ const CheckoutPage = () => {
     const numValue = parseFloat(value) || 0;
     setTipAmount(numValue);
     setSelectedTip('custom');
+  };
+
+  const handleSplitToggle = () => {
+    if (!splitEnabled) {
+      const { orderTotal } = calculateOrderTotals(cartTotal);
+      const currentFinalTotal = Math.round(orderTotal + tipAmount);
+      const half = Math.round(currentFinalTotal / 2);
+      setSplitCashAmount(half.toString());
+      setSplitUpiAmount((currentFinalTotal - half).toString());
+    } else {
+      setSplitCashAmount('');
+      setSplitUpiAmount('');
+    }
+    setSplitEnabled(prev => !prev);
+  };
+
+  const handleSplitCashChange = (value: string) => {
+    setSplitCashAmount(value);
+    const { orderTotal } = calculateOrderTotals(cartTotal);
+    const currentFinalTotal = Math.round(orderTotal + tipAmount);
+    const cash = parseFloat(value) || 0;
+    const upi = Math.max(0, currentFinalTotal - cash);
+    setSplitUpiAmount(upi > 0 ? upi.toString() : '0');
+  };
+
+  const handleSplitUpiChange = (value: string) => {
+    setSplitUpiAmount(value);
+    const { orderTotal } = calculateOrderTotals(cartTotal);
+    const currentFinalTotal = Math.round(orderTotal + tipAmount);
+    const upi = parseFloat(value) || 0;
+    const cash = Math.max(0, currentFinalTotal - upi);
+    setSplitCashAmount(cash > 0 ? cash.toString() : '0');
   };
 
   if (!isAuthenticated) {
@@ -1184,6 +1221,95 @@ const CheckoutPage = () => {
                         />
                       </div>
                     </div>
+
+                    {/* Split Payment Section */}
+                    <div className="mt-8">
+                      <label className={`flex items-center gap-4 p-4 border-2 rounded-xl cursor-pointer transition-all duration-300 ${splitEnabled ? 'border-purple-400 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50/50'}`}>
+                        <input
+                          type="checkbox"
+                          checked={splitEnabled}
+                          onChange={handleSplitToggle}
+                          className="h-5 w-5 accent-purple-600 rounded"
+                        />
+                        <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <CreditCard className="w-5 h-5 text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="font-semibold text-gray-800 block">Split Payment</span>
+                          <p className="text-sm text-gray-500">Pay part in Cash and the rest via UPI</p>
+                        </div>
+                        {splitEnabled && (
+                          <span className="text-xs font-semibold text-purple-700 bg-purple-100 px-2 py-1 rounded-full">Active</span>
+                        )}
+                      </label>
+
+                      {splitEnabled && (
+                        <div className="mt-4 p-5 bg-purple-50 rounded-2xl border-2 border-purple-100 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold text-gray-700">
+                              Total to pay: <span className="text-purple-700 font-bold">₹{finalTotal}</span>
+                            </p>
+                            {(() => {
+                              const total = (parseFloat(splitCashAmount) || 0) + (parseFloat(splitUpiAmount) || 0);
+                              const diff = Math.abs(Math.round(total) - finalTotal);
+                              return diff <= 1 ? (
+                                <span className="text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">✓ Balanced</span>
+                              ) : (
+                                <span className="text-xs font-semibold text-red-500 bg-red-50 px-2 py-1 rounded-full">
+                                  {Math.round(total) > finalTotal ? `₹${Math.round(total) - finalTotal} over` : `₹${finalTotal - Math.round(total)} remaining`}
+                                </span>
+                              );
+                            })()}
+                          </div>
+
+                          {/* Cash row */}
+                          <div className="flex items-center gap-3 bg-white p-4 rounded-xl border-2 border-gray-200 shadow-sm">
+                            <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                              <span className="text-lg">💵</span>
+                            </div>
+                            <div className="flex-1">
+                              <p className="text-sm font-semibold text-gray-700">Cash</p>
+                              <p className="text-xs text-gray-400">Pay in hand on delivery</p>
+                            </div>
+                            <div className="relative">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₹</span>
+                              <input
+                                type="number"
+                                value={splitCashAmount}
+                                onChange={(e) => handleSplitCashChange(e.target.value)}
+                                min="0"
+                                max={finalTotal}
+                                placeholder="0"
+                                className="w-28 pl-7 pr-3 py-2 border-2 border-gray-200 rounded-lg text-sm font-semibold focus:outline-none focus:border-green-400 transition-colors"
+                              />
+                            </div>
+                          </div>
+
+                          {/* UPI row */}
+                          <div className="flex items-center gap-3 bg-white p-4 rounded-xl border-2 border-gray-200 shadow-sm">
+                            <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                              <span className="text-lg">📱</span>
+                            </div>
+                            <div className="flex-1">
+                              <p className="text-sm font-semibold text-gray-700">UPI</p>
+                              <p className="text-xs text-gray-400">Pay via UPI / online</p>
+                            </div>
+                            <div className="relative">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₹</span>
+                              <input
+                                type="number"
+                                value={splitUpiAmount}
+                                onChange={(e) => handleSplitUpiChange(e.target.value)}
+                                min="0"
+                                max={finalTotal}
+                                placeholder="0"
+                                className="w-28 pl-7 pr-3 py-2 border-2 border-gray-200 rounded-lg text-sm font-semibold focus:outline-none focus:border-indigo-400 transition-colors"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1232,6 +1358,35 @@ const CheckoutPage = () => {
                         )}
                       </div>
                     </div>
+
+                    {splitEnabled && (
+                      <div className="bg-purple-50 rounded-xl p-4 mt-4 border-2 border-purple-100">
+                        <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-purple-600" />
+                          Split Payment
+                        </h3>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center text-sm">
+                            <div className="flex items-center gap-2">
+                              <span>💵</span>
+                              <span className="text-gray-700">Cash</span>
+                            </div>
+                            <span className="font-semibold text-green-700">₹{splitCashAmount || '0'}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-sm">
+                            <div className="flex items-center gap-2">
+                              <span>📱</span>
+                              <span className="text-gray-700">UPI</span>
+                            </div>
+                            <span className="font-semibold text-indigo-700">₹{splitUpiAmount || '0'}</span>
+                          </div>
+                          <div className="pt-2 mt-1 border-t border-purple-200 flex justify-between text-sm font-bold">
+                            <span className="text-gray-700">Total</span>
+                            <span className="text-purple-700">₹{Math.round((parseFloat(splitCashAmount) || 0) + (parseFloat(splitUpiAmount) || 0))}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1404,6 +1559,22 @@ const CheckoutPage = () => {
                       <span>Total</span>
                       <span className="text-primary">₹{Math.round(finalTotal)}</span>
                     </div>
+
+                    {splitEnabled && (
+                      <div className="mt-4 pt-4 border-t-2 border-purple-100">
+                        <p className="text-xs font-bold text-purple-700 uppercase tracking-wide mb-2">Split Payment</p>
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-xs text-gray-600">
+                            <span>💵 Cash</span>
+                            <span className="font-semibold text-green-700">₹{splitCashAmount || '0'}</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-gray-600">
+                            <span>📱 UPI</span>
+                            <span className="font-semibold text-indigo-700">₹{splitUpiAmount || '0'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-6">

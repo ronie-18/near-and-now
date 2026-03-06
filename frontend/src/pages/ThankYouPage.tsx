@@ -18,8 +18,6 @@ const ThankYouPage = () => {
   const [redirectCountdown, setRedirectCountdown] = useState<number>(THANK_YOU_DISPLAY_SEC);
   const redirectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [timeRemaining, setTimeRemaining] = useState<number>(120);
-  const [canCancel, setCanCancel] = useState<boolean>(true);
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
   const [cancelError, setCancelError] = useState<string>('');
   const [cancelSuccess, setCancelSuccess] = useState<boolean>(false);
@@ -55,17 +53,6 @@ const ThankYouPage = () => {
   useEffect(() => {
     if (!orderId) return;
 
-    const timer = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          setCanCancel(false);
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
     const checkDeliveryPartner = async () => {
       try {
         const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -76,9 +63,6 @@ const ThankYouPage = () => {
             (so: any) => so.delivery_partner_id !== null
           );
           setHasDeliveryPartner(hasPartner);
-          if (hasPartner) {
-            setCanCancel(false);
-          }
         }
       } catch (error) {
         console.error('Error checking delivery partner status:', error);
@@ -88,10 +72,7 @@ const ThankYouPage = () => {
     checkDeliveryPartner();
     const partnerCheckInterval = setInterval(checkDeliveryPartner, 5000);
 
-    return () => {
-      clearInterval(timer);
-      clearInterval(partnerCheckInterval);
-    };
+    return () => clearInterval(partnerCheckInterval);
   }, [orderId]);
 
   const handleCancelOrder = async () => {
@@ -119,12 +100,6 @@ const ThankYouPage = () => {
     } finally {
       setIsCancelling(false);
     }
-  };
-
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   // Generate a stable key for order items
@@ -244,18 +219,21 @@ const ThankYouPage = () => {
               <p className="text-green-800 font-medium">✓ Order cancelled successfully</p>
               <p className="text-green-600 text-sm mt-1">Redirecting to orders page...</p>
             </div>
-          ) : canCancel && !hasDeliveryPartner && timeRemaining > 0 ? (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center space-x-2">
-                  <svg className="w-5 h-5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="text-yellow-800 font-medium">Time to cancel: {formatTime(timeRemaining)}</span>
-                </div>
+          ) : hasDeliveryPartner ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <div className="flex items-center gap-2 mb-1">
+                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <p className="text-blue-800 font-semibold">Delivery partner assigned</p>
               </div>
+              <p className="text-blue-600 text-sm">Your order is on its way — cancellation is no longer possible.</p>
+            </div>
+          ) : (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+              <p className="text-yellow-800 font-semibold mb-1">Want to cancel?</p>
               <p className="text-yellow-700 text-sm mb-3">
-                You can cancel this order until a delivery partner is assigned or the timer expires.
+                You can cancel this order as long as no delivery partner has been assigned yet.
               </p>
               {cancelError && (
                 <div className="bg-red-50 border border-red-200 rounded p-2 mb-3">
@@ -270,12 +248,7 @@ const ThankYouPage = () => {
                 {isCancelling ? 'Cancelling...' : 'Cancel Order'}
               </button>
             </div>
-          ) : hasDeliveryPartner ? (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-              <p className="text-blue-800 font-medium">✓ Delivery partner assigned</p>
-              <p className="text-blue-600 text-sm mt-1">Your order is being prepared for delivery.</p>
-            </div>
-          ) : null}
+          )}
 
           <p className="text-gray-600 mb-8">
             You will receive an SMS notification when your order is out for delivery.
