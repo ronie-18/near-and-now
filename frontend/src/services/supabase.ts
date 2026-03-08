@@ -5,23 +5,11 @@ import { geocodeAddress } from './placesService';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-// Service role key for admin operations (bypasses RLS)
-// Get this from: Supabase Dashboard → Settings → API → service_role key
-const SUPABASE_SERVICE_ROLE_KEY = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || '';
-
-// Debug: Log key status at initialization
-console.log('🔑 Supabase URL:', SUPABASE_URL ? `${SUPABASE_URL.substring(0, 30)}...` : '❌ MISSING');
-console.log('🔑 Anon Key:', SUPABASE_ANON_KEY ? `loaded (${SUPABASE_ANON_KEY.length} chars)` : '❌ MISSING');
-console.log('🔑 Service Role Key:', SUPABASE_SERVICE_ROLE_KEY ? `loaded (${SUPABASE_SERVICE_ROLE_KEY.length} chars)` : '❌ MISSING - will fall back to anon key');
-
-// Create Supabase client for public operations
+// Create Supabase client for public operations (anon key, RLS applies)
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Create Supabase admin client for admin operations (bypasses RLS)
-// ⚠️ IMPORTANT: This key has full access to the database. Use ONLY for admin operations.
-const adminKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
-console.log('🔑 Admin client using:', SUPABASE_SERVICE_ROLE_KEY ? 'SERVICE_ROLE key (bypasses RLS)' : '⚠️ ANON key (RLS applies!)');
-export const supabaseAdmin = createClient(SUPABASE_URL, adminKey, {
+// Frontend admin client uses anon key — privileged operations go through the backend API
+export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     autoRefreshToken: false,
     persistSession: false
@@ -133,7 +121,7 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
         .eq('is_active', true)
         .in('store_id', ids);
       if (error) throw new Error(`Database error: ${error.message}`);
-      if (data?.length) allRows.push(...(data as ProductRow[]));
+      if (data?.length) allRows.push(...(data as unknown as ProductRow[]));
     }
     return allRows;
   }
@@ -149,7 +137,7 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
       .range(from, from + batchSize - 1);
     if (error) throw new Error(`Database error: ${error.message}`);
     if (data && data.length > 0) {
-      allRows.push(...(data as ProductRow[]));
+      allRows.push(...(data as unknown as ProductRow[]));
       from += batchSize;
       hasMore = data.length === batchSize;
     } else {
@@ -265,22 +253,6 @@ export async function searchProducts(query: string, options?: ProductFetchOption
   }
 }
 
-// Transform master_products to frontend Product format
-function transformSupabaseProducts(products: any[]): Product[] {
-  return products.map(product => ({
-    ...product,
-    price: product.discounted_price != null
-      ? (typeof product.discounted_price === 'string' ? parseFloat(product.discounted_price) : product.discounted_price)
-      : (typeof product.price === 'string' ? parseFloat(product.price) : product.price),
-    original_price: product.base_price != null
-      ? (typeof product.base_price === 'string' ? parseFloat(product.base_price) : product.base_price)
-      : product.original_price,
-    in_stock: product.is_active ?? product.in_stock ?? true,
-    image: product.image_url || product.image,
-    isLoose: product.is_loose ?? product.isLoose
-  }));
-}
-
 // Authentication types
 export interface User {
   id: string;
@@ -385,6 +357,8 @@ export interface CreateOrderData {
   delivery_fee: number;
   items: OrderItem[];
   shipping_address: ShippingAddress;
+  split_cash_amount?: number;
+  split_upi_amount?: number;
 }
 
 export interface Order {
@@ -518,7 +492,7 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
           const idx = items.indexOf(it);
           if (assigned.has(idx)) continue;
           const mid = it.product_id || it.id;
-          const options = mid ? byMaster.get(mid) : [];
+          const options = (mid ? byMaster.get(mid) : undefined) ?? [];
           if (options.some((o) => o.store_id === storeId)) count++;
         }
         if (count > bestCount) {
@@ -532,7 +506,7 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
         if (assigned.has(i)) continue;
         const it = items[i];
         const mid = it.product_id || it.id;
-        const options = mid ? byMaster.get(mid) : [];
+        const options = (mid ? byMaster.get(mid) : undefined) ?? [];
         if (options.some((o) => o.store_id === bestStore)) {
           chunk.push(it);
           assigned.add(i);
@@ -959,7 +933,7 @@ function mapRowToAddress(row: Record<string, unknown>): Address {
   const addressParts = fullAddress.split(',').map(s => s.trim()).filter(Boolean);
   const addressLine1 = addressParts[0] || fullAddress;
   const addressLine2 = addressParts.length > 1 ? addressParts.slice(1).join(', ') : undefined;
-  
+
   return {
     id: row.id as string,
     user_id: row.customer_id as string,

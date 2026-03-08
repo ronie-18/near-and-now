@@ -24,7 +24,7 @@ import AddressesPage from './pages/AddressesPage';
 import CartPage from './pages/CartPage';
 import AboutPage from './pages/AboutPage';
 import HelpPage from './pages/HelpPage';
-import TestPage from './pages/TestPage';
+import DeliveryPartnerPage from './pages/DeliveryPartnerPage';
 
 // Policy pages
 import TermsOfServicePage from './pages/policies/TermsOfServicePage';
@@ -49,9 +49,6 @@ const AppContent: React.FC = () => {
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin/*" element={<AdminRoutes />} />
 
-      {/* Test Route - No Layout */}
-      <Route path="/test" element={<TestPage />} />
-
       {/* Frontend Routes - With Layout */}
       <Route path="/*" element={
         <Layout notifications={notifications} removeNotification={removeNotification}>
@@ -72,6 +69,7 @@ const AppContent: React.FC = () => {
             <Route path="/cart" element={<CartPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/help" element={<HelpPage />} />
+            <Route path="/driver" element={<DeliveryPartnerPage />} />
             {/* Policy Pages */}
             <Route path="/terms" element={<TermsOfServicePage />} />
             <Route path="/shipping" element={<ShippingPolicyPage />} />

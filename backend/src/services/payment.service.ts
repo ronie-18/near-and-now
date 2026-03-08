@@ -1,77 +1,135 @@
-// Payment Gateway Service (Skeleton for Razorpay/Stripe integration)
-// This is a skeleton implementation - actual payment gateway integration will be added later
+import crypto from 'crypto';
+import { supabaseAdmin } from '../config/database.js';
+
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const RAZORPAY_BASE_URL = 'https://api.razorpay.com/v1';
+
+function razorpayRequest(method: string, path: string, body?: object) {
+  const credentials = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+  return fetch(`${RAZORPAY_BASE_URL}${path}`, {
+    method,
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  }).then(async (res) => {
+    const json = await res.json();
+    if (!res.ok) throw new Error((json as any).error?.description || 'Razorpay API error');
+    return json;
+  });
+}
 
 export class PaymentService {
-  // Create payment order
+  // Create a Razorpay order (amount in paise)
   async createPaymentOrder(data: {
     orderId: string;
     amount: number;
     currency: string;
   }) {
-    // TODO: Integrate with actual payment gateway (Razorpay/Stripe)
-    // For now, return a mock payment order
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+      throw new Error('Razorpay credentials not configured');
+    }
+    const order = await razorpayRequest('POST', '/orders', {
+      amount: Math.round(data.amount * 100), // convert ₹ to paise
+      currency: data.currency || 'INR',
+      receipt: `rcpt_${data.orderId.slice(0, 20)}`,
+      notes: { internal_order_id: data.orderId }
+    }) as any;
     return {
-      id: `pay_${Date.now()}`,
-      orderId: data.orderId,
-      amount: data.amount,
-      currency: data.currency,
-      status: 'created',
-      createdAt: new Date().toISOString()
+      razorpay_order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      status: order.status,
+      key_id: RAZORPAY_KEY_ID
     };
   }
 
-  // Verify payment
+  // Verify Razorpay payment signature (HMAC-SHA256)
   async verifyPayment(data: {
-    paymentId: string;
-    orderId: string;
-    signature: string;
+    paymentId: string;   // razorpay_payment_id
+    orderId: string;     // razorpay_order_id
+    signature: string;  // razorpay_signature
   }): Promise<boolean> {
-    // TODO: Implement actual payment verification with gateway
-    // For now, return true (mock verification)
-    console.log('Verifying payment:', data);
-    return true;
+    if (!RAZORPAY_KEY_SECRET) return false;
+    const payload = `${data.orderId}|${data.paymentId}`;
+    const expected = crypto
+      .createHmac('sha256', RAZORPAY_KEY_SECRET)
+      .update(payload)
+      .digest('hex');
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(data.signature));
   }
 
-  // Get payment details
+  // Fetch payment details from Razorpay
   async getPaymentDetails(paymentId: string) {
-    // TODO: Fetch from payment gateway
-    return {
-      id: paymentId,
-      status: 'captured',
-      amount: 0,
-      currency: 'INR',
-      method: 'card',
-      createdAt: new Date().toISOString()
-    };
+    if (!RAZORPAY_KEY_ID) return { id: paymentId, status: 'unknown' };
+    return razorpayRequest('GET', `/payments/${paymentId}`);
   }
 
-  // Process refund
+  // Issue a Razorpay refund
   async processRefund(data: {
     paymentId: string;
-    amount?: number;
+    amount?: number;   // in ₹; if omitted, full refund
     reason?: string;
   }) {
-    // TODO: Implement actual refund with payment gateway
-    return {
-      id: `rfnd_${Date.now()}`,
-      paymentId: data.paymentId,
-      amount: data.amount,
-      status: 'processed',
-      reason: data.reason,
-      createdAt: new Date().toISOString()
-    };
+    if (!RAZORPAY_KEY_ID) throw new Error('Razorpay credentials not configured');
+    const body: Record<string, any> = { notes: { reason: data.reason || 'Order cancelled' } };
+    if (data.amount) body.amount = Math.round(data.amount * 100);
+    const refund = await razorpayRequest('POST', `/payments/${data.paymentId}/refund`, body) as any;
+    return { id: refund.id, status: refund.status, amount: refund.amount / 100 };
   }
 
-  // Verify webhook signature
-  async verifyWebhook(headers: any, body: any): Promise<boolean> {
-    // TODO: Implement webhook signature verification
-    return true;
+  // Verify Razorpay webhook signature
+  async verifyWebhook(headers: Record<string, any>, body: any): Promise<boolean> {
+    if (!RAZORPAY_KEY_SECRET) return false;
+    const signature = headers['x-razorpay-signature'];
+    if (!signature) return false;
+    const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+    const expected = crypto
+      .createHmac('sha256', RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+    try {
+      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    } catch {
+      return false;
+    }
   }
 
-  // Process webhook event
+  // Handle Razorpay webhook events
   async processWebhookEvent(event: any) {
-    // TODO: Handle different webhook events (payment.success, payment.failed, etc.)
-    console.log('Processing webhook event:', event.type);
+    const eventType: string = event.event;
+    console.log('[Razorpay Webhook]', eventType);
+
+    if (eventType === 'payment.captured') {
+      const payment = event.payload?.payment?.entity;
+      const internalOrderId = payment?.notes?.internal_order_id;
+      if (internalOrderId && payment?.id) {
+        await supabaseAdmin
+          .from('customer_orders')
+          .update({ payment_status: 'paid', razorpay_payment_id: payment.id })
+          .eq('id', internalOrderId);
+      }
+    } else if (eventType === 'payment.failed') {
+      const payment = event.payload?.payment?.entity;
+      const internalOrderId = payment?.notes?.internal_order_id;
+      if (internalOrderId) {
+        await supabaseAdmin
+          .from('customer_orders')
+          .update({ payment_status: 'failed' })
+          .eq('id', internalOrderId);
+      }
+    } else if (eventType === 'refund.processed') {
+      const refund = event.payload?.refund?.entity;
+      const paymentId = refund?.payment_id;
+      if (paymentId) {
+        await supabaseAdmin
+          .from('customer_orders')
+          .update({ payment_status: 'refunded' })
+          .eq('razorpay_payment_id', paymentId);
+      }
+    }
   }
 }
 

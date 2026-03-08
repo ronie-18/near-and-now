@@ -511,6 +511,14 @@ const CheckoutPage = () => {
         shippingLng = pickedLocation.lng;
       }
 
+      // Determine payment method label (split overrides the radio choice)
+      let paymentMethodLabel = formData.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment';
+      if (splitEnabled) {
+        const cashAmt = parseFloat(splitCashAmount) || 0;
+        const upiAmt = parseFloat(splitUpiAmount) || 0;
+        paymentMethodLabel = `Split — Cash ₹${Math.round(cashAmt)} + UPI ₹${Math.round(upiAmt)}`;
+      }
+
       // Prepare order data
       const orderData: CreateOrderData = {
         user_id: user?.id,
@@ -518,8 +526,8 @@ const CheckoutPage = () => {
         customer_email: formData.email || undefined,
         customer_phone: formData.phone,
         order_status: 'placed',
-        payment_status: formData.paymentMethod === 'cod' ? 'pending' : 'pending',
-        payment_method: formData.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment',
+        payment_status: 'pending',
+        payment_method: paymentMethodLabel,
         order_total: finalOrderTotal,
         subtotal: subtotal,
         delivery_fee: deliveryFee,
@@ -530,7 +538,11 @@ const CheckoutPage = () => {
           state: formData.state,
           pincode: formData.pincode,
           ...(shippingLat != null && shippingLng != null && { latitude: shippingLat, longitude: shippingLng })
-        }
+        },
+        ...(splitEnabled && {
+          split_cash_amount: parseFloat(splitCashAmount) || 0,
+          split_upi_amount: parseFloat(splitUpiAmount) || 0
+        })
       };
 
       // Create order in database

@@ -87,7 +87,6 @@ const ThankYouPage = () => {
 
       if (response.data.success) {
         setCancelSuccess(true);
-        setCanCancel(false);
         setTimeout(() => {
           navigate('/orders');
         }, 2000);

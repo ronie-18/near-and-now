@@ -239,6 +239,13 @@ export class DatabaseService {
       throw new Error('Cannot cancel order - delivery partner already assigned');
     }
 
+    // Fetch customer order to check payment status before cancelling
+    const { data: customerOrder } = await supabaseAdmin
+      .from('customer_orders')
+      .select('payment_status, razorpay_payment_id, total_amount')
+      .eq('id', orderId)
+      .single();
+
     console.log('Updating store orders status...');
     const { error: updateStoreOrdersError } = await supabaseAdmin
       .from('store_orders')
@@ -267,6 +274,27 @@ export class DatabaseService {
     if (error) {
       console.error('Error updating customer order:', error);
       throw error;
+    }
+
+    // Trigger refund if the order was paid online
+    if (
+      customerOrder?.payment_status === 'paid' &&
+      customerOrder?.razorpay_payment_id
+    ) {
+      try {
+        const { paymentService } = await import('./payment.service.js');
+        await paymentService.processRefund({
+          paymentId: customerOrder.razorpay_payment_id,
+          reason: 'Order cancelled by customer'
+        });
+        console.log('Refund initiated for payment:', customerOrder.razorpay_payment_id);
+        await supabaseAdmin
+          .from('customer_orders')
+          .update({ payment_status: 'refunded' })
+          .eq('id', orderId);
+      } catch (refundErr) {
+        console.error('Refund failed (order still cancelled):', refundErr);
+      }
     }
 
     console.log('Order cancelled successfully:', data);
@@ -505,15 +533,15 @@ export class DatabaseService {
       .eq('role', 'delivery_partner')
       .order('created_at', { ascending: false });
     if (usersError) throw usersError;
-    
+
     const userIds = (users || []).map((u) => u.id);
     const { data: profiles } = await supabaseAdmin
       .from('delivery_partners')
       .select('*')
       .in('user_id', userIds);
-    
+
     const profilesMap = new Map((profiles || []).map((p: any) => [p.user_id, p]));
-    
+
     return (users || []).map((user) => ({
       ...user,
       profile: profilesMap.get(user.id) || null,
@@ -531,13 +559,13 @@ export class DatabaseService {
       .eq('role', 'delivery_partner')
       .single();
     if (error) throw error;
-    
+
     const { data: profile } = await supabaseAdmin
       .from('delivery_partners')
       .select('*')
       .eq('user_id', partnerId)
       .maybeSingle();
-    
+
     return { ...user, profile: profile || null };
   }
 
@@ -565,7 +593,7 @@ export class DatabaseService {
       .select()
       .single();
     if (userError) throw userError;
-    
+
     // Create delivery_partners profile
     const { error: profileError } = await supabaseAdmin
       .from('delivery_partners')
@@ -581,7 +609,7 @@ export class DatabaseService {
         is_online: false,
       });
     if (profileError) throw profileError;
-    
+
     return user;
   }
 
@@ -601,7 +629,7 @@ export class DatabaseService {
     if (data.email !== undefined) userUpdate.email = data.email;
     if (data.phone) userUpdate.phone = data.phone;
     userUpdate.updated_at = new Date().toISOString();
-    
+
     if (Object.keys(userUpdate).length > 0) {
       const { error: userError } = await supabaseAdmin
         .from('app_users')
@@ -609,7 +637,7 @@ export class DatabaseService {
         .eq('id', partnerId);
       if (userError) throw userError;
     }
-    
+
     // Update delivery_partners profile
     const profileUpdate: any = {};
     if (data.name) profileUpdate.name = data.name;
@@ -620,7 +648,7 @@ export class DatabaseService {
     if (data.is_online !== undefined) profileUpdate.is_online = data.is_online;
     if (data.verification_document !== undefined) profileUpdate.verification_document = data.verification_document;
     if (data.verification_number !== undefined) profileUpdate.verification_number = data.verification_number;
-    
+
     if (Object.keys(profileUpdate).length > 0) {
       const { error: profileError } = await supabaseAdmin
         .from('delivery_partners')
@@ -630,7 +658,7 @@ export class DatabaseService {
         }, { onConflict: 'user_id' });
       if (profileError) throw profileError;
     }
-    
+
     return { success: true };
   }
 
@@ -808,7 +836,7 @@ export class DatabaseService {
     const partnerIds = [...new Set((order.store_orders || [])
       .map((so: { delivery_partner_id?: string }) => so.delivery_partner_id)
       .filter(Boolean))];
-    
+
     const deliveryAgents: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }> = {};
     if (partnerIds.length > 0) {
       const { data: partners } = await supabaseAdmin
