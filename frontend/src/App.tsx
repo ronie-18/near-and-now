@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { NotificationProvider, useNotification } from './context/NotificationContext';
 import { GoogleMapsProvider } from './context/GoogleMapsContext';
+import { LocationProvider } from './context/LocationContext';
 import Layout from './components/layout/Layout';
 import AdminLoginPage from './pages/admin/AdminLoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -95,13 +96,15 @@ function App() {
     <ErrorBoundary>
       <Router basename="/">
         <AuthProvider>
-          <CartProvider>
-            <NotificationProvider>
-              <GoogleMapsProvider>
-                <AppContent />
-              </GoogleMapsProvider>
-            </NotificationProvider>
-          </CartProvider>
+          <LocationProvider>
+            <CartProvider>
+              <NotificationProvider>
+                <GoogleMapsProvider>
+                  <AppContent />
+                </GoogleMapsProvider>
+              </NotificationProvider>
+            </CartProvider>
+          </LocationProvider>
         </AuthProvider>
       </Router>
     </ErrorBoundary>

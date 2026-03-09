@@ -12,7 +12,7 @@ interface CartSidebarProps {
 const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
   const { cartItems, cartTotal, getDeliveryFee, clearCart } = useCart();
   const sidebarRef = useRef<HTMLDivElement>(null);
-  
+
   const deliveryFee = getDeliveryFee();
   const orderTotal = Math.round(cartTotal + deliveryFee);
 
@@ -29,7 +29,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
       // Prevent scrolling when sidebar is open
       document.body.style.overflow = 'hidden';
     }
-    
+
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.body.style.overflow = 'auto';
@@ -45,7 +45,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
     };
 
     document.addEventListener('keydown', handleEscKey);
-    
+
     return () => {
       document.removeEventListener('keydown', handleEscKey);
     };
@@ -54,16 +54,16 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
   return (
     <>
       {/* Overlay */}
-      <div 
+      <div
         className={`fixed inset-0 bg-black transition-opacity duration-300 z-40 ${
           isOpen ? 'opacity-50' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
         aria-hidden="true"
       />
-      
+
       {/* Sidebar */}
-      <div 
+      <div
         ref={sidebarRef}
         className={`fixed top-0 right-0 h-full w-full sm:w-96 bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
@@ -81,7 +81,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
               </svg>
               Your Cart {cartItems.length > 0 && `(${cartItems.length})`}
             </h2>
-            <button 
+            <button
               onClick={onClose}
               className="text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500 rounded-full p-1"
               aria-label="Close cart"
@@ -91,7 +91,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
               </svg>
             </button>
           </div>
-          
+
           {/* Cart Items */}
           <div className="flex-grow overflow-y-auto p-4">
             {cartItems.length === 0 ? (
@@ -106,7 +106,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
                 </div>
                 <h3 className="text-xl font-medium text-gray-700 mb-3">Your cart is empty</h3>
                 <p className="text-gray-500 mb-8 max-w-xs mx-auto">Looks like you haven't added any products to your cart yet. Browse our catalog to find what you need.</p>
-                <button 
+                <button
                   onClick={onClose}
                   className="bg-primary hover:bg-secondary text-white px-8 py-3 rounded-md transition-colors shadow-md hover:shadow-lg flex items-center justify-center group"
                 >
@@ -124,7 +124,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
               </div>
             )}
           </div>
-          
+
           {/* Footer */}
           {cartItems.length > 0 && (
             <div className="p-4 border-t border-gray-200 bg-gradient-to-r from-green-50 to-green-100">
@@ -144,7 +144,7 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
                   <span className="text-green-700">{formatPrice(orderTotal)}</span>
                 </div>
               </div>
-              
+
               {/* Actions */}
               <div className="space-y-3">
                 <Link

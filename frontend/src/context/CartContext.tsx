@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Product } from '../services/supabase';
 import { useAuth } from './AuthContext';
+import { calculateFeeBreakdown, PLATFORM_FEE, HANDLING_FEE, DeliveryFeeBreakdown } from '../utils/deliveryFees';
 
 // Define cart item interface
 export interface CartItem {
@@ -12,11 +13,23 @@ export interface CartItem {
   size?: string;
   weight?: string;
   isLoose?: boolean;
+  storeLatitude?: number;
+  storeLongitude?: number;
 }
 
-// Delivery: free above ₹500, else ₹40. Single source of truth for cart/checkout.
+// Legacy delivery fee function (kept for backward compatibility)
 export const getDeliveryFeeForSubtotal = (subtotal: number): number =>
   subtotal > 500 ? 0 : subtotal > 0 ? 40 : 0;
+
+// New distance-based delivery fee calculation
+export const getDistanceBasedDeliveryFee = (distanceKm: number): number => {
+  const breakdown = calculateFeeBreakdown(distanceKm);
+  return breakdown.deliveryFee;
+};
+
+export const getCompleteFeeBreakdown = (distanceKm: number): DeliveryFeeBreakdown => {
+  return calculateFeeBreakdown(distanceKm);
+};
 
 // Define cart context interface
 interface CartContextType {
@@ -29,7 +42,10 @@ interface CartContextType {
   decreaseCartQuantity: (id: string, isLoose?: boolean) => boolean;
   clearCart: () => void;
   getCartTotal: () => number;
-  getDeliveryFee: () => number;
+  getDeliveryFee: (distanceKm?: number) => number;
+  getFeeBreakdown: (distanceKm?: number) => DeliveryFeeBreakdown | null;
+  platformFee: number;
+  handlingFee: number;
   isAuthenticated: boolean;
 }
 
@@ -189,8 +205,23 @@ export function CartProvider({ children }: CartProviderProps) {
     );
   };
 
-  // Delivery fee: free above ₹500, else ₹40 (matches CartPage / Checkout)
-  const getDeliveryFee = () => getDeliveryFeeForSubtotal(cartTotal);
+  // Get delivery fee based on distance (if provided) or use legacy calculation
+  const getDeliveryFee = (distanceKm?: number) => {
+    if (distanceKm !== undefined && distanceKm !== null) {
+      const breakdown = calculateFeeBreakdown(distanceKm);
+      return breakdown.deliveryFee;
+    }
+    // Fallback to legacy calculation if no distance provided
+    return getDeliveryFeeForSubtotal(cartTotal);
+  };
+
+  // Get complete fee breakdown including platform and handling fees
+  const getFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown | null => {
+    if (distanceKm !== undefined && distanceKm !== null) {
+      return calculateFeeBreakdown(distanceKm);
+    }
+    return null;
+  };
 
   // Context value
   const value = {
@@ -204,6 +235,9 @@ export function CartProvider({ children }: CartProviderProps) {
     clearCart,
     getCartTotal,
     getDeliveryFee,
+    getFeeBreakdown,
+    platformFee: PLATFORM_FEE,
+    handlingFee: HANDLING_FEE,
     isAuthenticated
   };
 
