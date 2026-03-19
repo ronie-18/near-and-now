@@ -90,7 +90,6 @@ interface ProductRow {
   id: string;
   store_id: string;
   master_product_id: string;
-  quantity: number;
   is_active: boolean;
   master_products?: {
     id: string;
@@ -117,7 +116,7 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
     for (const ids of storeChunks) {
       const { data, error } = await supabaseAdmin
         .from('products')
-        .select('id, store_id, master_product_id, quantity, is_active, master_products(*)')
+        .select('id, store_id, master_product_id, is_active, master_products(*)')
         .eq('is_active', true)
         .in('store_id', ids);
       if (error) throw new Error(`Database error: ${error.message}`);
@@ -132,7 +131,7 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
   while (hasMore) {
     const { data, error } = await supabaseAdmin
       .from('products')
-      .select('id, store_id, master_product_id, quantity, is_active, master_products(*)')
+      .select('id, store_id, master_product_id, is_active, master_products(*)')
       .eq('is_active', true)
       .range(from, from + batchSize - 1);
     if (error) throw new Error(`Database error: ${error.message}`);
@@ -147,17 +146,13 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
   return allRows;
 }
 
-// Dedupe product rows by master_product_id (keep one per master product, prefer higher quantity) and transform to Product[]
+// Dedupe product rows by master_product_id and transform to Product[]
 function productRowsToProducts(rows: ProductRow[]): Product[] {
   const byMaster = new Map<string, ProductRow>();
   for (const row of rows) {
     const mp = row.master_products;
     if (!mp || !mp.is_active) continue;
-    const existing = byMaster.get(row.master_product_id);
-    const q = typeof row.quantity === 'number' ? row.quantity : parseFloat(String(row.quantity)) || 0;
-    if (!existing || (typeof existing.quantity === 'number' ? existing.quantity : 0) < q) {
-      byMaster.set(row.master_product_id, row);
-    }
+    if (!byMaster.has(row.master_product_id)) byMaster.set(row.master_product_id, row);
   }
   return Array.from(byMaster.values()).map((row) => transformProductRowToProduct(row));
 }
@@ -170,7 +165,6 @@ function transformProductRowToProduct(row: ProductRow): Product {
   const originalPrice = mp.base_price != null
     ? (typeof mp.base_price === 'string' ? parseFloat(mp.base_price) : mp.base_price)
     : undefined;
-  const q = typeof row.quantity === 'number' ? row.quantity : parseFloat(String(row.quantity)) || 0;
   return {
     id: mp.id,
     name: mp.name,
@@ -180,7 +174,8 @@ function transformProductRowToProduct(row: ProductRow): Product {
     image_url: mp.image_url,
     image: mp.image_url,
     description: mp.description,
-    in_stock: row.is_active && q > 0,
+    // New products table no longer stores quantity; active products are treated as in stock.
+    in_stock: row.is_active,
     unit: mp.unit ?? 'piece',
     isLoose: mp.is_loose ?? false,
     created_at: mp.created_at,
