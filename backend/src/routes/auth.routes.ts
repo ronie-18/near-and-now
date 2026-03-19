@@ -10,7 +10,9 @@ const sendOtpSchema = z.object({
 
 const verifyOtpSchema = z.object({
   phone: z.string().min(10).max(15),
-  otp: z.string().length(6, 'OTP must be 6 digits').regex(/^\d+$/, 'OTP must be numeric')
+  otp: z.string().length(6, 'OTP must be 6 digits').regex(/^\d+$/, 'OTP must be numeric'),
+  role: z.enum(['customer', 'shopkeeper', 'store_owner', 'delivery_partner']).optional(),
+  name: z.string().optional()
 });
 
 const router = Router();
