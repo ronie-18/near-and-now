@@ -103,9 +103,13 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
       setStep(2);
       setResendTimer(30);
       showNotification('OTP sent to your phone', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending OTP:', error);
-      showNotification('Failed to send OTP. Please try again.', 'error');
+      const message =
+        error?.message && typeof error.message === 'string'
+          ? error.message
+          : 'Failed to send OTP. Please try again.';
+      showNotification(message, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -151,9 +155,13 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
       await sendOTPCode('+91' + phone);
       setResendTimer(30);
       showNotification('OTP resent to your phone', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error resending OTP:', error);
-      showNotification('Failed to resend OTP. Please try again.', 'error');
+      const message =
+        error?.message && typeof error.message === 'string'
+          ? error.message
+          : 'Failed to resend OTP. Please try again.';
+      showNotification(message, 'error');
     } finally {
       setIsSubmitting(false);
     }

@@ -33,9 +33,36 @@ export interface AuthResponse {
   token: string;
 }
 
-// Base URL for backend API (use VITE_API_URL in production so requests hit your backend, not the frontend host)
+// Base URL for backend API.
+// Prefer VITE_API_URL for web builds, but also fall back to EXPO_PUBLIC_API_BASE_URL
+// so shared env files keep OTP/login working without duplicate values.
 const getApiBase = () =>
-  (import.meta.env.VITE_API_URL || '').toString().replace(/\/$/, '');
+  (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
+    .toString()
+    .replace(/\/$/, '');
+
+function isHtmlResponseBody(text: string): boolean {
+  const trimmed = text.trim().toLowerCase();
+  return trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
+}
+
+function parseErrorMessageFromResponse(text: string, fallback: string): string {
+  if (!text) return fallback;
+
+  try {
+    const parsed = JSON.parse(text);
+    const message = parsed?.message || parsed?.error;
+    if (typeof message === 'string' && message.trim()) return message;
+  } catch {
+    // Not JSON
+  }
+
+  if (isHtmlResponseBody(text)) {
+    return 'Server returned an internal error page. Please retry in a moment.';
+  }
+
+  return text.trim() || fallback;
+}
 
 // Send OTP to phone number via Twilio
 export async function sendOTP(phone: string): Promise<void> {
@@ -54,12 +81,7 @@ export async function sendOTP(phone: string): Promise<void> {
       let message = 'Failed to send OTP';
       try {
         const text = await response.text();
-        try {
-          const error = JSON.parse(text);
-          message = error.message || error.error || message;
-        } catch {
-          if (text) message = text;
-        }
+        message = parseErrorMessageFromResponse(text, message);
       } catch {
         // Response body read failed
       }
@@ -104,10 +126,8 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
     }
 
     if (!response.ok) {
-      let message = data.message || data.error || 'Invalid OTP';
-      if (typeof message === 'object' || String(message) === '{}' || !String(message).trim()) {
-        message = data.error || 'Something went wrong. Please try again.';
-      }
+      let message = parseErrorMessageFromResponse(text, 'Invalid OTP');
+      if (!String(message).trim()) message = 'Something went wrong. Please try again.';
       throw new Error(String(message));
     }
 
