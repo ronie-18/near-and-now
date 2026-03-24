@@ -35,7 +35,7 @@ const Header = () => {
     const loadLocation = async () => {
       if (isAuthenticated && user?.id) {
         try {
-          const addresses = await getUserAddresses(user.id);
+          const addresses = await getUserAddresses(user.id, user.phone || undefined);
           setUserSavedAddresses(addresses);
           const defaultAddr = addresses.find((a) => a.is_default) || addresses[0];
           if (defaultAddr?.latitude != null && defaultAddr?.longitude != null) {

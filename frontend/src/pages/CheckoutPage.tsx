@@ -75,6 +75,18 @@ const CheckoutPage = () => {
   const suggestionsScrollRef = useRef<HTMLDivElement>(null);
   const lastCreatedAddressRef = useRef<DbAddress | null>(null);
 
+  const getStoredDeliveryLocation = (): LocationData | null => {
+    try {
+      const raw = localStorage.getItem('currentLocation');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as LocationData;
+      if (typeof parsed?.lat !== 'number' || typeof parsed?.lng !== 'number') return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
   // Fetch saved addresses on component mount
   useEffect(() => {
     const fetchAddresses = async () => {
@@ -85,8 +97,30 @@ const CheckoutPage = () => {
 
       try {
         setLoadingAddresses(true);
-        const addresses = await getUserAddresses(user.id);
+        const addresses = await getUserAddresses(user.id, user.phone || undefined);
         setSavedAddresses(addresses);
+
+        const deliveryToLocation = getStoredDeliveryLocation();
+        if (deliveryToLocation) {
+          setPickedLocation(deliveryToLocation);
+        }
+
+        // If user selected "Deliver to" on main page, try to auto-match and select that saved address.
+        if (deliveryToLocation && addresses.length > 0) {
+          const matchByCoords = addresses.find((addr) =>
+            addr.latitude != null &&
+            addr.longitude != null &&
+            Math.abs(addr.latitude - deliveryToLocation.lat) < 0.0001 &&
+            Math.abs(addr.longitude - deliveryToLocation.lng) < 0.0001
+          );
+
+          if (matchByCoords) {
+            setSelectedAddressId(matchByCoords.id);
+            populateFormWithAddress(matchByCoords);
+            setShowNewAddressForm(false);
+            return;
+          }
+        }
 
         // Auto-select default address if available
         const defaultAddress = addresses.find(addr => addr.is_default);
@@ -99,6 +133,16 @@ const CheckoutPage = () => {
           setSelectedAddressId(addresses[0].id);
           populateFormWithAddress(addresses[0]);
           setShowNewAddressForm(false);
+        } else if (deliveryToLocation) {
+          // If no saved address exists, prefill checkout from "Deliver to" location.
+          setFormData(prev => ({
+            ...prev,
+            address: deliveryToLocation.address || '',
+            city: deliveryToLocation.city || '',
+            state: deliveryToLocation.state || '',
+            pincode: deliveryToLocation.pincode || '',
+          }));
+          setShowNewAddressForm(true);
         } else {
           // Show new address form if no addresses exist
           setShowNewAddressForm(true);
@@ -309,7 +353,7 @@ const CheckoutPage = () => {
     try {
       setLoadingAddresses(true);
       await deleteAddress(addressId, user.id);
-      let addresses = await getUserAddresses(user.id);
+      let addresses = await getUserAddresses(user.id, user.phone || undefined);
       setSavedAddresses(addresses);
 
       // Re-select default or first
@@ -376,7 +420,7 @@ const CheckoutPage = () => {
         }
         await updateAddress(editAddressId, user.id, updatePayload);
         const updatedAddressId = editAddressId; // Store before clearing
-        let addresses = await getUserAddresses(user.id);
+        let addresses = await getUserAddresses(user.id, user.phone || undefined);
         setSavedAddresses(addresses);
         setEditAddressId(null);
         setShowNewAddressForm(false);
@@ -467,7 +511,7 @@ const CheckoutPage = () => {
           lastCreatedAddressRef.current = createdAddress;
 
           // Refresh the addresses list to include the newly added address
-          const updatedAddresses = await getUserAddresses(user.id);
+          const updatedAddresses = await getUserAddresses(user.id, user.phone || undefined);
           setSavedAddresses(updatedAddresses);
 
           // Select the newly created address
@@ -731,6 +775,16 @@ const CheckoutPage = () => {
                     {!loadingAddresses && savedAddresses.length > 0 && !showNewAddressForm && (
                       <div className="mb-6 space-y-3">
                         <p className="text-sm text-gray-600 mb-3">Select a delivery address:</p>
+                        <button
+                          type="button"
+                          onClick={handleNewAddress}
+                          className="w-full p-4 border-2 border-dashed border-primary/40 rounded-xl hover:border-primary hover:bg-primary/5 transition-all duration-300 text-left"
+                        >
+                          <div className="flex items-center gap-3 text-primary">
+                            <Plus className="w-5 h-5" />
+                            <span className="font-semibold">Add Address</span>
+                          </div>
+                        </button>
                         {savedAddresses.map((address) => (
                           <label
                             key={address.id}

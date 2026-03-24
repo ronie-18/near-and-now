@@ -955,14 +955,40 @@ function mapRowToAddress(row: Record<string, unknown>): Address {
 }
 
 // Get all addresses for a user (customer_saved_addresses)
-export async function getUserAddresses(userId: string): Promise<Address[]> {
+export async function getUserAddresses(userId?: string, userPhone?: string): Promise<Address[]> {
   try {
-    console.log('📍 Fetching addresses for user:', userId);
+    console.log('📍 Fetching addresses for user:', userId, 'phone:', userPhone);
+
+    const customerIds = new Set<string>();
+    if (userId) customerIds.add(userId);
+
+    // Some older records can be attached to an app_users row matched by phone.
+    // Resolve those user IDs so addresses still appear after account remaps/migrations.
+    if (userPhone) {
+      const normalizedPhone = userPhone.trim();
+      if (normalizedPhone) {
+        const { data: usersByPhone, error: usersByPhoneError } = await supabaseAdmin
+          .from('app_users')
+          .select('id')
+          .eq('phone', normalizedPhone)
+          .eq('role', 'customer');
+
+        if (!usersByPhoneError && usersByPhone?.length) {
+          for (const row of usersByPhone) {
+            if (row.id) customerIds.add(row.id);
+          }
+        }
+      }
+    }
+
+    if (customerIds.size === 0) {
+      return [];
+    }
 
     const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .select('*')
-      .eq('customer_id', userId)
+      .in('customer_id', Array.from(customerIds))
       .eq('is_active', true)
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: false });

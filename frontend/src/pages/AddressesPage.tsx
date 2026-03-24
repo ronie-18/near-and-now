@@ -75,7 +75,7 @@ const AddressesPage = () => {
 
       try {
         setLoading(true);
-        const data = await getUserAddresses(user.id);
+        const data = await getUserAddresses(user.id, user.phone || undefined);
         
         // Transform database addresses to component format
         const transformedAddresses = data.map(addr => ({
@@ -198,7 +198,7 @@ const AddressesPage = () => {
         await updateAddress(editingAddress.id, user.id, updateData);
         
         // Refresh addresses list
-        const data = await getUserAddresses(user.id);
+        const data = await getUserAddresses(user.id, user.phone || undefined);
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
@@ -233,7 +233,7 @@ const AddressesPage = () => {
         await createAddress(createData);
         
         // Refresh addresses list
-        const data = await getUserAddresses(user.id);
+        const data = await getUserAddresses(user.id, user.phone || undefined);
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
@@ -276,7 +276,7 @@ const AddressesPage = () => {
       await deleteAddress(id, user.id);
       
       // Refresh addresses list
-      const data = await getUserAddresses(user.id);
+      const data = await getUserAddresses(user.id, user.phone || undefined);
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
@@ -308,7 +308,7 @@ const AddressesPage = () => {
       await setDefaultAddress(id, user.id);
       
       // Refresh addresses list
-      const data = await getUserAddresses(user.id);
+      const data = await getUserAddresses(user.id, user.phone || undefined);
         const transformedAddresses = data.map(addr => ({
           id: addr.id,
           name: addr.name,
