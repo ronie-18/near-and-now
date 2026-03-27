@@ -6,7 +6,7 @@ The LocationPicker component provides a user-friendly interface for selecting de
 
 - **Current Location Detection**: Uses browser geolocation to auto-detect user's location
 - **Address Search**: Search for any address in India with autocomplete suggestions
-- **Saved Addresses**: Automatically saves up to 5 recent addresses
+- **Saved Addresses**: Automatically saves recent addresses (localStorage; no fixed cap)
 - **Persistent Storage**: Remembers selected location across sessions
 
 ## Features
@@ -23,8 +23,7 @@ The LocationPicker component provides a user-friendly interface for selecting de
 
 ### 3. Saved Addresses
 - Automatically saves selected addresses
-- Stores up to 5 recent locations (configurable in `app-config.ts`)
-- Persists in localStorage
+- Persists in localStorage (unlimited recent selections)
 
 ### 4. Visual Feedback
 - Loading states for async operations
@@ -89,7 +88,6 @@ interface Location {
 The component uses settings from `app-config.ts`:
 
 - `GOOGLE_MAPS_API_KEY`: Your Google Maps API key
-- `MAX_SAVED_ADDRESSES`: Maximum number of saved addresses (default: 5)
 
 ## Google Maps API Requirements
 

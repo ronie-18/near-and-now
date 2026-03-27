@@ -25,9 +25,14 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+// Local Vite dev calling production API (VITE_API_URL=https://nearandnow.in) needs these origins.
+// Production domains still come from ALLOWED_ORIGINS (e.g. on Vercel).
+const LOCAL_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const fromEnv = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
-  .map((o) => o.trim());
+  .map((o) => o.trim())
+  .filter(Boolean);
+const ALLOWED_ORIGINS = [...new Set([...LOCAL_DEV_ORIGINS, ...fromEnv])];
 
 app.use(helmet());
 app.use(cors({
@@ -55,7 +60,7 @@ app.use('/api/tracking', trackingRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/payment', paymentRoutes);
 
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 

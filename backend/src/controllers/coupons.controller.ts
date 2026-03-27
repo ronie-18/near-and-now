@@ -3,7 +3,7 @@ import { databaseService } from '../services/database.service.js';
 
 export class CouponsController {
   // Get all coupons
-  async getCoupons(req: Request, res: Response) {
+  async getCoupons(_req: Request, res: Response) {
     try {
       const coupons = await databaseService.getCoupons();
       res.json(coupons);
@@ -76,7 +76,7 @@ export class CouponsController {
     }
   }
 
-  async getActiveCoupons(req: Request, res: Response) {
+  async getActiveCoupons(_req: Request, res: Response) {
     try {
       const coupons = await databaseService.getActiveCoupons();
       res.json(coupons);

@@ -31,7 +31,7 @@ export class CustomersController {
 
   async updateAddress(req: Request, res: Response) {
     try {
-      const { addressId } = req.params;
+      void req.params.addressId;
       res.status(501).json({ error: 'Not implemented yet' });
     } catch (error) {
       console.error('Error updating address:', error);
@@ -41,7 +41,7 @@ export class CustomersController {
 
   async deleteAddress(req: Request, res: Response) {
     try {
-      const { addressId } = req.params;
+      void req.params.addressId;
       res.status(501).json({ error: 'Not implemented yet' });
     } catch (error) {
       console.error('Error deleting address:', error);

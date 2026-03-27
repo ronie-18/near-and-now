@@ -8,7 +8,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // This file is for Vite build configuration only
 export default defineConfig({
   plugins: [react()],
-  base: './', // Use relative paths for cPanel deployment
+  // Vercel: absolute / so deep routes load /assets/* correctly. Non-Vercel: ./ for static hosts (e.g. cPanel).
+  base: process.env.VERCEL ? '/' : './',
   envDir: path.resolve(__dirname, '..'), // Load .env from project root
   server: {
     proxy: {

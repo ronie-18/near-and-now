@@ -101,8 +101,8 @@ export class OrdersController {
 
   async updateOrderStatus(req: Request, res: Response) {
     try {
-      const { orderId } = req.params;
-      const { status } = req.body;
+      void req.params.orderId;
+      void req.body.status;
       res.status(501).json({ error: 'Not implemented yet' });
     } catch (error) {
       console.error('Error updating order status:', error);

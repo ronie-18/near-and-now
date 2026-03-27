@@ -72,9 +72,6 @@
   ```
   VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
   VITE_SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
-  VITE_LOCATION_CACHE_DURATION=86400000
-  VITE_SEARCH_RADIUS_KM=2
-  VITE_MAX_SAVED_ADDRESSES=5
   ```
 
 **Files to Create:**

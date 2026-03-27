@@ -33,7 +33,7 @@ export class NotificationService {
   }
 
   // Send email notification
-  async sendEmail(to: string, subject: string, body: string) {
+  async sendEmail(to: string, subject: string, _body: string) {
     // TODO: Integrate with email service (SendGrid, AWS SES, etc.)
     console.log(`Sending email to ${to}: ${subject}`);
     return { success: true };
@@ -47,7 +47,7 @@ export class NotificationService {
   }
 
   // Send push notification
-  async sendPushNotification(userId: string, title: string, body: string) {
+  async sendPushNotification(userId: string, title: string, _body: string) {
     // TODO: Integrate with push notification service (FCM, etc.)
     console.log(`Sending push to user ${userId}: ${title}`);
     return { success: true };

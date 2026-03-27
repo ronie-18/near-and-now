@@ -83,37 +83,6 @@ const geocodeAddress = async (address: string) => {
 };
 ```
 
-## Using App Settings
-
-```typescript
-import APP_CONFIG from '@/config/app-config';
-
-// Cache location for 24 hours
-const cacheLocation = (location: any) => {
-  const cacheData = {
-    location,
-    timestamp: Date.now(),
-  };
-  localStorage.setItem('userLocation', JSON.stringify(cacheData));
-};
-
-const getCachedLocation = () => {
-  const cached = localStorage.getItem('userLocation');
-  if (!cached) return null;
-
-  const { location, timestamp } = JSON.parse(cached);
-  const isExpired = Date.now() - timestamp > APP_CONFIG.LOCATION_CACHE_DURATION;
-  
-  return isExpired ? null : location;
-};
-
-// Use search radius
-const searchNearbyShops = (userLocation: any) => {
-  const radiusKm = APP_CONFIG.SEARCH_RADIUS_KM;
-  // Your search logic using the radius
-};
-```
-
 ## Environment Detection
 
 ```typescript
@@ -146,6 +115,5 @@ import APP_CONFIG from '@/config/app-config';
 
 // ✅ TypeScript will autocomplete these properties
 const apiKey: string = APP_CONFIG.GOOGLE_MAPS_API_KEY;
-const radius: number = APP_CONFIG.SEARCH_RADIUS_KM;
 const isProduction: boolean = APP_CONFIG.isProduction();
 ```

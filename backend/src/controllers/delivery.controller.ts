@@ -20,7 +20,7 @@ export class DeliveryController {
     }
   }
   // Get all delivery partners
-  async getDeliveryPartners(req: Request, res: Response) {
+  async getDeliveryPartners(_req: Request, res: Response) {
     try {
       const partners = await databaseService.getDeliveryPartners();
       res.json(partners);

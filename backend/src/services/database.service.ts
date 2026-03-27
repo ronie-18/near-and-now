@@ -1,8 +1,6 @@
 import { supabase, supabaseAdmin } from '../config/database.js';
 import { reverseGeocode } from './geocoding.service.js';
 import type {
-  AppUser,
-  Customer,
   CustomerSavedAddress,
   Store,
   MasterProduct,

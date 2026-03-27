@@ -40,7 +40,6 @@ export interface Product {
 export interface ProductFetchOptions {
   lat?: number;
   lng?: number;
-  radiusKm?: number;
 }
 
 function getLocationFromStorage(): ProductFetchOptions | undefined {
@@ -55,12 +54,15 @@ function getLocationFromStorage(): ProductFetchOptions | undefined {
   return undefined;
 }
 
+/** Try 1 km first, then 2, 3, 4 km until at least one store is found (delivery coverage). */
+export const STORE_SEARCH_RADIUS_STEPS_KM = [1, 2, 3, 4] as const;
+
 // Get store IDs from the stores table within radius of (lat, lng). No mock/dummy stores.
 // On RPC failure or no stores, returns empty array.
 async function getNearbyStoreIds(
   lat: number,
   lng: number,
-  radiusKm = 50
+  radiusKm: number
 ): Promise<string[]> {
   try {
     const { data: storeIds, error } = await supabaseAdmin.rpc('get_nearby_store_ids', {
@@ -73,6 +75,15 @@ async function getNearbyStoreIds(
   } catch {
     return [];
   }
+}
+
+/** Uses STORE_SEARCH_RADIUS_STEPS_KM: smallest radius that returns any store, else []. */
+async function getNearbyStoreIdsExpanding(lat: number, lng: number): Promise<string[]> {
+  for (const radiusKm of STORE_SEARCH_RADIUS_STEPS_KM) {
+    const ids = await getNearbyStoreIds(lat, lng, radiusKm);
+    if (ids.length > 0) return ids;
+  }
+  return [];
 }
 
 // PostgREST encodes .in() filters in the URL. Large ID lists exceed URL limits and cause Bad Request.
@@ -187,16 +198,16 @@ function transformProductRowToProduct(row: ProductRow): Product {
 export async function getAllProducts(options?: ProductFetchOptions): Promise<Product[]> {
   try {
     const opts = options ?? getLocationFromStorage();
-    const { lat, lng, radiusKm = 50 } = opts || {};
+    const { lat, lng } = opts || {};
     const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIds(lat, lng, radiusKm)
+      ? await getNearbyStoreIdsExpanding(lat, lng)
       : null;
 
     const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
     const rows = await fetchProductRows(storeIdsToUse);
     const products = productRowsToProducts(rows);
 
-    console.log(`✅ Fetched ${products.length} products from products table` + (storeIdsToUse ? ' (nearby stores)' : ''));
+    console.log(`✅ Fetched ${products.length} products from products table` + (storeIdsToUse ? ' (nearby stores, 1→4 km)' : ''));
     return products;
   } catch (error) {
     console.error('❌ Error in getAllProducts:', error);
@@ -211,9 +222,9 @@ export async function getProductsByCategory(
 ): Promise<Product[]> {
   try {
     const opts = options ?? getLocationFromStorage();
-    const { lat, lng, radiusKm = 50 } = opts || {};
+    const { lat, lng } = opts || {};
     const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIds(lat, lng, radiusKm)
+      ? await getNearbyStoreIdsExpanding(lat, lng)
       : null;
     const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
 
@@ -230,9 +241,9 @@ export async function getProductsByCategory(
 export async function searchProducts(query: string, options?: ProductFetchOptions): Promise<Product[]> {
   try {
     const opts = options ?? getLocationFromStorage();
-    const { lat, lng, radiusKm = 50 } = opts || {};
+    const { lat, lng } = opts || {};
     const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIds(lat, lng, radiusKm)
+      ? await getNearbyStoreIdsExpanding(lat, lng)
       : null;
     const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
 
@@ -450,7 +461,7 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
     console.log('📝 Generated order code:', orderCode);
 
     // Get real stores near delivery address (from stores table, no mock data)
-    const storeIds = await getNearbyStoreIds(geocoded.lat, geocoded.lng, 50);
+    const storeIds = await getNearbyStoreIdsExpanding(geocoded.lat, geocoded.lng);
     if (!storeIds.length) {
       throw new Error('No store available for your delivery address. Please contact support.');
     }

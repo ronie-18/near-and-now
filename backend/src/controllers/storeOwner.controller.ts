@@ -17,7 +17,7 @@ export async function getStores(req: Request, res: Response) {
       });
     }
 
-    const token = authHeader.substring(7);
+    void authHeader.substring(7); // Bearer token — validate JWT when auth is implemented
     
     // In a real implementation, you'd validate the token and extract user ID
     // For now, we'll extract from request query or body as a workaround
@@ -215,7 +215,7 @@ export async function signupComplete(req: Request, res: Response) {
     const name = String(ownerName).trim();
     const storeNameTrim = String(storeName).trim();
     const address = storeAddress ? String(storeAddress).trim() : null;
-    const radius = radiusKm != null ? Number(radiusKm) : 3;
+    void radiusKm;
     const lat = latitude != null ? Number(latitude) : null;
     const lng = longitude != null ? Number(longitude) : null;
     const emailVal = email ? String(email).trim() || null : null;

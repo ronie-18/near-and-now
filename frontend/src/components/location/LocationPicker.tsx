@@ -6,7 +6,6 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { MapPin, Navigation, X, Search, Loader2, Check, ArrowLeft } from 'lucide-react';
-import APP_CONFIG from '../../config/app-config';
 import {
   searchPlaces,
   getPlaceDetails,
@@ -228,7 +227,6 @@ const LocationPicker = ({
     const existingIndex = saved.findIndex((addr) => addr.address === location.address);
     if (existingIndex === -1) {
       saved.unshift(location);
-      if (saved.length > APP_CONFIG.MAX_SAVED_ADDRESSES) saved.pop();
       setSavedAddresses(saved);
       localStorage.setItem('savedAddresses', JSON.stringify(saved));
     }

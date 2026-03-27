@@ -19,10 +19,6 @@ VITE_SUPABASE_ANON_KEY=your_anon_key_here
 VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 
 # App Settings (Optional - defaults provided)
-VITE_LOCATION_CACHE_DURATION=86400000
-VITE_SEARCH_RADIUS_KM=2
-VITE_MAX_SAVED_ADDRESSES=5
-
 # Encryption Key (Optional but recommended for production)
 VITE_ENCRYPTION_KEY=generate_a_strong_random_key_here
 ```
