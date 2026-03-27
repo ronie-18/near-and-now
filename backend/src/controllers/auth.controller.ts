@@ -43,18 +43,6 @@ export class AuthController {
 
       console.log('📱 Sending OTP to:', phone);
 
-      // DEV MODE: Bypass Twilio in development (use OTP: 123456)
-      if (process.env.NODE_ENV === 'development' || process.env.DEV_BYPASS_OTP === 'true') {
-        console.log('🛠️ DEV MODE: Skipping Twilio, use OTP: 123456');
-        return res.json({
-          success: true,
-          message: 'OTP sent successfully (dev mode)',
-          status: 'pending',
-          devMode: true,
-          devOtp: '123456'
-        });
-      }
-
       // Check if Twilio is configured
       if (!client) {
         return res.status(503).json({
@@ -99,52 +87,26 @@ export class AuthController {
       const isStoreOwnerFlow = requestRole === 'store_owner' || requestRole === 'shopkeeper';
       console.log('🔐 Verifying OTP for:', phone, isStoreOwnerFlow ? `(${requestRole})` : '(customer)');
 
-      // DEV MODE: Bypass Twilio verification (accept any OTP in dev, or 123456)
-      const devBypass = process.env.NODE_ENV === 'development' || process.env.DEV_BYPASS_OTP === 'true';
-      let otpVerified = false;
-
-      if (devBypass) {
-        // In dev mode, accept OTP: 123456 or any 6-digit code
-        if (otp === '123456' || /^\d{6}$/.test(String(otp))) {
-          console.log('🛠️ DEV MODE: OTP verification bypassed');
-          otpVerified = true;
-        } else {
-          console.log('❌ DEV MODE: Invalid OTP format (need 6 digits)');
-          return res.status(400).json({
-            error: 'Invalid OTP',
-            message: 'In dev mode, use OTP: 123456 or any 6-digit code'
-          });
-        }
-      } else {
-        // Production: Use Twilio verification
-        // Check if Twilio is configured
-        if (!client) {
-          return res.status(503).json({
-            error: 'OTP service not configured',
-            message: 'SMS OTP verification is currently unavailable.'
-          });
-        }
-
-        // Verify OTP via Twilio
-        const verificationCheck = await client.verify.v2
-          .services(serviceSid!)
-          .verificationChecks.create({
-            to: String(phone),
-            code: String(otp)
-          });
-
-        if (verificationCheck.status !== 'approved') {
-          console.log('❌ Invalid OTP');
-          return res.status(400).json({
-            error: 'Invalid OTP',
-            status: verificationCheck.status
-          });
-        }
-        otpVerified = true;
+      if (!client) {
+        return res.status(503).json({
+          error: 'OTP service not configured',
+          message: 'SMS OTP verification is currently unavailable.'
+        });
       }
 
-      if (!otpVerified) {
-        return res.status(400).json({ error: 'OTP verification failed' });
+      const verificationCheck = await client.verify.v2
+        .services(serviceSid!)
+        .verificationChecks.create({
+          to: String(phone),
+          code: String(otp)
+        });
+
+      if (verificationCheck.status !== 'approved') {
+        console.log('❌ Invalid OTP');
+        return res.status(400).json({
+          error: 'Invalid OTP',
+          status: verificationCheck.status
+        });
       }
 
       console.log('✅ OTP verified successfully');
