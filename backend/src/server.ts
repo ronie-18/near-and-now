@@ -34,10 +34,9 @@ const fromEnv = (process.env.ALLOWED_ORIGINS || '')
   .filter(Boolean);
 const ALLOWED_ORIGINS = [...new Set([...LOCAL_DEV_ORIGINS, ...fromEnv])];
 
-app.use(helmet());
+// Apply CORS before Helmet so preflight (OPTIONS) always gets Access-Control-* headers.
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow server-to-server requests (no origin) and listed origins
     if (!origin || ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
@@ -46,6 +45,7 @@ app.use(cors({
   },
   credentials: true
 }));
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);

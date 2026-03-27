@@ -14,8 +14,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://near-and-now-backend-production.up.railway.app',
-        changeOrigin: true
+        target: 'https://nearandnow.in',
+        changeOrigin: true,
+        secure: true
       }
     }
   },

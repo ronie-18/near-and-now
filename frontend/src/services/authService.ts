@@ -34,12 +34,18 @@ export interface AuthResponse {
 }
 
 // Base URL for backend API.
-// Prefer VITE_API_URL for web builds, but also fall back to EXPO_PUBLIC_API_BASE_URL
-// so shared env files keep OTP/login working without duplicate values.
-const getApiBase = () =>
-  (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
+// Prefer VITE_API_URL; optional EXPO_PUBLIC_API_BASE_URL fallback (Expo / shared .env).
+// In Vite dev, if VITE_API_URL points at a remote https API, use same-origin `/api` instead so the
+// dev server proxy (vite.config) forwards the request — avoids CORS (localhost → production).
+const getApiBase = () => {
+  let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
     .toString()
     .replace(/\/$/, '');
+  if (import.meta.env.DEV && base.startsWith('https://')) {
+    return '';
+  }
+  return base;
+};
 
 function isHtmlResponseBody(text: string): boolean {
   const trimmed = text.trim().toLowerCase();
