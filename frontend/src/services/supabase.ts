@@ -16,6 +16,26 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   }
 });
 
+/** Same-origin /api in Vite dev (proxy); full URL in production when set. Mirrors authService.getApiBase. */
+function getApiBaseForAddresses(): string {
+  let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
+    .toString()
+    .replace(/\/$/, '');
+  if (import.meta.env.DEV && base.startsWith('https://')) {
+    return '';
+  }
+  return base;
+}
+
+function getStoredAuthLoginPhone(): string | undefined {
+  try {
+    const p = localStorage.getItem('authLoginPhone')?.trim();
+    return p || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Product types
 export interface Product {
   unit: string;
@@ -966,7 +986,7 @@ export interface Address {
   city: string;
   state: string;
   pincode: string;
-  phone: string;
+  phone: string; // DB: contact_phone
   is_default: boolean;
   latitude?: number;
   longitude?: number;
@@ -1025,31 +1045,101 @@ export interface UpdateAddressData {
   receiver_phone?: string;
 }
 
+/** Match app_users.phone across +91 / digit-only variants (same logic as auth verify-otp). */
+function customerPhoneLookupVariants(phone: string): string[] {
+  const raw = String(phone).trim();
+  const digits = raw.replace(/\D/g, '');
+  const out = new Set<string>();
+  if (raw) out.add(raw);
+  if (digits) out.add(digits);
+  if (digits.length === 10 && /^[6-9]/.test(digits)) {
+    out.add(digits);
+    out.add(`91${digits}`);
+    out.add(`+91${digits}`);
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    const local = digits.slice(1);
+    if (local.length === 10 && /^[6-9]/.test(local)) {
+      out.add(local);
+      out.add(`91${local}`);
+      out.add(`+91${local}`);
+    }
+  }
+  if (digits.length >= 12 && digits.startsWith('91')) {
+    const local = digits.slice(-10);
+    out.add(digits);
+    out.add(local);
+    out.add(`91${local}`);
+    out.add(`+91${local}`);
+  }
+  return [...out].filter(Boolean);
+}
+
+function lastTenIndianMobileDigits(phone: string): string | null {
+  const d = String(phone).replace(/\D/g, '');
+  if (d.length === 10 && /^[6-9]/.test(d)) return d;
+  if (d.length === 11 && d.startsWith('0')) {
+    const rest = d.slice(1);
+    return rest.length === 10 && /^[6-9]/.test(rest) ? rest : null;
+  }
+  if (d.length >= 12 && d.startsWith('91')) {
+    const rest = d.slice(-10);
+    return /^[6-9]/.test(rest) ? rest : null;
+  }
+  if (d.length >= 10) {
+    const rest = d.slice(-10);
+    return /^[6-9]/.test(rest) ? rest : null;
+  }
+  return null;
+}
+
 // Transform DB row to Address
 function mapRowToAddress(row: Record<string, unknown>): Address {
-  // Split address into lines if it contains commas
-  const fullAddress = (row.address as string) || '';
-  const addressParts = fullAddress.split(',').map(s => s.trim()).filter(Boolean);
-  const addressLine1 = addressParts[0] || fullAddress;
-  const addressLine2 = addressParts.length > 1 ? addressParts.slice(1).join(', ') : undefined;
+  const line1Col = row.address_line_1 != null ? String(row.address_line_1).trim() : '';
+  const line2Col = row.address_line_2 != null ? String(row.address_line_2).trim() : '';
+  const rawAddress = typeof row.address === 'string' ? row.address.trim() : '';
+  const googleFmt =
+    typeof row.google_formatted_address === 'string' ? row.google_formatted_address.trim() : '';
+  const fullAddress = rawAddress || googleFmt;
+
+  let addressLine1: string;
+  let addressLine2: string | undefined;
+  if (line1Col) {
+    addressLine1 = line1Col;
+    addressLine2 = line2Col || undefined;
+  } else {
+    const addressParts = fullAddress.split(',').map((s) => s.trim()).filter(Boolean);
+    addressLine1 = addressParts[0] || fullAddress || 'Address';
+    addressLine2 = addressParts.length > 1 ? addressParts.slice(1).join(', ') : undefined;
+  }
+
+  const contactName =
+    row.contact_name != null && String(row.contact_name).trim()
+      ? String(row.contact_name).trim()
+      : '';
+  const labelStr = row.label != null && String(row.label).trim() ? String(row.label).trim() : '';
+
+  const rawDeliveryFor = String(row.delivery_for || 'self').toLowerCase();
+  const deliveryFor: 'self' | 'others' =
+    rawDeliveryFor === 'others' || rawDeliveryFor === 'someone_else' ? 'others' : 'self';
 
   return {
     id: row.id as string,
     user_id: row.customer_id as string,
-    name: (row.contact_name as string) || (row.label as string) || 'Address',
+    name: contactName || labelStr || 'Address',
     address_line_1: addressLine1,
     address_line_2: addressLine2,
     city: (row.city as string) || '',
     state: (row.state as string) || '',
     pincode: (row.pincode as string) || '',
-    phone: (row.contact_phone as string) || '',
+    phone: row.contact_phone != null ? String(row.contact_phone) : '',
     is_default: Boolean(row.is_default),
     latitude: row.latitude != null ? Number(row.latitude) : undefined,
     longitude: row.longitude != null ? Number(row.longitude) : undefined,
-    label: (row.label as string) || undefined,
+    label: labelStr || undefined,
     landmark: (row.landmark as string) || undefined,
     delivery_instructions: (row.delivery_instructions as string) || undefined,
-    delivery_for: (row.delivery_for as 'self' | 'others') || 'self',
+    delivery_for: deliveryFor,
     receiver_name: (row.receiver_name as string) || undefined,
     receiver_address: (row.receiver_address as string) || undefined,
     receiver_phone: (row.receiver_phone as string) || undefined,
@@ -1059,22 +1149,67 @@ function mapRowToAddress(row: Record<string, unknown>): Address {
 }
 
 // Get all addresses for a user (customer_saved_addresses)
-export async function getUserAddresses(userId?: string, userPhone?: string): Promise<Address[]> {
+export async function getUserAddresses(
+  userId?: string,
+  userPhone?: string,
+  customerPhone?: string
+): Promise<Address[]> {
+  if (!userId) return [];
+
+  const hintPhone = userPhone?.trim() || customerPhone?.trim() || getStoredAuthLoginPhone();
+
   try {
-    console.log('📍 Fetching addresses for user:', userId, 'phone:', userPhone);
+    console.log('📍 Fetching addresses for user:', userId, 'phone:', userPhone, 'customerPhone:', customerPhone, 'hintPhone:', hintPhone);
+
+    const params = new URLSearchParams({ userId });
+    if (hintPhone) params.set('phone', hintPhone);
+    if (customerPhone?.trim() && customerPhone.trim() !== hintPhone) {
+      params.set('customerPhone', customerPhone.trim());
+    }
+
+    const base = getApiBaseForAddresses();
+    const path = `/api/customers/addresses/resolved?${params.toString()}`;
+    const url = base ? `${base}${path}` : path;
+
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = (await res.json()) as unknown;
+      if (data && typeof data === 'object' && !Array.isArray(data) && 'error' in data) {
+        console.warn('📍 Resolved addresses API returned error JSON:', data);
+      } else if (Array.isArray(data)) {
+        console.log(`✅ Fetched ${data.length} addresses (API resolved by login + phone)`);
+        return data.map((row) => mapRowToAddress(row as Record<string, unknown>));
+      } else {
+        console.warn('📍 Resolved addresses API returned non-array:', data);
+      }
+    } else {
+      const errText = await res.text().catch(() => '');
+      console.warn('📍 Resolved addresses API failed:', res.status, errText);
+    }
+  } catch (e) {
+    console.warn('📍 Resolved addresses API error, falling back to direct Supabase:', e);
+  }
 
     const customerIds = new Set<string>();
-    if (userId) customerIds.add(userId);
+    customerIds.add(userId);
 
-    // Some older records can be attached to an app_users row matched by phone.
-    // Resolve those user IDs so addresses still appear after account remaps/migrations.
-    if (userPhone) {
-      const normalizedPhone = userPhone.trim();
-      if (normalizedPhone) {
+    const seeds = new Set<string>();
+    if (hintPhone) seeds.add(hintPhone);
+    if (customerPhone?.trim()) seeds.add(customerPhone.trim());
+
+    const tenDigitHints = new Set<string>();
+    for (const s of seeds) {
+      const t = lastTenIndianMobileDigits(s);
+      if (t) tenDigitHints.add(t);
+    }
+
+    for (const seed of seeds) {
+      const variants = customerPhoneLookupVariants(seed);
+      if (variants.length > 0) {
         const { data: usersByPhone, error: usersByPhoneError } = await supabaseAdmin
           .from('app_users')
           .select('id')
-          .eq('phone', normalizedPhone)
+          .in('phone', variants)
           .eq('role', 'customer');
 
         if (!usersByPhoneError && usersByPhone?.length) {
@@ -1082,11 +1217,39 @@ export async function getUserAddresses(userId?: string, userPhone?: string): Pro
             if (row.id) customerIds.add(row.id);
           }
         }
+
+        const { data: custRows } = await supabaseAdmin
+          .from('customers')
+          .select('user_id')
+          .in('phone', variants);
+
+        for (const row of custRows || []) {
+          if (row.user_id) customerIds.add(row.user_id);
+        }
+
+        const { data: addrByContact } = await supabaseAdmin
+          .from('customer_saved_addresses')
+          .select('customer_id')
+          .in('contact_phone', variants)
+          .eq('is_active', true);
+
+        for (const row of addrByContact || []) {
+          if (row.customer_id) customerIds.add(row.customer_id);
+        }
       }
     }
 
-    if (customerIds.size === 0) {
-      return [];
+    for (const ten of tenDigitHints) {
+      const { data: addrLoose } = await supabaseAdmin
+        .from('customer_saved_addresses')
+        .select('customer_id')
+        .eq('is_active', true)
+        .not('contact_phone', 'is', null)
+        .ilike('contact_phone', `%${ten}%`);
+
+      for (const row of addrLoose || []) {
+        if (row.customer_id) customerIds.add(row.customer_id);
+      }
     }
 
     const { data, error } = await supabaseAdmin
@@ -1102,12 +1265,8 @@ export async function getUserAddresses(userId?: string, userPhone?: string): Pro
       throw new Error(`Failed to fetch addresses: ${error.message}`);
     }
 
-    console.log(`✅ Fetched ${data?.length || 0} addresses`);
+    console.log(`✅ Fetched ${data?.length || 0} addresses (direct Supabase fallback)`);
     return (data || []).map(mapRowToAddress);
-  } catch (error: any) {
-    console.error('❌ Error in getUserAddresses:', error);
-    throw error;
-  }
 }
 
 // Create a new address (customer_saved_addresses)

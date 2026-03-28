@@ -20,4 +20,7 @@ export const supabaseAdmin: SupabaseClient = supabaseServiceKey
     })
   : supabase;
 
+/** Saved-address merge uses service role to read app_users / customer_saved_addresses under RLS. */
+export const isSupabaseServiceRoleConfigured = Boolean(supabaseServiceKey);
+
 export default supabase;

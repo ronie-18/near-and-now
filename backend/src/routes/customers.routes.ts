@@ -4,6 +4,7 @@ import { CustomersController } from '../controllers/customers.controller.js';
 const router = Router();
 const customersController = new CustomersController();
 
+router.get('/addresses/resolved', (req, res) => customersController.getResolvedAddresses(req, res));
 router.get('/:customerId/addresses', customersController.getAddresses);
 router.post('/:customerId/addresses', customersController.createAddress);
 router.patch('/addresses/:addressId', customersController.updateAddress);

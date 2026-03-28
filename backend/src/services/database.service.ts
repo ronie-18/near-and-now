@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin } from '../config/database.js';
+import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../config/database.js';
 import { reverseGeocode } from './geocoding.service.js';
 import type {
   CustomerSavedAddress,
@@ -13,6 +13,55 @@ import type {
   Admin,
   ProductsWithDetails
 } from '../types/database.types.js';
+
+/** Same rules as auth verify-otp / frontend — match app_users.customers phone storage variants. */
+function customerPhoneLookupVariants(phone: string): string[] {
+  const raw = String(phone).trim();
+  const digits = raw.replace(/\D/g, '');
+  const out = new Set<string>();
+  if (raw) out.add(raw);
+  if (digits) out.add(digits);
+  if (digits.length === 10 && /^[6-9]/.test(digits)) {
+    out.add(digits);
+    out.add(`91${digits}`);
+    out.add(`+91${digits}`);
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    const local = digits.slice(1);
+    if (local.length === 10 && /^[6-9]/.test(local)) {
+      out.add(local);
+      out.add(`91${local}`);
+      out.add(`+91${local}`);
+    }
+  }
+  if (digits.length >= 12 && digits.startsWith('91')) {
+    const local = digits.slice(-10);
+    out.add(digits);
+    out.add(local);
+    out.add(`91${local}`);
+    out.add(`+91${local}`);
+  }
+  return [...out].filter(Boolean);
+}
+
+/** 10-digit Indian mobile for loose contact_phone ILIKE matching (ignores spaces/format in DB). */
+function lastTenIndianMobileDigits(phone: string): string | null {
+  const d = String(phone).replace(/\D/g, '');
+  if (d.length === 10 && /^[6-9]/.test(d)) return d;
+  if (d.length === 11 && d.startsWith('0')) {
+    const rest = d.slice(1);
+    return rest.length === 10 && /^[6-9]/.test(rest) ? rest : null;
+  }
+  if (d.length >= 12 && d.startsWith('91')) {
+    const rest = d.slice(-10);
+    return /^[6-9]/.test(rest) ? rest : null;
+  }
+  if (d.length >= 10) {
+    const rest = d.slice(-10);
+    return /^[6-9]/.test(rest) ? rest : null;
+  }
+  return null;
+}
 
 export class DatabaseService {
   async getCategories() {
@@ -309,6 +358,120 @@ export class DatabaseService {
 
     if (error) throw error;
     return data as CustomerSavedAddress[];
+  }
+
+  /**
+   * All saved addresses for this login: current app_users id plus any other customer rows sharing the same
+   * phone (handles duplicate accounts / +91 vs 10-digit). Uses service role so RLS does not block app_users lookup.
+   *
+   * Schema: customer_saved_addresses.customer_id and customers.user_id both reference app_users(id).
+   */
+  async getCustomerSavedAddressesResolved(userId: string, phoneHints: string[]): Promise<CustomerSavedAddress[]> {
+    if (!isSupabaseServiceRoleConfigured) {
+      console.error(
+        '[addresses] SUPABASE_SERVICE_ROLE_KEY is not set on the API. Saved-address merge cannot bypass RLS — set the service role key in backend / Vercel env.'
+      );
+    }
+
+    const customerIds = new Set<string>();
+    customerIds.add(userId);
+
+    const seeds = new Set<string>();
+    for (const p of phoneHints) {
+      if (p?.trim()) seeds.add(p.trim());
+    }
+
+    const { data: me } = await supabaseAdmin
+      .from('app_users')
+      .select('phone')
+      .eq('id', userId)
+      .maybeSingle();
+    if (me?.phone) seeds.add(String(me.phone).trim());
+
+    // Profile row often has phone when app_users.phone is null / out of sync
+    const { data: myCustomer } = await supabaseAdmin
+      .from('customers')
+      .select('phone')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (myCustomer?.phone) seeds.add(String(myCustomer.phone).trim());
+
+    const allVariants = new Set<string>();
+    for (const seed of seeds) {
+      for (const v of customerPhoneLookupVariants(seed)) allVariants.add(v);
+    }
+
+    const list = [...allVariants];
+
+    const tenDigitHints = new Set<string>();
+    for (const p of phoneHints) {
+      const t = lastTenIndianMobileDigits(p);
+      if (t) tenDigitHints.add(t);
+    }
+    for (const s of seeds) {
+      const t = lastTenIndianMobileDigits(s);
+      if (t) tenDigitHints.add(t);
+    }
+
+    if (list.length > 0) {
+      const { data: usersByPhone } = await supabaseAdmin
+        .from('app_users')
+        .select('id')
+        .in('phone', list)
+        .eq('role', 'customer');
+
+      for (const row of usersByPhone || []) {
+        if (row.id) customerIds.add(row.id);
+      }
+
+      const { data: custRows } = await supabaseAdmin
+        .from('customers')
+        .select('user_id')
+        .in('phone', list);
+
+      for (const row of custRows || []) {
+        if (row.user_id) customerIds.add(row.user_id);
+      }
+
+      // Saved addresses use contact_phone (not a generic "phone" column); exact variant match
+      const { data: addrByContactExact } = await supabaseAdmin
+        .from('customer_saved_addresses')
+        .select('customer_id')
+        .in('contact_phone', list)
+        .eq('is_active', true);
+
+      for (const row of addrByContactExact || []) {
+        const cid = (row as { customer_id?: string }).customer_id;
+        if (cid) customerIds.add(cid);
+      }
+    }
+
+    // contact_phone may not equal any variant exactly (+91 vs spaces); match by 10-digit substring
+    for (const ten of tenDigitHints) {
+      const { data: addrByContactLoose } = await supabaseAdmin
+        .from('customer_saved_addresses')
+        .select('customer_id')
+        .eq('is_active', true)
+        .not('contact_phone', 'is', null)
+        .ilike('contact_phone', `%${ten}%`);
+
+      for (const row of addrByContactLoose || []) {
+        const cid = (row as { customer_id?: string }).customer_id;
+        if (cid) customerIds.add(cid);
+      }
+    }
+
+    const ids = [...customerIds];
+    const { data, error } = await supabaseAdmin
+      .from('customer_saved_addresses')
+      .select('*')
+      .in('customer_id', ids)
+      .eq('is_active', true)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return (data || []) as CustomerSavedAddress[];
   }
 
   async createCustomerSavedAddress(addressData: Partial<CustomerSavedAddress>) {

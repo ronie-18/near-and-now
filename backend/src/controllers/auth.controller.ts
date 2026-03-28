@@ -17,6 +17,39 @@ function normalizePhone(phone: string): string {
   return String(phone).replace(/\D/g, '');
 }
 
+/**
+ * All plausible stored values for app_users.phone so login matches regardless of +91 / spacing.
+ * Prevents duplicate customer rows (and orphaned saved addresses) when OTP uses a different format.
+ */
+function customerPhoneLookupVariants(phone: string): string[] {
+  const raw = String(phone).trim();
+  const digits = raw.replace(/\D/g, '');
+  const out = new Set<string>();
+  if (raw) out.add(raw);
+  if (digits) out.add(digits);
+  if (digits.length === 10 && /^[6-9]/.test(digits)) {
+    out.add(digits);
+    out.add(`91${digits}`);
+    out.add(`+91${digits}`);
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    const local = digits.slice(1);
+    if (local.length === 10 && /^[6-9]/.test(local)) {
+      out.add(local);
+      out.add(`91${local}`);
+      out.add(`+91${local}`);
+    }
+  }
+  if (digits.length >= 12 && digits.startsWith('91')) {
+    const local = digits.slice(-10);
+    out.add(digits);
+    out.add(local);
+    out.add(`91${local}`);
+    out.add(`+91${local}`);
+  }
+  return [...out].filter(Boolean);
+}
+
 // Twilio configuration
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -169,13 +202,25 @@ export class AuthController {
         });
       }
 
-      // Customer flow: check if customer exists
-      const { data: existingUser } = await supabaseAdmin
+      // Customer flow: match by any common phone format (stored value may differ from Twilio "to" format)
+      const phoneVariants = customerPhoneLookupVariants(phone);
+      const { data: customerRows, error: customerLookupError } = await supabaseAdmin
         .from('app_users')
         .select('*')
-        .eq('phone', phone)
+        .in('phone', phoneVariants)
         .eq('role', 'customer')
-        .single();
+        .order('created_at', { ascending: true });
+
+      if (customerLookupError) {
+        console.error('❌ Customer lookup by phone failed:', customerLookupError);
+      }
+      if (customerRows && customerRows.length > 1) {
+        console.warn(
+          `⚠️ Multiple customer app_users rows for same phone variants (${phoneVariants.join(', ')}); using oldest`
+        );
+      }
+
+      const existingUser = customerRows?.[0] ?? null;
 
       let appUser: any;
       let customer: any;

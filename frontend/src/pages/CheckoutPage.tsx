@@ -22,7 +22,7 @@ const calculateOrderTotals = (cartTotal: number) => {
 const CheckoutPage = () => {
   const { cartItems, cartTotal, clearCart } = useCart();
   const { showNotification } = useNotification();
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, customer } = useAuth();
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -97,7 +97,7 @@ const CheckoutPage = () => {
 
       try {
         setLoadingAddresses(true);
-        const addresses = await getUserAddresses(user.id, user.phone || undefined);
+        const addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
         setSavedAddresses(addresses);
 
         const deliveryToLocation = getStoredDeliveryLocation();
@@ -158,7 +158,7 @@ const CheckoutPage = () => {
     if (user?.id) {
       fetchAddresses();
     }
-  }, [user?.id]);
+  }, [user?.id, user?.phone, customer?.phone]);
 
   // Fetch and filter suggested products based on cart items
   useEffect(() => {
@@ -353,7 +353,7 @@ const CheckoutPage = () => {
     try {
       setLoadingAddresses(true);
       await deleteAddress(addressId, user.id);
-      let addresses = await getUserAddresses(user.id, user.phone || undefined);
+      let addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
       setSavedAddresses(addresses);
 
       // Re-select default or first
@@ -420,7 +420,7 @@ const CheckoutPage = () => {
         }
         await updateAddress(editAddressId, user.id, updatePayload);
         const updatedAddressId = editAddressId; // Store before clearing
-        let addresses = await getUserAddresses(user.id, user.phone || undefined);
+        let addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
         setSavedAddresses(addresses);
         setEditAddressId(null);
         setShowNewAddressForm(false);
@@ -511,7 +511,7 @@ const CheckoutPage = () => {
           lastCreatedAddressRef.current = createdAddress;
 
           // Refresh the addresses list to include the newly added address
-          const updatedAddresses = await getUserAddresses(user.id, user.phone || undefined);
+          const updatedAddresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
           setSavedAddresses(updatedAddresses);
 
           // Select the newly created address

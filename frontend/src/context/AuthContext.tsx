@@ -80,6 +80,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
             setUser(userData);
             setCustomer(customerData);
             setIsAuthenticated(true);
+            if (!localStorage.getItem('authLoginPhone')) {
+              const p = userData.phone?.trim() || customerData?.phone?.trim();
+              if (p) localStorage.setItem('authLoginPhone', p);
+            }
           } catch {
             localStorage.removeItem('userId');
             localStorage.removeItem('userToken');
@@ -140,6 +144,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       localStorage.setItem('userToken', response.token);
       localStorage.setItem('userData', JSON.stringify(response.user));
       localStorage.setItem('customerData', response.customer ? JSON.stringify(response.customer) : '');
+      // OTP login always knows this number; user.phone is often missing from API/session JSON
+      localStorage.setItem('authLoginPhone', String(phone).trim());
     } catch (error) {
       console.error('Error verifying OTP:', error);
       throw error;
@@ -158,6 +164,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       localStorage.removeItem('userToken');
       localStorage.removeItem('userData');
       localStorage.removeItem('customerData');
+      localStorage.removeItem('authLoginPhone');
 
       setUser(null);
       setCustomer(null);

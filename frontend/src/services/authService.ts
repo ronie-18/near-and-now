@@ -83,15 +83,31 @@ export async function sendOTP(phone: string): Promise<void> {
       body: JSON.stringify({ phone })
     });
 
+    const text = await response.text();
+
+    if (isHtmlResponseBody(text)) {
+      throw new Error(
+        'Login API is not reachable at this URL (got a web page instead of JSON). If you use a custom domain, add it to the same Vercel project as the API or set VITE_API_URL to your *.vercel.app URL until /api works on that domain.'
+      );
+    }
+
     if (!response.ok) {
-      let message = 'Failed to send OTP';
-      try {
-        const text = await response.text();
-        message = parseErrorMessageFromResponse(text, message);
-      } catch {
-        // Response body read failed
-      }
+      const message = parseErrorMessageFromResponse(text, 'Failed to send OTP');
       throw new Error(message);
+    }
+
+    try {
+      const data = text ? JSON.parse(text) : {};
+      if (data.success !== true) {
+        throw new Error(
+          typeof data.error === 'string' ? data.error : data.message || 'Failed to send OTP'
+        );
+      }
+    } catch (e: any) {
+      if (e instanceof SyntaxError) {
+        throw new Error('Invalid response from server when sending OTP');
+      }
+      throw e;
     }
 
     console.log('✅ OTP sent successfully');
@@ -124,6 +140,11 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
     });
 
     const text = await response.text();
+    if (isHtmlResponseBody(text)) {
+      throw new Error(
+        'Login API is not reachable at this URL (got a web page instead of JSON). Set VITE_API_URL to your Vercel API origin or fix custom domain routing for /api.'
+      );
+    }
     let data: any;
     try {
       data = text ? JSON.parse(text) : {};

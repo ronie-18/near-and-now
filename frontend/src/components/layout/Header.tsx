@@ -11,7 +11,7 @@ import {
 import { searchProducts, Product, getUserAddresses, Address as DbAddress } from '../../services/supabase';
 
 const Header = () => {
-  const { user, isAuthenticated, logoutUser } = useAuth();
+  const { user, customer, isAuthenticated, logoutUser } = useAuth();
   const { cartCount } = useCart();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -35,7 +35,7 @@ const Header = () => {
     const loadLocation = async () => {
       if (isAuthenticated && user?.id) {
         try {
-          const addresses = await getUserAddresses(user.id, user.phone || undefined);
+          const addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
           setUserSavedAddresses(addresses);
           const defaultAddr = addresses.find((a) => a.is_default) || addresses[0];
           if (defaultAddr?.latitude != null && defaultAddr?.longitude != null) {
@@ -67,7 +67,7 @@ const Header = () => {
       }
     };
     loadLocation();
-  }, [isAuthenticated, user?.id]);
+  }, [isAuthenticated, user?.id, user?.phone, customer?.phone]);
 
   // Handle scroll effect
   useEffect(() => {
