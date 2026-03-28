@@ -1,55 +1,65 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import ProductGrid from '../components/products/ProductGrid';
-import { getAllProducts } from '../services/supabase';
-import { Product } from '../services/supabase';
-import { getCategories, Category } from '../services/adminService';
+import { useNavigate } from 'react-router-dom';
+import { useCart } from '../context/CartContext';
+import { getAllProducts, getAllCategories } from '../services/supabase';
+import { Product, Category } from '../services/supabase';
 import { useNotification } from '../context/NotificationContext';
-import { formatCategoryName } from '../utils/formatCategoryName';
 
 const HomePage = () => {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
   const { showNotification } = useNotification();
+  const { addToCart } = useCart();
   const navigate = useNavigate();
 
-  const MAX_PRODUCTS_ON_HOME = 40;
+  const MAX_PRODUCTS_ON_HOME = 15;
 
   // Fetch all products and categories on mount
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [products, categoriesData] = await Promise.all([
-          getAllProducts(),
-          getCategories()
-        ]);
-        setAllProducts(products);
-        
-        // Filter categories: remove duplicates. When we have products, only show categories that have products; when no products, show all so the section isn't empty.
-        const productCategories = new Set(products.map(p => p.category).filter(Boolean));
-        const uniqueCategories = categoriesData.filter((category, index, self) => {
-          // Remove duplicates by name (case-insensitive)
-          const isUnique = index === self.findIndex(c => 
-            c.name.toLowerCase() === category.name.toLowerCase()
-          );
-          const hasProducts = products.length === 0 || productCategories.has(category.name);
-          return isUnique && hasProducts;
-        });
-        
-        setCategories(uniqueCategories);
+        setCategoriesLoading(true);
+
+        console.log('🔄 Starting to fetch data...');
+
+        let products: Product[] = [];
+        let categoriesData: Category[] = [];
+
+        try {
+          console.log('📦 Fetching products...');
+          products = await getAllProducts();
+          console.log('✅ Products fetched successfully:', products.length);
+          setAllProducts(products);
+        } catch (productError) {
+          console.error('❌ Error fetching products:', productError);
+          showNotification('Failed to load products. Please try again.', 'error');
+        }
+
+        try {
+          console.log('🏷️ Fetching categories...');
+          categoriesData = await getAllCategories();
+          console.log('✅ Categories fetched successfully:', categoriesData.length);
+          setCategories(categoriesData);
+        } catch (categoryError) {
+          console.error('❌ Error fetching categories:', categoryError);
+          console.warn('Categories failed to load, continuing without them');
+        }
+
       } catch (error) {
-        console.error('Error fetching data:', error);
+        console.error('❌ General error fetching data:', error);
         showNotification('Failed to load data. Please try again.', 'error');
       } finally {
         setLoading(false);
+        setCategoriesLoading(false);
       }
     };
 
     fetchData();
-  }, []); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNotification]);
 
   // Randomize and limit displayed products to MAX_PRODUCTS_ON_HOME
   useEffect(() => {
@@ -61,111 +71,189 @@ const HomePage = () => {
       }
       return shuffled;
     };
-    
+
     const randomized = shuffleArray(allProducts);
     setDisplayedProducts(randomized.slice(0, MAX_PRODUCTS_ON_HOME));
   }, [allProducts]);
 
-  // Generate background color for categories
-  const getCategoryBgColor = (index: number) => {
-    const colors = [
-      'bg-green-50', 'bg-red-50', 'bg-yellow-50', 'bg-orange-50',
-      'bg-pink-50', 'bg-slate-50', 'bg-blue-50', 'bg-purple-50',
-      'bg-teal-50', 'bg-indigo-50'
-    ];
-    return colors[index % colors.length];
+  const handleAddToCart = (product: Product) => {
+    addToCart(product, 1);
+    showNotification(`${product.name} added to cart!`, 'success');
+  };
+
+  const handleCategoryClick = (categoryName: string) => {
+    navigate(`/shop?category=${encodeURIComponent(categoryName)}`);
   };
 
   return (
     <>
-      {/* Categories Section - Moved to Top */}
-      <section className="py-16 bg-gradient-to-b from-gray-50 to-white">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-3">
-              Shop by Category
-            </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Discover a wide variety of fresh products across all your favorite categories
+      {/* Hero Section */}
+      <section className="relative overflow-hidden bg-surface py-20 lg:py-32">
+        <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 items-center gap-12">
+          <div className="z-10">
+            <span className="inline-block px-3 py-1 rounded-full bg-tertiary-container text-on-tertiary-container text-xs font-bold font-headline uppercase tracking-wider mb-6">
+              Ultra-Fast Delivery
+            </span>
+            <h1 className="font-headline text-5xl lg:text-7xl font-extrabold text-on-surface leading-[1.1] tracking-tight mb-6">
+              Local shops, delivered in <span className="text-primary">minutes.</span>
+            </h1>
+            <p className="text-lg text-on-surface-variant max-w-lg mb-10 leading-relaxed">
+              Your neighborhood favorites, curated and delivered with concierge-level precision. From artisan bakeries to fresh organic produce.
             </p>
+            <div className="flex flex-col sm:flex-row gap-4">
+              <button
+                onClick={() => navigate('/shop')}
+                className="bg-primary hover:bg-primary-dim text-white px-8 py-4 rounded-lg font-semibold flex items-center justify-center gap-2 shadow-lg shadow-primary/20 transition-all active:scale-95"
+              >
+                Start Shopping
+                <span className="material-symbols-outlined">arrow_forward</span>
+              </button>
+              <button className="bg-surface-container-high text-on-surface-variant px-8 py-4 rounded-lg font-semibold hover:bg-surface-container-highest transition-all">
+                View Offers
+              </button>
+            </div>
           </div>
+          <div className="relative group">
+            <div className="absolute -top-10 -right-10 w-64 h-64 bg-primary-container/30 rounded-full blur-3xl group-hover:bg-primary-container/50 transition-colors"></div>
+            <div className="relative aspect-square rounded-2xl overflow-hidden shadow-2xl">
+              <img
+                alt="Premium Grocery Delivery"
+                className="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105"
+                src="https://lh3.googleusercontent.com/aida-public/AB6AXuC_qQW37pOOAL9ARm5wXE51zKPsZpyAccpATZOhJCVB90ak8q5rnTcQa0Ep5bimZFfFwcV-tMI07CmsSVR94rhCpaGojj6D1LyI_R6bixA4zYeBoV1tIoqkyQP1RUOU76zu5M6h1FemGe7BDfkIT-JJfqEBRv7c-6k41DuS_GAkoeRhw_JfHAoF42Dg8OGdrALlCcnrF--ZqjAayRc665IJ8PmNNP_nCvWTVGsNRkdUBYoZ7kJvS_Tpg3U6CsBlcykzfbqou3UogyjN"
+              />
+              <div className="absolute bottom-6 left-6 right-6 p-6 glass-nav bg-white/20 rounded-xl border border-white/30">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-white text-xs font-medium uppercase tracking-widest opacity-80">Recent delivery</p>
+                    <p className="text-white font-headline font-bold text-lg">Fresh Harvest Basket</p>
+                  </div>
+                  <div className="bg-primary p-2 rounded-lg text-white">
+                    <span className="material-symbols-outlined">bolt</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-          {/* Categories Grid - 5 per row */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6">
-            {loading ? (
+      {/* Categories Section */}
+      <section className="py-24 bg-surface-container-low">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="flex flex-col md:flex-row justify-between items-end mb-12 gap-6">
+            <div>
+              <h2 className="font-headline text-3xl font-bold text-on-surface mb-2">Shop by Category</h2>
+              <p className="text-on-surface-variant">Discover fresh products organized by category.</p>
+            </div>
+            <button
+              onClick={() => navigate('/shop')}
+              className="text-primary font-semibold flex items-center gap-1 hover:underline underline-offset-4 transition-all"
+            >
+              View all categories <span className="material-symbols-outlined text-sm">open_in_new</span>
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
+            {categoriesLoading ? (
               // Category Skeleton Loaders
-              Array.from({ length: 10 }).map((_, index) => (
-                <div
-                  key={`skeleton-cat-${index}`}
-                  className="bg-white rounded-2xl p-5 animate-pulse shadow-md"
-                >
-                  <div className="w-full h-40 bg-gray-200 rounded-xl mb-4"></div>
-                  <div className="h-5 bg-gray-200 rounded mb-2"></div>
-                  <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+              Array.from({ length: 6 }).map((_, index) => (
+                <div key={`category-skeleton-${index}`} className="bg-surface-container-lowest p-4 rounded-xl shadow-sm animate-pulse">
+                  <div className="aspect-square rounded-lg bg-surface-container mb-4"></div>
+                  <div className="h-4 bg-surface-container rounded mb-2"></div>
+                  <div className="h-3 bg-surface-container rounded"></div>
                 </div>
               ))
             ) : (
-              categories.map((category, index) => (
-                <Link
+              categories.slice(0, 6).map((category) => (
+                <div
                   key={category.id}
-                  to={`/category/${encodeURIComponent(category.name)}`}
-                  className="group bg-white rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-2"
+                  onClick={() => handleCategoryClick(category.name)}
+                  className="bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer group"
                 >
-                  <div className={`${category.color || getCategoryBgColor(index)} p-4`}>
-                    <div className="overflow-hidden rounded-xl">
-                      <img
-                        src={category.image_url || `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`}
-                        alt={category.name}
-                        loading="lazy"
-                        className="w-full h-40 object-cover transform group-hover:scale-110 transition-transform duration-300"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement;
-                          target.src = `https://via.placeholder.com/300x200?text=${encodeURIComponent(category.name)}`;
-                        }}
-                      />
+                  <div className="aspect-square rounded-lg overflow-hidden bg-surface-container mb-4 relative">
+                    <img
+                      alt={category.name}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      src={category.image_url || `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`}
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`;
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <div className="absolute bottom-2 left-2 right-2 text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span className="material-symbols-outlined text-sm">arrow_forward</span>
                     </div>
                   </div>
-                  <div className="p-4 text-center">
-                    <h3 className="font-bold text-gray-800 text-base mb-1.5 group-hover:text-green-600 transition-colors">
-                      {formatCategoryName(category.name)}
-                    </h3>
-                    <p className="text-sm text-gray-500 line-clamp-2">
-                      {category.description || 'Browse products'}
-                    </p>
-                  </div>
-                </Link>
+                  <h4 className="font-bold text-sm text-on-surface mb-1 truncate">{category.name}</h4>
+                  <p className="text-xs text-on-surface-variant truncate">{category.description || 'Browse products'}</p>
+                </div>
               ))
             )}
           </div>
-
-          {/* Empty State */}
-          {!loading && categories.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-gray-500">No categories available at the moment.</p>
+          {/* Show More Categories Button */}
+          {!categoriesLoading && categories.length > 6 && (
+            <div className="text-center mt-8">
+              <button
+                onClick={() => navigate('/shop')}
+                className="inline-flex items-center gap-2 text-primary font-semibold hover:underline underline-offset-4 transition-all"
+              >
+                View all {categories.length} categories
+                <span className="material-symbols-outlined text-sm">arrow_forward</span>
+              </button>
             </div>
           )}
         </div>
       </section>
 
-      {/* Featured Products Section */}
-      <section className="py-16 bg-white">
-        <div className="container mx-auto px-4">
-          {/* Header */}
-          <div className="mb-10">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
-              Featured Products
-            </h2>
-            <p className="text-gray-600">
-              {allProducts.length > 0
-                ? `Showing ${displayedProducts.length} of ${allProducts.length} products`
-                : 'Browse through our complete collection of quality products'
-              }
-            </p>
+      {/* Essential Groceries Grid */}
+      <section className="py-24 bg-surface">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="mb-12">
+            <h2 className="font-headline text-3xl font-bold text-on-surface mb-2">Essential Groceries</h2>
+            <p className="text-on-surface-variant">The staples you need, delivered with care.</p>
           </div>
-
-          {/* Products Grid */}
-          <ProductGrid products={displayedProducts} loading={loading} />
-
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+            {loading ? (
+              // Product Skeleton Loaders
+              Array.from({ length: 15 }).map((_, index) => (
+                <div key={`skeleton-${index}`} className="bg-surface-container-lowest p-4 rounded-xl shadow-sm animate-pulse">
+                  <div className="aspect-square rounded-lg bg-surface-container mb-4"></div>
+                  <div className="h-3 bg-surface-container rounded mb-1"></div>
+                  <div className="h-4 bg-surface-container rounded mb-1"></div>
+                  <div className="h-3 bg-surface-container rounded mb-3"></div>
+                  <div className="h-5 bg-surface-container rounded"></div>
+                </div>
+              ))
+            ) : (
+              displayedProducts.map((product) => (
+                <div key={product.id} className="bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow group">
+                  <div className="aspect-square rounded-lg overflow-hidden bg-surface-container mb-4 relative">
+                    <img
+                      alt={product.name}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      src={product.image_url || `https://via.placeholder.com/300x300?text=${encodeURIComponent(product.name)}`}
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = `https://via.placeholder.com/300x300?text=${encodeURIComponent(product.name)}`;
+                      }}
+                    />
+                    <button
+                      onClick={() => handleAddToCart(product)}
+                      className="absolute bottom-2 right-2 bg-primary text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity active:scale-90"
+                    >
+                      <span className="material-symbols-outlined">add</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] font-bold text-tertiary mb-1 uppercase tracking-tighter">{product.category}</p>
+                  <h4 className="font-bold text-sm text-on-surface mb-1 truncate">{product.name}</h4>
+                  <p className="text-xs text-on-surface-variant mb-3">{product.description || 'Fresh & Quality'}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="font-headline font-bold text-lg text-on-surface">₹{product.price}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
           {/* Show More Products Button */}
           {!loading && allProducts.length > MAX_PRODUCTS_ON_HOME && (
             <div className="text-center mt-12">
@@ -173,15 +261,11 @@ const HomePage = () => {
                 onClick={() => navigate('/shop')}
                 className="inline-flex items-center gap-3 bg-gradient-to-r from-primary to-secondary hover:from-secondary hover:to-primary text-white px-8 py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
+                <span className="material-symbols-outlined">shopping_bag</span>
                 Show More Products
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
+                <span className="material-symbols-outlined">arrow_forward</span>
               </button>
-              <p className="text-gray-500 mt-4 text-sm">
+              <p className="text-on-surface-variant mt-4 text-sm">
                 View all {allProducts.length} products in our shop
               </p>
             </div>
@@ -190,31 +274,17 @@ const HomePage = () => {
           {/* Show message when no products available */}
           {!loading && allProducts.length === 0 && (
             <div className="text-center py-12">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-24 w-24 mx-auto text-gray-300 mb-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-                />
-              </svg>
-              <h3 className="text-xl font-semibold text-gray-700 mb-2">
+              <span className="material-symbols-outlined text-6xl text-on-surface-variant/30 mb-4">inventory_2</span>
+              <h3 className="text-xl font-semibold text-on-surface mb-2">
                 No Products Available
               </h3>
-              <p className="text-gray-500">
+              <p className="text-on-surface-variant">
                 We're working on adding new products. Check back soon!
               </p>
             </div>
           )}
         </div>
       </section>
-
     </>
   );
 };

@@ -122,39 +122,68 @@ interface ProductRow {
 async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]> {
   const allRows: ProductRow[] = [];
 
-  if (storeIds != null && storeIds.length > 0) {
-    const storeChunks = chunk(storeIds, IN_FILTER_CHUNK_SIZE);
-    for (const ids of storeChunks) {
+  try {
+    if (storeIds != null && storeIds.length > 0) {
+      console.log('🔍 Fetching products for specific stores:', storeIds.length);
+      const storeChunks = chunk(storeIds, IN_FILTER_CHUNK_SIZE);
+      for (const ids of storeChunks) {
+        console.log('📦 Fetching chunk for stores:', ids.length);
+        const { data, error } = await supabaseAdmin
+          .from('products')
+          .select('id, store_id, master_product_id, is_active, master_products(*)')
+          .eq('is_active', true)
+          .in('store_id', ids);
+
+        if (error) {
+          console.error('❌ Database error in fetchProductRows (store-filtered):', error);
+          throw new Error(`Database error: ${error.message}`);
+        }
+        if (data?.length) {
+          console.log('✅ Fetched', data.length, 'products for chunk');
+          allRows.push(...(data as unknown as ProductRow[]));
+        }
+      }
+      return allRows;
+    }
+
+    console.log('🔍 Fetching all products (no store filter)');
+    let from = 0;
+    const batchSize = 500;
+    let hasMore = true;
+    while (hasMore) {
+      console.log('📦 Fetching batch from', from, 'to', from + batchSize - 1);
       const { data, error } = await supabaseAdmin
         .from('products')
         .select('id, store_id, master_product_id, is_active, master_products(*)')
         .eq('is_active', true)
-        .in('store_id', ids);
-      if (error) throw new Error(`Database error: ${error.message}`);
-      if (data?.length) allRows.push(...(data as unknown as ProductRow[]));
+        .range(from, from + batchSize - 1);
+
+      if (error) {
+        console.error('❌ Database error in fetchProductRows (all products):', error);
+        console.error('Error details:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        });
+        throw new Error(`Database error: ${error.message}`);
+      }
+
+      if (data && data.length > 0) {
+        console.log('✅ Fetched batch of', data.length, 'products');
+        allRows.push(...(data as unknown as ProductRow[]));
+        from += batchSize;
+        hasMore = data.length === batchSize;
+      } else {
+        console.log('📝 No more products to fetch');
+        hasMore = false;
+      }
     }
     return allRows;
+  } catch (error) {
+    console.error('❌ Error in fetchProductRows:', error);
+    throw error;
   }
-
-  let from = 0;
-  const batchSize = 500;
-  let hasMore = true;
-  while (hasMore) {
-    const { data, error } = await supabaseAdmin
-      .from('products')
-      .select('id, store_id, master_product_id, is_active, master_products(*)')
-      .eq('is_active', true)
-      .range(from, from + batchSize - 1);
-    if (error) throw new Error(`Database error: ${error.message}`);
-    if (data && data.length > 0) {
-      allRows.push(...(data as unknown as ProductRow[]));
-      from += batchSize;
-      hasMore = data.length === batchSize;
-    } else {
-      hasMore = false;
-    }
-  }
-  return allRows;
 }
 
 // Dedupe product rows by master_product_id and transform to Product[]
@@ -197,21 +226,85 @@ function transformProductRowToProduct(row: ProductRow): Product {
 // Get all products from products table (joined with master_products). Optionally filtered by stores near lat/lng.
 export async function getAllProducts(options?: ProductFetchOptions): Promise<Product[]> {
   try {
+    console.log('🔍 Attempting to fetch products from database...');
+
     const opts = options ?? getLocationFromStorage();
     const { lat, lng } = opts || {};
+    console.log('📍 Location options:', { lat, lng });
+
     const nearbyStoreIds = (lat != null && lng != null)
       ? await getNearbyStoreIdsExpanding(lat, lng)
       : null;
 
+    console.log('🏪 Nearby store IDs:', nearbyStoreIds);
     const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
-    const rows = await fetchProductRows(storeIdsToUse);
-    const products = productRowsToProducts(rows);
 
-    console.log(`✅ Fetched ${products.length} products from products table` + (storeIdsToUse ? ' (nearby stores, 1→4 km)' : ''));
+    console.log('📦 Fetching product rows...');
+    const rows = await fetchProductRows(storeIdsToUse);
+    console.log('📊 Raw product rows fetched:', rows.length);
+
+    const products = productRowsToProducts(rows);
+    console.log(`✅ Processed ${products.length} products from products table` + (storeIdsToUse ? ' (nearby stores, 1→4 km)' : ' (all stores)'));
+
     return products;
   } catch (error) {
     console.error('❌ Error in getAllProducts:', error);
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
     throw error;
+  }
+}
+
+// Category types
+export interface Category {
+  id: string;
+  name: string;
+  description?: string;
+  image_url?: string;
+  display_order?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Get all categories from categories table
+export async function getAllCategories(): Promise<Category[]> {
+  try {
+    console.log('🔍 Attempting to fetch categories from database...');
+
+    const { data, error } = await supabaseAdmin
+      .from('categories')
+      .select('id, name, description, image_url, display_order, created_at, updated_at')
+      .order('display_order', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('❌ Error fetching categories:', error);
+      console.error('Error details:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+
+      // If categories table doesn't exist, return empty array instead of throwing
+      if (error.code === 'PGRST116' || error.message.includes('does not exist')) {
+        console.warn('⚠️ Categories table does not exist, returning empty array');
+        return [];
+      }
+
+      throw new Error(`Failed to fetch categories: ${error.message}`);
+    }
+
+    console.log(`✅ Fetched ${data?.length || 0} categories`);
+    return data || [];
+  } catch (error) {
+    console.error('❌ Error in getAllCategories:', error);
+
+    // Return empty array instead of throwing to prevent breaking the entire page
+    console.warn('⚠️ Returning empty categories array to prevent page crash');
+    return [];
   }
 }
 

@@ -694,7 +694,7 @@ const CheckoutPage = () => {
 
   return (
     <>
-    <div className="min-h-screen bg-gradient-to-br from-primary/5 via-white to-secondary/5 py-8">
+    <div className="min-h-screen bg-surface py-8">
       <div className="container mx-auto px-4">
         {/* Progress Steps */}
         <div className="max-w-4xl mx-auto mb-8">
