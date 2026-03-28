@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { calculateDistance } from '../utils/deliveryFees';
 import { geocodeAddress } from './placesService';
 
 // Supabase configuration (from .env)
@@ -104,6 +105,25 @@ async function getNearbyStoreIdsExpanding(lat: number, lng: number): Promise<str
     if (ids.length > 0) return ids;
   }
   return [];
+}
+
+/** Straight-line km from customer to the first store returned for their area (checkout quote). */
+export async function getCheckoutDeliveryDistanceKm(
+  customerLat: number,
+  customerLng: number
+): Promise<number | null> {
+  const ids = await getNearbyStoreIdsExpanding(customerLat, customerLng);
+  if (!ids.length) return null;
+  const { data, error } = await supabaseAdmin
+    .from('stores')
+    .select('latitude, longitude')
+    .eq('id', ids[0])
+    .maybeSingle();
+  if (error || !data) return null;
+  const slat = data.latitude != null ? Number(data.latitude) : NaN;
+  const slng = data.longitude != null ? Number(data.longitude) : NaN;
+  if (!Number.isFinite(slat) || !Number.isFinite(slng)) return null;
+  return calculateDistance(customerLat, customerLng, slat, slng);
 }
 
 // PostgREST encodes .in() filters in the URL. Large ID lists exceed URL limits and cause Bad Request.

@@ -1,7 +1,13 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Product } from '../services/supabase';
 import { useAuth } from './AuthContext';
-import { calculateFeeBreakdown, PLATFORM_FEE, HANDLING_FEE, DeliveryFeeBreakdown } from '../utils/deliveryFees';
+import {
+  calculateFeeBreakdown,
+  PLATFORM_FEE,
+  HANDLING_FEE,
+  DeliveryFeeBreakdown,
+  DEFAULT_QUOTE_DISTANCE_KM
+} from '../utils/deliveryFees';
 
 // Define cart item interface
 export interface CartItem {
@@ -17,13 +23,13 @@ export interface CartItem {
   storeLongitude?: number;
 }
 
-export const getDistanceBasedDeliveryFee = (distanceKm?: number): number => {
-  const breakdown = calculateFeeBreakdown(distanceKm ?? 0);
+export const getDistanceBasedDeliveryFee = (distanceKm?: number, cartSubtotal = 0): number => {
+  const breakdown = calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartSubtotal);
   return breakdown.deliveryFee;
 };
 
-export const getCompleteFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown => {
-  return calculateFeeBreakdown(distanceKm ?? 0);
+export const getCompleteFeeBreakdown = (distanceKm?: number, cartSubtotal = 0): DeliveryFeeBreakdown => {
+  return calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartSubtotal);
 };
 
 // Define cart context interface
@@ -200,10 +206,11 @@ export function CartProvider({ children }: CartProviderProps) {
     );
   };
 
-  const getDeliveryFee = (distanceKm?: number) => calculateFeeBreakdown(distanceKm ?? 0).deliveryFee;
+  const getDeliveryFee = (distanceKm?: number) =>
+    calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal).deliveryFee;
 
   const getFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown =>
-    calculateFeeBreakdown(distanceKm ?? 0);
+    calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal);
 
   // Context value
   const value = {
