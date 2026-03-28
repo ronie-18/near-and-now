@@ -17,18 +17,13 @@ export interface CartItem {
   storeLongitude?: number;
 }
 
-// Legacy delivery fee function (kept for backward compatibility)
-export const getDeliveryFeeForSubtotal = (subtotal: number): number =>
-  subtotal > 500 ? 0 : subtotal > 0 ? 40 : 0;
-
-// New distance-based delivery fee calculation
-export const getDistanceBasedDeliveryFee = (distanceKm: number): number => {
-  const breakdown = calculateFeeBreakdown(distanceKm);
+export const getDistanceBasedDeliveryFee = (distanceKm?: number): number => {
+  const breakdown = calculateFeeBreakdown(distanceKm ?? 0);
   return breakdown.deliveryFee;
 };
 
-export const getCompleteFeeBreakdown = (distanceKm: number): DeliveryFeeBreakdown => {
-  return calculateFeeBreakdown(distanceKm);
+export const getCompleteFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown => {
+  return calculateFeeBreakdown(distanceKm ?? 0);
 };
 
 // Define cart context interface
@@ -43,7 +38,7 @@ interface CartContextType {
   clearCart: () => void;
   getCartTotal: () => number;
   getDeliveryFee: (distanceKm?: number) => number;
-  getFeeBreakdown: (distanceKm?: number) => DeliveryFeeBreakdown | null;
+  getFeeBreakdown: (distanceKm?: number) => DeliveryFeeBreakdown;
   platformFee: number;
   handlingFee: number;
   isAuthenticated: boolean;
@@ -205,23 +200,10 @@ export function CartProvider({ children }: CartProviderProps) {
     );
   };
 
-  // Get delivery fee based on distance (if provided) or use legacy calculation
-  const getDeliveryFee = (distanceKm?: number) => {
-    if (distanceKm !== undefined && distanceKm !== null) {
-      const breakdown = calculateFeeBreakdown(distanceKm);
-      return breakdown.deliveryFee;
-    }
-    // Fallback to legacy calculation if no distance provided
-    return getDeliveryFeeForSubtotal(cartTotal);
-  };
+  const getDeliveryFee = (distanceKm?: number) => calculateFeeBreakdown(distanceKm ?? 0).deliveryFee;
 
-  // Get complete fee breakdown including platform and handling fees
-  const getFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown | null => {
-    if (distanceKm !== undefined && distanceKm !== null) {
-      return calculateFeeBreakdown(distanceKm);
-    }
-    return null;
-  };
+  const getFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown =>
+    calculateFeeBreakdown(distanceKm ?? 0);
 
   // Context value
   const value = {

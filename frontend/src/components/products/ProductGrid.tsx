@@ -3,12 +3,18 @@ import { Product } from '../../services/supabase';
 import ProductCard from './ProductCard';
 import QuickViewModal from './QuickViewModal';
 
+const DEFAULT_GRID_CLASS =
+  'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6';
+
 interface ProductGridProps {
   products: Product[];
   loading?: boolean;
+  /** Override Tailwind grid layout (e.g. home page density) */
+  gridClassName?: string;
 }
 
-const ProductGrid = ({ products, loading = false }: ProductGridProps) => {
+const ProductGrid = ({ products, loading = false, gridClassName }: ProductGridProps) => {
+  const gridClass = gridClassName ?? DEFAULT_GRID_CLASS;
   const [quickViewProduct, setQuickViewProduct] = useState<Product | null>(null);
 
   const handleQuickView = (product: Product) => {
@@ -21,7 +27,7 @@ const ProductGrid = ({ products, loading = false }: ProductGridProps) => {
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+      <div className={gridClass}>
         {Array.from({ length: 8 }).map((_, index) => (
           <div key={index} className="bg-white rounded-lg shadow-md overflow-hidden animate-pulse">
             <div className="h-48 bg-gray-200"></div>
@@ -51,7 +57,7 @@ const ProductGrid = ({ products, loading = false }: ProductGridProps) => {
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+      <div className={gridClass}>
         {products.map((product) => (
           <ProductCard 
             key={product.id} 

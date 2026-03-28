@@ -180,7 +180,7 @@ const ThankYouPage = () => {
               )}
               {order.delivery_fee !== undefined && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Delivery Fee</span>
+                  <span className="text-gray-600">Platform, handling & delivery</span>
                   <span className="text-gray-800">
                     {order.delivery_fee === 0 ? 'FREE' : formatPrice(order.delivery_fee)}
                   </span>

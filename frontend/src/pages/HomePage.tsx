@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useCart } from '../context/CartContext';
+import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts, getAllCategories } from '../services/supabase';
 import { Product, Category } from '../services/supabase';
 import { useNotification } from '../context/NotificationContext';
@@ -12,7 +12,6 @@ const HomePage = () => {
   const [loading, setLoading] = useState(true);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const { showNotification } = useNotification();
-  const { addToCart } = useCart();
   const navigate = useNavigate();
 
   const MAX_PRODUCTS_ON_HOME = 15;
@@ -75,11 +74,6 @@ const HomePage = () => {
     const randomized = shuffleArray(allProducts);
     setDisplayedProducts(randomized.slice(0, MAX_PRODUCTS_ON_HOME));
   }, [allProducts]);
-
-  const handleAddToCart = (product: Product) => {
-    addToCart(product, 1);
-    showNotification(`${product.name} added to cart!`, 'success');
-  };
 
   const handleCategoryClick = (categoryName: string) => {
     navigate(`/shop?category=${encodeURIComponent(categoryName)}`);
@@ -212,48 +206,11 @@ const HomePage = () => {
             <h2 className="font-headline text-3xl font-bold text-on-surface mb-2">Essential Groceries</h2>
             <p className="text-on-surface-variant">The staples you need, delivered with care.</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-            {loading ? (
-              // Product Skeleton Loaders
-              Array.from({ length: 15 }).map((_, index) => (
-                <div key={`skeleton-${index}`} className="bg-surface-container-lowest p-4 rounded-xl shadow-sm animate-pulse">
-                  <div className="aspect-square rounded-lg bg-surface-container mb-4"></div>
-                  <div className="h-3 bg-surface-container rounded mb-1"></div>
-                  <div className="h-4 bg-surface-container rounded mb-1"></div>
-                  <div className="h-3 bg-surface-container rounded mb-3"></div>
-                  <div className="h-5 bg-surface-container rounded"></div>
-                </div>
-              ))
-            ) : (
-              displayedProducts.map((product) => (
-                <div key={product.id} className="bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow group">
-                  <div className="aspect-square rounded-lg overflow-hidden bg-surface-container mb-4 relative">
-                    <img
-                      alt={product.name}
-                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                      src={product.image_url || `https://via.placeholder.com/300x300?text=${encodeURIComponent(product.name)}`}
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.src = `https://via.placeholder.com/300x300?text=${encodeURIComponent(product.name)}`;
-                      }}
-                    />
-                    <button
-                      onClick={() => handleAddToCart(product)}
-                      className="absolute bottom-2 right-2 bg-primary text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity active:scale-90"
-                    >
-                      <span className="material-symbols-outlined">add</span>
-                    </button>
-                  </div>
-                  <p className="text-[10px] font-bold text-tertiary mb-1 uppercase tracking-tighter">{product.category}</p>
-                  <h4 className="font-bold text-sm text-on-surface mb-1 truncate">{product.name}</h4>
-                  <p className="text-xs text-on-surface-variant mb-3">{product.description || 'Fresh & Quality'}</p>
-                  <div className="flex items-center justify-between">
-                    <span className="font-headline font-bold text-lg text-on-surface">₹{product.price}</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <ProductGrid
+            products={displayedProducts}
+            loading={loading}
+            gridClassName="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6"
+          />
           {/* Show More Products Button */}
           {!loading && allProducts.length > MAX_PRODUCTS_ON_HOME && (
             <div className="text-center mt-12">
@@ -267,19 +224,6 @@ const HomePage = () => {
               </button>
               <p className="text-on-surface-variant mt-4 text-sm">
                 View all {allProducts.length} products in our shop
-              </p>
-            </div>
-          )}
-
-          {/* Show message when no products available */}
-          {!loading && allProducts.length === 0 && (
-            <div className="text-center py-12">
-              <span className="material-symbols-outlined text-6xl text-on-surface-variant/30 mb-4">inventory_2</span>
-              <h3 className="text-xl font-semibold text-on-surface mb-2">
-                No Products Available
-              </h3>
-              <p className="text-on-surface-variant">
-                We're working on adding new products. Check back soon!
               </p>
             </div>
           )}

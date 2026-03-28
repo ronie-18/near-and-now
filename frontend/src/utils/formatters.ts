@@ -11,6 +11,16 @@ export function formatPrice(price: number): string {
   }).format(rounded);
 }
 
+/** Rupees with up to 2 decimals (e.g. platform ₹9.5, handling ₹5.5) */
+export function formatRupeesDetailed(amount: number): string {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  }).format(amount);
+}
+
 /**
  * Format category name for display
  */

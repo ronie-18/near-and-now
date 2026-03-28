@@ -10,11 +10,8 @@ interface CartSidebarProps {
 }
 
 const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
-  const { cartItems, cartTotal, getDeliveryFee, clearCart } = useCart();
+  const { cartItems, cartTotal, clearCart } = useCart();
   const sidebarRef = useRef<HTMLDivElement>(null);
-
-  const deliveryFee = getDeliveryFee();
-  const orderTotal = Math.round(cartTotal + deliveryFee);
 
   // Handle click outside to close
   useEffect(() => {
@@ -130,19 +127,11 @@ const CartSidebar = ({ isOpen, onClose }: CartSidebarProps) => {
             <div className="p-4 border-t border-gray-200 bg-gradient-to-r from-green-50 to-green-100">
               {/* Summary */}
               <div className="space-y-3 mb-4">
-                <div className="flex justify-between text-gray-600">
-                  <span>Subtotal</span>
-                  <span className="font-medium">{formatPrice(cartTotal)}</span>
-                </div>
-                <div className="flex justify-between text-gray-600">
-                  <span>Delivery Fee</span>
-                  <span className="font-medium">{formatPrice(deliveryFee)}</span>
-                </div>
-                <div className="h-px bg-gray-200 my-2"></div>
                 <div className="flex justify-between font-bold text-gray-800 text-lg">
                   <span>Total</span>
-                  <span className="text-green-700">{formatPrice(orderTotal)}</span>
+                  <span className="text-green-700">{formatPrice(cartTotal)}</span>
                 </div>
+                <p className="text-xs text-gray-500">Delivery fee is calculated at checkout.</p>
               </div>
 
               {/* Actions */}

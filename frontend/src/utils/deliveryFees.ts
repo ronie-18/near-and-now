@@ -1,53 +1,40 @@
 /**
- * Delivery Fee Calculation Utility
- * 
- * Revenue Plan:
- * - Platform fee: ₹9.50
- * - Handling fee: ₹5.50
- * - Delivery fee (distance-based):
- *   - 0-1 km: ₹15
- *   - 1-2 km: ₹20
- *   - 2-3 km: ₹25
- *   - 3-4 km: ₹30 (exceptional, not more than this range)
+ * Checkout fees (platform + handling + delivery).
+ * Delivery is a fixed standard rate for now; distance-based calculation will plug in later.
  */
 
-export const PLATFORM_FEE = 9.50;
-export const HANDLING_FEE = 5.50;
+export const PLATFORM_FEE = 9.5;
+export const HANDLING_FEE = 5.5;
+/** Standard delivery charge until distance-based pricing is wired up */
+export const STANDARD_DELIVERY_FEE = 15;
 
 export interface DeliveryFeeBreakdown {
   deliveryFee: number;
   platformFee: number;
   handlingFee: number;
   totalFees: number;
+  /** Reserved for future distance-based delivery; unused while flat ₹15 applies */
   distance: number;
 }
 
 /**
- * Calculate delivery fee based on distance in kilometers
- * @param distanceKm Distance in kilometers
- * @returns Delivery fee amount
+ * Delivery charge only (flat ₹15 for now).
+ * @param _distanceKm Ignored until distance-based section is implemented
  */
-export function calculateDeliveryFee(distanceKm: number): number {
-  if (distanceKm <= 1) {
-    return 15;
-  } else if (distanceKm <= 2) {
-    return 20;
-  } else if (distanceKm <= 3) {
-    return 25;
-  } else if (distanceKm <= 4) {
-    return 30;
-  } else {
-    // Beyond 4km is exceptional - return 30 as max
-    return 30;
-  }
+export function calculateDeliveryFee(_distanceKm?: number): number {
+  return STANDARD_DELIVERY_FEE;
+}
+
+/** Platform + handling + standard delivery */
+export function getCheckoutFeesTotal(): number {
+  return PLATFORM_FEE + HANDLING_FEE + STANDARD_DELIVERY_FEE;
 }
 
 /**
- * Calculate complete fee breakdown including platform and handling fees
- * @param distanceKm Distance in kilometers
- * @returns Complete fee breakdown
+ * Full fee breakdown for checkout UI and order totals.
+ * @param distanceKm Optional; stored for future use when delivery varies by distance
  */
-export function calculateFeeBreakdown(distanceKm: number): DeliveryFeeBreakdown {
+export function calculateFeeBreakdown(distanceKm: number = 0): DeliveryFeeBreakdown {
   const deliveryFee = calculateDeliveryFee(distanceKm);
   const totalFees = deliveryFee + PLATFORM_FEE + HANDLING_FEE;
 

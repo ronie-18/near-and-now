@@ -4,14 +4,13 @@ import { useCart } from '../context/CartContext';
 import { formatPrice } from '../utils/formatters';
 
 const CartPage = () => {
-  const { cartItems, cartTotal, getDeliveryFee, updateCartQuantity, removeFromCart, clearCart } = useCart();
+  const { cartItems, cartTotal, updateCartQuantity, removeFromCart, clearCart } = useCart();
   const [couponCode, setCouponCode] = useState('');
   const [couponApplied, setCouponApplied] = useState(false);
   const [discount, setDiscount] = useState(0);
   const navigate = useNavigate();
 
-  const deliveryFee = getDeliveryFee();
-  const orderTotal = Math.round(cartTotal + deliveryFee - discount);
+  const orderTotal = Math.round(cartTotal - discount);
 
   const handleQuantityChange = (id: string, quantity: number, isLoose?: boolean) => {
     const minQty = isLoose ? 0.25 : 1;
@@ -182,13 +181,8 @@ const CartPage = () => {
 
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between text-gray-600">
-                  <span>Subtotal</span>
+                  <span>Items</span>
                   <span>{formatPrice(cartTotal)}</span>
-                </div>
-
-                <div className="flex justify-between text-gray-600">
-                  <span>Delivery Fee</span>
-                  <span>{deliveryFee === 0 ? 'Free' : formatPrice(deliveryFee)}</span>
                 </div>
 
                 {discount > 0 && (
@@ -203,9 +197,7 @@ const CartPage = () => {
                     <span>Total</span>
                     <span>{formatPrice(orderTotal)}</span>
                   </div>
-                  {deliveryFee === 0 && (
-                    <p className="text-green-600 text-xs mt-1">Free delivery on orders above ₹500</p>
-                  )}
+                  <p className="text-gray-500 text-xs mt-2">Delivery fee is shown at checkout.</p>
                 </div>
               </div>
 

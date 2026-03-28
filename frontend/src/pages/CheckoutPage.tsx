@@ -5,18 +5,35 @@ import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData, getAllProducts, Product } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
-import { getDeliveryFeeForSubtotal } from '../context/CartContext';
+import {
+  PLATFORM_FEE,
+  HANDLING_FEE,
+  STANDARD_DELIVERY_FEE,
+  getCheckoutFeesTotal
+} from '../utils/deliveryFees';
+import { formatRupeesDetailed } from '../utils/formatters';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight, Home, Briefcase } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import ProductCard from '../components/products/ProductCard';
 
-// Same totals as cart: subtotal + delivery (free above ₹500) - discount. No auto discount.
+// Checkout: items + platform + handling + standard delivery (₹15 flat until distance-based logic ships)
 const calculateOrderTotals = (cartTotal: number) => {
   const subtotal = cartTotal;
-  const deliveryFee = getDeliveryFeeForSubtotal(cartTotal);
   const discount = 0;
-  const orderTotal = subtotal + deliveryFee - discount;
-  return { subtotal, deliveryFee, discount, orderTotal };
+  const platformFee = PLATFORM_FEE;
+  const handlingFee = HANDLING_FEE;
+  const deliveryFee = STANDARD_DELIVERY_FEE;
+  const feesTotal = getCheckoutFeesTotal();
+  const orderTotal = subtotal + feesTotal - discount;
+  return {
+    subtotal,
+    platformFee,
+    handlingFee,
+    deliveryFee,
+    feesTotal,
+    discount,
+    orderTotal
+  };
 };
 
 const CheckoutPage = () => {
@@ -536,7 +553,7 @@ const CheckoutPage = () => {
       }));
 
       // Calculate totals
-      const { subtotal, deliveryFee, orderTotal } = calculateOrderTotals(cartTotal);
+      const { subtotal, feesTotal, orderTotal } = calculateOrderTotals(cartTotal);
       const finalOrderTotal = Math.round(orderTotal + tipAmount);
 
       // Resolve lat/lng from saved address, just-created address, or map picker (avoids geocoding failures)
@@ -574,7 +591,7 @@ const CheckoutPage = () => {
         payment_method: paymentMethodLabel,
         order_total: finalOrderTotal,
         subtotal: subtotal,
-        delivery_fee: deliveryFee,
+        delivery_fee: feesTotal,
         items: orderItems,
         shipping_address: {
           address: formData.address,
@@ -689,7 +706,8 @@ const CheckoutPage = () => {
     );
   }
 
-  const { deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
+  const { platformFee, handlingFee, deliveryFee, feesTotal, discount, orderTotal } =
+    calculateOrderTotals(cartTotal);
   const finalTotal = Math.round(orderTotal + tipAmount);
 
   return (
@@ -1602,11 +1620,31 @@ const CheckoutPage = () => {
                       <span className="font-semibold">₹{Math.round(cartTotal)}</span>
                     </div>
 
-                    <div className="flex justify-between text-gray-600">
-                      <span>Delivery</span>
-                      <span className="font-semibold">
-                        {deliveryFee === 0 ? 'Free' : `₹${deliveryFee}`}
-                      </span>
+                    <div className="flex justify-between text-gray-600 text-sm">
+                      <span>Platform fee</span>
+                      <span className="font-semibold">{formatRupeesDetailed(platformFee)}</span>
+                    </div>
+                    <div className="flex justify-between text-gray-600 text-sm">
+                      <span>Handling fee</span>
+                      <span className="font-semibold">{formatRupeesDetailed(handlingFee)}</span>
+                    </div>
+
+                    <div className="rounded-lg bg-gray-50 border border-gray-100 p-3 space-y-2">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        Delivery charge
+                      </p>
+                      <div className="flex justify-between text-gray-700 text-sm">
+                        <span>Standard delivery</span>
+                        <span className="font-semibold">{formatRupeesDetailed(deliveryFee)}</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 leading-snug">
+                        Distance-based delivery pricing will be calculated here later.
+                      </p>
+                    </div>
+
+                    <div className="flex justify-between text-gray-500 text-xs pt-1 border-t border-dashed border-gray-200">
+                      <span>Fees subtotal</span>
+                      <span>{formatRupeesDetailed(feesTotal)}</span>
                     </div>
 
                     {discount > 0 && (
