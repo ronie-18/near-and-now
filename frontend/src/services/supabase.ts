@@ -107,25 +107,6 @@ async function getNearbyStoreIdsExpanding(lat: number, lng: number): Promise<str
   return [];
 }
 
-/** Straight-line km from customer to the first store returned for their area (checkout quote). */
-export async function getCheckoutDeliveryDistanceKm(
-  customerLat: number,
-  customerLng: number
-): Promise<number | null> {
-  const ids = await getNearbyStoreIdsExpanding(customerLat, customerLng);
-  if (!ids.length) return null;
-  const { data, error } = await supabaseAdmin
-    .from('stores')
-    .select('latitude, longitude')
-    .eq('id', ids[0])
-    .maybeSingle();
-  if (error || !data) return null;
-  const slat = data.latitude != null ? Number(data.latitude) : NaN;
-  const slng = data.longitude != null ? Number(data.longitude) : NaN;
-  if (!Number.isFinite(slat) || !Number.isFinite(slng)) return null;
-  return calculateDistance(customerLat, customerLng, slat, slng);
-}
-
 // PostgREST encodes .in() filters in the URL. Large ID lists exceed URL limits and cause Bad Request.
 // Chunk size to stay under limits (~100 UUIDs ≈ 4KB).
 const IN_FILTER_CHUNK_SIZE = 100;
@@ -134,6 +115,49 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+/** Haversine km from customer to each store (for tie-breaking and delivery quote). */
+async function loadDistanceKmByStoreId(
+  storeIds: string[],
+  customerLat: number,
+  customerLng: number
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (storeIds.length === 0) return map;
+  for (const ids of chunk(storeIds, IN_FILTER_CHUNK_SIZE)) {
+    const { data, error } = await supabaseAdmin
+      .from('stores')
+      .select('id, latitude, longitude')
+      .in('id', ids);
+    if (error || !data) continue;
+    for (const row of data) {
+      const slat = row.latitude != null ? Number(row.latitude) : NaN;
+      const slng = row.longitude != null ? Number(row.longitude) : NaN;
+      if (!Number.isFinite(slat) || !Number.isFinite(slng)) continue;
+      map.set(
+        row.id,
+        calculateDistance(customerLat, customerLng, slat, slng)
+      );
+    }
+  }
+  return map;
+}
+
+/** Straight-line km to the nearest eligible store in the delivery area (checkout quote). */
+export async function getCheckoutDeliveryDistanceKm(
+  customerLat: number,
+  customerLng: number
+): Promise<number | null> {
+  const ids = await getNearbyStoreIdsExpanding(customerLat, customerLng);
+  if (!ids.length) return null;
+  const byStore = await loadDistanceKmByStoreId(ids, customerLat, customerLng);
+  let min = Infinity;
+  for (const id of ids) {
+    const d = byStore.get(id);
+    if (d != null && d < min) min = d;
+  }
+  return Number.isFinite(min) ? min : null;
 }
 
 // Row from products table joined with master_products (Supabase returns nested master_products)
@@ -619,24 +643,43 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
       byMaster.set(row.master_product_id, list);
     }
 
-    // Assign each item to a store that has it (greedy: minimize number of stores)
+    const distanceKmByStore = await loadDistanceKmByStoreId(storeIds, geocoded.lat, geocoded.lng);
+
+    // Greedy assignment: each round pick the store that covers the most still-unassigned lines.
+    // Tie-break (e.g. both stores stock the full cart): prefer the store closest to the customer.
     const storeToItems = new Map<string, typeof items>();
     const assigned = new Set<number>();
     while (assigned.size < items.length) {
       let bestStore: string | null = null;
       let bestCount = 0;
+      let bestDistanceKm = Number.POSITIVE_INFINITY;
       for (const storeId of storeIds) {
         let count = 0;
-        for (const it of items) {
-          const idx = items.indexOf(it);
-          if (assigned.has(idx)) continue;
+        for (let i = 0; i < items.length; i++) {
+          if (assigned.has(i)) continue;
+          const it = items[i];
           const mid = it.product_id || it.id;
           const options = (mid ? byMaster.get(mid) : undefined) ?? [];
           if (options.some((o) => o.store_id === storeId)) count++;
         }
+        if (count === 0) continue;
+
+        const distKm = distanceKmByStore.get(storeId) ?? Number.POSITIVE_INFINITY;
         if (count > bestCount) {
           bestCount = count;
           bestStore = storeId;
+          bestDistanceKm = distKm;
+        } else if (count === bestCount) {
+          if (distKm < bestDistanceKm) {
+            bestStore = storeId;
+            bestDistanceKm = distKm;
+          } else if (
+            distKm === bestDistanceKm &&
+            bestStore !== null &&
+            storeId.localeCompare(bestStore) < 0
+          ) {
+            bestStore = storeId;
+          }
         }
       }
       if (!bestStore || bestCount === 0) break;
