@@ -1,0 +1,59 @@
+{
+  "info": {
+    "name": "Near and Now API",
+    "description": "Import into Thunder Client: Thunder Client → Menu → Import → this file.\nUse the Vercel URL for API calls until custom domain routes /api to the same project.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health (Vercel)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "https://near-and-now-frontend.vercel.app/health"
+      }
+    },
+    {
+      "name": "Send OTP (Vercel — use this if nearandnow.in returns HTML)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"phone\": \"+919062692914\"\n}"
+        },
+        "url": "https://near-and-now-frontend.vercel.app/api/auth/send-otp"
+      }
+    },
+    {
+      "name": "Verify OTP (Vercel)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"phone\": \"+919062692914\",\n  \"otp\": \"REPLACE_WITH_SMS_CODE\"\n}"
+        },
+        "url": "https://near-and-now-frontend.vercel.app/api/auth/verify-otp"
+      }
+    },
+    {
+      "name": "Send OTP (custom domain — compare response)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"phone\": \"+919062692914\"\n}"
+        },
+        "url": "https://nearandnow.in/api/auth/send-otp"
+      }
+    }
+  ]
+}

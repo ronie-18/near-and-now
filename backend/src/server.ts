@@ -25,26 +25,30 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Local Vite dev calling production API (VITE_API_URL=https://nearandnow.in) needs these origins.
-// Production domains still come from ALLOWED_ORIGINS (e.g. on Vercel).
-const LOCAL_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
-const fromEnv = (process.env.ALLOWED_ORIGINS || '')
+// CORS: reflect any browser Origin (works with credentials). Same idea as a permissive Railway setup.
+// Optional: set ALLOWED_ORIGINS=comma,separated,origins to restrict; leave unset for allow-all via reflection.
+const allowlist = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((o) => o.trim())
   .filter(Boolean);
-const ALLOWED_ORIGINS = [...new Set([...LOCAL_DEV_ORIGINS, ...fromEnv])];
 
 // Apply CORS before Helmet so preflight (OPTIONS) always gets Access-Control-* headers.
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS: origin ${origin} not allowed`));
-    }
-  },
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (allowlist.length === 0) {
+        callback(null, true);
+        return;
+      }
+      if (!origin || allowlist.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origin ${origin} not allowed`));
+      }
+    },
+    credentials: true
+  })
+);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(express.json());
 
