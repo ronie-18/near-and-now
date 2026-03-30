@@ -1,5 +1,5 @@
--- Add 'store_owner' to user_role enum so app can create store owners from the app.
--- Run in Supabase Dashboard → SQL Editor if signup fails with "invalid input value for enum user_role".
--- (If you get "already exists", the value is already there.)
-
-ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'store_owner';
+-- Deprecated: do not add `store_owner` to user_role.
+-- Allowed enum values for app_users.role: customer (default), delivery_partner, shopkeeper.
+-- If your database still has an old `store_owner` label, run:
+--   migrate-app-users-store-owner-to-shopkeeper.sql
+-- Removing an unused enum label in PostgreSQL requires a type migration (see Postgres docs).

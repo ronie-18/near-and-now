@@ -188,9 +188,8 @@ export async function updateProductQuantity(req: Request, res: Response) {
 }
 
 /**
- * Complete store owner registration after OTP verification.
- * Inserts app_users with role 'store_owner' and a store row in Supabase.
- * Ensure DB enum user_role includes 'store_owner' (run add-store-owner-role.sql if needed).
+ * Complete shopkeeper registration after OTP verification.
+ * Inserts app_users with role 'shopkeeper'.
  */
 export async function signupComplete(req: Request, res: Response) {
   try {
@@ -201,6 +200,8 @@ export async function signupComplete(req: Request, res: Response) {
       storeAddress,
       radiusKm,
       email,
+      ownerEmail,
+      owner_email,
       latitude,
       longitude
     } = req.body;
@@ -218,7 +219,9 @@ export async function signupComplete(req: Request, res: Response) {
     void radiusKm;
     const lat = latitude != null ? Number(latitude) : null;
     const lng = longitude != null ? Number(longitude) : null;
-    const emailVal = email ? String(email).trim() || null : null;
+    const rawEmail = email ?? ownerEmail ?? owner_email;
+    const emailVal =
+      rawEmail != null && String(rawEmail).trim() !== '' ? String(rawEmail).trim().toLowerCase() : null;
 
     const { data: newUser, error: userError } = await supabaseAdmin
       .from('app_users')
@@ -227,7 +230,7 @@ export async function signupComplete(req: Request, res: Response) {
         phone,
         email: emailVal,
         password_hash: null,
-        role: 'store_owner',
+        role: 'shopkeeper',
         is_activated: true
       })
       .select()

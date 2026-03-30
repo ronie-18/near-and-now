@@ -117,8 +117,8 @@ export class AuthController {
         return res.status(400).json({ error: 'Phone number and OTP are required' });
       }
 
-      const isStoreOwnerFlow = requestRole === 'store_owner' || requestRole === 'shopkeeper';
-      console.log('🔐 Verifying OTP for:', phone, isStoreOwnerFlow ? `(${requestRole})` : '(customer)');
+      const isShopkeeperFlow = requestRole === 'shopkeeper';
+      console.log('🔐 Verifying OTP for:', phone, isShopkeeperFlow ? '(shopkeeper)' : '(customer)');
 
       if (!client) {
         return res.status(503).json({
@@ -144,9 +144,9 @@ export class AuthController {
 
       console.log('✅ OTP verified successfully');
 
-      // Store owner flow: look up by phone AND role (shopkeeper)
-      if (isStoreOwnerFlow) {
-        console.log('🏪 Store owner flow: looking for shopkeeper account');
+      // Shopkeeper app flow: look up by phone AND role shopkeeper
+      if (isShopkeeperFlow) {
+        console.log('🏪 Shopkeeper flow: looking for shopkeeper account');
         
         // CRITICAL: Must filter by BOTH phone AND role
         // Same phone can have multiple users with different roles
@@ -157,7 +157,7 @@ export class AuthController {
           .from('app_users')
           .select('*')
           .eq('phone', phone)
-          .in('role', ['shopkeeper', 'store_owner'])  // ← Filter by shopkeeper role!
+          .eq('role', 'shopkeeper')
           .maybeSingle();
           
         if (byExact) {
@@ -171,7 +171,7 @@ export class AuthController {
               .from('app_users')
               .select('*')
               .eq('phone', normalized)
-              .in('role', ['shopkeeper', 'store_owner'])  // ← Filter by shopkeeper role!
+              .eq('role', 'shopkeeper')
               .maybeSingle();
             if (byNormalized) {
               existingUser = byNormalized;
@@ -180,7 +180,7 @@ export class AuthController {
           }
         }
 
-        if (existingUser && (existingUser.role === 'shopkeeper' || existingUser.role === 'store_owner')) {
+        if (existingUser && existingUser.role === 'shopkeeper') {
           const token = crypto.randomUUID();
           const { password_hash: _, ...userWithoutPassword } = existingUser;
           console.log('👤 Existing shopkeeper, logging in:', existingUser.id, existingUser.name);
