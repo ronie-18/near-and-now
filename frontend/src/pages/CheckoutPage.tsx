@@ -17,6 +17,7 @@ import {
   getCheckoutDeliveryDistanceKm
 } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
+import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
 import {
   FREE_DELIVERY_SUBTOTAL_MIN,
   getCheckoutOrderTotals
@@ -648,10 +649,39 @@ const CheckoutPage = () => {
         })
       };
 
-      // Create order in database
+      // Create order in database first to get internal order ID.
       const createdOrder = await createOrder(orderData);
 
-      showNotification('Order placed successfully! 🎉', 'success');
+      if (formData.paymentMethod === 'online') {
+        await openRazorpayCheckout({
+          orderId: createdOrder.id,
+          amount: finalOrderTotal,
+          customerName: formData.name,
+          customerEmail: formData.email,
+          customerPhone: formData.phone,
+          onSuccess: async (rzpResponse) => {
+            await verifyPayment({
+              paymentId: rzpResponse.razorpay_payment_id,
+              razorpayOrderId: rzpResponse.razorpay_order_id,
+              signature: rzpResponse.razorpay_signature,
+              internalOrderId: createdOrder.id
+            });
+          },
+          onDismiss: () => {
+            showNotification(
+              'Payment window closed. Your order is created and pending payment.',
+              'info'
+            );
+          }
+        });
+      }
+
+      showNotification(
+        formData.paymentMethod === 'online'
+          ? 'Payment successful! Order placed. 🎉'
+          : 'Order placed successfully! 🎉',
+        'success'
+      );
       clearCart();
       lastCreatedAddressRef.current = null;
 

@@ -29,21 +29,21 @@ export class PaymentController {
   // Verify payment
   async verifyPayment(req: Request, res: Response) {
     try {
-      const { paymentId, orderId, signature } = req.body;
+      const { paymentId, razorpayOrderId, signature, internalOrderId } = req.body;
 
-      if (!paymentId || !orderId || !signature) {
-        return res.status(400).json({ error: 'Payment ID, Order ID, and signature are required' });
+      if (!paymentId || !razorpayOrderId || !signature || !internalOrderId) {
+        return res.status(400).json({ error: 'paymentId, razorpayOrderId, signature, and internalOrderId are required' });
       }
 
       const isValid = await paymentService.verifyPayment({
         paymentId,
-        orderId,
+        orderId: razorpayOrderId,
         signature
       });
 
       if (isValid) {
-        // Update order payment status
-        await databaseService.updateOrderPaymentStatus(orderId, 'paid', paymentId);
+        // Update internal customer order payment status after successful signature verification
+        await databaseService.updateOrderPaymentStatus(internalOrderId, 'paid', paymentId);
         res.json({ success: true, message: 'Payment verified successfully' });
       } else {
         res.status(400).json({ success: false, error: 'Payment verification failed' });

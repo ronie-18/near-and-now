@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice } from '../utils/formatters';
 import { getUserOrders, Order } from '../services/supabase';
+import { downloadCustomerInvoice } from '../utils/invoice';
 
 // Order status badge component
 const OrderStatusBadge = ({ status }: { status: string }) => {
@@ -107,6 +108,32 @@ const OrdersPage = () => {
       'cancelled': 'Cancelled'
     };
     return statusMap[status] || status;
+  };
+
+  const handleCustomerInvoiceDownload = (order: Order) => {
+    const shippingAddress = order.shipping_address
+      ? `${order.shipping_address.address || ''}, ${order.shipping_address.city || ''}, ${order.shipping_address.state || ''} - ${order.shipping_address.pincode || ''}`
+      : '';
+
+    downloadCustomerInvoice({
+      id: order.id,
+      orderNumber: order.order_number,
+      createdAt: order.created_at,
+      customerName: user?.name,
+      customerEmail: user?.email,
+      customerPhone: user?.phone,
+      paymentMethod: order.payment_method,
+      paymentStatus: order.payment_status,
+      shippingAddress,
+      subtotal: order.subtotal,
+      deliveryFee: order.delivery_fee,
+      total: order.order_total,
+      items: (order.items || []).map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price
+      }))
+    });
   };
 
   if (isLoading || loading) {
@@ -271,7 +298,13 @@ const OrdersPage = () => {
                       </div>
                     )}
 
-                    <div className="mt-6 flex justify-end">
+                    <div className="mt-6 flex justify-end gap-3">
+                      <button
+                        onClick={() => handleCustomerInvoiceDownload(order)}
+                        className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-100 transition-colors text-sm font-medium"
+                      >
+                        Download Invoice
+                      </button>
                       <Link
                         to={`/track/${order.id}`}
                         className="bg-primary text-white px-4 py-2 rounded-md hover:bg-secondary transition-colors text-sm font-medium"

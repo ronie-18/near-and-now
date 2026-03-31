@@ -20,6 +20,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { getOrderById, updateOrderStatus, Order } from '../../services/adminService';
+import { downloadShopkeeperInvoice } from '../../utils/invoice';
 
 const OrderDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -108,6 +109,33 @@ const OrderDetailPage = () => {
       case 'failed': case 'refunded': return 'bg-red-100 text-red-700';
       default: return 'bg-gray-100 text-gray-700';
     }
+  };
+
+  const handleShopkeeperInvoiceDownload = () => {
+    if (!order) return;
+    const shippingAddress = order.shipping_address
+      ? `${order.shipping_address.address || ''}, ${order.shipping_address.city || ''}, ${order.shipping_address.state || ''} - ${order.shipping_address.pincode || ''}`
+      : '';
+
+    downloadShopkeeperInvoice({
+      id: order.id,
+      orderNumber: order.order_number,
+      createdAt: order.created_at,
+      customerName: order.customer_name,
+      customerEmail: order.customer_email,
+      customerPhone: order.customer_phone,
+      paymentMethod: order.payment_method,
+      paymentStatus: order.payment_status,
+      shippingAddress,
+      subtotal: order.subtotal,
+      deliveryFee: order.delivery_fee,
+      total: order.order_total,
+      items: (order.items || []).map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price
+      }))
+    });
   };
 
   if (loading) {
@@ -343,6 +371,12 @@ const OrderDetailPage = () => {
                   <p className="text-sm text-gray-500">Payment Method</p>
                   <p className="font-semibold text-gray-800 mt-1">{order.payment_method || 'N/A'}</p>
                 </div>
+                <button
+                  onClick={handleShopkeeperInvoiceDownload}
+                  className="w-full mt-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Download Shopkeeper Invoice
+                </button>
               </div>
             </div>
 
