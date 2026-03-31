@@ -39,10 +39,26 @@ export interface TrackingFullResponse {
 }
 
 export async function fetchOrderTrackingFull(orderId: string): Promise<TrackingFullResponse | null> {
-  const url = `${API_BASE || ''}/api/tracking/orders/${orderId}/full`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  return res.json();
+  try {
+    const url = `${API_BASE || ''}/api/tracking/orders/${orderId}/full`;
+    console.log('🔍 Fetching order tracking from:', url);
+
+    const res = await fetch(url);
+
+    if (!res.ok) {
+      console.error('❌ Failed to fetch order tracking:', res.status, res.statusText);
+      const errorText = await res.text();
+      console.error('Error response:', errorText);
+      return null;
+    }
+
+    const data = await res.json();
+    console.log('✅ Order tracking data received:', data);
+    return data;
+  } catch (error) {
+    console.error('❌ Error fetching order tracking:', error);
+    return null;
+  }
 }
 
 export async function fetchDriverLocations(orderId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }>> {

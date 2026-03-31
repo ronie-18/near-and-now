@@ -944,8 +944,11 @@ export class DatabaseService {
         )
       `)
       .eq('id', orderId)
-      .single();
-    if (error) throw error;
+      .maybeSingle();
+    if (error) {
+      console.error('Error fetching order tracking:', error);
+      return null;
+    }
     return data;
   }
 

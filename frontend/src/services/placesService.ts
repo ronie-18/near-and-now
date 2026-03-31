@@ -126,10 +126,25 @@ export async function getPlaceDetails(placeId: string): Promise<LocationData | n
   return null;
 }
 
+// Cache for geocoded addresses (in-memory, session-based)
+const geocodeCache = new Map<string, { data: LocationData | null; timestamp: number }>();
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Geocode an address to coordinates via backend proxy.
+ * Results are cached for 5 minutes to improve performance.
  */
 export async function geocodeAddress(address: string): Promise<LocationData | null> {
+  const normalizedAddress = address.trim().toLowerCase();
+
+  // Check cache first
+  const cached = geocodeCache.get(normalizedAddress);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION_MS) {
+    console.log('📍 Using cached geocode result for:', address);
+    return cached.data;
+  }
+
+  console.log('🔍 Geocoding address:', address);
   const url = new URL(`${API_BASE}/geocode`, window.location.origin);
   url.searchParams.set('address', address);
 
@@ -141,16 +156,35 @@ export async function geocodeAddress(address: string): Promise<LocationData | nu
     throw new Error(msg);
   }
 
+  let result: LocationData | null = null;
   if (data.status === 'OK' && data.results?.length > 0) {
-    return parseGeocodeResult(data.results[0]);
+    result = parseGeocodeResult(data.results[0]);
   }
-  return null;
+
+  // Cache the result
+  geocodeCache.set(normalizedAddress, { data: result, timestamp: Date.now() });
+
+  return result;
 }
+
+// Cache for reverse geocoded coordinates
+const reverseGeocodeCache = new Map<string, { data: LocationData | null; timestamp: number }>();
 
 /**
  * Reverse geocode coordinates to address via backend proxy.
+ * Results are cached for 5 minutes to improve performance.
  */
 export async function reverseGeocode(lat: number, lng: number): Promise<LocationData | null> {
+  const cacheKey = `${lat.toFixed(6)},${lng.toFixed(6)}`;
+
+  // Check cache first
+  const cached = reverseGeocodeCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION_MS) {
+    console.log('📍 Using cached reverse geocode result for:', cacheKey);
+    return cached.data;
+  }
+
+  console.log('🔍 Reverse geocoding coordinates:', cacheKey);
   const url = new URL(`${API_BASE}/reverse-geocode`, window.location.origin);
   url.searchParams.set('lat', String(lat));
   url.searchParams.set('lng', String(lng));
@@ -163,10 +197,15 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Location
     throw new Error(msg);
   }
 
+  let result: LocationData | null = null;
   if (data.status === 'OK' && data.results?.length > 0) {
-    return parseGeocodeResult(data.results[0]);
+    result = parseGeocodeResult(data.results[0]);
   }
-  return null;
+
+  // Cache the result
+  reverseGeocodeCache.set(cacheKey, { data: result, timestamp: Date.now() });
+
+  return result;
 }
 
 /**
@@ -243,7 +282,7 @@ export async function fetchDirections(
   try {
     const roadUrl = `${API_BASE}/road-route?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`;
     const roadRes = await fetch(roadUrl);
-    
+
     if (!roadRes.ok) {
       console.warn(`Road route API returned ${roadRes.status}, trying fallback`);
     } else {

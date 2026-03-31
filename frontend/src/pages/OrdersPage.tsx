@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice } from '../utils/formatters';
-import { getUserOrders, Order } from '../services/supabase';
+import { Order } from '../services/supabase';
+import { fetchCustomerOrders } from '../services/orderService';
 import { downloadCustomerInvoice } from '../utils/invoice';
 
 // Order status badge component
@@ -65,7 +66,7 @@ const OrdersPage = () => {
       try {
         setLoading(true);
         setError(null);
-        const userOrders = await getUserOrders(user.id, user.phone ?? undefined, user.email ?? undefined);
+        const userOrders = await fetchCustomerOrders(user.id);
         setOrders(userOrders);
       } catch (err: any) {
         console.error('Error fetching orders:', err);
@@ -120,8 +121,8 @@ const OrdersPage = () => {
       orderNumber: order.order_number,
       createdAt: order.created_at,
       customerName: user?.name,
-      customerEmail: user?.email,
-      customerPhone: user?.phone,
+      customerEmail: user?.email ?? undefined,
+      customerPhone: user?.phone ?? undefined,
       paymentMethod: order.payment_method,
       paymentStatus: order.payment_status,
       shippingAddress,

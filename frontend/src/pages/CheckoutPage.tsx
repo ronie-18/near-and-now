@@ -1352,7 +1352,18 @@ const CheckoutPage = () => {
                         <span className="text-xl font-bold text-gray-800">Add a Tip</span>
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                        <button
+                          type="button"
+                          onClick={() => handleTipSelect(0)}
+                          className={`py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
+                            selectedTip === '0'
+                              ? 'bg-gradient-to-r from-primary to-secondary text-white shadow-lg scale-105'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow-md'
+                          }`}
+                        >
+                          No Tip
+                        </button>
                         {[5, 10, 15, 20].map((amount) => (
                           <button
                             key={amount}

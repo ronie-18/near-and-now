@@ -81,7 +81,7 @@ const ShopPage = () => {
       const query = searchQuery.toLowerCase();
       result = result.filter(
         product => product.name.toLowerCase().includes(query) ||
-                  product.category.toLowerCase().includes(query)
+          product.category.toLowerCase().includes(query)
       );
     }
 
@@ -144,9 +144,9 @@ const ShopPage = () => {
 
   // Check if any filters are active
   const hasActiveFilters = selectedCategory !== 'all' ||
-                           priceRange[0] !== 0 ||
-                           priceRange[1] !== maxPrice ||
-                           searchQuery !== '';
+    priceRange[0] !== 0 ||
+    priceRange[1] !== maxPrice ||
+    searchQuery !== '';
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
