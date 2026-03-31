@@ -207,7 +207,7 @@ const CategoriesPage = () => {
       // Only include categories that have products
       const productCount = productCounts[category.id] || 0;
       if (productCount === 0) return false;
-      
+
       // Apply search filter
       const searchLower = searchTerm.toLowerCase();
       return (
