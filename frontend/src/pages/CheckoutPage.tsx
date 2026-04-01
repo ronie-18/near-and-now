@@ -3,34 +3,26 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
-import {
-  createOrder,
-  CreateOrderData,
-  getUserAddresses,
-  createAddress,
-  updateAddress,
-  deleteAddress,
-  Address as DbAddress,
-  UpdateAddressData,
-  getAllProducts,
-  Product,
-  getCheckoutDeliveryDistanceKm
-} from '../services/supabase';
+import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData, getAllProducts, Product } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
-import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
-import {
-  FREE_DELIVERY_SUBTOTAL_MIN,
-  getCheckoutOrderTotals
-} from '../utils/deliveryFees';
-import { formatRupeesDetailed } from '../utils/formatters';
+import { getDeliveryFeeForSubtotal } from '../context/CartContext';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight, Home, Briefcase } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import ProductCard from '../components/products/ProductCard';
 
+// Same totals as cart: subtotal + delivery (free above ₹500) - discount. No auto discount.
+const calculateOrderTotals = (cartTotal: number) => {
+  const subtotal = cartTotal;
+  const deliveryFee = getDeliveryFeeForSubtotal(cartTotal);
+  const discount = 0;
+  const orderTotal = subtotal + deliveryFee - discount;
+  return { subtotal, deliveryFee, discount, orderTotal };
+};
+
 const CheckoutPage = () => {
   const { cartItems, cartTotal, clearCart } = useCart();
   const { showNotification } = useNotification();
-  const { isAuthenticated, user, customer } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -76,8 +68,6 @@ const CheckoutPage = () => {
   const [editAddressId, setEditAddressId] = useState<string | null>(null);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [pickedLocation, setPickedLocation] = useState<LocationData | null>(null);
-  const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(null);
-  const [deliveryDistanceLoading, setDeliveryDistanceLoading] = useState(false);
 
   // Suggested products
   const [suggestedProducts, setSuggestedProducts] = useState<Product[]>([]);
@@ -107,7 +97,7 @@ const CheckoutPage = () => {
 
       try {
         setLoadingAddresses(true);
-        const addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
+        const addresses = await getUserAddresses(user.id, user.phone || undefined);
         setSavedAddresses(addresses);
 
         const deliveryToLocation = getStoredDeliveryLocation();
@@ -168,49 +158,7 @@ const CheckoutPage = () => {
     if (user?.id) {
       fetchAddresses();
     }
-  }, [user?.id, user?.phone, customer?.phone]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const resolveCoords = (): { lat: number; lng: number } | null => {
-      if (pickedLocation) {
-        return { lat: pickedLocation.lat, lng: pickedLocation.lng };
-      }
-      if (selectedAddressId) {
-        const addr = savedAddresses.find((a) => a.id === selectedAddressId);
-        if (addr?.latitude != null && addr?.longitude != null) {
-          return { lat: addr.latitude, lng: addr.longitude };
-        }
-      }
-      const stored = getStoredDeliveryLocation();
-      if (stored) return { lat: stored.lat, lng: stored.lng };
-      return null;
-    };
-
-    const run = async () => {
-      const coords = resolveCoords();
-      if (!coords) {
-        setDeliveryDistanceKm(null);
-        setDeliveryDistanceLoading(false);
-        return;
-      }
-      setDeliveryDistanceLoading(true);
-      try {
-        const km = await getCheckoutDeliveryDistanceKm(coords.lat, coords.lng);
-        if (!cancelled) setDeliveryDistanceKm(km);
-      } catch {
-        if (!cancelled) setDeliveryDistanceKm(null);
-      } finally {
-        if (!cancelled) setDeliveryDistanceLoading(false);
-      }
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [pickedLocation, selectedAddressId, savedAddresses]);
+  }, [user?.id]);
 
   // Fetch and filter suggested products based on cart items
   useEffect(() => {
@@ -405,7 +353,7 @@ const CheckoutPage = () => {
     try {
       setLoadingAddresses(true);
       await deleteAddress(addressId, user.id);
-      let addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
+      let addresses = await getUserAddresses(user.id, user.phone || undefined);
       setSavedAddresses(addresses);
 
       // Re-select default or first
@@ -472,7 +420,7 @@ const CheckoutPage = () => {
         }
         await updateAddress(editAddressId, user.id, updatePayload);
         const updatedAddressId = editAddressId; // Store before clearing
-        let addresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
+        let addresses = await getUserAddresses(user.id, user.phone || undefined);
         setSavedAddresses(addresses);
         setEditAddressId(null);
         setShowNewAddressForm(false);
@@ -563,7 +511,7 @@ const CheckoutPage = () => {
           lastCreatedAddressRef.current = createdAddress;
 
           // Refresh the addresses list to include the newly added address
-          const updatedAddresses = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
+          const updatedAddresses = await getUserAddresses(user.id, user.phone || undefined);
           setSavedAddresses(updatedAddresses);
 
           // Select the newly created address
@@ -578,7 +526,20 @@ const CheckoutPage = () => {
         }
       }
 
-      // Resolve lat/lng from saved address, just-created address, or map picker (fees use delivery distance)
+      // Prepare order items from cart
+      const orderItems = cartItems.map(item => ({
+        product_id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+        image: item.image
+      }));
+
+      // Calculate totals
+      const { subtotal, deliveryFee, orderTotal } = calculateOrderTotals(cartTotal);
+      const finalOrderTotal = Math.round(orderTotal + tipAmount);
+
+      // Resolve lat/lng from saved address, just-created address, or map picker (avoids geocoding failures)
       let shippingLat: number | undefined;
       let shippingLng: number | undefined;
       if (selectedAddressId) {
@@ -593,27 +554,6 @@ const CheckoutPage = () => {
         shippingLat = pickedLocation.lat;
         shippingLng = pickedLocation.lng;
       }
-
-      let kmForFees: number | null = deliveryDistanceKm;
-      if (shippingLat != null && shippingLng != null) {
-        try {
-          const d = await getCheckoutDeliveryDistanceKm(shippingLat, shippingLng);
-          if (d != null) kmForFees = d;
-        } catch {
-          /* keep kmForFees from UI state */
-        }
-      }
-
-      const { subtotal, feesTotal, orderTotal } = getCheckoutOrderTotals(cartTotal, kmForFees);
-      const finalOrderTotal = Math.round(orderTotal + tipAmount);
-
-      const orderItems = cartItems.map(item => ({
-        product_id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        image: item.image
-      }));
 
       // Determine payment method label (split overrides the radio choice)
       let paymentMethodLabel = formData.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment';
@@ -634,7 +574,7 @@ const CheckoutPage = () => {
         payment_method: paymentMethodLabel,
         order_total: finalOrderTotal,
         subtotal: subtotal,
-        delivery_fee: feesTotal,
+        delivery_fee: deliveryFee,
         items: orderItems,
         shipping_address: {
           address: formData.address,
@@ -649,39 +589,10 @@ const CheckoutPage = () => {
         })
       };
 
-      // Create order in database first to get internal order ID.
+      // Create order in database
       const createdOrder = await createOrder(orderData);
 
-      if (formData.paymentMethod === 'online') {
-        await openRazorpayCheckout({
-          orderId: createdOrder.id,
-          amount: finalOrderTotal,
-          customerName: formData.name,
-          customerEmail: formData.email,
-          customerPhone: formData.phone,
-          onSuccess: async (rzpResponse) => {
-            await verifyPayment({
-              paymentId: rzpResponse.razorpay_payment_id,
-              razorpayOrderId: rzpResponse.razorpay_order_id,
-              signature: rzpResponse.razorpay_signature,
-              internalOrderId: createdOrder.id
-            });
-          },
-          onDismiss: () => {
-            showNotification(
-              'Payment window closed. Your order is created and pending payment.',
-              'info'
-            );
-          }
-        });
-      }
-
-      showNotification(
-        formData.paymentMethod === 'online'
-          ? 'Payment successful! Order placed. 🎉'
-          : 'Order placed successfully! 🎉',
-        'success'
-      );
+      showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
       lastCreatedAddressRef.current = null;
 
@@ -726,7 +637,7 @@ const CheckoutPage = () => {
 
   const handleSplitToggle = () => {
     if (!splitEnabled) {
-      const { orderTotal } = getCheckoutOrderTotals(cartTotal, deliveryDistanceKm);
+      const { orderTotal } = calculateOrderTotals(cartTotal);
       const currentFinalTotal = Math.round(orderTotal + tipAmount);
       const half = Math.round(currentFinalTotal / 2);
       setSplitCashAmount(half.toString());
@@ -740,7 +651,7 @@ const CheckoutPage = () => {
 
   const handleSplitCashChange = (value: string) => {
     setSplitCashAmount(value);
-    const { orderTotal } = getCheckoutOrderTotals(cartTotal, deliveryDistanceKm);
+    const { orderTotal } = calculateOrderTotals(cartTotal);
     const currentFinalTotal = Math.round(orderTotal + tipAmount);
     const cash = parseFloat(value) || 0;
     const upi = Math.max(0, currentFinalTotal - cash);
@@ -749,7 +660,7 @@ const CheckoutPage = () => {
 
   const handleSplitUpiChange = (value: string) => {
     setSplitUpiAmount(value);
-    const { orderTotal } = getCheckoutOrderTotals(cartTotal, deliveryDistanceKm);
+    const { orderTotal } = calculateOrderTotals(cartTotal);
     const currentFinalTotal = Math.round(orderTotal + tipAmount);
     const upi = parseFloat(value) || 0;
     const cash = Math.max(0, currentFinalTotal - upi);
@@ -778,22 +689,12 @@ const CheckoutPage = () => {
     );
   }
 
-  const {
-    platformFee,
-    handlingFee,
-    deliveryFee,
-    rawDeliveryFee,
-    feesTotal,
-    discount,
-    orderTotal,
-    deliveryFreeBySubtotal,
-    distanceKmUsed
-  } = getCheckoutOrderTotals(cartTotal, deliveryDistanceKm);
+  const { deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
   const finalTotal = Math.round(orderTotal + tipAmount);
 
   return (
     <>
-    <div className="min-h-screen bg-surface py-8">
+    <div className="min-h-screen bg-gradient-to-br from-primary/5 via-white to-secondary/5 py-8">
       <div className="container mx-auto px-4">
         {/* Progress Steps */}
         <div className="max-w-4xl mx-auto mb-8">
@@ -1352,18 +1253,7 @@ const CheckoutPage = () => {
                         <span className="text-xl font-bold text-gray-800">Add a Tip</span>
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                        <button
-                          type="button"
-                          onClick={() => handleTipSelect(0)}
-                          className={`py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
-                            selectedTip === '0'
-                              ? 'bg-gradient-to-r from-primary to-secondary text-white shadow-lg scale-105'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow-md'
-                          }`}
-                        >
-                          No Tip
-                        </button>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                         {[5, 10, 15, 20].map((amount) => (
                           <button
                             key={amount}
@@ -1712,50 +1602,11 @@ const CheckoutPage = () => {
                       <span className="font-semibold">₹{Math.round(cartTotal)}</span>
                     </div>
 
-                    <div className="flex justify-between text-gray-600 text-sm">
-                      <span>Platform fee</span>
-                      <span className="font-semibold">{formatRupeesDetailed(platformFee)}</span>
-                    </div>
-                    <div className="flex justify-between text-gray-600 text-sm">
-                      <span>Handling fee</span>
-                      <span className="font-semibold">{formatRupeesDetailed(handlingFee)}</span>
-                    </div>
-
-                    <div className="rounded-lg bg-gray-50 border border-gray-100 p-3 space-y-2">
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                        Delivery charge
-                      </p>
-                      {deliveryDistanceLoading ? (
-                        <p className="text-xs text-gray-500">Calculating distance…</p>
-                      ) : (
-                        <p className="text-[11px] text-gray-500">
-                          {deliveryDistanceKm != null
-                            ? `About ${distanceKmUsed.toFixed(1)} km to store — tier ₹${rawDeliveryFee}`
-                            : 'Set a delivery location for an exact distance quote (showing a typical distance until then).'}
-                        </p>
-                      )}
-                      <div className="flex justify-between text-gray-700 text-sm">
-                        <span>{deliveryFreeBySubtotal ? 'Delivery (subtotal offer)' : 'Delivery'}</span>
-                        <span className="font-semibold">
-                          {deliveryFreeBySubtotal ? (
-                            <span className="text-green-700">
-                              <span className="line-through text-gray-400 mr-1">{formatRupeesDetailed(rawDeliveryFee)}</span>
-                              FREE
-                            </span>
-                          ) : (
-                            formatRupeesDetailed(deliveryFee)
-                          )}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-gray-400 leading-snug">
-                        ₹15 / ₹20 / ₹25 / ₹40 by distance (up to 4 km). Free delivery when subtotal is ₹
-                        {FREE_DELIVERY_SUBTOTAL_MIN} or more.
-                      </p>
-                    </div>
-
-                    <div className="flex justify-between text-gray-500 text-xs pt-1 border-t border-dashed border-gray-200">
-                      <span>Fees subtotal</span>
-                      <span>{formatRupeesDetailed(feesTotal)}</span>
+                    <div className="flex justify-between text-gray-600">
+                      <span>Delivery</span>
+                      <span className="font-semibold">
+                        {deliveryFee === 0 ? 'Free' : `₹${deliveryFee}`}
+                      </span>
                     </div>
 
                     {discount > 0 && (
