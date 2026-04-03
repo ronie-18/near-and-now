@@ -2,11 +2,9 @@
 
 Backend API server for the Near and Now e-commerce platform.
 
-## Database Schema
+## Database schema
 
-The backend uses the new database schema defined in:
-- `docs/near_and_now_schema_tables` - Table definitions
-- `docs/near_and_now_schema_functions` - Functions, triggers, and views
+PostgreSQL (Supabase) objects are maintained in the Supabase project. See the repository root **`PROJECT_STATUS.md`** for feature status and operational notes.
 
 ## Setup
 

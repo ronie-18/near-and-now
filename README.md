@@ -8,25 +8,14 @@ Multi-vendor quick commerce platform with centralized admin management, featurin
 near-and-now/
 ├── frontend/          # React frontend application
 ├── backend/           # Express.js API server
-├── docs/              # Documentation and schema files
-│   ├── near_and_now_schema_tables      # Database table definitions
-│   └── near_and_now_schema_functions   # Database functions & triggers
+├── supabase/          # Edge functions (e.g. admin-auth)
+├── PROJECT_STATUS.md  # Feature status and recent updates
 └── README.md
 ```
 
-## Database Schema
+## Database schema
 
-The platform uses a comprehensive PostgreSQL schema with 32 tables, including:
-
-- **User Management**: Multi-role system (customers, shopkeepers, delivery partners)
-- **Admin Panel**: RBAC with super_admin and custom permissions
-- **Product Catalog**: Master products with store-specific inventory
-- **Orders**: Multi-store orders with individual delivery partners
-- **Payments**: Customer payments and store payouts
-- **Location**: Google Places integration for accurate delivery
-- **Coupons**: Flexible discount system with first-order support
-
-See `docs/near_and_now_schema_tables` and `docs/near_and_now_schema_functions` for complete schema details.
+The platform uses PostgreSQL (Supabase) with PostGIS, RLS, and real-time subscriptions. Table and function definitions are maintained in the Supabase project. For **feature completion, gaps, and recent fixes**, see **`PROJECT_STATUS.md`** at the repository root.
 
 ## Quick Start
 
@@ -60,15 +49,7 @@ VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-3. **Initialize database**:
-Run the SQL files in your Supabase SQL editor:
-```sql
--- First run:
-docs/near_and_now_schema_tables
-
--- Then run:
-docs/near_and_now_schema_functions
-```
+3. **Initialize database**: Apply schema and migrations from your Supabase project (SQL Editor or migration workflow your team uses).
 
 4. **Start development servers**:
 
@@ -175,4 +156,4 @@ See LICENSE file for details.
 
 ## Support
 
-For issues and questions, please refer to the documentation in the `docs/` folder.
+For current feature status and operational notes, see **`PROJECT_STATUS.md`**. API details are in **`backend/README.md`**.

@@ -141,7 +141,7 @@ const HelpPage = () => {
               </a>
             </div>
             <p className="text-blue-700 text-sm mt-2">
-              Refer to the docs/ folder in the project repository for schema details and setup guides.
+              See PROJECT_STATUS.md in the repository root for current feature status and setup notes.
             </p>
           </div>
         </div>

@@ -1,5 +1,0 @@
--- Deprecated: do not add `store_owner` to user_role.
--- Allowed enum values for app_users.role: customer (default), delivery_partner, shopkeeper.
--- If your database still has an old `store_owner` label, run:
---   migrate-app-users-store-owner-to-shopkeeper.sql
--- Removing an unused enum label in PostgreSQL requires a type migration (see Postgres docs).
