@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData, getAllProducts, Product } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
 import { getDeliveryFeeForSubtotal } from '../context/CartContext';
+import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, ChevronLeft, ChevronRight, Home, Briefcase } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import ProductCard from '../components/products/ProductCard';
@@ -591,6 +592,52 @@ const CheckoutPage = () => {
 
       // Create order in database
       const createdOrder = await createOrder(orderData);
+
+      const isOnlineRazorpay =
+        formData.paymentMethod === 'online' && !splitEnabled;
+
+      if (isOnlineRazorpay) {
+        try {
+          await openRazorpayCheckout({
+            orderId: createdOrder.id,
+            amount: finalOrderTotal,
+            customerName: formData.name,
+            customerEmail: formData.email,
+            customerPhone: formData.phone,
+            onSuccess: async (response) => {
+              await verifyPayment({
+                paymentId: response.razorpay_payment_id,
+                razorpayOrderId: response.razorpay_order_id,
+                signature: response.razorpay_signature,
+                internalOrderId: createdOrder.id
+              });
+            }
+          });
+        } catch (payErr: unknown) {
+          const msg = payErr instanceof Error ? payErr.message : String(payErr);
+          if (msg.includes('cancelled') || msg.includes('Payment cancelled')) {
+            showNotification(
+              'Order placed. Payment was not completed — your order is pending payment.',
+              'warning'
+            );
+          } else {
+            showNotification(
+              msg || 'Payment could not be completed. Your order is pending payment.',
+              'error'
+            );
+          }
+          clearCart();
+          lastCreatedAddressRef.current = null;
+          navigate('/thank-you', {
+            state: {
+              order: createdOrder,
+              orderId: createdOrder.id,
+              orderNumber: createdOrder.order_number
+            }
+          });
+          return;
+        }
+      }
 
       showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
