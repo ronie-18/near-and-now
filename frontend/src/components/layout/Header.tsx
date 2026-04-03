@@ -688,11 +688,15 @@ const Header = () => {
               </div>
 
               <div className="space-y-2">
-                <Link to="/category/staples" className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-amber-50 hover:to-transparent transition-all group" onClick={toggleMobileMenu}>
+                <Link
+                  to={`/category/${encodeURIComponent('Rice, Atta, Dal and Maida')}`}
+                  className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-amber-50 hover:to-transparent transition-all group"
+                  onClick={toggleMobileMenu}
+                >
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-sm">
                     🌾
                   </div>
-                  <span className="font-bold text-gray-800">Staples</span>
+                  <span className="font-bold text-gray-800">Rice, Atta, Dal and Maida</span>
                 </Link>
                 <Link to="/category/vegetables" className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gradient-to-r hover:from-green-50 hover:to-transparent transition-all group" onClick={toggleMobileMenu}>
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-100 to-green-200 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-sm">
