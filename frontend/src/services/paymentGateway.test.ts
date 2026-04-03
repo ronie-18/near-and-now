@@ -16,7 +16,8 @@ describe('paymentGateway service', () => {
           amount: 129900,
           currency: 'INR',
           status: 'created',
-          key_id: 'rzp_test_key'
+          key_id: 'rzp_test_key',
+          razorpay_mode: 'test' as const
         })
       })
     );

@@ -4,6 +4,8 @@ type CreatePaymentOrderResponse = {
   currency: string;
   status: string;
   key_id: string;
+  /** Present when backend uses test keys (`rzp_test_…`) vs live keys */
+  razorpay_mode?: 'test' | 'live';
 };
 
 type VerifyPaymentRequest = {
@@ -125,13 +127,18 @@ export async function openRazorpayCheckout(params: {
   const paymentOrder = await createPaymentOrder(params.orderId, params.amount);
 
   await new Promise<void>((resolve, reject) => {
+    const isTestMode =
+      paymentOrder.razorpay_mode === 'test' ||
+      (!paymentOrder.razorpay_mode && paymentOrder.key_id.startsWith('rzp_test_'));
     const rzp = new window.Razorpay!({
       key: paymentOrder.key_id,
       amount: paymentOrder.amount,
       currency: paymentOrder.currency,
       order_id: paymentOrder.razorpay_order_id,
       name: 'Near and Now',
-      description: 'Test payment via Razorpay',
+      description: isTestMode
+        ? 'Test payment (Razorpay sandbox)'
+        : 'Order payment',
       prefill: {
         name: params.customerName,
         email: params.customerEmail,

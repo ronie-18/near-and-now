@@ -28,6 +28,10 @@ export const getDistanceBasedDeliveryFee = (distanceKm?: number, cartSubtotal = 
   return breakdown.deliveryFee;
 };
 
+/** Subtotal-only delivery line (uses default quote distance until checkout has a real route). */
+export const getDeliveryFeeForSubtotal = (cartSubtotal: number): number =>
+  getDistanceBasedDeliveryFee(undefined, cartSubtotal);
+
 export const getCompleteFeeBreakdown = (distanceKm?: number, cartSubtotal = 0): DeliveryFeeBreakdown => {
   return calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartSubtotal);
 };

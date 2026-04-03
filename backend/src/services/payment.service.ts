@@ -42,7 +42,8 @@ export class PaymentService {
       amount: order.amount,
       currency: order.currency,
       status: order.status,
-      key_id: RAZORPAY_KEY_ID
+      key_id: RAZORPAY_KEY_ID,
+      razorpay_mode: RAZORPAY_KEY_ID.startsWith('rzp_test_') ? ('test' as const) : ('live' as const)
     };
   }
 
@@ -58,7 +59,11 @@ export class PaymentService {
       .createHmac('sha256', RAZORPAY_KEY_SECRET)
       .update(payload)
       .digest('hex');
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(data.signature));
+    try {
+      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(data.signature));
+    } catch {
+      return false;
+    }
   }
 
   // Fetch payment details from Razorpay
