@@ -66,7 +66,15 @@ export const CreateOrderSchema = z.object({
   
   order_status: z.enum(['placed', 'confirmed', 'shipped', 'delivered', 'cancelled']),
   
-  payment_status: z.enum(['pending', 'paid', 'failed', 'refunded']),
+  payment_status: z.enum([
+    'pending',
+    'authorized',
+    'paid',
+    'failed',
+    'cancelled',
+    'refunded',
+    'partially_refunded'
+  ]),
   
   payment_method: z.string()
     .min(1, 'Payment method is required')

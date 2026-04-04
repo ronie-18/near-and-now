@@ -98,7 +98,14 @@ export interface Order {
   customer_email?: string;
   customer_phone?: string;
   order_status: 'placed' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
-  payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_status:
+    | 'pending'
+    | 'authorized'
+    | 'paid'
+    | 'failed'
+    | 'cancelled'
+    | 'refunded'
+    | 'partially_refunded';
   payment_method: string;
   order_total: number;
   subtotal?: number;

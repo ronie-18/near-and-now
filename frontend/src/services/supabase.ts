@@ -350,13 +350,23 @@ export interface ShippingAddress {
   longitude?: number;
 }
 
+/** Matches DB enum public.payment_status (Razorpay + COD). */
+export type OrderPaymentStatus =
+  | 'pending'
+  | 'authorized'
+  | 'paid'
+  | 'failed'
+  | 'cancelled'
+  | 'refunded'
+  | 'partially_refunded';
+
 export interface CreateOrderData {
   user_id?: string;
   customer_name: string;
   customer_email?: string;
   customer_phone: string;
   order_status: 'placed' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
-  payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_status: OrderPaymentStatus;
   payment_method: string;
   order_total: number;
   subtotal: number;
@@ -374,7 +384,7 @@ export interface Order {
   customer_email?: string;
   customer_phone?: string;
   order_status: 'placed' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
-  payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_status: OrderPaymentStatus;
   payment_method: string;
   order_total: number;
   subtotal?: number;
@@ -529,11 +539,10 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
     const storeIdsToUse = Array.from(storeToItems.keys());
     const itemChunks = storeIdsToUse.map((sid) => storeToItems.get(sid)!);
 
-    // Map display names to DB enum (payment_method_type: cash_on_delivery, upi, credit_card, etc.)
+    // DB enum public.payment_method: 'razorpay' | 'cod'
+    const pm = orderData.payment_method?.toLowerCase() ?? '';
     const paymentMethodEnum =
-      orderData.payment_method?.toLowerCase().includes('cash') || orderData.payment_method === 'cod'
-        ? 'cash_on_delivery'
-        : 'upi';
+      pm.includes('split') || pm.includes('online') || pm.includes('upi') ? 'razorpay' : 'cod';
 
     // Create customer_order
     const { data: customerOrder, error: coError } = await supabaseAdmin

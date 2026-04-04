@@ -68,6 +68,9 @@ const getPaymentStyle = (status: string) => {
   switch (status) {
     case 'paid': return 'bg-emerald-100 text-emerald-700';
     case 'pending': return 'bg-amber-100 text-amber-700';
+    case 'authorized': return 'bg-sky-100 text-sky-800';
+    case 'cancelled': return 'bg-slate-200 text-slate-700';
+    case 'partially_refunded': return 'bg-orange-100 text-orange-800';
     case 'failed': case 'refunded': return 'bg-red-100 text-red-700';
     default: return 'bg-gray-100 text-gray-700';
   }

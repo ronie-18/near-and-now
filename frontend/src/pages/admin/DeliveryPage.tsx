@@ -15,6 +15,7 @@ interface DeliveryPartner {
   profile?: {
     verification_document?: string;
     verification_number?: string;
+    status?: string;
   };
 }
 
@@ -37,6 +38,7 @@ const DeliveryPage = () => {
     vehicle_number: '',
     verification_document: '',
     verification_number: '',
+    status: 'pending_verification' as string,
   });
 
   useEffect(() => {
@@ -112,11 +114,19 @@ const DeliveryPage = () => {
   };
 
   const toggleOnlineStatus = async (partner: DeliveryPartner) => {
+    const st = partner.profile?.status;
+    if (st !== 'active' && st !== 'inactive') {
+      showNotification(
+        'Use Active / Inactive only after verification. Edit the partner to set status, then use this toggle to start or stop delivering.',
+        'info'
+      );
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/api/delivery/partners/${partner.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_online: !partner.is_online }),
+        body: JSON.stringify({ status: st === 'active' ? 'inactive' : 'active' }),
       });
       if (!res.ok) throw new Error('Failed to update status');
       fetchPartners();
@@ -135,6 +145,7 @@ const DeliveryPage = () => {
       vehicle_number: '',
       verification_document: '',
       verification_number: '',
+      status: 'pending_verification',
     });
   };
 
@@ -148,6 +159,7 @@ const DeliveryPage = () => {
       vehicle_number: partner.vehicle_number || '',
       verification_document: partner.profile?.verification_document || '',
       verification_number: partner.profile?.verification_number || '',
+      status: partner.profile?.status || 'pending_verification',
     });
     setShowModal(true);
   };
@@ -391,6 +403,23 @@ const DeliveryPage = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                   placeholder="e.g., KA-01-AB-1234"
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Partner status</label>
+                <select
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="pending_verification">Pending verification</option>
+                  <option value="inactive">Inactive (verified, not delivering)</option>
+                  <option value="active">Active (delivering)</option>
+                  <option value="suspended">Suspended</option>
+                  <option value="offboarded">Offboarded</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Online / offline in the list follows status: Active = online, otherwise offline.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

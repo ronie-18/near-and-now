@@ -107,7 +107,16 @@ export class PaymentService {
     const eventType: string = event.event;
     console.log('[Razorpay Webhook]', eventType);
 
-    if (eventType === 'payment.captured') {
+    if (eventType === 'payment.authorized') {
+      const payment = event.payload?.payment?.entity;
+      const internalOrderId = payment?.notes?.internal_order_id;
+      if (internalOrderId && payment?.id) {
+        await supabaseAdmin
+          .from('customer_orders')
+          .update({ payment_status: 'authorized', razorpay_payment_id: payment.id })
+          .eq('id', internalOrderId);
+      }
+    } else if (eventType === 'payment.captured') {
       const payment = event.payload?.payment?.entity;
       const internalOrderId = payment?.notes?.internal_order_id;
       if (internalOrderId && payment?.id) {
