@@ -154,6 +154,7 @@ export class PaymentController {
   async handleWebhook(req: Request, res: Response) {
     try {
       const event = req.body;
+      console.log('WEBHOOK HIT', event?.event);
       console.log('[WEBHOOK] Incoming webhook', { event: event?.event, id: event?.id });
       
       // Verify webhook signature

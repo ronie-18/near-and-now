@@ -4,6 +4,7 @@ import { databaseService } from './database.service.js';
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 const RAZORPAY_BASE_URL = 'https://api.razorpay.com/v1';
 
 export class RazorpayApiError extends Error {
@@ -189,12 +190,13 @@ export class PaymentService {
 
   // Verify Razorpay webhook signature
   async verifyWebhook(headers: Record<string, any>, body: any): Promise<boolean> {
-    if (!RAZORPAY_KEY_SECRET) return false;
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || RAZORPAY_WEBHOOK_SECRET || RAZORPAY_KEY_SECRET;
+    if (!secret) return false;
     const signature = headers['x-razorpay-signature'];
     if (!signature) return false;
     const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
     const expected = crypto
-      .createHmac('sha256', RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', secret)
       .update(bodyStr)
       .digest('hex');
     try {
