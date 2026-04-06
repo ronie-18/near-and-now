@@ -11,8 +11,9 @@ export function getApiBase(): string {
 
 /**
  * Route address/order mutations through the Express API (service role), not browser → Supabase.
- * - Production: set `VITE_API_URL` to your API origin at build time.
- * - Development: use same-origin `/api/...` (Vite proxy → local backend) even when `VITE_API_URL` is unset.
+ * - Production: set `VITE_API_URL` to your deployed API origin (often same Vercel host as the SPA).
+ * - Development: if `VITE_API_URL` is https (e.g. Vercel URL in .env), base is empty and requests use
+ *   same-origin `/api/...`; Vite proxies those to the local backend (`VITE_API_PROXY_TARGET` or :3000), not to `VITE_API_URL`.
  */
 export function shouldUseBackendApi(): boolean {
   if (getApiBase()) return true;

@@ -123,6 +123,7 @@ export interface Product {
   id: string;
   store_id: string;
   master_product_id: string;
+  product_name: string | null;
   quantity: number;
   is_active: boolean;
   created_at: string;

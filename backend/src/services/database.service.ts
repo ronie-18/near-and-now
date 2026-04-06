@@ -64,6 +64,98 @@ function lastTenIndianMobileDigits(phone: string): string | null {
 }
 
 export class DatabaseService {
+  async getOrderPaymentContext(orderId: string): Promise<{
+    id: string;
+    total_amount: number;
+    payment_status: string;
+    razorpay_order_id: string | null;
+    razorpay_payment_id: string | null;
+  } | null> {
+    const { data, error } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as {
+      id: string;
+      total_amount: number;
+      payment_status: string;
+      razorpay_order_id: string | null;
+      razorpay_payment_id: string | null;
+    } | null) ?? null;
+  }
+
+  async updateOrderPaymentGatewayResponse(orderId: string, response: unknown): Promise<void> {
+    const now = new Date().toISOString();
+    const { error } = await supabaseAdmin
+      .from('customer_orders')
+      .update({
+        payment_gateway_response: response as any,
+        updated_at: now
+      })
+      .eq('id', orderId);
+    if (error) throw error;
+
+    const { error: mirrorError } = await supabaseAdmin
+      .from('customer_payments')
+      .update({
+        payment_gateway_response: response as any,
+        updated_at: now
+      })
+      .eq('customer_order_id', orderId);
+    if (mirrorError) {
+      // customer_payments mirror can be temporarily unavailable during migrations.
+      console.error('[PAYMENT] Failed to mirror payment gateway response to customer_payments:', mirrorError);
+    }
+  }
+
+  /**
+   * Maintain one row per order in customer_payments.
+   * Uses upsert on customer_order_id and is safe to call repeatedly.
+   */
+  private async upsertCustomerPaymentSnapshot(params: {
+    customer_order_id: string;
+    status: string;
+    razorpay_order_id?: string;
+    razorpay_payment_id?: string;
+    transaction_id?: string;
+    paid_at?: string | null;
+  }): Promise<void> {
+    const { data: order, error: orderErr } = await supabaseAdmin
+      .from('customer_orders')
+      .select(
+        'id, customer_id, order_code, subtotal_amount, delivery_fee, discount_amount, total_amount, payment_method'
+      )
+      .eq('id', params.customer_order_id)
+      .maybeSingle();
+    if (orderErr || !order) {
+      throw new Error(orderErr?.message || 'Order not found for payment snapshot');
+    }
+
+    const payload = {
+      customer_order_id: order.id,
+      customer_id: order.customer_id,
+      order_code: order.order_code,
+      items_total: order.subtotal_amount ?? 0,
+      delivery_fee: order.delivery_fee ?? 0,
+      discount_amount: order.discount_amount ?? 0,
+      total_amount: order.total_amount ?? 0,
+      status: params.status,
+      payment_method: order.payment_method ?? null,
+      razorpay_order_id: params.razorpay_order_id ?? null,
+      razorpay_payment_id: params.razorpay_payment_id ?? null,
+      transaction_id: params.transaction_id ?? null,
+      paid_at: params.paid_at ?? null,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabaseAdmin
+      .from('customer_payments')
+      .upsert(payload, { onConflict: 'customer_order_id' });
+    if (error) throw error;
+  }
+
   async getCategories() {
     const { data, error } = await supabase
       .from('categories')
@@ -555,6 +647,12 @@ export class DatabaseService {
       longitude?: number;
     };
   }) {
+    if (!isSupabaseServiceRoleConfigured) {
+      throw new Error(
+        'Server is missing SUPABASE_SERVICE_ROLE_KEY (or VITE_SUPABASE_SERVICE_ROLE_KEY). Add it to backend/.env or repo root .env and restart the API — orders require the service role to bypass RLS.'
+      );
+    }
+
     const items = orderData.items;
     if (!items?.length) throw new Error('No items in order');
 
@@ -761,6 +859,17 @@ export class DatabaseService {
       notes: 'Order placed',
       created_at: new Date().toISOString()
     });
+
+    // Keep customer_payments in sync from the moment order is created.
+    // Do not block checkout if this mirror write fails (schema may be mid-migration).
+    try {
+      await this.upsertCustomerPaymentSnapshot({
+        customer_order_id: customerOrder.id,
+        status: orderData.payment_status || 'pending'
+      });
+    } catch (e) {
+      console.error('Failed to upsert initial customer_payments snapshot:', e);
+    }
 
     return {
       id: customerOrder.id,
@@ -1228,15 +1337,41 @@ export class DatabaseService {
   }
 
   // Payment
-  async updateOrderPaymentStatus(orderId: string, status: string, _paymentId?: string) {
+  async updateOrderPaymentStatus(orderId: string, status: string, paymentId?: string, razorpayOrderId?: string) {
+    const current = await this.getOrderPaymentContext(orderId);
+    if (!current) {
+      throw new Error('Order not found');
+    }
+    if (current.payment_status === 'paid' && status === 'paid') {
+      console.log('[PAYMENT] Idempotent skip: order already paid', { orderId, paymentId, razorpayOrderId });
+      return { success: true, alreadyPaid: true };
+    }
+
     const { error } = await supabaseAdmin
       .from('customer_orders')
       .update({
-        payment_status: status,
+        payment_status: status as any,
+        razorpay_order_id: razorpayOrderId ?? current.razorpay_order_id ?? null,
+        razorpay_payment_id: paymentId ?? null,
         updated_at: new Date().toISOString()
       })
       .eq('id', orderId);
-    if (error) throw error;
+    if (error) {
+      console.error('[PAYMENT] DB update failed for customer_orders', { orderId, status, paymentId, razorpayOrderId, error });
+      throw error;
+    }
+
+    // Mirror payment status into customer_payments (1 row per order).
+    await this.upsertCustomerPaymentSnapshot({
+      customer_order_id: orderId,
+      status,
+      razorpay_order_id: razorpayOrderId,
+      razorpay_payment_id: paymentId,
+      transaction_id: paymentId,
+      paid_at: status === 'paid' ? new Date().toISOString() : null
+    });
+    console.log('[PAYMENT] DB update success', { orderId, status, paymentId, razorpayOrderId });
+
     return { success: true };
   }
 

@@ -117,6 +117,7 @@ interface ProductRow {
   id: string;
   store_id: string;
   master_product_id: string;
+  product_name?: string | null;
   is_active: boolean;
   master_products?: {
     id: string;
@@ -144,7 +145,7 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
     for (const ids of storeChunks) {
       const { data, error } = await supabaseAdmin
         .from('products')
-        .select('id, store_id, master_product_id, is_active, master_products(*)')
+        .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
         .eq('is_active', true)
         .in('store_id', ids);
       if (error) throw new Error(`Database error: ${error.message}`);
@@ -159,7 +160,7 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
   while (hasMore) {
     const { data, error } = await supabaseAdmin
       .from('products')
-      .select('id, store_id, master_product_id, is_active, master_products(*)')
+      .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
       .eq('is_active', true)
       .range(from, from + batchSize - 1);
     if (error) throw new Error(`Database error: ${error.message}`);
@@ -204,7 +205,7 @@ function transformProductRowToProduct(row: ProductRow): Product {
     basePreTax != null && Number.isFinite(basePreTax) ? priceWithGst(basePreTax, gstRate) : undefined;
   return {
     id: mp.id,
-    name: mp.name,
+    name: row.product_name || mp.name,
     category: mp.category,
     price,
     gst_rate: !isLoose && gstRate > 0 ? gstRate : undefined,
@@ -1026,7 +1027,11 @@ function mapRowToAddress(row: Record<string, unknown>): Address {
 }
 
 // Get all addresses for a user (customer_saved_addresses)
-export async function getUserAddresses(userId?: string, userPhone?: string): Promise<Address[]> {
+export async function getUserAddresses(
+  userId?: string,
+  userPhone?: string,
+  customerPhone?: string
+): Promise<Address[]> {
   try {
     console.log('📍 Fetching addresses for user:', userId, 'phone:', userPhone);
 
@@ -1035,6 +1040,7 @@ export async function getUserAddresses(userId?: string, userPhone?: string): Pro
       const params = new URLSearchParams();
       params.set('userId', userId);
       if (userPhone?.trim()) params.set('phone', userPhone.trim());
+      if (customerPhone?.trim()) params.set('customerPhone', customerPhone.trim());
       const res = await fetch(apiUrl(`/api/customers/addresses/resolved?${params.toString()}`));
       if (!res.ok) {
         throw new Error(await readApiErrorMessage(res));

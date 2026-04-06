@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { paymentService } from '../services/payment.service.js';
+import { RazorpayApiError, paymentService } from '../services/payment.service.js';
 import { databaseService } from '../services/database.service.js';
 
 export class PaymentController {
@@ -30,6 +30,7 @@ export class PaymentController {
   async verifyPayment(req: Request, res: Response) {
     try {
       const { paymentId, razorpayOrderId, signature, internalOrderId } = req.body;
+      console.log('[PAYMENT] Verification start', { internalOrderId, paymentId, razorpayOrderId });
 
       if (!paymentId || !razorpayOrderId || !signature || !internalOrderId) {
         return res.status(400).json({ error: 'paymentId, razorpayOrderId, signature, and internalOrderId are required' });
@@ -41,15 +42,76 @@ export class PaymentController {
         signature
       });
 
-      if (isValid) {
-        // Update internal customer order payment status after successful signature verification
-        await databaseService.updateOrderPaymentStatus(internalOrderId, 'paid', paymentId);
-        res.json({ success: true, message: 'Payment verified successfully' });
-      } else {
+      if (!isValid) {
+        console.warn('[PAYMENT] Signature mismatch', { internalOrderId, paymentId, razorpayOrderId });
         res.status(400).json({ success: false, error: 'Payment verification failed' });
+        return;
       }
+
+      const orderCtx = await databaseService.getOrderPaymentContext(internalOrderId);
+      if (!orderCtx) {
+        return res.status(500).json({ error: 'Failed to verify payment' });
+      }
+
+      // Explicitly capture authorized payments so dashboard amount/transactions reflect successful payments.
+      const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
+      if (captureResult.status !== 'captured') {
+        console.warn('[PAYMENT] Capture did not result in captured status', {
+          internalOrderId,
+          paymentId,
+          status: captureResult.status
+        });
+        return res.status(400).json({
+          success: false,
+          error: `Payment not captured (status: ${captureResult.status})`
+        });
+      }
+
+      const payment = await paymentService.getPaymentDetails(paymentId) as any;
+      const paymentStatus = String(payment?.status || '').toLowerCase();
+      const trustedAmountPaise = Math.round(Number(orderCtx.total_amount || 0) * 100);
+      const razorpayAmountPaise = Number(payment?.amount || 0);
+
+      const strictChecksPassed =
+        paymentStatus === 'captured' &&
+        payment?.order_id === razorpayOrderId &&
+        razorpayAmountPaise === trustedAmountPaise;
+
+      if (!strictChecksPassed) {
+        console.warn('[PAYMENT] Strict source-of-truth checks failed', {
+          internalOrderId,
+          paymentId,
+          paymentStatus,
+          razorpayOrderId,
+          paymentOrderId: payment?.order_id,
+          razorpayAmountPaise,
+          trustedAmountPaise
+        });
+        return res.status(400).json({
+          success: false,
+          error: 'Payment verification failed'
+        });
+      }
+
+      await paymentService.persistGatewayResponse(internalOrderId, payment);
+
+      // Idempotent DB update prevents verify + webhook race from double-updating.
+      await databaseService.updateOrderPaymentStatus(
+        internalOrderId,
+        'paid',
+        paymentId,
+        razorpayOrderId
+      );
+      console.log('[PAYMENT] Verification end', { internalOrderId, paymentId, razorpayOrderId, status: 'paid' });
+      res.json({ success: true, message: 'Payment verified successfully' });
     } catch (error) {
-      console.error('Error verifying payment:', error);
+      console.error('[PAYMENT] Error verifying payment:', error);
+      if (error instanceof RazorpayApiError) {
+        return res.status(502).json({ error: 'Failed to verify payment' });
+      }
+      if (error instanceof Error && error.message.toLowerCase().includes('not capturable')) {
+        return res.status(400).json({ success: false, error: 'Payment not captured' });
+      }
       res.status(500).json({ error: 'Failed to verify payment' });
     }
   }
@@ -92,6 +154,7 @@ export class PaymentController {
   async handleWebhook(req: Request, res: Response) {
     try {
       const event = req.body;
+      console.log('[WEBHOOK] Incoming webhook', { event: event?.event, id: event?.id });
       
       // Verify webhook signature
       const isValid = await paymentService.verifyWebhook(req.headers, event);
@@ -102,10 +165,13 @@ export class PaymentController {
 
       // Process webhook event
       await paymentService.processWebhookEvent(event);
-      
+      console.log('[WEBHOOK] Processed webhook', { event: event?.event, id: event?.id });
       res.json({ success: true });
     } catch (error) {
-      console.error('Error handling webhook:', error);
+      console.error('[WEBHOOK] Error handling webhook:', error);
+      if (error instanceof RazorpayApiError) {
+        return res.status(502).json({ error: 'Failed to handle webhook' });
+      }
       res.status(500).json({ error: 'Failed to handle webhook' });
     }
   }
