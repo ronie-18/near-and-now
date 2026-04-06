@@ -2,6 +2,26 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 
 export class OrdersController {
+  /** Checkout flow from web app — uses service role on server (RLS-safe). */
+  async placeCheckout(req: Request, res: Response) {
+    try {
+      const order = await databaseService.placeCheckoutOrder(req.body);
+      res.status(201).json(order);
+    } catch (error: unknown) {
+      console.error('Error placing checkout order:', error);
+      const msg = error instanceof Error ? error.message : 'Failed to place order';
+      const status =
+        msg.includes('not available') ||
+        msg.includes('No store') ||
+        msg.includes('verify delivery') ||
+        msg.includes('No valid products') ||
+        msg.includes('No items')
+          ? 400
+          : 500;
+      res.status(status).json({ error: msg });
+    }
+  }
+
   async createOrder(req: Request, res: Response) {
     try {
       const {

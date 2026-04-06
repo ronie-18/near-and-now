@@ -9,9 +9,11 @@ const projectRoot = path.resolve(__dirname, '..');
 // This file is for Vite build configuration only
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, projectRoot, '');
+  // Local dev: proxy /api → backend (default localhost:3000). Override with VITE_API_PROXY_TARGET.
   const apiProxyTarget =
     env.VITE_API_PROXY_TARGET ||
-    'https://near-and-now-frontend.vercel.app';
+    env.VITE_API_URL ||
+    'http://127.0.0.1:3000';
 
   return {
   plugins: [react()],

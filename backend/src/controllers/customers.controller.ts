@@ -40,8 +40,8 @@ export class CustomersController {
     try {
       const { customerId } = req.params;
       const addressData = {
-        customer_id: customerId,
-        ...req.body
+        ...req.body,
+        customer_id: customerId
       };
       
       const address = await databaseService.createCustomerSavedAddress(addressData);

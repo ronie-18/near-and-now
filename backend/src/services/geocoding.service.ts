@@ -35,3 +35,34 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string |
     return null;
   }
 }
+
+/**
+ * Forward geocode a free-text address to coordinates.
+ * Returns null if API key missing or no result.
+ */
+export async function forwardGeocode(address: string): Promise<{ lat: number; lng: number } | null> {
+  const apiKey = getApiKey();
+  const q = String(address || '').trim();
+  if (!apiKey || !q) return null;
+
+  try {
+    const url = new URL(GEOCODE_URL);
+    url.searchParams.set('address', q);
+    url.searchParams.set('key', apiKey);
+
+    const response = await fetch(url.toString());
+    const data = (await response.json()) as {
+      status?: string;
+      results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
+    };
+
+    const loc = data.results?.[0]?.geometry?.location;
+    if (data.status === 'OK' && loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+      return { lat: loc.lat, lng: loc.lng };
+    }
+    return null;
+  } catch (err) {
+    console.error('Forward geocode error:', err);
+    return null;
+  }
+}

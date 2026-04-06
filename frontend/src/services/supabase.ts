@@ -1,5 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { geocodeAddress } from './placesService';
+import { parseGstRatePercent, priceWithGst } from '../utils/priceGst';
+import { apiUrl, shouldUseBackendApi } from '../utils/apiBase';
+
+async function readApiErrorMessage(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const j = JSON.parse(text) as { error?: string; message?: string };
+    if (typeof j?.error === 'string') return j.error;
+    if (typeof j?.message === 'string') return j.message;
+  } catch {
+    /* use text */
+  }
+  return text || `Request failed (${res.status})`;
+}
 
 // Supabase configuration (from .env)
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
@@ -22,6 +36,8 @@ export interface Product {
   id: string;
   name: string;
   price: number;
+  /** GST % from master_products (e.g. 18). Omitted for loose products (no GST on selling price). */
+  gst_rate?: number;
   original_price?: number;
   description?: string;
   image?: string;
@@ -114,6 +130,7 @@ interface ProductRow {
     is_loose?: boolean;
     is_active: boolean;
     created_at?: string;
+    gst_rate?: number | string | null;
     [key: string]: unknown;
   } | null;
 }
@@ -170,17 +187,27 @@ function productRowsToProducts(rows: ProductRow[]): Product[] {
 
 function transformProductRowToProduct(row: ProductRow): Product {
   const mp = row.master_products!;
-  const price = mp.discounted_price != null
+  const isLoose = mp.is_loose ?? false;
+  // Loose items: sold at listed discounted/base price only; no GST on top.
+  const gstRate = isLoose ? 0 : parseGstRatePercent(mp.gst_rate);
+  const discountedPreTax = mp.discounted_price != null
     ? (typeof mp.discounted_price === 'string' ? parseFloat(mp.discounted_price) : mp.discounted_price)
     : 0;
-  const originalPrice = mp.base_price != null
-    ? (typeof mp.base_price === 'string' ? parseFloat(mp.base_price) : mp.base_price)
-    : undefined;
+  const basePreTax =
+    mp.base_price != null
+      ? typeof mp.base_price === 'string'
+        ? parseFloat(mp.base_price)
+        : mp.base_price
+      : undefined;
+  const price = priceWithGst(Number.isFinite(discountedPreTax) ? discountedPreTax : 0, gstRate);
+  const originalPrice =
+    basePreTax != null && Number.isFinite(basePreTax) ? priceWithGst(basePreTax, gstRate) : undefined;
   return {
     id: mp.id,
     name: mp.name,
     category: mp.category,
     price,
+    gst_rate: !isLoose && gstRate > 0 ? gstRate : undefined,
     original_price: originalPrice,
     image_url: mp.image_url,
     image: mp.image_url,
@@ -188,7 +215,7 @@ function transformProductRowToProduct(row: ProductRow): Product {
     // New products table no longer stores quantity; active products are treated as in stock.
     in_stock: row.is_active,
     unit: mp.unit ?? 'piece',
-    isLoose: mp.is_loose ?? false,
+    isLoose,
     created_at: mp.created_at,
     updated_at: (mp as { updated_at?: string }).updated_at
   };
@@ -442,6 +469,30 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
 
     if (!orderData.user_id) {
       throw new Error('User ID is required to place an order');
+    }
+
+    if (shouldUseBackendApi()) {
+      const res = await fetch(apiUrl('/api/orders/place'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: orderData.user_id,
+          customer_name: orderData.customer_name,
+          customer_email: orderData.customer_email,
+          customer_phone: orderData.customer_phone,
+          order_total: orderData.order_total,
+          subtotal: orderData.subtotal ?? 0,
+          delivery_fee: orderData.delivery_fee ?? 0,
+          payment_status: orderData.payment_status,
+          payment_method: orderData.payment_method,
+          items: orderData.items ?? [],
+          shipping_address: orderData.shipping_address
+        })
+      });
+      if (!res.ok) {
+        throw new Error(await readApiErrorMessage(res));
+      }
+      return (await res.json()) as Order;
     }
 
     const fullAddress = [
@@ -979,6 +1030,19 @@ export async function getUserAddresses(userId?: string, userPhone?: string): Pro
   try {
     console.log('📍 Fetching addresses for user:', userId, 'phone:', userPhone);
 
+    if (shouldUseBackendApi()) {
+      if (!userId) return [];
+      const params = new URLSearchParams();
+      params.set('userId', userId);
+      if (userPhone?.trim()) params.set('phone', userPhone.trim());
+      const res = await fetch(apiUrl(`/api/customers/addresses/resolved?${params.toString()}`));
+      if (!res.ok) {
+        throw new Error(await readApiErrorMessage(res));
+      }
+      const data = (await res.json()) as Record<string, unknown>[];
+      return (data || []).map((row) => mapRowToAddress(row));
+    }
+
     const customerIds = new Set<string>();
     if (userId) customerIds.add(userId);
 
@@ -1055,6 +1119,22 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
       google_formatted_address: addressData.google_formatted_address || null,
       google_place_data: addressData.google_place_data || null,
     };
+
+    if (shouldUseBackendApi()) {
+      const res = await fetch(
+        apiUrl(`/api/customers/${encodeURIComponent(addressData.user_id)}/addresses`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }
+      );
+      if (!res.ok) {
+        throw new Error(await readApiErrorMessage(res));
+      }
+      const data = (await res.json()) as Record<string, unknown>;
+      return mapRowToAddress(data);
+    }
 
     // If this is set as default, unset all other default addresses for this user
     if (addressData.is_default) {

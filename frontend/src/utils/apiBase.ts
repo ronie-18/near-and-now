@@ -1,0 +1,26 @@
+/** Backend API origin for checkout, payments, and other server-side Supabase operations. */
+export function getApiBase(): string {
+  let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
+    .toString()
+    .replace(/\/$/, '');
+  if (import.meta.env.DEV && base.startsWith('https://')) {
+    return '';
+  }
+  return base;
+}
+
+/**
+ * Route address/order mutations through the Express API (service role), not browser → Supabase.
+ * - Production: set `VITE_API_URL` to your API origin at build time.
+ * - Development: use same-origin `/api/...` (Vite proxy → local backend) even when `VITE_API_URL` is unset.
+ */
+export function shouldUseBackendApi(): boolean {
+  if (getApiBase()) return true;
+  return Boolean(import.meta.env.DEV);
+}
+
+export function apiUrl(path: string): string {
+  const base = getApiBase();
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return base ? `${base}${p}` : p;
+}

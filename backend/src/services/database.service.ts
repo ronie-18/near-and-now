@@ -1,5 +1,5 @@
 import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../config/database.js';
-import { reverseGeocode } from './geocoding.service.js';
+import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -167,7 +167,7 @@ export class DatabaseService {
     notes?: string;
     coupon_id?: string;
   }) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .insert({
         customer_id: orderData.customer_id,
@@ -197,7 +197,7 @@ export class DatabaseService {
     subtotal_amount: number;
     delivery_fee: number;
   }) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('store_orders')
       .insert({
         customer_order_id: storeOrderData.customer_order_id,
@@ -222,7 +222,7 @@ export class DatabaseService {
     unit_price: number;
     quantity: number;
   }>) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('order_items')
       .insert(items)
       .select();
@@ -232,7 +232,7 @@ export class DatabaseService {
   }
 
   async getCustomerOrders(customerId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .select(`
         *,
@@ -349,7 +349,7 @@ export class DatabaseService {
   }
 
   async getCustomerSavedAddresses(customerId: string) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .select('*')
       .eq('customer_id', customerId)
@@ -475,7 +475,14 @@ export class DatabaseService {
   }
 
   async createCustomerSavedAddress(addressData: Partial<CustomerSavedAddress>) {
-    const { data, error } = await supabase
+    if (addressData.is_default && addressData.customer_id) {
+      await supabaseAdmin
+        .from('customer_saved_addresses')
+        .update({ is_default: false })
+        .eq('customer_id', addressData.customer_id);
+    }
+
+    const { data, error } = await supabaseAdmin
       .from('customer_saved_addresses')
       .insert(addressData)
       .select()
@@ -483,6 +490,299 @@ export class DatabaseService {
 
     if (error) throw error;
     return data as CustomerSavedAddress;
+  }
+
+  /** Store coverage radii (km), same as storefront. */
+  private static readonly NEARBY_STORE_RADIUS_STEPS_KM = [1, 2, 3, 4] as const;
+
+  async getNearbyStoreIdsExpanding(lat: number, lng: number): Promise<string[]> {
+    for (const radiusKm of DatabaseService.NEARBY_STORE_RADIUS_STEPS_KM) {
+      const { data: storeIds, error } = await supabaseAdmin.rpc('get_nearby_store_ids', {
+        cust_lat: lat,
+        cust_lng: lng,
+        radius_km: radiusKm
+      });
+      if (!error && Array.isArray(storeIds) && storeIds.length > 0) {
+        return storeIds as string[];
+      }
+    }
+    return [];
+  }
+
+  async generateNextOrderNumber(): Promise<string> {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const prefix = `NN${year}${month}${day}`;
+    const { data, error } = await supabaseAdmin.rpc('generate_next_order_number', {
+      prefix_input: prefix
+    });
+    if (error) throw new Error(`Failed to generate order number: ${error.message}`);
+    if (!data || typeof data !== 'string') throw new Error('Invalid response from order number generator');
+    return data;
+  }
+
+  /**
+   * Full checkout placement (customer_order, store_orders, order_items, status history).
+   * Uses service role — call only from trusted API routes.
+   */
+  async placeCheckoutOrder(orderData: {
+    user_id: string;
+    customer_name: string;
+    customer_email?: string;
+    customer_phone: string;
+    order_total: number;
+    subtotal: number;
+    delivery_fee: number;
+    payment_status: string;
+    payment_method: string;
+    items: Array<{
+      product_id?: string;
+      id?: string;
+      name: string;
+      price: number;
+      quantity: number;
+      image?: string;
+      unit?: string;
+    }>;
+    shipping_address: {
+      address: string;
+      city?: string;
+      state?: string;
+      pincode?: string;
+      latitude?: number;
+      longitude?: number;
+    };
+  }) {
+    const items = orderData.items;
+    if (!items?.length) throw new Error('No items in order');
+
+    const fullAddress = [
+      orderData.shipping_address.address,
+      orderData.shipping_address.city,
+      orderData.shipping_address.state,
+      orderData.shipping_address.pincode
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    let geocoded: { lat: number; lng: number };
+    const lat = orderData.shipping_address.latitude;
+    const lng = orderData.shipping_address.longitude;
+    if (typeof lat === 'number' && typeof lng === 'number' && !Number.isNaN(lat) && !Number.isNaN(lng)) {
+      geocoded = { lat, lng };
+    } else {
+      const g = await forwardGeocode(fullAddress);
+      if (!g) {
+        throw new Error(
+          'Could not verify delivery address. Please use the map to pick your location or try a different address.'
+        );
+      }
+      geocoded = g;
+    }
+
+    const orderCode = await this.generateNextOrderNumber();
+    const storeIds = await this.getNearbyStoreIdsExpanding(geocoded.lat, geocoded.lng);
+    if (!storeIds.length) {
+      throw new Error('No store available for your delivery address. Please contact support.');
+    }
+
+    const masterProductIds = [
+      ...new Set(
+        items
+          .map((it) => it.product_id || it.id)
+          .filter((id): id is string => id != null && id !== '')
+      )
+    ];
+    if (masterProductIds.length === 0) throw new Error('No valid products in order');
+
+    const { data: productRows } = await supabaseAdmin
+      .from('products')
+      .select('id, store_id, master_product_id')
+      .in('store_id', storeIds)
+      .in('master_product_id', masterProductIds)
+      .eq('is_active', true);
+
+    const byMaster = new Map<string, Array<{ store_id: string; product_id: string }>>();
+    for (const row of productRows || []) {
+      const list = byMaster.get(row.master_product_id) || [];
+      list.push({ store_id: row.store_id, product_id: row.id });
+      byMaster.set(row.master_product_id, list);
+    }
+
+    const storeToItems = new Map<string, typeof items>();
+    const assigned = new Set<number>();
+    while (assigned.size < items.length) {
+      let bestStore: string | null = null;
+      let bestCount = 0;
+      for (const storeId of storeIds) {
+        let count = 0;
+        for (let idx = 0; idx < items.length; idx++) {
+          if (assigned.has(idx)) continue;
+          const it = items[idx];
+          const mid = it.product_id || it.id;
+          const options = (mid ? byMaster.get(mid) : undefined) ?? [];
+          if (options.some((o) => o.store_id === storeId)) count++;
+        }
+        if (count > bestCount) {
+          bestCount = count;
+          bestStore = storeId;
+        }
+      }
+      if (!bestStore || bestCount === 0) break;
+      const chunk: typeof items = [];
+      for (let i = 0; i < items.length; i++) {
+        if (assigned.has(i)) continue;
+        const it = items[i];
+        const mid = it.product_id || it.id;
+        const options = (mid ? byMaster.get(mid) : undefined) ?? [];
+        if (options.some((o) => o.store_id === bestStore)) {
+          chunk.push(it);
+          assigned.add(i);
+        }
+      }
+      const existing = storeToItems.get(bestStore) || [];
+      storeToItems.set(bestStore, [...existing, ...chunk]);
+    }
+
+    const unassigned = items.filter((_, i) => !assigned.has(i));
+    if (unassigned.length > 0) {
+      throw new Error(
+        `Product(s) not available from any store near you: ${unassigned.map((u) => u.name).join(', ')}`
+      );
+    }
+
+    const storeIdsToUse = Array.from(storeToItems.keys());
+    const itemChunks = storeIdsToUse.map((sid) => storeToItems.get(sid)!);
+
+    const pm = orderData.payment_method?.toLowerCase() ?? '';
+    const paymentMethodEnum =
+      pm.includes('split') || pm.includes('online') || pm.includes('upi') ? 'razorpay' : 'cod';
+
+    const { data: customerOrder, error: coError } = await supabaseAdmin
+      .from('customer_orders')
+      .insert({
+        customer_id: orderData.user_id,
+        order_code: orderCode,
+        status: 'pending_at_store',
+        payment_status: orderData.payment_status,
+        payment_method: paymentMethodEnum,
+        subtotal_amount: orderData.subtotal,
+        delivery_fee: orderData.delivery_fee,
+        discount_amount: 0,
+        total_amount: orderData.order_total,
+        delivery_address: fullAddress,
+        delivery_latitude: geocoded.lat,
+        delivery_longitude: geocoded.lng,
+        notes: null
+      })
+      .select()
+      .single();
+
+    if (coError || !customerOrder) {
+      throw new Error(coError?.message || 'Failed to create order');
+    }
+
+    for (let i = 0; i < itemChunks.length; i++) {
+      const chunk = itemChunks[i];
+      const storeId = storeIdsToUse[i];
+      if (!chunk?.length || !storeId) continue;
+
+      const chunkSubtotal = chunk.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      const chunkDeliveryFee =
+        itemChunks.length > 1 ? orderData.delivery_fee / itemChunks.length : orderData.delivery_fee;
+
+      const { data: storeOrder, error: soError } = await supabaseAdmin
+        .from('store_orders')
+        .insert({
+          customer_order_id: customerOrder.id,
+          store_id: storeId,
+          subtotal_amount: chunkSubtotal,
+          delivery_fee: chunkDeliveryFee,
+          status: 'pending_at_store'
+        })
+        .select()
+        .single();
+
+      if (soError || !storeOrder) {
+        throw new Error(soError?.message || 'Failed to create store order');
+      }
+
+      const chunkMasterIds = chunk
+        .map((item) => item.product_id || item.id)
+        .filter((id): id is string => id != null && id !== '');
+
+      if (chunkMasterIds.length === 0) continue;
+
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from('products')
+        .select('id, master_product_id')
+        .eq('store_id', storeId)
+        .in('master_product_id', chunkMasterIds)
+        .eq('is_active', true);
+
+      if (productsError) {
+        throw new Error('Failed to verify product availability');
+      }
+
+      const masterToProduct = new Map<string, string>();
+      for (const p of products || []) {
+        masterToProduct.set(p.master_product_id, p.id);
+      }
+
+      const orderItemsPayload = chunk.map((item) => {
+        const masterId = item.product_id || item.id;
+        const productId = masterId ? masterToProduct.get(masterId) : null;
+        if (!productId) {
+          throw new Error(`Product "${item.name}" is not available from the store.`);
+        }
+        return {
+          store_order_id: storeOrder.id,
+          product_id: productId,
+          product_name: item.name,
+          unit: item.unit || null,
+          image_url: item.image || null,
+          unit_price: item.price,
+          quantity: item.quantity
+        };
+      });
+
+      const { error: itemsError } = await supabaseAdmin.from('order_items').insert(orderItemsPayload);
+
+      if (itemsError) {
+        throw new Error(itemsError.message || 'Failed to create order items');
+      }
+    }
+
+    await supabaseAdmin.from('order_status_history').insert({
+      customer_order_id: customerOrder.id,
+      status: 'pending_at_store',
+      notes: 'Order placed',
+      created_at: new Date().toISOString()
+    });
+
+    return {
+      id: customerOrder.id,
+      user_id: orderData.user_id,
+      customer_name: orderData.customer_name,
+      customer_email: orderData.customer_email,
+      customer_phone: orderData.customer_phone,
+      order_status: 'placed',
+      payment_status: orderData.payment_status,
+      payment_method: orderData.payment_method,
+      order_total: orderData.order_total,
+      subtotal: orderData.subtotal,
+      delivery_fee: orderData.delivery_fee,
+      items: orderData.items,
+      items_count: orderData.items.length,
+      shipping_address: orderData.shipping_address,
+      created_at:
+        (customerOrder as { placed_at?: string; created_at?: string }).placed_at ||
+        (customerOrder as { created_at?: string }).created_at ||
+        new Date().toISOString(),
+      order_number: orderCode
+    };
   }
 
   // Coupons - CRUD operations

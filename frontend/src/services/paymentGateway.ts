@@ -1,3 +1,5 @@
+import { apiUrl } from '../utils/apiBase';
+
 type CreatePaymentOrderResponse = {
   razorpay_order_id: string;
   amount: number;
@@ -44,21 +46,6 @@ declare global {
       open: () => void;
     };
   }
-}
-
-function getApiBase(): string {
-  let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
-    .toString()
-    .replace(/\/$/, '');
-  if (import.meta.env.DEV && base.startsWith('https://')) {
-    return '';
-  }
-  return base;
-}
-
-function apiUrl(path: string): string {
-  const base = getApiBase();
-  return base ? `${base}${path}` : path;
 }
 
 async function loadRazorpayScript(): Promise<void> {
