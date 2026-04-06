@@ -55,8 +55,8 @@ export default defineConfig(({ mode }) => {
 
   return {
   plugins: [react()],
-  // Vercel: absolute / so deep routes load /assets/* correctly. Non-Vercel: ./ for static hosts (e.g. cPanel).
-  base: process.env.VERCEL ? '/' : './',
+  // Always use absolute path for consistent routing in production
+  base: '/',
   envDir: projectRoot, // Load .env from project root
   server: {
     proxy: {
