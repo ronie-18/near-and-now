@@ -64,6 +64,14 @@ function lastTenIndianMobileDigits(phone: string): string | null {
 }
 
 export class DatabaseService {
+  private isMissingColumnError(error: unknown, columnName: string): boolean {
+    const code = (error as { code?: string })?.code;
+    const message = String((error as { message?: string })?.message || '');
+    if (code === '42703') return true;
+    if (code === 'PGRST204' && message.includes(columnName)) return true;
+    return false;
+  }
+
   async getOrderPaymentContext(orderId: string): Promise<{
     id: string;
     total_amount: number;
@@ -71,31 +79,52 @@ export class DatabaseService {
     razorpay_order_id: string | null;
     razorpay_payment_id: string | null;
   } | null> {
-    const { data, error } = await supabaseAdmin
+    const primary = await supabaseAdmin
       .from('customer_orders')
       .select('id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id')
       .eq('id', orderId)
       .maybeSingle();
-    if (error) throw error;
-    return (data as {
-      id: string;
-      total_amount: number;
-      payment_status: string;
-      razorpay_order_id: string | null;
-      razorpay_payment_id: string | null;
-    } | null) ?? null;
+    if (!primary.error) {
+      return (primary.data as {
+        id: string;
+        total_amount: number;
+        payment_status: string;
+        razorpay_order_id: string | null;
+        razorpay_payment_id: string | null;
+      } | null) ?? null;
+    }
+    // Backward compatibility if razorpay_order_id column is not yet migrated.
+    if (this.isMissingColumnError(primary.error, 'razorpay_order_id')) {
+      const fallback = await supabaseAdmin
+        .from('customer_orders')
+        .select('id, total_amount, payment_status, razorpay_payment_id')
+        .eq('id', orderId)
+        .maybeSingle();
+      if (fallback.error) throw fallback.error;
+      if (!fallback.data) return null;
+      return {
+        id: (fallback.data as any).id,
+        total_amount: Number((fallback.data as any).total_amount || 0),
+        payment_status: String((fallback.data as any).payment_status || 'pending'),
+        razorpay_order_id: null,
+        razorpay_payment_id: (fallback.data as any).razorpay_payment_id ?? null
+      };
+    }
+    throw primary.error;
   }
 
   async updateOrderPaymentGatewayResponse(orderId: string, response: unknown): Promise<void> {
     const now = new Date().toISOString();
-    const { error } = await supabaseAdmin
+    const primary = await supabaseAdmin
       .from('customer_orders')
       .update({
         payment_gateway_response: response as any,
         updated_at: now
       })
       .eq('id', orderId);
-    if (error) throw error;
+    if (primary.error && !this.isMissingColumnError(primary.error, 'payment_gateway_response')) {
+      throw primary.error;
+    }
 
     const { error: mirrorError } = await supabaseAdmin
       .from('customer_payments')
@@ -1347,18 +1376,35 @@ export class DatabaseService {
       return { success: true, alreadyPaid: true };
     }
 
-    const { error } = await supabaseAdmin
+    const nextOrderId = razorpayOrderId ?? current.razorpay_order_id ?? null;
+    const primary = await supabaseAdmin
       .from('customer_orders')
       .update({
         payment_status: status as any,
-        razorpay_order_id: razorpayOrderId ?? current.razorpay_order_id ?? null,
+        razorpay_order_id: nextOrderId,
         razorpay_payment_id: paymentId ?? null,
         updated_at: new Date().toISOString()
       })
       .eq('id', orderId);
-    if (error) {
-      console.error('[PAYMENT] DB update failed for customer_orders', { orderId, status, paymentId, razorpayOrderId, error });
-      throw error;
+
+    if (primary.error && this.isMissingColumnError(primary.error, 'razorpay_order_id')) {
+      const fallback = await supabaseAdmin
+        .from('customer_orders')
+        .update({
+          payment_status: status as any,
+          razorpay_payment_id: paymentId ?? null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', orderId);
+      if (fallback.error) {
+        console.error('[PAYMENT] DB update failed for customer_orders', {
+          orderId, status, paymentId, razorpayOrderId, error: fallback.error
+        });
+        throw fallback.error;
+      }
+    } else if (primary.error) {
+      console.error('[PAYMENT] DB update failed for customer_orders', { orderId, status, paymentId, razorpayOrderId, error: primary.error });
+      throw primary.error;
     }
 
     // Mirror payment status into customer_payments (1 row per order).
