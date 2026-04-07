@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
-import CartSidebar from '../cart/CartSidebar';
 import LocationPicker, { LocationData } from '../location/LocationPicker';
 import {
   Search, ShoppingCart, User, MapPin, ChevronDown, Menu, X,
@@ -15,7 +14,6 @@ const Header = () => {
   const { cartCount } = useCart();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isCartOpen, setIsCartOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -165,10 +163,6 @@ const Header = () => {
 
   const toggleUserMenu = () => {
     setIsUserMenuOpen(!isUserMenuOpen);
-  };
-
-  const toggleCartSidebar = () => {
-    setIsCartOpen(!isCartOpen);
   };
 
   const handleLogout = async () => {
@@ -506,8 +500,8 @@ const Header = () => {
                 </div>
 
                 {/* Cart Button - Enhanced */}
-                <button
-                  onClick={toggleCartSidebar}
+                <Link
+                  to="/checkout"
                   className="hidden md:flex flex-col items-center text-gray-600 hover:text-primary transition-all duration-300 relative group px-2 py-1 rounded-xl hover:bg-primary/5"
                 >
                   <div className="relative">
@@ -521,7 +515,7 @@ const Header = () => {
                     )}
                   </div>
                   <span className="text-xs mt-1 font-semibold">Cart</span>
-                </button>
+                </Link>
 
                 {/* Mobile Icons - Enhanced */}
                 <div className="flex md:hidden items-center gap-2">
@@ -562,7 +556,7 @@ const Header = () => {
                     </Link>
                   )}
 
-                  <button onClick={toggleCartSidebar} className="relative active:scale-95 transition-transform">
+                  <Link to="/checkout" className="relative active:scale-95 transition-transform">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center hover:from-primary hover:to-secondary hover:text-white transition-all">
                       <ShoppingCart className="w-5 h-5" />
                     </div>
@@ -571,7 +565,7 @@ const Header = () => {
                         {cartCount}
                       </span>
                     )}
-                  </button>
+                  </Link>
 
                   <button
                     onClick={toggleMobileMenu}
@@ -755,9 +749,6 @@ const Header = () => {
           </div>
         </div>
       )}
-
-      {/* Cart Sidebar */}
-      <CartSidebar isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} />
 
       {/* Location Picker Modal */}
       <LocationPicker

@@ -19,6 +19,14 @@ async function readApiErrorMessage(res: Response): Promise<string> {
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
+// Validate required environment variables
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.error('❌ Missing Supabase configuration!');
+  console.error('VITE_SUPABASE_URL:', SUPABASE_URL ? '✓ Set' : '✗ Missing');
+  console.error('VITE_SUPABASE_ANON_KEY:', SUPABASE_ANON_KEY ? '✓ Set' : '✗ Missing');
+  console.error('Available env vars:', Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
+}
+
 // Create Supabase client for public operations (anon key, RLS applies)
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 

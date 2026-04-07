@@ -50,7 +50,6 @@ const CheckoutPage = () => {
   const [receiverAddress, setReceiverAddress] = useState('');
 
   const [loading, setLoading] = useState(false);
-  const [currentStep, setCurrentStep] = useState(1);
   const [tipAmount, setTipAmount] = useState(0);
   const [customTip, setCustomTip] = useState('');
   const [selectedTip, setSelectedTip] = useState<string | null>(null);
@@ -451,13 +450,7 @@ const CheckoutPage = () => {
       return;
     }
 
-    // If we're not on the final step, move to the next step
-    if (currentStep < 3) {
-      setCurrentStep(currentStep + 1);
-      return;
-    }
-
-    // Only process the order on the final step
+    // Process the order
     try {
       setLoading(true);
 
@@ -659,12 +652,6 @@ const CheckoutPage = () => {
       );
     } finally {
       setLoading(false);
-    }
-  };
-
-  const goToPreviousStep = () => {
-    if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
     }
   };
 
