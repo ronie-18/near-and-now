@@ -21,7 +21,7 @@ const calculateOrderTotals = (cartTotal: number) => {
 };
 
 const CheckoutPage = () => {
-  const { cartItems, cartTotal, clearCart } = useCart();
+  const { cartItems, cartTotal, clearCart, updateCartQuantity, removeFromCart } = useCart();
   const { showNotification } = useNotification();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
@@ -74,6 +74,23 @@ const CheckoutPage = () => {
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const suggestionsScrollRef = useRef<HTMLDivElement>(null);
   const lastCreatedAddressRef = useRef<DbAddress | null>(null);
+
+  // Multi-step checkout (2 steps: Shipping and Review)
+  const [currentStep, setCurrentStep] = useState(1);
+
+  const goToNextStep = () => {
+    if (currentStep < 2) {
+      setCurrentStep(currentStep + 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const goToPreviousStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   const getStoredDeliveryLocation = (): LocationData | null => {
     try {
@@ -438,7 +455,22 @@ const CheckoutPage = () => {
       }
       return;
     }
-    // Otherwise fall back to normal submission logic
+
+    // Multi-step navigation: only submit order on step 2 (Review)
+    if (currentStep < 2) {
+      // Validate current step before proceeding
+      if (currentStep === 1) {
+        // Validate shipping info
+        if (!formData.address || !formData.city || !formData.state || !formData.pincode || !formData.phone) {
+          showNotification('Please fill in all required shipping fields', 'error');
+          return;
+        }
+      }
+      goToNextStep();
+      return;
+    }
+
+    // Step 2: Submit the actual order
     handleSubmit(e);
   };
 
@@ -735,8 +767,7 @@ const CheckoutPage = () => {
           <div className="flex items-center justify-between">
             {[
               { step: 1, label: 'Shipping', icon: Truck },
-              { step: 2, label: 'Payment', icon: CreditCard },
-              { step: 3, label: 'Review', icon: CheckCircle }
+              { step: 2, label: 'Review', icon: CheckCircle }
             ].map(({ step, label, icon: Icon }, index) => (
               <div key={step} className="flex items-center flex-1">
                 <div className="flex flex-col items-center flex-1">
@@ -753,7 +784,7 @@ const CheckoutPage = () => {
                     {label}
                   </span>
                 </div>
-                {index < 2 && (
+                {index < 1 && (
                   <div className={`flex-1 h-1 mx-2 transition-all duration-500 ${
                     currentStep > step ? 'bg-gradient-to-r from-primary to-secondary' : 'bg-gray-200'
                   }`} />
@@ -1231,190 +1262,8 @@ const CheckoutPage = () => {
                   </div>
                 )}
 
-                {/* Step 2: Payment Method */}
+                {/* Step 2: Order Review */}
                 {currentStep === 2 && (
-                  <div className="mb-8">
-                    <div className="flex items-center mb-4">
-                      <CreditCard className="w-5 h-5 text-primary mr-2" />
-                      <h2 className="text-xl font-bold text-gray-800">Payment Method</h2>
-                    </div>
-
-                    <div className="space-y-3">
-                      <label className={`flex items-center p-4 border-2 rounded-xl cursor-pointer transition-all duration-300 ${
-                        formData.paymentMethod === 'cod'
-                          ? 'border-primary bg-primary/5 shadow-md'
-                          : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
-                      }`}>
-                        <input
-                          type="radio"
-                          name="paymentMethod"
-                          value="cod"
-                          checked={formData.paymentMethod === 'cod'}
-                          onChange={handleChange}
-                          className="h-5 w-5 text-primary focus:ring-primary border-gray-300"
-                        />
-                        <div className="ml-3 flex-1">
-                          <span className="font-semibold text-gray-800">Cash on Delivery</span>
-                          <p className="text-sm text-gray-500">Pay when you receive your order</p>
-                        </div>
-                        <Truck className="w-6 h-6 text-primary" />
-                      </label>
-
-                      <label className={`flex items-center p-4 border-2 rounded-xl cursor-pointer transition-all duration-300 ${
-                        formData.paymentMethod === 'online'
-                          ? 'border-primary bg-primary/5 shadow-md'
-                          : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
-                      }`}>
-                        <input
-                          type="radio"
-                          name="paymentMethod"
-                          value="online"
-                          checked={formData.paymentMethod === 'online'}
-                          onChange={handleChange}
-                          className="h-5 w-5 text-primary focus:ring-primary border-gray-300"
-                        />
-                        <div className="ml-3 flex-1">
-                          <span className="font-semibold text-gray-800">Online Payment</span>
-                          <p className="text-sm text-gray-500">UPI, Card, Net Banking</p>
-                        </div>
-                        <Shield className="w-6 h-6 text-primary" />
-                      </label>
-                    </div>
-
-                    {/* Tips Section */}
-                    <div className="mt-8">
-                      <div className="flex items-center mb-4">
-                        <span className="text-xl font-bold text-gray-800">Add a Tip</span>
-                      </div>
-
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                        {[5, 10, 15, 20].map((amount) => (
-                          <button
-                            key={amount}
-                            type="button"
-                            onClick={() => handleTipSelect(amount)}
-                            className={`py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
-                              selectedTip === amount.toString()
-                                ? 'bg-gradient-to-r from-primary to-secondary text-white shadow-lg scale-105'
-                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow-md'
-                            }`}
-                          >
-                            ₹{amount}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="mt-4">
-                        <label htmlFor="customTip" className="block text-gray-700 mb-2 font-medium">
-                          Custom Amount
-                        </label>
-                        <input
-                          type="number"
-                          id="customTip"
-                          name="customTip"
-                          value={customTip}
-                          onChange={handleCustomTipChange}
-                          min="0"
-                          step="1"
-                          placeholder="Enter custom tip amount"
-                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 hover:border-gray-300"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Split Payment Section */}
-                    <div className="mt-8">
-                      <label className={`flex items-center gap-4 p-4 border-2 rounded-xl cursor-pointer transition-all duration-300 ${splitEnabled ? 'border-purple-400 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50/50'}`}>
-                        <input
-                          type="checkbox"
-                          checked={splitEnabled}
-                          onChange={handleSplitToggle}
-                          className="h-5 w-5 accent-purple-600 rounded"
-                        />
-                        <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                          <CreditCard className="w-5 h-5 text-white" />
-                        </div>
-                        <div className="flex-1">
-                          <span className="font-semibold text-gray-800 block">Split Payment</span>
-                          <p className="text-sm text-gray-500">Pay part in Cash and the rest via UPI</p>
-                        </div>
-                        {splitEnabled && (
-                          <span className="text-xs font-semibold text-purple-700 bg-purple-100 px-2 py-1 rounded-full">Active</span>
-                        )}
-                      </label>
-
-                      {splitEnabled && (
-                        <div className="mt-4 p-5 bg-purple-50 rounded-2xl border-2 border-purple-100 space-y-4">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm font-semibold text-gray-700">
-                              Total to pay: <span className="text-purple-700 font-bold">₹{finalTotal}</span>
-                            </p>
-                            {(() => {
-                              const total = (parseFloat(splitCashAmount) || 0) + (parseFloat(splitUpiAmount) || 0);
-                              const diff = Math.abs(Math.round(total) - finalTotal);
-                              return diff <= 1 ? (
-                                <span className="text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">✓ Balanced</span>
-                              ) : (
-                                <span className="text-xs font-semibold text-red-500 bg-red-50 px-2 py-1 rounded-full">
-                                  {Math.round(total) > finalTotal ? `₹${Math.round(total) - finalTotal} over` : `₹${finalTotal - Math.round(total)} remaining`}
-                                </span>
-                              );
-                            })()}
-                          </div>
-
-                          {/* Cash row */}
-                          <div className="flex items-center gap-3 bg-white p-4 rounded-xl border-2 border-gray-200 shadow-sm">
-                            <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                              <span className="text-lg">💵</span>
-                            </div>
-                            <div className="flex-1">
-                              <p className="text-sm font-semibold text-gray-700">Cash</p>
-                              <p className="text-xs text-gray-400">Pay in hand on delivery</p>
-                            </div>
-                            <div className="relative">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₹</span>
-                              <input
-                                type="number"
-                                value={splitCashAmount}
-                                onChange={(e) => handleSplitCashChange(e.target.value)}
-                                min="0"
-                                max={finalTotal}
-                                placeholder="0"
-                                className="w-28 pl-7 pr-3 py-2 border-2 border-gray-200 rounded-lg text-sm font-semibold focus:outline-none focus:border-green-400 transition-colors"
-                              />
-                            </div>
-                          </div>
-
-                          {/* UPI row */}
-                          <div className="flex items-center gap-3 bg-white p-4 rounded-xl border-2 border-gray-200 shadow-sm">
-                            <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                              <span className="text-lg">📱</span>
-                            </div>
-                            <div className="flex-1">
-                              <p className="text-sm font-semibold text-gray-700">UPI</p>
-                              <p className="text-xs text-gray-400">Pay via UPI / online</p>
-                            </div>
-                            <div className="relative">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₹</span>
-                              <input
-                                type="number"
-                                value={splitUpiAmount}
-                                onChange={(e) => handleSplitUpiChange(e.target.value)}
-                                min="0"
-                                max={finalTotal}
-                                placeholder="0"
-                                className="w-28 pl-7 pr-3 py-2 border-2 border-gray-200 rounded-lg text-sm font-semibold focus:outline-none focus:border-indigo-400 transition-colors"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Step 3: Order Review */}
-                {currentStep === 3 && (
                   <div className="mb-8">
                     <div className="flex items-center mb-4">
                       <CheckCircle className="w-5 h-5 text-primary mr-2" />
@@ -1442,51 +1291,6 @@ const CheckoutPage = () => {
                       </div>
                     </div>
 
-                    <div className="bg-gray-50 rounded-xl p-4">
-                      <h3 className="font-semibold text-gray-800 mb-2">Payment Method</h3>
-                      <div className="flex items-center">
-                        {formData.paymentMethod === 'cod' ? (
-                          <>
-                            <Truck className="w-4 h-4 text-primary mr-2" />
-                            <span>Cash on Delivery</span>
-                          </>
-                        ) : (
-                          <>
-                            <Shield className="w-4 h-4 text-primary mr-2" />
-                            <span>Online Payment</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    {splitEnabled && (
-                      <div className="bg-purple-50 rounded-xl p-4 mt-4 border-2 border-purple-100">
-                        <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                          <CreditCard className="w-4 h-4 text-purple-600" />
-                          Split Payment
-                        </h3>
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-sm">
-                            <div className="flex items-center gap-2">
-                              <span>💵</span>
-                              <span className="text-gray-700">Cash</span>
-                            </div>
-                            <span className="font-semibold text-green-700">₹{splitCashAmount || '0'}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-sm">
-                            <div className="flex items-center gap-2">
-                              <span>📱</span>
-                              <span className="text-gray-700">UPI</span>
-                            </div>
-                            <span className="font-semibold text-indigo-700">₹{splitUpiAmount || '0'}</span>
-                          </div>
-                          <div className="pt-2 mt-1 border-t border-purple-200 flex justify-between text-sm font-bold">
-                            <span className="text-gray-700">Total</span>
-                            <span className="text-purple-700">₹{Math.round((parseFloat(splitCashAmount) || 0) + (parseFloat(splitUpiAmount) || 0))}</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
 
@@ -1514,10 +1318,10 @@ const CheckoutPage = () => {
                       </>
                     ) : (
                       <>
-                        {currentStep < 3 ? (
+                        {currentStep < 2 ? (
                           <>
-                            {currentStep === 1 ? <Truck className="w-5 h-5 mr-2" /> : <CreditCard className="w-5 h-5 mr-2" />}
-                            {currentStep < 3 ? `Continue to ${currentStep === 1 ? 'Payment' : 'Review'}` : ''}
+                            <Truck className="w-5 h-5 mr-2" />
+                            Continue to Review
                           </>
                         ) : (
                           <>
@@ -1613,7 +1417,7 @@ const CheckoutPage = () => {
                 </div>
               ) : (
                 <>
-                  <div className="max-h-64 overflow-y-auto mb-4 space-y-3">
+                  <div className="mb-4 space-y-3">
                     {cartItems.map(item => (
                       <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors">
                         <img
@@ -1622,10 +1426,33 @@ const CheckoutPage = () => {
                           className="w-16 h-16 object-cover rounded-lg"
                         />
                         <div className="flex-1 min-w-0">
-                          <p className="text-gray-800 font-semibold truncate">{item.name}</p>
-                          <p className="text-gray-500 text-sm">Qty: {item.quantity}</p>
+                          <p className="text-gray-800 font-semibold truncate text-sm">{item.name}</p>
+                          <p className="text-gray-600 text-xs">₹{Math.round(item.price)}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (item.quantity > 1) {
+                                  updateCartQuantity(item.id, item.quantity - 1, item.isLoose);
+                                } else {
+                                  removeFromCart(item.id, item.isLoose);
+                                }
+                              }}
+                              className="w-6 h-6 flex items-center justify-center bg-white border border-gray-300 rounded hover:bg-gray-100 transition-colors"
+                            >
+                              <span className="text-gray-600 font-bold text-sm">−</span>
+                            </button>
+                            <span className="text-gray-800 font-semibold text-sm min-w-[20px] text-center">{item.quantity}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateCartQuantity(item.id, item.quantity + 1, item.isLoose)}
+                              className="w-6 h-6 flex items-center justify-center bg-white border border-gray-300 rounded hover:bg-gray-100 transition-colors"
+                            >
+                              <span className="text-gray-600 font-bold text-sm">+</span>
+                            </button>
+                          </div>
                         </div>
-                        <p className="text-gray-800 font-bold">₹{Math.round(item.price * item.quantity)}</p>
+                        <p className="text-gray-800 font-bold text-sm">₹{Math.round(item.price * item.quantity)}</p>
                       </div>
                     ))}
                   </div>
@@ -1675,6 +1502,160 @@ const CheckoutPage = () => {
                         </div>
                       </div>
                     )}
+                  </div>
+
+                  {/* Payment Section */}
+                  <div className="mt-6 pt-6 border-t-2 border-gray-200">
+                    <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
+                      <CreditCard className="w-5 h-5 text-primary mr-2" />
+                      Payment Method
+                    </h3>
+
+                    <div className="space-y-3">
+                      <label className={`flex items-center p-3 border-2 rounded-xl cursor-pointer transition-all duration-300 ${
+                        formData.paymentMethod === 'cod'
+                          ? 'border-primary bg-primary/5 shadow-md'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          value="cod"
+                          checked={formData.paymentMethod === 'cod'}
+                          onChange={handleChange}
+                          className="h-4 w-4 text-primary focus:ring-primary border-gray-300"
+                        />
+                        <div className="ml-3 flex-1">
+                          <span className="font-semibold text-gray-800 text-sm">Cash on Delivery</span>
+                        </div>
+                        <Truck className="w-5 h-5 text-primary" />
+                      </label>
+
+                      <label className={`flex items-center p-3 border-2 rounded-xl cursor-pointer transition-all duration-300 ${
+                        formData.paymentMethod === 'online'
+                          ? 'border-primary bg-primary/5 shadow-md'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          value="online"
+                          checked={formData.paymentMethod === 'online'}
+                          onChange={handleChange}
+                          className="h-4 w-4 text-primary focus:ring-primary border-gray-300"
+                        />
+                        <div className="ml-3 flex-1">
+                          <span className="font-semibold text-gray-800 text-sm">Online Payment</span>
+                        </div>
+                        <Shield className="w-5 h-5 text-primary" />
+                      </label>
+                    </div>
+
+                    {/* Tips Section */}
+                    <div className="mt-6">
+                      <h4 className="text-sm font-bold text-gray-800 mb-3">Add a Tip (Optional)</h4>
+                      <div className="grid grid-cols-4 gap-2 mb-3">
+                        {[5, 10, 15, 20].map((amount) => (
+                          <button
+                            key={amount}
+                            type="button"
+                            onClick={() => handleTipSelect(amount)}
+                            className={`py-2 px-2 rounded-lg text-sm font-semibold transition-all duration-300 ${
+                              selectedTip === amount.toString()
+                                ? 'bg-gradient-to-r from-primary to-secondary text-white shadow-md'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            ₹{amount}
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        type="number"
+                        value={customTip}
+                        onChange={handleCustomTipChange}
+                        min="0"
+                        step="1"
+                        placeholder="Custom tip"
+                        className="w-full px-3 py-2 text-sm border-2 border-gray-200 rounded-lg focus:outline-none focus:border-primary transition-all"
+                      />
+                    </div>
+
+                    {/* Split Payment Section */}
+                    <div className="mt-6">
+                      <label className={`flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all duration-300 ${splitEnabled ? 'border-purple-400 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
+                        <input
+                          type="checkbox"
+                          checked={splitEnabled}
+                          onChange={handleSplitToggle}
+                          className="h-4 w-4 accent-purple-600 rounded"
+                        />
+                        <div className="flex-1">
+                          <span className="font-semibold text-gray-800 text-sm block">Split Payment</span>
+                          <p className="text-xs text-gray-500">Cash + UPI</p>
+                        </div>
+                        {splitEnabled && (
+                          <span className="text-xs font-semibold text-purple-700 bg-purple-100 px-2 py-1 rounded-full">Active</span>
+                        )}
+                      </label>
+
+                      {splitEnabled && (
+                        <div className="mt-3 p-4 bg-purple-50 rounded-xl border-2 border-purple-100 space-y-3">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-gray-700">Total: ₹{finalTotal}</span>
+                            {(() => {
+                              const total = (parseFloat(splitCashAmount) || 0) + (parseFloat(splitUpiAmount) || 0);
+                              const diff = Math.abs(Math.round(total) - finalTotal);
+                              return diff <= 1 ? (
+                                <span className="font-semibold text-green-600">✓ Balanced</span>
+                              ) : (
+                                <span className="font-semibold text-red-500">
+                                  {Math.round(total) > finalTotal ? `₹${Math.round(total) - finalTotal} over` : `₹${finalTotal - Math.round(total)} short`}
+                                </span>
+                              );
+                            })()}
+                          </div>
+
+                          <div className="flex items-center gap-2 bg-white p-3 rounded-lg">
+                            <span className="text-sm">💵</span>
+                            <div className="flex-1">
+                              <p className="text-xs font-semibold text-gray-700">Cash</p>
+                            </div>
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                              <input
+                                type="number"
+                                value={splitCashAmount}
+                                onChange={(e) => handleSplitCashChange(e.target.value)}
+                                min="0"
+                                max={finalTotal}
+                                placeholder="0"
+                                className="w-20 pl-5 pr-2 py-1 border-2 border-gray-200 rounded text-xs font-semibold focus:outline-none focus:border-green-400"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 bg-white p-3 rounded-lg">
+                            <span className="text-sm">📱</span>
+                            <div className="flex-1">
+                              <p className="text-xs font-semibold text-gray-700">UPI</p>
+                            </div>
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                              <input
+                                type="number"
+                                value={splitUpiAmount}
+                                onChange={(e) => handleSplitUpiChange(e.target.value)}
+                                min="0"
+                                max={finalTotal}
+                                placeholder="0"
+                                className="w-20 pl-5 pr-2 py-1 border-2 border-gray-200 rounded text-xs font-semibold focus:outline-none focus:border-indigo-400"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div className="mt-6">

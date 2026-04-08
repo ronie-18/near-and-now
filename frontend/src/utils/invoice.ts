@@ -114,8 +114,12 @@ function downloadHtml(filename: string, html: string): void {
   link.download = filename;
   document.body.appendChild(link);
   link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+
+  // Use setTimeout to avoid React DOM conflicts
+  setTimeout(() => {
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, 100);
 }
 
 export function downloadCustomerInvoice(order: InvoiceOrder): void {

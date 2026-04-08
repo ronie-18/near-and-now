@@ -132,7 +132,7 @@ const StatCard: React.FC<StatCardProps> = ({ icon: Icon, gradient, label, value,
 const PieChartComponent: React.FC<{ data: CategorySales[] }> = ({ data }) => {
   // Filter out categories with 0 sales for the pie chart
   const activeData = data.filter(d => d.sales > 0);
-  
+
   // If no sales data, show empty state
   if (activeData.length === 0) {
     return (
@@ -171,7 +171,7 @@ const PieChartComponent: React.FC<{ data: CategorySales[] }> = ({ data }) => {
             cumulativePercent += item.percentage / 100;
             const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
             const largeArcFlag = item.percentage > 50 ? 1 : 0;
-            
+
             // Handle case where one category is 100%
             if (item.percentage >= 99.9) {
               return (
@@ -185,7 +185,7 @@ const PieChartComponent: React.FC<{ data: CategorySales[] }> = ({ data }) => {
                 />
               );
             }
-            
+
             const pathData = [
               `M ${startX} ${startY}`,
               `A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY}`,
@@ -214,8 +214,8 @@ const PieChartComponent: React.FC<{ data: CategorySales[] }> = ({ data }) => {
       <div className="grid grid-cols-2 md:grid-cols-1 gap-2 max-w-xs">
         {dataWithPercent.slice(0, 8).map((item, index) => (
           <div key={index} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 transition-colors">
-            <div 
-              className="w-4 h-4 rounded-full shadow-sm flex-shrink-0" 
+            <div
+              className="w-4 h-4 rounded-full shadow-sm flex-shrink-0"
               style={{ backgroundColor: item.color }}
             />
             <div className="flex-1 min-w-0">
@@ -250,7 +250,7 @@ const DailySalesChart: React.FC<{ data: DailySale[] }> = ({ data }) => {
     return Math.ceil(val / 10000) * 10000;
   };
   const maxYAxis = getNiceMax(actualMax);
-  
+
   // Generate Y-axis values (4 ticks)
   const yAxisValues = [
     maxYAxis,
@@ -293,10 +293,10 @@ const DailySalesChart: React.FC<{ data: DailySale[] }> = ({ data }) => {
                   // Calculate height in pixels based on container height (176px = h-44)
                   const containerHeight = 170; // pixels
                   const barHeight = maxYAxis > 0 ? (item.sales / maxYAxis) * containerHeight : 0;
-                  
+
                   return (
-                    <div 
-                      key={index} 
+                    <div
+                      key={index}
                       className="flex-1 flex flex-col items-center justify-end group min-w-0 px-0.5 h-full"
                     >
                       {/* Tooltip - only show if there's data */}
@@ -309,7 +309,7 @@ const DailySalesChart: React.FC<{ data: DailySale[] }> = ({ data }) => {
                       {item.sales > 0 ? (
                         <div
                           className="w-full max-w-[30px] bg-gray-900 hover:bg-gray-700 cursor-pointer transition-colors rounded-t mx-auto"
-                          style={{ 
+                          style={{
                             height: `${Math.max(barHeight, 4)}px`
                           }}
                         />
@@ -324,8 +324,8 @@ const DailySalesChart: React.FC<{ data: DailySale[] }> = ({ data }) => {
               {/* X-axis labels - aligned with bars */}
               <div className="flex mt-2 px-1">
                 {data.map((item, index) => (
-                  <div 
-                    key={index} 
+                  <div
+                    key={index}
                     className="flex-1 text-center min-w-0 px-0.5"
                   >
                     <span className="text-[10px] text-gray-500 font-medium truncate block">{item.date}</span>
@@ -480,7 +480,7 @@ const ReportsPage = () => {
     const days = parseInt(period);
     const now = new Date();
     now.setHours(23, 59, 59, 999); // End of today
-    
+
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
     cutoffDate.setHours(0, 0, 0, 0); // Start of the cutoff day (midnight)
@@ -504,12 +504,12 @@ const ReportsPage = () => {
 
     // Calculate growth (comparing to previous period)
     const days = parseInt(period);
-    
+
     // Previous period: from (days*2) ago to (days) ago
     const previousPeriodEnd = new Date();
     previousPeriodEnd.setDate(previousPeriodEnd.getDate() - days);
     previousPeriodEnd.setHours(23, 59, 59, 999);
-    
+
     const previousPeriodStart = new Date();
     previousPeriodStart.setDate(previousPeriodStart.getDate() - days * 2);
     previousPeriodStart.setHours(0, 0, 0, 0);
@@ -554,7 +554,7 @@ const ReportsPage = () => {
         order.items.forEach((item: any) => {
           // Try to find category: first by 'id' (cart item structure), then 'product_id', then by name
           let category = 'Uncategorized';
-          
+
           // CartItem uses 'id' field for product ID
           if (item.id && productCategoryMap[item.id]) {
             category = productCategoryMap[item.id];
@@ -563,7 +563,7 @@ const ReportsPage = () => {
           } else if (item.name && productCategoryMap[item.name.toLowerCase()]) {
             category = productCategoryMap[item.name.toLowerCase()];
           }
-          
+
           if (!salesByCategory[category]) {
             salesByCategory[category] = { sales: 0, orders: 0 };
           }
@@ -603,10 +603,10 @@ const ReportsPage = () => {
     const now = new Date();
     now.setHours(23, 59, 59, 999);
     const daysToShow = parseInt(period);
-    
+
     // Group orders by date - aggregate total sales per day
     const ordersByDate: Record<string, { sales: number }> = {};
-    
+
     if (orders && orders.length > 0) {
       const startDate = new Date(now);
       startDate.setDate(startDate.getDate() - daysToShow);
@@ -627,21 +627,21 @@ const ReportsPage = () => {
 
     // Generate all dates for the period
     const allDates: DailySale[] = [];
-    
+
     // Determine step size to keep chart manageable
     // 7 days: show all 7 days
     // 30 days: show every 3rd day (10 points)
     // 90 days: show every 9th day (10 points)
     // 365 days: show every 36th day (10 points)
     const stepSize = daysToShow <= 7 ? 1 : daysToShow <= 30 ? 3 : daysToShow <= 90 ? 9 : 36;
-    
+
     for (let i = daysToShow - 1; i >= 0; i -= stepSize) {
       const date = new Date(now);
       date.setDate(date.getDate() - i);
       date.setHours(0, 0, 0, 0);
       const dateKey = date.toDateString();
       const orderData = ordersByDate[dateKey] || { sales: 0 };
-      
+
       allDates.push({
         date: date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
         sales: orderData.sales
@@ -667,11 +667,11 @@ const ReportsPage = () => {
         order.items.forEach((item: any) => {
           // CartItem uses 'id' for product ID, fallback to product_id then name
           const itemId = item.id || item.product_id || item.name;
-          
+
           // Look up category from products
           let category = 'Uncategorized';
           let productImage = item.image;
-          
+
           if (item.id && productMap[item.id]) {
             category = productMap[item.id].category;
             productImage = productImage || productMap[item.id].image;
@@ -682,7 +682,7 @@ const ReportsPage = () => {
             category = productMap[item.name.toLowerCase()].category;
             productImage = productImage || productMap[item.name.toLowerCase()].image;
           }
-          
+
           if (!productSales[itemId]) {
             productSales[itemId] = {
               name: item.name || 'Unknown Product',
@@ -736,7 +736,7 @@ const ReportsPage = () => {
 
       // Convert to JSON string
       const jsonString = JSON.stringify(reportData, null, 2);
-      
+
       // Create blob and download
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -745,8 +745,12 @@ const ReportsPage = () => {
       link.download = `report-${periodLabel.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+
+      // Use setTimeout to avoid React DOM conflicts
+      setTimeout(() => {
+        link.remove();
+        URL.revokeObjectURL(url);
+      }, 100);
     } catch (err) {
       console.error('Error exporting report:', err);
       setError('Failed to export report. Please try again.');
@@ -784,7 +788,7 @@ const ReportsPage = () => {
                 <option value="365">Last Year</option>
               </select>
             </div>
-            <button 
+            <button
               onClick={handleExportReport}
               className="inline-flex items-center px-4 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all shadow-lg font-medium"
             >
