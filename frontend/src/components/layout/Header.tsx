@@ -193,23 +193,23 @@ const Header = () => {
 
         {/* Main Header */}
         <div className="border-b border-gray-100/50">
-          <div className="container mx-auto px-4 py-4">
-            <div className="flex items-center justify-between gap-4 h-16">
+          <div className="w-full max-w-[1600px] mx-auto px-2 sm:px-3 py-2">
+            <div className="flex items-center justify-between gap-2 sm:gap-4 min-h-[48px]">
               {/* Logo - Enhanced */}
               <Link to="/" className="flex items-center flex-shrink-0 group">
                 <div className="relative">
-                  <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all duration-300"></div>
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 rounded-xl blur-lg group-hover:blur-xl transition-all duration-300" />
                   <img
                     src="/Logo.png"
                     alt="Near & Now"
-                    className="h-14 w-14 object-contain transform group-hover:scale-110 transition-transform duration-300 relative z-10"
+                    className="h-10 w-10 sm:h-11 sm:w-11 object-contain transform group-hover:scale-105 transition-transform duration-300 relative z-10"
                   />
                 </div>
-                <div className="ml-3">
-                  <h1 className="text-2xl font-black bg-gradient-to-r from-primary via-green-600 to-secondary bg-clip-text text-transparent leading-none tracking-tight">
+                <div className="ml-2 sm:ml-2.5">
+                  <h1 className="text-lg sm:text-xl font-black bg-gradient-to-r from-primary via-green-600 to-secondary bg-clip-text text-transparent leading-tight tracking-tight">
                     Near & Now
                   </h1>
-                  <p className="text-xs text-gray-600 mt-1 font-semibold tracking-wide">Digital Dukan, Local Dil Se</p>
+                  <p className="text-[10px] sm:text-xs text-gray-600 mt-0.5 font-medium tracking-wide leading-none">Digital Dukan, Local Dil Se</p>
                 </div>
               </Link>
 
@@ -217,14 +217,14 @@ const Header = () => {
               <div className="hidden lg:block">
                 <button
                   onClick={toggleLocationPicker}
-                  className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-2xl hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10 transition-all duration-300 group bg-gradient-to-br from-gray-50 to-white hover:from-primary/5 hover:to-secondary/5 min-w-[280px] max-w-[320px] relative overflow-hidden"
+                  className="flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-xl hover:border-primary/50 hover:shadow-md transition-all duration-300 group bg-gradient-to-br from-gray-50 to-white hover:from-primary/5 hover:to-secondary/5 min-w-[220px] max-w-[300px] relative overflow-hidden"
                 >
-                  <div className="absolute inset-0 bg-gradient-to-r from-primary/0 via-primary/5 to-primary/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
-                  <div className="w-11 h-11 bg-gradient-to-br from-primary via-green-600 to-secondary rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg group-hover:shadow-xl group-hover:scale-110 transition-all duration-300 relative z-10">
-                    <MapPin className="w-5 h-5 text-white drop-shadow-lg" />
+                  <div className="absolute inset-0 bg-gradient-to-r from-primary/0 via-primary/5 to-primary/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+                  <div className="w-9 h-9 bg-gradient-to-br from-primary via-green-600 to-secondary rounded-lg flex items-center justify-center flex-shrink-0 shadow-md group-hover:shadow-lg group-hover:scale-105 transition-all duration-300 relative z-10">
+                    <MapPin className="w-4 h-4 text-white drop-shadow-lg" />
                   </div>
                   <div className="text-left flex-1 min-w-0 relative z-10">
-                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1">
                       <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse"></span>
                       Deliver to
                     </p>
@@ -250,7 +250,7 @@ const Header = () => {
                     isSearchFocused ? 'transform scale-[1.02]' : ''
                   }`}>
                     <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-secondary/20 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                    <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-2xl focus-within:border-primary/50 focus-within:shadow-xl focus-within:shadow-primary/10 transition-all duration-300 overflow-hidden flex items-center py-4 px-4">
+                    <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl focus-within:border-primary/50 focus-within:shadow-md focus-within:shadow-primary/10 transition-all duration-300 overflow-hidden flex items-center py-2 px-3">
                       <Search className="w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors z-10 flex-shrink-0" />
                       <input
                         type="text"
@@ -578,14 +578,14 @@ const Header = () => {
             </div>
 
             {/* Mobile Search - Enhanced */}
-            <div className="mt-3 md:hidden">
+            <div className="mt-2 md:hidden">
               <form onSubmit={handleSearch} className="relative">
-                <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-2xl focus-within:border-primary/50 focus-within:shadow-lg transition-all duration-300">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <div className="relative bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl focus-within:border-primary/50 focus-within:shadow-md transition-all duration-300">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
                     placeholder="Search products..."
-                    className="w-full pl-11 pr-4 py-3 bg-transparent focus:outline-none text-sm"
+                    className="w-full pl-10 pr-4 py-2 bg-transparent focus:outline-none text-sm"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onFocus={() => setIsSearchFocused(true)}

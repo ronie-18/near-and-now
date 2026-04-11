@@ -104,7 +104,7 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
       onMouseLeave={() => setIsHovered(false)}
     >
       <Link to={`/product/${product.id}`} className="block">
-        <div className="relative h-48 overflow-hidden bg-gray-100">
+        <div className="relative h-36 sm:h-40 overflow-hidden bg-gray-100">
           {/* Discount Badge */}
           {discount > 0 && (
             <div className="absolute top-2 left-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full z-10">
@@ -142,14 +142,14 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
           )}
         </div>
 
-        <div className="p-4">
+        <div className="p-2.5 sm:p-3">
           {/* Rating Stars */}
-          <div className="flex items-center mb-1">
+          <div className="flex items-center mb-0.5">
             {[1, 2, 3, 4, 5].map((star) => (
               <svg
                 key={star}
                 xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4 text-yellow-400"
+                className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-yellow-400"
                 viewBox="0 0 20 20"
                 fill="currentColor"
                 aria-hidden="true"
@@ -187,12 +187,12 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
           </div>
 
           {/* Empty space for button positioning */}
-          <div className="mt-4 h-10"></div>
+          <div className="mt-2 h-9 sm:h-10" />
         </div>
       </Link>
 
       {/* Fixed Add to Cart Button at the bottom center */}
-      <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-4 px-4">
+      <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-2.5 px-2.5 sm:pb-3 sm:px-3">
         {inCart ? (
           <div className="flex items-center justify-between bg-gray-100 rounded-md p-1 shadow-md">
             <button

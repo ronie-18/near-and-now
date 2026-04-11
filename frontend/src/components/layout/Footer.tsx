@@ -137,7 +137,7 @@ const Footer = () => {
   return (
     <footer className="bg-gradient-to-b from-gray-800 to-gray-900 text-white">
       {/* Main Footer Content */}
-      <div className="container mx-auto px-4 pt-12 pb-8">
+      <div className="w-full max-w-[1600px] mx-auto px-2 sm:px-3 pt-8 pb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 lg:gap-12">
           {/* About Section */}
           <div className="space-y-4">
@@ -324,7 +324,7 @@ const Footer = () => {
 
       {/* Bottom Bar */}
       <div className="border-t border-gray-700">
-        <div className="container mx-auto px-4 py-6">
+        <div className="w-full max-w-[1600px] mx-auto px-2 sm:px-3 py-4">
           <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
             {/* Copyright */}
             <p className="text-sm text-gray-400 text-center md:text-left">

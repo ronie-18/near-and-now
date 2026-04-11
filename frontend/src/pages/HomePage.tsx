@@ -91,43 +91,37 @@ const HomePage = () => {
 
     <>
 
-      {/* Banner Section - Dynamic Advertisement Space */}
-      <section className="bg-gradient-to-r from-primary/10 to-secondary/10">
-        <div className="container mx-auto px-4 py-8">
-          <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
-            {/* Banner Image */}
-            <div className="relative w-full bg-white" style={{ height: '380px' }}>
-              <img
-                src="/near_and_now_banner.png"
-                alt="Near & Now - Digital Dukan, Local Dil Se - Groceries, Essentials & More Delivered in Minutes"
-                className="w-full h-full object-contain object-center"
-                loading="eager"
-                onError={(e) => {
-                  console.error('Banner image failed to load from /near_and_now_banner.png');
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                }}
-                onLoad={() => console.log('Banner image loaded successfully from /near_and_now_banner.png')}
-              />
-            </div>
+      {/* Banner — edge-to-edge image, no letterboxing */}
+      <section className="bg-neutral-50/80 border-b border-gray-100/80">
+        <div className="w-full max-w-[1600px] mx-auto px-2 sm:px-3 pt-2 pb-3">
+          <div className="relative w-full h-32 sm:h-36 md:h-44 overflow-hidden rounded-lg sm:rounded-xl bg-neutral-200">
+            <img
+              src="/near_and_now_banner.png"
+              alt="Near & Now - Digital Dukan, Local Dil Se - Groceries, Essentials & More Delivered in Minutes"
+              className="absolute inset-0 h-full w-full object-cover object-center"
+              loading="eager"
+              onError={(e) => {
+                console.error('Banner image failed to load from /near_and_now_banner.png');
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+              }}
+            />
           </div>
         </div>
       </section>
 
-      {/* Categories Section - Centered Grid Layout */}
-      <section className="py-12 bg-white">
-        <div className="container mx-auto px-4">
-          {/* Categories Grid - Aligned with banner and product borders */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+      {/* Categories — compact tiles */}
+      <section className="py-4 bg-white">
+        <div className="w-full max-w-[1600px] mx-auto px-2 sm:px-3">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2 sm:gap-2.5">
             {loading ? (
-              // Category Skeleton Loaders
               Array.from({ length: 12 }).map((_, index) => (
                 <div
                   key={`skeleton-cat-${index}`}
                   className="flex flex-col items-center animate-pulse"
                 >
-                  <div className="w-full h-48 bg-gray-200 rounded-lg mb-2"></div>
-                  <div className="h-3 bg-gray-200 rounded w-16"></div>
+                  <div className="w-full aspect-square max-h-24 sm:max-h-28 bg-gray-200 rounded-md mb-1.5" />
+                  <div className="h-2.5 bg-gray-200 rounded w-14" />
                 </div>
               ))
             ) : (
@@ -137,7 +131,7 @@ const HomePage = () => {
                   to={`/category/${encodeURIComponent(category.name)}`}
                   className="flex flex-col items-center group"
                 >
-                  <div className="w-full h-48 bg-white rounded-lg shadow-md hover:shadow-xl transition-all duration-200 overflow-hidden mb-2 transform group-hover:scale-105">
+                  <div className="w-full aspect-square max-h-24 sm:max-h-28 bg-white rounded-md border border-gray-100 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden mb-1 transform group-hover:scale-[1.02]">
                     <img
                       src={category.image_url || `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`}
                       alt={category.name}
@@ -149,7 +143,7 @@ const HomePage = () => {
                       }}
                     />
                   </div>
-                  <p className="text-sm font-medium text-gray-700 text-center leading-tight group-hover:text-primary transition-colors">
+                  <p className="text-[11px] sm:text-xs font-medium text-gray-700 text-center leading-snug line-clamp-2 group-hover:text-primary transition-colors px-0.5">
                     {formatCategoryName(category.name)}
                   </p>
                 </Link>
@@ -157,32 +151,29 @@ const HomePage = () => {
             )}
           </div>
 
-          {/* Empty State */}
           {!loading && categories.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-gray-500">No categories available at the moment.</p>
+            <div className="text-center py-8">
+              <p className="text-gray-500 text-sm">No categories available at the moment.</p>
             </div>
           )}
         </div>
       </section>
 
-
-
-      {/* Products by Category Section */}
-      <section className="py-8 bg-white">
-        <div className="container mx-auto px-4">
+      {/* Products by category */}
+      <section className="py-4 pb-8 bg-white">
+        <div className="w-full max-w-[1600px] mx-auto px-2 sm:px-3">
           {loading ? (
-            <div className="space-y-12">
+            <div className="space-y-8">
               {Array.from({ length: 3 }).map((_, idx) => (
                 <div key={idx}>
-                  <div className="h-8 bg-gray-200 rounded w-48 mb-6 animate-pulse"></div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                  <div className="h-6 bg-gray-200 rounded w-40 mb-3 animate-pulse" />
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3">
                     {Array.from({ length: 6 }).map((_, i) => (
-                      <div key={i} className="bg-white rounded-lg shadow-md overflow-hidden animate-pulse">
-                        <div className="h-48 bg-gray-200"></div>
-                        <div className="p-4">
-                          <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                          <div className="h-6 bg-gray-200 rounded w-1/2"></div>
+                      <div key={i} className="bg-white rounded-lg shadow border border-gray-100 overflow-hidden animate-pulse">
+                        <div className="h-36 bg-gray-200" />
+                        <div className="p-3">
+                          <div className="h-3.5 bg-gray-200 rounded w-3/4 mb-2" />
+                          <div className="h-5 bg-gray-200 rounded w-1/2" />
                         </div>
                       </div>
                     ))}
@@ -191,29 +182,29 @@ const HomePage = () => {
               ))}
             </div>
           ) : categories.length > 0 ? (
-            <div className="space-y-12">
+            <div className="space-y-8">
               {categories.map((category) => {
                 const categoryProducts = allProducts.filter(p => p.category === category.name);
                 if (categoryProducts.length === 0) return null;
 
                 return (
                   <div key={category.id}>
-                    <div className="flex items-center justify-between mb-6">
-                      <h2 className="text-2xl font-bold text-gray-900">
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-900">
                         {formatCategoryName(category.name)}
                       </h2>
                       <Link
                         to={`/category/${encodeURIComponent(category.name)}`}
-                        className="text-green-600 hover:text-green-700 font-semibold text-sm flex items-center gap-1"
+                        className="text-green-600 hover:text-green-700 font-semibold text-xs sm:text-sm flex items-center gap-0.5 shrink-0"
                       >
                         see all
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
                       </Link>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3">
                       {categoryProducts.map((product) => (
                         <ProductCard key={product.id} product={product} />
                       ))}
@@ -223,7 +214,7 @@ const HomePage = () => {
               })}
             </div>
           ) : (
-            <div className="text-center py-12">
+            <div className="text-center py-8">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 className="h-24 w-24 mx-auto text-gray-300 mb-4"
