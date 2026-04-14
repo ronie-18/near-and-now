@@ -7,7 +7,7 @@ import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAd
 import { geocodeAddress, LocationData } from '../services/placesService';
 import { getDeliveryFeeForSubtotal } from '../context/CartContext';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
-import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, User, Mail, Phone, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation } from 'lucide-react';
+import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 
 const calculateOrderTotals = (cartTotal: number) => {
