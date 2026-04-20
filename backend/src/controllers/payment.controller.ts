@@ -116,6 +116,20 @@ export class PaymentController {
     }
   }
 
+  // Saved payment methods (cards/UPIs) for the mobile "Preferred Payment" section.
+  // Response shape is consumed as-is by nearandnowcustomerapp/lib/razorpayService.ts.
+  async getSavedMethods(req: Request, res: Response) {
+    try {
+      const userId = String(req.query.user_id || '');
+      if (!userId) return res.status(400).json({ error: 'user_id required' });
+      const methods = await paymentService.getSavedMethods(userId);
+      res.json({ methods });
+    } catch (error) {
+      console.error('Error fetching saved payment methods:', error);
+      res.status(500).json({ error: 'Failed to fetch saved methods' });
+    }
+  }
+
   // Get payment details
   async getPaymentDetails(req: Request, res: Response) {
     try {

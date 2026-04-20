@@ -10,6 +10,10 @@ router.post('/create', paymentController.createPaymentOrder.bind(paymentControll
 // Verify payment
 router.post('/verify', paymentController.verifyPayment.bind(paymentController));
 
+// Saved payment methods for the logged-in user (cards/UPIs). Must be declared
+// before the '/:paymentId' catch-all below or Express will route to it.
+router.get('/methods', paymentController.getSavedMethods.bind(paymentController));
+
 // Get payment details
 router.get('/:paymentId', paymentController.getPaymentDetails.bind(paymentController));
 
