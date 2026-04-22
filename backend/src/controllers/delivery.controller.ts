@@ -50,9 +50,14 @@ export class DeliveryController {
     try {
       const partner = await databaseService.createDeliveryPartner(req.body);
       res.status(201).json(partner);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating delivery partner:', error);
-      res.status(500).json({ error: 'Failed to create delivery partner' });
+      const code = error?.code;
+      const message = error?.message || 'Failed to create delivery partner';
+      if (code === '23505') {
+        return res.status(409).json({ error: message });
+      }
+      res.status(500).json({ error: message });
     }
   }
 

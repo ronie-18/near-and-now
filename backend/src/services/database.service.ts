@@ -1183,38 +1183,94 @@ export class DatabaseService {
      */
     status?: 'pending_verification' | 'active' | 'inactive' | 'suspended' | 'offboarded';
   }) {
+    const normalizedEmail = data.email?.trim() || null;
+    const normalizedPhone = data.phone?.trim() || null;
+
+    const resolveExistingDeliveryUser = async () => {
+      if (!normalizedPhone && !normalizedEmail) return null;
+
+      let query = supabaseAdmin
+        .from('app_users')
+        .select('*')
+        .eq('role', 'delivery_partner');
+
+      if (normalizedPhone && normalizedEmail) {
+        query = query.or(`phone.eq.${normalizedPhone},email.eq.${normalizedEmail}`);
+      } else if (normalizedPhone) {
+        query = query.eq('phone', normalizedPhone);
+      } else {
+        query = query.eq('email', normalizedEmail);
+      }
+
+      const { data: existingUsers, error } = await query.limit(1);
+      if (error) throw error;
+      return existingUsers?.[0] ?? null;
+    };
+
+    const upsertProfile = async (userId: string) => {
+      const { error: profileError } = await supabaseAdmin
+        .from('delivery_partners')
+        .upsert(
+          {
+            user_id: userId,
+            name: data.name,
+            email: normalizedEmail,
+            phone: normalizedPhone,
+            address: data.address || null,
+            vehicle_number: data.vehicle_number || null,
+            verification_document: data.verification_document || null,
+            verification_number: data.verification_number || null,
+            is_online: false,
+            ...(data.status ? { status: data.status } : {})
+          },
+          { onConflict: 'user_id' }
+        );
+      if (profileError) throw profileError;
+    };
+
+    const existingUser = await resolveExistingDeliveryUser();
+    if (existingUser?.id) {
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from('app_users')
+        .update({
+          name: data.name,
+          email: normalizedEmail,
+          phone: normalizedPhone,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingUser.id)
+        .select()
+        .single();
+      if (updateError) throw updateError;
+      await upsertProfile(existingUser.id);
+      return updatedUser;
+    }
+
     // Create app_user first
     const { data: user, error: userError } = await supabaseAdmin
       .from('app_users')
       .insert({
         name: data.name,
-        email: data.email || null,
-        phone: data.phone,
+        email: normalizedEmail,
+        phone: normalizedPhone,
         password_hash: data.password_hash || null,
         role: 'delivery_partner',
-        is_activated: true,
+        is_activated: true
       })
       .select()
       .single();
-    if (userError) throw userError;
+    if (userError) {
+      const duplicateErr = (userError as { code?: string }).code === '23505';
+      if (!duplicateErr) throw userError;
 
-    // Create delivery_partners profile
-    const { error: profileError } = await supabaseAdmin
-      .from('delivery_partners')
-      .insert({
-        user_id: user.id,
-        name: data.name,
-        email: data.email || null,
-        phone: data.phone,
-        address: data.address || null,
-        vehicle_number: data.vehicle_number || null,
-        verification_document: data.verification_document || null,
-        verification_number: data.verification_number || null,
-        is_online: false,
-        ...(data.status ? { status: data.status } : {})
-      });
-    if (profileError) throw profileError;
+      // Retry via existing delivery_partner user when phone/email uniqueness collides.
+      const conflictedUser = await resolveExistingDeliveryUser();
+      if (!conflictedUser?.id) throw userError;
+      await upsertProfile(conflictedUser.id);
+      return conflictedUser;
+    }
 
+    await upsertProfile(user.id);
     return user;
   }
 
