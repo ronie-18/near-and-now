@@ -108,7 +108,7 @@ export class AuthController {
     }
   }
 
-  // Verify OTP and login/register customer or store owner (Twilio Verify)
+  // Verify OTP and login/register by role (customer, shopkeeper, delivery_partner)
   async verifyOTP(req: Request, res: Response) {
     try {
       const { phone, otp, name, role: requestRole } = req.body;
@@ -117,8 +117,14 @@ export class AuthController {
         return res.status(400).json({ error: 'Phone number and OTP are required' });
       }
 
-      const isShopkeeperFlow = requestRole === 'shopkeeper';
-      console.log('🔐 Verifying OTP for:', phone, isShopkeeperFlow ? '(shopkeeper)' : '(customer)');
+      const requestedRole =
+        requestRole === 'shopkeeper'
+          ? 'shopkeeper'
+          : requestRole === 'delivery_partner'
+            ? 'delivery_partner'
+            : 'customer';
+      const isRoleScopedFlow = requestedRole === 'shopkeeper' || requestedRole === 'delivery_partner';
+      console.log('🔐 Verifying OTP for:', phone, `(${requestedRole})`);
 
       if (!client) {
         return res.status(503).json({
@@ -144,25 +150,26 @@ export class AuthController {
 
       console.log('✅ OTP verified successfully');
 
-      // Shopkeeper app flow: look up by phone AND role shopkeeper
-      if (isShopkeeperFlow) {
-        console.log('🏪 Shopkeeper flow: looking for shopkeeper account');
-        
-        // CRITICAL: Must filter by BOTH phone AND role
+      // Role-scoped flows: look up by phone AND requested role (shopkeeper / delivery_partner)
+      if (isRoleScopedFlow) {
+        const roleLabel = requestedRole === 'shopkeeper' ? '🏪 Shopkeeper' : '🛵 Delivery partner';
+        console.log(`${roleLabel} flow: looking for ${requestedRole} account`);
+
+        // CRITICAL: Must filter by BOTH phone AND role.
         // Same phone can have multiple users with different roles
         let existingUser: any = null;
-        
+
         // Try exact phone with role filter
         const { data: byExact } = await supabaseAdmin
           .from('app_users')
           .select('*')
           .eq('phone', phone)
-          .eq('role', 'shopkeeper')
+          .eq('role', requestedRole)
           .maybeSingle();
-          
+
         if (byExact) {
           existingUser = byExact;
-          console.log(`✅ Found shopkeeper account: ${byExact.name} (${byExact.role})`);
+          console.log(`✅ Found ${requestedRole} account: ${byExact.name} (${byExact.role})`);
         } else {
           // Try normalized phone with role filter
           const normalized = normalizePhone(phone);
@@ -171,19 +178,21 @@ export class AuthController {
               .from('app_users')
               .select('*')
               .eq('phone', normalized)
-              .eq('role', 'shopkeeper')
+              .eq('role', requestedRole)
               .maybeSingle();
             if (byNormalized) {
               existingUser = byNormalized;
-              console.log(`✅ Found shopkeeper account (normalized): ${byNormalized.name} (${byNormalized.role})`);
+              console.log(
+                `✅ Found ${requestedRole} account (normalized): ${byNormalized.name} (${byNormalized.role})`
+              );
             }
           }
         }
 
-        if (existingUser && existingUser.role === 'shopkeeper') {
+        if (existingUser && existingUser.role === requestedRole) {
           const token = crypto.randomUUID();
           const { password_hash: _, ...userWithoutPassword } = existingUser;
-          console.log('👤 Existing shopkeeper, logging in:', existingUser.id, existingUser.name);
+          console.log(`👤 Existing ${requestedRole}, logging in:`, existingUser.id, existingUser.name);
           return res.json({
             success: true,
             message: 'OTP verified successfully',
@@ -192,9 +201,9 @@ export class AuthController {
             token
           });
         }
-        
-        // No shopkeeper account found (customer may exist, but we need shopkeeper)
-        console.log('📝 No shopkeeper account found, need signup');
+
+        // No role-specific account found (customer may exist, but we need requestedRole)
+        console.log(`📝 No ${requestedRole} account found, need signup`);
         return res.json({
           success: true,
           message: 'OTP verified; complete signup',
