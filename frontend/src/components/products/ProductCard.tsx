@@ -117,12 +117,21 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
             src={product.image || 'https://via.placeholder.com/300x300?text=No+Image'}
             alt={product.name}
             loading="lazy"
-            className="w-full h-full object-cover transition-transform duration-300"
+            className={`w-full h-full object-cover transition-transform duration-300 ${!product.in_stock ? 'opacity-50 grayscale' : ''}`}
             style={{ transform: isHovered ? 'scale(1.05)' : 'scale(1)' }}
             onError={(e) => {
               e.currentTarget.src = 'https://via.placeholder.com/300x300?text=No+Image';
             }}
           />
+
+          {/* Out of Stock Overlay */}
+          {!product.in_stock && (
+            <div className="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center">
+              <div className="bg-white px-3 py-1.5 rounded-full shadow-md">
+                <span className="text-xs font-bold text-gray-800">Sold Out</span>
+              </div>
+            </div>
+          )}
 
           {/* Quick View Button (shown on hover) */}
           {onQuickView && (
@@ -193,7 +202,11 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
 
       {/* Fixed Add to Cart Button at the bottom center */}
       <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-2.5 px-2.5 sm:pb-3 sm:px-3">
-        {inCart ? (
+        {!product.in_stock ? (
+          <div className="bg-gray-300 text-gray-600 py-1.5 px-6 rounded-md text-sm shadow-md cursor-not-allowed">
+            Out of Stock
+          </div>
+        ) : inCart ? (
           <div className="flex items-center justify-between bg-gray-100 rounded-md p-1 shadow-md">
             <button
               onClick={handleDecreaseQuantity}

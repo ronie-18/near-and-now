@@ -54,6 +54,10 @@ const CheckoutPage = () => {
   const [splitCashAmount, setSplitCashAmount] = useState('');
   const [splitUpiAmount, setSplitUpiAmount] = useState('');
 
+  const [gstinEnabled, setGstinEnabled] = useState(false);
+  const [gstin, setGstin] = useState('');
+  const [businessName, setBusinessName] = useState('');
+
   const [savedAddresses, setSavedAddresses] = useState<DbAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [showNewAddressForm, setShowNewAddressForm] = useState(false);
@@ -1139,6 +1143,54 @@ const CheckoutPage = () => {
                         className="w-full pl-8 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all bg-gray-50 focus:bg-white"
                       />
                     </div>
+                  </div>
+                </div>
+
+                {/* GSTIN Section */}
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                  <div className="px-6 py-4">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={gstinEnabled}
+                        onChange={(e) => setGstinEnabled(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-gray-800 text-sm">Add GSTIN</p>
+                          <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">Business</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-0.5">Claim GST credit up to 18% on the order</p>
+                      </div>
+                    </label>
+
+                    {gstinEnabled && (
+                      <div className="mt-4 space-y-3 pt-4 border-t border-gray-100">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">GSTIN Number *</label>
+                          <input
+                            type="text"
+                            value={gstin}
+                            onChange={(e) => setGstin(e.target.value.toUpperCase())}
+                            maxLength={15}
+                            placeholder="22AAAAA0000A1Z5"
+                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all bg-gray-50 focus:bg-white font-mono"
+                          />
+                          <p className="text-xs text-gray-400 mt-1">Enter 15-digit GSTIN</p>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Registered Business Name *</label>
+                          <input
+                            type="text"
+                            value={businessName}
+                            onChange={(e) => setBusinessName(e.target.value)}
+                            placeholder="Your Company Name Pvt Ltd"
+                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all bg-gray-50 focus:bg-white"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
