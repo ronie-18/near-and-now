@@ -1,79 +1,84 @@
-// Notification Service (Email/SMS/Push notifications)
-// This is a skeleton implementation - actual integrations will be added later
+import { supabaseAdmin } from '../config/database.js';
+
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
 export class NotificationService {
-  // Send order notification
-  async sendOrderNotification(orderId: string, type: string) {
-    console.log(`Sending ${type} notification for order ${orderId}`);
-    
-    // TODO: Implement actual notification sending
-    // - Email: Use SendGrid, AWS SES, or similar
-    // - SMS: Use Twilio, AWS SNS, or similar
-    // - Push: Use Firebase Cloud Messaging or similar
-    
-    switch (type) {
-      case 'order_placed':
-        await this.sendOrderPlacedNotification(orderId);
-        break;
-      case 'order_confirmed':
-        await this.sendOrderConfirmedNotification(orderId);
-        break;
-      case 'order_shipped':
-        await this.sendOrderShippedNotification(orderId);
-        break;
-      case 'order_delivered':
-        await this.sendOrderDeliveredNotification(orderId);
-        break;
-      case 'order_cancelled':
-        await this.sendOrderCancelledNotification(orderId);
-        break;
-      default:
-        console.log('Unknown notification type:', type);
+
+  async sendExpoPush(expoPushToken: string, title: string, body: string, data: object = {}) {
+    if (!expoPushToken?.startsWith('ExponentPushToken')) return;
+    try {
+      await fetch(EXPO_PUSH_URL, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Accept-encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ to: expoPushToken, sound: 'default', title, body, data }),
+      });
+    } catch (err) {
+      console.error('Expo push send failed:', err);
     }
   }
 
-  // Send email notification
+  async notifyRiderNewOrder(riderId: string, orderId: string, orderCode: string, storeName: string) {
+    const { data: partner } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('expo_push_token')
+      .eq('user_id', riderId)
+      .maybeSingle();
+
+    if (partner?.expo_push_token) {
+      await this.sendExpoPush(
+        partner.expo_push_token,
+        'New Order!',
+        `Order #${orderCode} from ${storeName} is waiting for you.`,
+        { orderId, type: 'new_order' }
+      );
+    }
+  }
+
+  async sendOrderNotification(orderId: string, type: string) {
+    console.log(`Sending ${type} notification for order ${orderId}`);
+    switch (type) {
+      case 'order_placed':      return this.sendOrderPlacedNotification(orderId);
+      case 'order_confirmed':   return this.sendOrderConfirmedNotification(orderId);
+      case 'order_shipped':     return this.sendOrderShippedNotification(orderId);
+      case 'order_delivered':   return this.sendOrderDeliveredNotification(orderId);
+      case 'order_cancelled':   return this.sendOrderCancelledNotification(orderId);
+      default: console.log('Unknown notification type:', type);
+    }
+  }
+
   async sendEmail(to: string, subject: string, _body: string) {
-    // TODO: Integrate with email service (SendGrid, AWS SES, etc.)
+    // TODO: SendGrid / AWS SES
     console.log(`Sending email to ${to}: ${subject}`);
     return { success: true };
   }
 
-  // Send SMS notification
   async sendSMS(to: string, message: string) {
-    // TODO: Integrate with SMS service (Twilio, AWS SNS, etc.)
+    // TODO: Twilio / AWS SNS
     console.log(`Sending SMS to ${to}: ${message}`);
     return { success: true };
   }
 
-  // Send push notification
-  async sendPushNotification(userId: string, title: string, _body: string) {
-    // TODO: Integrate with push notification service (FCM, etc.)
-    console.log(`Sending push to user ${userId}: ${title}`);
+  async sendPushNotification(userId: string, title: string, body: string) {
+    const { data: partner } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('expo_push_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (partner?.expo_push_token) {
+      await this.sendExpoPush(partner.expo_push_token, title, body);
+    }
     return { success: true };
   }
 
-  // Order-specific notification methods
-  private async sendOrderPlacedNotification(orderId: string) {
-    // TODO: Fetch order details and send notification
-    console.log('Order placed notification for:', orderId);
-  }
-
-  private async sendOrderConfirmedNotification(orderId: string) {
-    console.log('Order confirmed notification for:', orderId);
-  }
-
-  private async sendOrderShippedNotification(orderId: string) {
-    console.log('Order shipped notification for:', orderId);
-  }
-
-  private async sendOrderDeliveredNotification(orderId: string) {
-    console.log('Order delivered notification for:', orderId);
-  }
-
-  private async sendOrderCancelledNotification(orderId: string) {
-    console.log('Order cancelled notification for:', orderId);
-  }
+  private async sendOrderPlacedNotification(_orderId: string) {}
+  private async sendOrderConfirmedNotification(_orderId: string) {}
+  private async sendOrderShippedNotification(_orderId: string) {}
+  private async sendOrderDeliveredNotification(_orderId: string) {}
+  private async sendOrderCancelledNotification(_orderId: string) {}
 }
 
 export const notificationService = new NotificationService();

@@ -1,0 +1,21 @@
+import { Router } from 'express';
+import { DeliveryPartnerController, requireRider } from '../controllers/deliveryPartner.controller.js';
+
+const router = Router();
+const ctrl = new DeliveryPartnerController();
+
+// All routes require a valid rider session token
+router.use(requireRider);
+
+router.get('/profile',                      ctrl.getProfile.bind(ctrl));
+router.patch('/status',                     ctrl.updateStatus.bind(ctrl));
+router.post('/location',                    ctrl.updateLocation.bind(ctrl));
+router.get('/orders',                       ctrl.getOrders.bind(ctrl));
+router.get('/orders/:orderId',              ctrl.getOrderById.bind(ctrl));
+router.post('/orders/:orderId/accept',      ctrl.acceptOrder.bind(ctrl));
+router.post('/orders/:orderId/reject',      ctrl.rejectOrder.bind(ctrl));
+router.post('/orders/:orderId/picked-up',   ctrl.markPickedUp.bind(ctrl));
+router.post('/orders/:orderId/delivered',   ctrl.markDelivered.bind(ctrl));
+router.patch('/push-token',                 ctrl.updatePushToken.bind(ctrl));
+
+export default router;

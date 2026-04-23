@@ -193,6 +193,15 @@ export class AuthController {
           const token = crypto.randomUUID();
           const { password_hash: _, ...userWithoutPassword } = existingUser;
           console.log(`👤 Existing ${requestedRole}, logging in:`, existingUser.id, existingUser.name);
+
+          // Persist token so delivery-partner API can authenticate requests
+          if (requestedRole === 'delivery_partner') {
+            await supabaseAdmin
+              .from('delivery_partners')
+              .update({ session_token: token })
+              .eq('user_id', existingUser.id);
+          }
+
           return res.json({
             success: true,
             message: 'OTP verified successfully',

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
+import { notificationService } from '../services/notification.service.js';
 
 export class DeliveryController {
   /** Start mock delivery simulation (driver follows road routes). Runs in background. */
@@ -109,6 +110,25 @@ export class DeliveryController {
 
       const result = await databaseService.assignDeliveryAgent(orderId, agentId, partnerId);
       res.json(result);
+
+      // Push notification to the rider (best-effort, after response)
+      setImmediate(async () => {
+        try {
+          const { supabaseAdmin } = await import('../config/database.js');
+          const { data: order } = await supabaseAdmin
+            .from('customer_orders')
+            .select('order_code')
+            .eq('id', orderId)
+            .maybeSingle();
+          const { data: storeOrder } = await supabaseAdmin
+            .from('store_orders')
+            .select('stores(name)')
+            .eq('customer_order_id', orderId)
+            .maybeSingle();
+          const storeName = (storeOrder as any)?.stores?.name || 'a store';
+          await notificationService.notifyRiderNewOrder(agentId, orderId, order?.order_code || orderId, storeName);
+        } catch { /* non-critical */ }
+      });
     } catch (error) {
       console.error('Error assigning delivery agent:', error);
       res.status(500).json({ error: 'Failed to assign delivery agent' });
