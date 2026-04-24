@@ -20,7 +20,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { getOrderById, updateOrderStatus, Order } from '../../services/adminService';
-import { downloadShopkeeperInvoice } from '../../utils/invoice';
+import { apiUrl } from '../../utils/apiBase';
 
 const OrderDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -29,6 +29,7 @@ const OrderDetailPage = () => {
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
+  const [invoiceLoading, setInvoiceLoading] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -114,31 +115,22 @@ const OrderDetailPage = () => {
     }
   };
 
-  const handleShopkeeperInvoiceDownload = () => {
+  const handleAdminInvoiceDownload = async (docType: 'customer' | 'store' | 'delivery') => {
     if (!order) return;
-    const shippingAddress = order.shipping_address
-      ? `${order.shipping_address.address || ''}, ${order.shipping_address.city || ''}, ${order.shipping_address.state || ''} - ${order.shipping_address.pincode || ''}`
-      : '';
-
-    downloadShopkeeperInvoice({
-      id: order.id,
-      orderNumber: order.order_number,
-      createdAt: order.created_at,
-      customerName: order.customer_name,
-      customerEmail: order.customer_email,
-      customerPhone: order.customer_phone,
-      paymentMethod: order.payment_method,
-      paymentStatus: order.payment_status,
-      shippingAddress,
-      subtotal: order.subtotal,
-      deliveryFee: order.delivery_fee,
-      total: order.order_total,
-      items: (order.items || []).map((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        price: item.price
-      }))
-    });
+    const adminId = localStorage.getItem('admin_id') || '';
+    setInvoiceLoading(docType);
+    try {
+      const res = await fetch(apiUrl(`/api/invoices/order/${order.id}/admin/${docType}`), {
+        headers: { Authorization: `Bearer ${adminId}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch invoice');
+      const data = await res.json();
+      if (data.url) window.open(data.url, '_blank');
+    } catch {
+      alert(`Invoice download (${docType}) failed. Please try again.`);
+    } finally {
+      setInvoiceLoading(null);
+    }
   };
 
   if (loading) {
@@ -374,12 +366,29 @@ const OrderDetailPage = () => {
                   <p className="text-sm text-gray-500">Payment Method</p>
                   <p className="font-semibold text-gray-800 mt-1">{order.payment_method || 'N/A'}</p>
                 </div>
-                <button
-                  onClick={handleShopkeeperInvoiceDownload}
-                  className="w-full mt-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Download Shopkeeper Invoice
-                </button>
+                <div className="flex flex-col gap-2 mt-2">
+                  <button
+                    onClick={() => handleAdminInvoiceDownload('store')}
+                    disabled={invoiceLoading === 'store'}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                  >
+                    {invoiceLoading === 'store' ? 'Generating…' : 'Download Merchant Invoice'}
+                  </button>
+                  <button
+                    onClick={() => handleAdminInvoiceDownload('customer')}
+                    disabled={invoiceLoading === 'customer'}
+                    className="w-full px-4 py-2 border border-blue-300 rounded-lg text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-colors disabled:opacity-50"
+                  >
+                    {invoiceLoading === 'customer' ? 'Generating…' : 'Download Customer Invoice'}
+                  </button>
+                  <button
+                    onClick={() => handleAdminInvoiceDownload('delivery')}
+                    disabled={invoiceLoading === 'delivery'}
+                    className="w-full px-4 py-2 border border-green-300 rounded-lg text-sm font-semibold text-green-700 hover:bg-green-50 transition-colors disabled:opacity-50"
+                  >
+                    {invoiceLoading === 'delivery' ? 'Generating…' : 'Download Delivery Slip'}
+                  </button>
+                </div>
               </div>
             </div>
 

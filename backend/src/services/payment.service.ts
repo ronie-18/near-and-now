@@ -451,6 +451,13 @@ export class PaymentService {
         await this.persistGatewayResponse(internalOrderId, payment);
         await databaseService.updateOrderPaymentStatus(internalOrderId, 'paid', payment.id, payment.order_id);
         console.log('[WEBHOOK] Payment captured processed', { eventId, paymentId: payment.id, internalOrderId });
+
+        // Fire-and-forget invoice generation (idempotent)
+        import('../services/invoice.service.js').then(({ invoiceService }) => {
+          invoiceService.generateForOrder(internalOrderId).catch((err: unknown) => {
+            console.error('[INVOICE] Webhook invoice generation failed', { internalOrderId, err });
+          });
+        }).catch(() => {/* ignore dynamic import failure */});
       }
     } else if (eventType === 'payment.failed') {
       const payment = event.payload?.payment?.entity;

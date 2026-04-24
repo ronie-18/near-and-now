@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { RazorpayApiError, paymentService } from '../services/payment.service.js';
 import { databaseService } from '../services/database.service.js';
+import { invoiceService } from '../services/invoice.service.js';
 
 export class PaymentController {
   // Create payment order (for online payment)
@@ -103,6 +104,12 @@ export class PaymentController {
         razorpayOrderId
       );
       console.log('[PAYMENT] Verification end', { internalOrderId, paymentId, razorpayOrderId, status: 'paid' });
+
+      // Fire-and-forget invoice generation (idempotent, non-blocking)
+      invoiceService.generateForOrder(internalOrderId).catch((err) => {
+        console.error('[INVOICE] Background generation failed for order', internalOrderId, err);
+      });
+
       res.json({ success: true, message: 'Payment verified successfully' });
     } catch (error) {
       console.error('[PAYMENT] Error verifying payment:', error);

@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { formatPrice } from '../utils/formatters';
 import { Order } from '../services/supabase';
 import { fetchCustomerOrders } from '../services/orderService';
-import { downloadCustomerInvoice } from '../utils/invoice';
+import { apiUrl } from '../utils/apiBase';
 
 // Order status badge component
 const OrderStatusBadge = ({ status }: { status: string }) => {
@@ -47,6 +47,7 @@ const OrdersPage = () => {
   const [loading, setLoading] = useState(true);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [invoiceLoading, setInvoiceLoading] = useState<string | null>(null);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -111,30 +112,21 @@ const OrdersPage = () => {
     return statusMap[status] || status;
   };
 
-  const handleCustomerInvoiceDownload = (order: Order) => {
-    const shippingAddress = order.shipping_address
-      ? `${order.shipping_address.address || ''}, ${order.shipping_address.city || ''}, ${order.shipping_address.state || ''} - ${order.shipping_address.pincode || ''}`
-      : '';
-
-    downloadCustomerInvoice({
-      id: order.id,
-      orderNumber: order.order_number,
-      createdAt: order.created_at,
-      customerName: user?.name,
-      customerEmail: user?.email ?? undefined,
-      customerPhone: user?.phone ?? undefined,
-      paymentMethod: order.payment_method,
-      paymentStatus: order.payment_status,
-      shippingAddress,
-      subtotal: order.subtotal,
-      deliveryFee: order.delivery_fee,
-      total: order.order_total,
-      items: (order.items || []).map((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        price: item.price
-      }))
-    });
+  const handleCustomerInvoiceDownload = async (order: Order) => {
+    if (!user?.id) return;
+    setInvoiceLoading(order.id);
+    try {
+      const res = await fetch(apiUrl(`/api/invoices/order/${order.id}/customer`), {
+        headers: { Authorization: `Bearer ${user.id}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch invoice');
+      const data = await res.json();
+      if (data.url) window.open(data.url, '_blank');
+    } catch {
+      alert('Invoice download failed. Please try again.');
+    } finally {
+      setInvoiceLoading(null);
+    }
   };
 
   if (isLoading || loading) {
@@ -302,9 +294,10 @@ const OrdersPage = () => {
                     <div className="mt-6 flex justify-end gap-3">
                       <button
                         onClick={() => handleCustomerInvoiceDownload(order)}
-                        className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-100 transition-colors text-sm font-medium"
+                        disabled={invoiceLoading === order.id}
+                        className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-100 transition-colors text-sm font-medium disabled:opacity-50"
                       >
-                        Download Invoice
+                        {invoiceLoading === order.id ? 'Generating…' : 'Download Invoice'}
                       </button>
                       <Link
                         to={`/track/${order.id}`}
