@@ -148,7 +148,7 @@ async function fetchOrderData(orderId: string) {
       id, order_code, customer_id, status, payment_status, payment_method,
       subtotal_amount, delivery_fee, discount_amount, total_amount,
       delivery_address, placed_at, created_at,
-      razorpay_payment_id, razorpay_order_id
+      razorpay_payment_id
     `)
     .eq('id', orderId)
     .single();
@@ -209,7 +209,14 @@ async function fetchOrderData(orderId: string) {
     deliveryPartner = dp;
   }
 
-  return { order, customer, appUser, storeOrder, items, store, deliveryPartner };
+  // razorpay_order_id lives in customer_payments, not customer_orders
+  const { data: payment } = await supabaseAdmin
+    .from('customer_payments')
+    .select('razorpay_order_id')
+    .eq('customer_order_id', orderId)
+    .maybeSingle();
+
+  return { order, customer, appUser, storeOrder, items, store, deliveryPartner, payment };
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +224,7 @@ async function fetchOrderData(orderId: string) {
 // ---------------------------------------------------------------------------
 
 function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): InvoiceData {
-  const { order, customer, appUser, storeOrder, items, store, deliveryPartner } = raw;
+  const { order, customer, appUser, storeOrder, items, store, deliveryPartner, payment } = raw;
   const o = order as any;
 
   const buyerName = [customer?.name, customer?.surname].filter(Boolean).join(' ') || appUser?.name || 'Customer';
@@ -299,7 +306,7 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
     payment_method: String(o.payment_method || 'razorpay'),
     payment_status: String(o.payment_status || 'paid'),
     razorpay_payment_id: o.razorpay_payment_id || '',
-    razorpay_order_id: o.razorpay_order_id || '',
+    razorpay_order_id: (payment as any)?.razorpay_order_id || '',
     items: lineItems,
     delivery_partner_name: deliveryPartner?.name || '',
     delivery_partner_phone: deliveryPartner?.phone || '',
