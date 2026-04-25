@@ -330,181 +330,341 @@ function r(n: number): string {
 
 function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margins: { top: 40, bottom: 40, left: 40, right: 40 } });
+    const doc = new PDFDocument({ size: 'A4', margins: { top: 30, bottom: 30, left: 30, right: 30 } });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const W = doc.page.width - 80; // usable width
-    const L = 40; // left margin
+    const L = 30, R = 565, W = R - L; // 535pt usable
 
-    // ── Header ──────────────────────────────────────────────────────────────
-    doc.rect(L, 30, W, 60).fill(BRAND_DARK);
-    doc.fillColor('#ffffff').fontSize(22).font('Helvetica-Bold').text('NEAR & NOW', L + 14, 44);
-    doc.fillColor('#ffffff').fontSize(9).font('Helvetica').text('TAX INVOICE', L + 14, 68);
-    doc.fillColor('#ffffff').fontSize(9).text(`Invoice: ${inv.invoice_number}`, L + W - 160, 44);
-    doc.fillColor('#ffffff').fontSize(9).text(`Date: ${inv.invoice_date}`, L + W - 160, 58);
-    doc.fillColor(BRAND_ACCENT).fontSize(9).text(`Order: ${inv.order_id.slice(0, 8).toUpperCase()}`, L + W - 160, 72);
+    const vLine = (rx: number, y1: number, y2: number) =>
+      doc.moveTo(rx, y1).lineTo(rx, y2).strokeColor('#000000').lineWidth(0.5).stroke();
+    const box = (x: number, ry: number, w: number, h: number) =>
+      doc.rect(x, ry, w, h).strokeColor('#000000').lineWidth(0.5).stroke();
+    const t = (text: string, x: number, ry: number, opts: Record<string, unknown> = {}) =>
+      doc.text(text, x, ry, { lineBreak: false, ...opts });
 
-    doc.moveDown(4.5);
+    let y = 30;
 
-    // ── Seller / Buyer block ─────────────────────────────────────────────────
-    doc.fillColor(BRAND_DARK).fontSize(9).font('Helvetica-Bold').text('SOLD BY', L, doc.y);
-    const sellerY = doc.y + 4;
-    doc.fillColor('#333333').font('Helvetica').fontSize(9)
-      .text(inv.seller_name, L, sellerY)
-      .text(inv.seller_address || '', L, doc.y);
-    if (inv.seller_gstin) doc.text(`GSTIN: ${inv.seller_gstin}`, L, doc.y);
-    if (inv.seller_fssai) doc.text(`FSSAI: ${inv.seller_fssai}`, L, doc.y);
+    // ── 1. HEADER ───────────────────────────────────────────────────────────
+    {
+      const h = 54;
+      box(L, y, W, h);
+      const divX = L + 275;
+      vLine(divX, y, y + h);
 
-    const buyerX = L + W / 2 + 10;
-    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(9).text('BILL TO', buyerX, sellerY - 13);
-    doc.fillColor('#333333').font('Helvetica').fontSize(9)
-      .text(inv.buyer_name, buyerX, sellerY)
-      .text(inv.buyer_phone, buyerX, doc.y)
-      .text(inv.buyer_address || '', buyerX, doc.y, { width: W / 2 - 10 });
-    if (inv.buyer_state) doc.text(`State: ${inv.buyer_state}  PIN: ${inv.buyer_pincode}`, buyerX, doc.y);
+      // Orange logo box
+      doc.rect(L + 5, y + 9, 36, 36).fill('#FF8C00').stroke();
+      doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold');
+      t('N&N', L + 14, y + 23);
 
-    doc.moveDown(1);
-    doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#dddddd').stroke();
-    doc.moveDown(0.5);
+      doc.fillColor('#1a1a1a').fontSize(19).font('Helvetica-Bold');
+      t('NEAR & NOW', L + 48, y + 9);
+      doc.fillColor('#FF8C00').fontSize(8.5).font('Helvetica-Oblique');
+      t('Digital Dukan, Local Dil Se', L + 48, y + 34);
 
-    // Payment info bar
-    doc.rect(L, doc.y, W, 20).fill(GREY_LIGHT);
-    doc.fillColor(GREY_TEXT).fontSize(8).font('Helvetica')
-      .text(`Payment: ${inv.payment_method.toUpperCase()}  |  Status: ${inv.payment_status.toUpperCase()}`, L + 8, doc.y + 5);
-    if (inv.razorpay_payment_id) {
-      doc.text(`Razorpay ID: ${inv.razorpay_payment_id}`, L + 260, doc.y - 8);
-    }
-    doc.moveDown(1.8);
+      doc.fillColor('#1a1a1a').fontSize(17).font('Helvetica-Bold');
+      t('Tax Invoice', divX + 5, y + 18, { width: R - divX - 10, align: 'right' });
 
-    // ── Items Table ──────────────────────────────────────────────────────────
-    const cols = { no: 0, name: 20, hsn: 180, qty: 240, rate: 290, taxable: 355, gst: 415, total: 475 };
-
-    // Table header
-    doc.rect(L, doc.y, W, 18).fill(BRAND_DARK);
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
-    const hY = doc.y + 4;
-    doc.text('#', L + cols.no + 2, hY);
-    doc.text('ITEM', L + cols.name, hY);
-    doc.text('HSN', L + cols.hsn, hY);
-    doc.text('QTY', L + cols.qty, hY);
-    doc.text('RATE', L + cols.rate, hY);
-    doc.text('TAXABLE', L + cols.taxable, hY);
-    doc.text('GST', L + cols.gst, hY);
-    doc.text('TOTAL', L + cols.total, hY);
-    doc.moveDown(1.6);
-
-    // Rows
-    let rowY = doc.y;
-    inv.items.forEach((item, i) => {
-      const bg = i % 2 === 0 ? '#ffffff' : GREY_LIGHT;
-      doc.rect(L, rowY, W, 16).fill(bg);
-      doc.fillColor('#333333').font('Helvetica').fontSize(8);
-      doc.text(String(item.line_no), L + cols.no + 2, rowY + 3, { width: 18 });
-      doc.text(item.product_name, L + cols.name, rowY + 3, { width: 155, ellipsis: true });
-      doc.text(item.hsn_code, L + cols.hsn, rowY + 3);
-      doc.text(item.quantity.toString(), L + cols.qty, rowY + 3);
-      doc.text(r(item.selling_price), L + cols.rate, rowY + 3);
-      doc.text(r(item.taxable_value), L + cols.taxable, rowY + 3);
-      doc.text(`${item.gst_percent}%`, L + cols.gst, rowY + 3);
-      doc.text(r(item.line_total), L + cols.total, rowY + 3);
-      rowY += 16;
-    });
-
-    doc.y = rowY;
-    doc.moveDown(0.3);
-    doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#cccccc').stroke();
-
-    // ── Totals ───────────────────────────────────────────────────────────────
-    const totalsX = L + W - 220;
-    const totalsW = 220;
-    doc.moveDown(0.5);
-    const totStart = doc.y;
-
-    function totRow(label: string, val: string, bold = false) {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9)
-        .fillColor(bold ? BRAND_DARK : '#333333')
-        .text(label, totalsX, doc.y, { width: 140 })
-        .text(val, totalsX + 140, doc.y - 11, { width: 80, align: 'right' });
-      doc.moveDown(0.4);
+      y += h;
     }
 
-    totRow('Subtotal:', r(inv.subtotal));
-    if (inv.discount_amount > 0) totRow('Discount:', `-${r(inv.discount_amount)}`);
-    totRow('Taxable Amount:', r(inv.taxable_amount));
-    if (inv.cgst_total > 0) totRow(`CGST (${inv.items[0]?.cgst_percent || 0}%):`, r(inv.cgst_total));
-    if (inv.sgst_total > 0) totRow(`SGST (${inv.items[0]?.sgst_percent || 0}%):`, r(inv.sgst_total));
-    if (inv.igst_total > 0) totRow(`IGST (${inv.items[0]?.igst_percent || 0}%):`, r(inv.igst_total));
-    if (inv.cess_total > 0) totRow('CESS:', r(inv.cess_total));
-    totRow('Delivery Fee:', r(inv.delivery_fee));
+    // ── 2. SELLER BLOCK ─────────────────────────────────────────────────────
+    {
+      const qrW = 135;
+      const infoW = W - qrW;
+      const qrX = L + infoW;
 
-    // Grand total box
-    doc.rect(totalsX, doc.y, totalsW, 22).fill(BRAND_DARK);
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11)
-      .text('GRAND TOTAL:', totalsX + 6, doc.y + 5, { width: 140 })
-      .text(r(inv.grand_total), totalsX + 140, doc.y - 13, { width: 74, align: 'right' });
-    doc.moveDown(2.2);
+      // "Sold By / Seller" label row
+      const labelH = 14;
+      box(L, y, W, labelH);
+      vLine(qrX, y, y + labelH);
+      doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+      t('Sold By / Seller', L + 4, y + 3);
+      y += labelH;
 
-    // Amount in words
-    doc.rect(L, doc.y, totalsX - L - 10, doc.y - totStart + 60).fill(GREY_LIGHT);
-    doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(8)
-      .text('Amount in Words:', L + 6, totStart + 4)
-      .text(inv.amount_in_words, L + 6, totStart + 16, { width: totalsX - L - 20 });
+      // Seller name + address row
+      const nameH = 26;
+      box(L, y, infoW, nameH);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t(inv.seller_name, L + 4, y + 3);
+      if (inv.seller_address) {
+        doc.fillColor('#000000').fontSize(7).font('Helvetica');
+        t(inv.seller_address, L + 4, y + 14, { width: infoW - 8, ellipsis: true });
+      }
 
-    // ── GST Summary ──────────────────────────────────────────────────────────
-    doc.moveDown(2);
-    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(9).text('GST SUMMARY', L, doc.y);
-    doc.moveDown(0.3);
-
-    doc.rect(L, doc.y, W, 16).fill(BRAND_DARK);
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
-    const gY = doc.y + 3;
-    doc.text('HSN Code', L + 4, gY);
-    doc.text('Taxable (₹)', L + 80, gY);
-    doc.text('CGST', L + 180, gY);
-    doc.text('SGST', L + 270, gY);
-    doc.text('IGST', L + 360, gY);
-    doc.text('Total Tax', L + 440, gY);
-    doc.moveDown(1.5);
-
-    // Group by HSN
-    const hsnMap = new Map<string, { taxable: number; cgst: number; sgst: number; igst: number }>();
-    inv.items.forEach((item) => {
-      const cur = hsnMap.get(item.hsn_code) || { taxable: 0, cgst: 0, sgst: 0, igst: 0 };
-      hsnMap.set(item.hsn_code, {
-        taxable: round2(cur.taxable + item.taxable_value),
-        cgst: round2(cur.cgst + item.cgst_amount),
-        sgst: round2(cur.sgst + item.sgst_amount),
-        igst: round2(cur.igst + item.igst_amount),
+      // Info rows: GSTIN, FSSAI, CIN, PAN
+      const infoRows = [
+        { label: 'GSTIN', value: `: ${inv.seller_gstin || 'N/A'}`, labelW: 55 },
+        { label: 'FSSAI License Number', value: `:${inv.seller_fssai || 'N/A'}`, labelW: 95 },
+        { label: 'CIN', value: `: ${inv.seller_cin || 'N/A'}`, labelW: 55 },
+        { label: 'PAN', value: `: ${inv.seller_pan || 'N/A'}`, labelW: 55 },
+      ];
+      const infoRowH = 13;
+      let rowY = y + nameH;
+      infoRows.forEach(row => {
+        box(L, rowY, infoW, infoRowH);
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+        t(row.label, L + 4, rowY + 3);
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+        t(row.value, L + row.labelW + 4, rowY + 3, { width: infoW - row.labelW - 10, ellipsis: true });
+        rowY += infoRowH;
       });
-    });
 
-    let gRowY = doc.y;
-    Array.from(hsnMap.entries()).forEach(([hsn, vals], i) => {
-      doc.rect(L, gRowY, W, 15).fill(i % 2 === 0 ? '#ffffff' : GREY_LIGHT);
-      doc.fillColor('#333333').font('Helvetica').fontSize(8);
-      doc.text(hsn, L + 4, gRowY + 3);
-      doc.text(r(vals.taxable), L + 80, gRowY + 3);
-      doc.text(r(vals.cgst), L + 180, gRowY + 3);
-      doc.text(r(vals.sgst), L + 270, gRowY + 3);
-      doc.text(r(vals.igst), L + 360, gRowY + 3);
-      doc.text(r(vals.cgst + vals.sgst + vals.igst), L + 440, gRowY + 3);
-      gRowY += 15;
-    });
+      const totalSellerH = nameH + infoRows.length * infoRowH;
 
-    doc.y = gRowY;
+      // QR placeholder (spans all seller rows below the label row)
+      box(qrX, y, qrW, totalSellerH);
+      const qrSize = 52;
+      const qrPX = qrX + (qrW - qrSize) / 2;
+      const qrPY = y + 6;
+      box(qrPX, qrPY, qrSize, qrSize);
+      doc.moveTo(qrPX, qrPY).lineTo(qrPX + qrSize, qrPY + qrSize).strokeColor('#aaaaaa').lineWidth(0.3).stroke();
+      doc.moveTo(qrPX + qrSize, qrPY).lineTo(qrPX, qrPY + qrSize).strokeColor('#aaaaaa').lineWidth(0.3).stroke();
+      doc.lineWidth(0.5).strokeColor('#000000');
 
-    // ── Footer ───────────────────────────────────────────────────────────────
-    doc.moveDown(1.5);
-    doc.rect(L, doc.y, W, 1).fill('#dddddd');
-    doc.moveDown(0.5);
-    doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(7.5)
-      .text('This is a computer-generated invoice. No signature required.', L, doc.y, { align: 'center', width: W });
-    doc.text('Near & Now — Your Neighbourhood, Delivered.', L, doc.y + 2, { align: 'center', width: W });
-    if (inv.razorpay_payment_id) {
-      doc.text(`Payment Reference: ${inv.razorpay_payment_id}`, L, doc.y + 2, { align: 'center', width: W });
+      doc.fillColor('#000000').fontSize(6.5).font('Helvetica');
+      t(`Invoice Number : ${inv.invoice_number}`, qrX + 3, qrPY + qrSize + 5, { width: qrW - 6, align: 'center' });
+
+      y += totalSellerH;
+    }
+
+    // ── 3. INVOICE TO / ORDER BLOCK ──────────────────────────────────────────
+    {
+      const blockH = 66;
+      box(L, y, W, blockH);
+      const splitX = L + Math.round(W * 0.58);
+      vLine(splitX, y, y + blockH);
+
+      const buyerLabelW = 75;
+      const invoiceDateStr = (() => {
+        try {
+          return new Date(inv.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric',
+          });
+        } catch {
+          return inv.invoice_date;
+        }
+      })();
+
+      // Left: buyer details
+      const buyerRows: [string, string][] = [
+        ['Invoice To', ': Near & Now'],
+        ['Name', `: ${inv.buyer_name}`],
+        ['Address Pin code', `: ${inv.buyer_address || ''}`],
+        ['State', `: ${inv.buyer_state || 'West Bengal'}`],
+      ];
+      let ly = y + 4;
+      buyerRows.forEach(([label, value]) => {
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+        t(label, L + 4, ly);
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+        t(value, L + buyerLabelW + 4, ly, { width: splitX - L - buyerLabelW - 10, ellipsis: true });
+        ly += 15;
+      });
+
+      // Right: order details
+      const odX = splitX + 5;
+      const odLW = 55;
+      let oy = y + 4;
+
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Order Id', odX, oy);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`: ${inv.order_id}`, odX + odLW, oy, { width: R - odX - odLW - 5, ellipsis: true });
+      oy += 14;
+
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Invoice', odX, oy);
+      oy += 9;
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Date', odX, oy);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`: ${invoiceDateStr}`, odX + odLW, oy);
+      oy += 14;
+
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Place of', odX, oy);
+      oy += 9;
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Supply', odX, oy);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`:${inv.place_of_supply || inv.buyer_state || 'West Bengal'}`, odX + odLW, oy);
+
+      y += blockH;
+    }
+
+    // ── 4. ITEMS TABLE ───────────────────────────────────────────────────────
+    {
+      const colDefs = [
+        { label: 'Sr. no',             w: 22 },
+        { label: 'UPC',                w: 32 },
+        { label: 'Item Description',   w: 90 },
+        { label: 'MRP',                w: 30 },
+        { label: 'Discount',           w: 30 },
+        { label: 'Qty.',               w: 20 },
+        { label: 'Taxable\nValue',     w: 38 },
+        { label: 'CGST\n(%)',          w: 26 },
+        { label: 'CGST\n(INR)',        w: 30 },
+        { label: 'SGST\n(%)',          w: 26 },
+        { label: 'SGST\n(INR)',        w: 30 },
+        { label: 'Cess\n(%)',          w: 26 },
+        { label: 'Additional\nCess Val', w: 37 },
+        { label: 'Total',              w: 22 },
+      ];
+      const rawW = colDefs.reduce((s, c) => s + c.w, 0);
+      const scale = W / rawW;
+      const cw = colDefs.map(c => c.w * scale);
+
+      // Header row (2-line text, so taller)
+      const hdrH = 22;
+      box(L, y, W, hdrH);
+      let cx = L;
+      colDefs.forEach((col, i) => {
+        if (i > 0) vLine(cx, y, y + hdrH);
+        doc.fillColor('#000000').fontSize(6.5).font('Helvetica-Bold')
+          .text(col.label, cx + 1, y + 2, { width: cw[i] - 2, align: 'center', lineBreak: true });
+        cx += cw[i];
+      });
+      y += hdrH;
+
+      // Data rows
+      inv.items.forEach(item => {
+        const rowH = 26;
+        box(L, y, W, rowH);
+        cx = L;
+        const vals = [
+          String(item.line_no),
+          item.hsn_code || '',
+          item.product_name,
+          item.mrp.toFixed(2),
+          item.discount_amount.toFixed(2),
+          String(item.quantity),
+          item.taxable_value.toFixed(2),
+          String(item.cgst_percent),
+          item.cgst_amount.toFixed(2),
+          String(item.sgst_percent),
+          item.sgst_amount.toFixed(2),
+          String(item.cess_percent),
+          item.cess_amount.toFixed(2),
+          item.line_total.toFixed(2),
+        ];
+        vals.forEach((v, i) => {
+          if (i > 0) vLine(cx, y, y + rowH);
+          const align: 'left' | 'right' | 'center' = i === 2 ? 'left' : (i < 2 ? 'center' : 'right');
+          doc.fillColor('#000000').fontSize(7).font('Helvetica')
+            .text(v, cx + 2, y + 4, { width: cw[i] - 4, align, lineBreak: false, ellipsis: true });
+          cx += cw[i];
+        });
+        y += rowH;
+      });
+
+      // Total row
+      const totRowH = 14;
+      box(L, y, W, totRowH);
+      cx = L;
+      colDefs.forEach((_, i) => {
+        if (i > 0) vLine(cx, y, y + totRowH);
+        let val = '';
+        const totalQty = inv.items.reduce((s, it) => s + it.quantity, 0);
+        if (i === 0) val = 'Total';
+        else if (i === 5) val = String(totalQty);
+        else if (i === 8) val = inv.cgst_total.toFixed(2);
+        else if (i === 10) val = inv.sgst_total.toFixed(2);
+        else if (i === 13) val = inv.grand_total.toFixed(2);
+        if (val) {
+          doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold')
+            .text(val, cx + 2, y + 3, { width: cw[i] - 4, align: i === 0 ? 'left' : 'right', lineBreak: false });
+        }
+        cx += cw[i];
+      });
+      y += totRowH;
+    }
+
+    // ── 5. AMOUNT IN WORDS ───────────────────────────────────────────────────
+    {
+      const wH = 16;
+      box(L, y, W, wH);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Amount in', L + 4, y + 4);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Words', L + 4, y + 12);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(inv.amount_in_words, L + 55, y + 4, { width: W - 60, lineBreak: false });
+      y += wH;
+    }
+
+    // ── 6. FOOTER SELLER BLOCK ───────────────────────────────────────────────
+    {
+      const sigW = 110;
+      const infoW = W - sigW;
+      const sigX = L + infoW;
+      const fH = 60;
+      box(L, y, W, fH);
+      vLine(sigX, y, y + fH);
+
+      // Company name line
+      doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+      t('Near & Now Digital Commerce ', L + 4, y + 5);
+      doc.fillColor('#000000').fontSize(8).font('Helvetica-Oblique');
+      doc.text('(formerly known as Near & Now)', L + 4 + doc.widthOfString('Near & Now Digital Commerce '), y + 5, {
+        lineBreak: false, width: infoW - 10,
+      });
+
+      const midX = L + infoW / 2;
+
+      // Left column: GSTIN, CIN
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('GSTIN', L + 4, y + 22);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`  ${inv.seller_gstin || 'N/A'}`, L + 36, y + 22, { width: midX - L - 40, ellipsis: true });
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('CIN', L + 4, y + 36);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`  ${inv.seller_cin || 'N/A'}`, L + 36, y + 36, { width: midX - L - 40, ellipsis: true });
+
+      // Right column: FSSAI, PAN
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('FSSAI License Number', midX + 4, y + 22);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`  ${inv.seller_fssai || 'N/A'}`, midX + 95, y + 22, { width: sigX - midX - 100, ellipsis: true });
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('PAN', midX + 4, y + 36);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      t(`  ${inv.seller_pan || 'N/A'}`, midX + 36, y + 36, { width: sigX - midX - 40, ellipsis: true });
+
+      // Signature area
+      doc.fillColor('#000000').fontSize(7).font('Helvetica');
+      t('Authorised Signatory', sigX + 3, y + fH - 14, { width: sigW - 6, align: 'center' });
+
+      y += fH;
+    }
+
+    // ── 7. REVERSE CHARGE ────────────────────────────────────────────────────
+    {
+      const rcH = 14;
+      box(L, y, W, rcH);
+      doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+      t(`Whether the tax is payable on reverse charge - ${inv.reverse_charge ? 'Yes' : 'No'}`, L + 4, y + 3);
+      y += rcH;
+    }
+
+    // ── 8. TERMS & CONDITIONS ────────────────────────────────────────────────
+    {
+      y += 5;
+      doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold').text('Terms & Conditions:', L, y);
+      y += 13;
+      const terms = [
+        '1. If you have any issues or queries in respect of your order, please contact customer chat support through the Near & Now platform or drop in an email.',
+        "2. In case you need to get more information about the seller's FSSAI status, please visit https://foscos.fssai.gov.in/ and use the FBO search option with FSSAI License / Registration number.",
+        '3. Please note that we never ask for bank account details such as CVV, account number, UPI Pin, etc. across our support channels. For your safety please do not share these details with anyone over any medium.',
+        '4. MRP displayed on the platform is as printed on the product package. Actual MRP and amount payable may be a function of offers/discounts and/or the revised GST rates made effective by Govt.',
+      ];
+      terms.forEach(term => {
+        doc.fillColor('#000000').fontSize(6.5).font('Helvetica').text(term, L, y, { width: W, lineBreak: true });
+        y = doc.y + 2;
+      });
     }
 
     doc.end();
