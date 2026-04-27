@@ -236,15 +236,35 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
 
   const isInterState = false; // assume intra-state (same state for now)
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CALCULATION FLOW (matching spreadsheet logic):
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1. Item price: ₹200 (base, taxable)
+  // 2. Platform fee: ₹9.50 total → ₹9.05 base + ₹0.45 GST (reverse calc)
+  // 3. Handling fee: ₹5.50 total → ₹5.24 base + ₹0.26 GST (reverse calc)
+  // 4. Delivery fee: ₹20 (no GST)
+  // 5. Subtotal: ₹200 + ₹10 (item GST) + ₹9.50 + ₹5.50 + ₹20 = ₹245
+  // 6. Total GST: ₹10 (items) + ₹0.45 (platform) + ₹0.26 (handling) = ₹10.71
+  // 7. Grand total: ₹245
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Line items calculation
   const lineItems: InvoiceLineItem[] = items.map((item: any, idx: number) => {
     const qty = Number(item.quantity || 1);
-    const sellingPrice = Number(item.unit_price || 0);
-    const mrp = sellingPrice; // no separate MRP in current schema
-    const lineSubtotal = round2(sellingPrice * qty);
+    const unitPrice = Number(item.unit_price || 0);
+    const mrp = unitPrice; // no separate MRP in current schema
+
+    // Item price is the base price (without GST)
+    const itemSubtotal = round2(unitPrice * qty);
     const discountAmt = 0;
-    const taxableValue = round2(lineSubtotal - discountAmt);
+    const taxableValue = round2(itemSubtotal - discountAmt);
+
+    // GST calculation on taxable value
     const gstPercent = DEFAULT_GST_RATE;
     const gst = calcGstSplit(taxableValue, gstPercent, isInterState);
+
+    // Line total = taxable value + GST
+    const lineTotal = round2(taxableValue + gst.cgst_amount + gst.sgst_amount + gst.igst_amount);
 
     return {
       line_no: idx + 1,
@@ -253,7 +273,7 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
       hsn_code: '2106', // default HSN for misc food preparations
       unit: item.unit || 'nos',
       mrp,
-      selling_price: sellingPrice,
+      selling_price: unitPrice,
       quantity: qty,
       discount_amount: discountAmt,
       taxable_value: taxableValue,
@@ -261,19 +281,60 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
       ...gst,
       cess_percent: 0,
       cess_amount: 0,
-      line_total: round2(taxableValue + gst.cgst_amount + gst.sgst_amount + gst.igst_amount),
+      line_total: lineTotal,
     };
   });
 
-  const subtotal = round2(lineItems.reduce((s, i) => s + i.line_total, 0));
-  const discountAmount = round2(Number(o.discount_amount || 0));
+  // Sum up all line items
+  const itemsSubtotal = round2(lineItems.reduce((s, i) => s + i.line_total, 0));
+  const itemsTaxableAmount = round2(lineItems.reduce((s, i) => s + i.taxable_value, 0));
+  const itemsCgstTotal = round2(lineItems.reduce((s, i) => s + i.cgst_amount, 0));
+  const itemsSgstTotal = round2(lineItems.reduce((s, i) => s + i.sgst_amount, 0));
+  const itemsIgstTotal = round2(lineItems.reduce((s, i) => s + i.igst_amount, 0));
+
+  // Platform fee and handling fee (fixed amounts with embedded GST at 5%)
+  // Platform fee: ₹9.50 (includes GST), Handling fee: ₹5.50 (includes GST)
+  const platformFeeWithGst = 9.50;
+  const handlingFeeWithGst = 5.50;
+
+  // Reverse GST calculation: base = total / (1 + gst_rate)
+  // Example: 9.50 / 1.05 = 9.047619... ≈ 9.05 (base), GST = 0.45
+  const feeGstRate = 0.05; // 5% GST on fees
+  const platformFeeBase = round2(platformFeeWithGst / (1 + feeGstRate));
+  const platformFeeGst = round2(platformFeeWithGst - platformFeeBase);
+  const handlingFeeBase = round2(handlingFeeWithGst / (1 + feeGstRate));
+  const handlingFeeGst = round2(handlingFeeWithGst - handlingFeeBase);
+
+  // Delivery fee (no GST applicable)
   const deliveryFee = round2(Number(o.delivery_fee || 0));
-  const taxableAmount = round2(lineItems.reduce((s, i) => s + i.taxable_value, 0));
-  const cgstTotal = round2(lineItems.reduce((s, i) => s + i.cgst_amount, 0));
-  const sgstTotal = round2(lineItems.reduce((s, i) => s + i.sgst_amount, 0));
-  const igstTotal = round2(lineItems.reduce((s, i) => s + i.igst_amount, 0));
-  const cessTotal = round2(lineItems.reduce((s, i) => s + i.cess_amount, 0));
-  const grandTotal = round2(Number(o.total_amount || 0));
+
+  // Discount amount
+  const discountAmount = round2(Number(o.discount_amount || 0));
+
+  // Calculate subtotal before GST (items taxable + fees base + delivery)
+  // This represents the amount before final GST calculation
+  const subtotalBeforeFees = itemsTaxableAmount;
+
+  // Subtotal with fees (items + platform fee + handling fee + delivery - discount)
+  const subtotal = round2(itemsSubtotal + platformFeeWithGst + handlingFeeWithGst + deliveryFee - discountAmount);
+
+  // Total taxable amount (items + platform fee base + handling fee base)
+  const taxableAmount = round2(itemsTaxableAmount + platformFeeBase + handlingFeeBase);
+
+  // Total GST (items GST + platform fee GST + handling fee GST)
+  const totalGstAmount = round2(itemsCgstTotal + itemsSgstTotal + itemsIgstTotal + platformFeeGst + handlingFeeGst);
+
+  // Split fee GST into CGST/SGST for intra-state
+  const feeCgst = round2((platformFeeGst + handlingFeeGst) / 2);
+  const feeSgst = round2((platformFeeGst + handlingFeeGst) / 2);
+
+  const cgstTotal = round2(itemsCgstTotal + feeCgst);
+  const sgstTotal = round2(itemsSgstTotal + feeSgst);
+  const igstTotal = itemsIgstTotal; // No IGST for intra-state
+  const cessTotal = 0;
+
+  // Grand total = subtotal (already includes items with GST + fees with GST + delivery - discount)
+  const grandTotal = round2(subtotal);
 
   return {
     order_id: o.id,
@@ -396,10 +457,10 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
 
       // Info rows: GSTIN, FSSAI, CIN, PAN
       const infoRows = [
-        { label: 'GSTIN', value: `: ${inv.seller_gstin || 'N/A'}`, labelW: 55 },
-        { label: 'FSSAI License Number', value: `:${inv.seller_fssai || 'N/A'}`, labelW: 95 },
-        { label: 'CIN', value: `: ${inv.seller_cin || 'N/A'}`, labelW: 55 },
-        { label: 'PAN', value: `: ${inv.seller_pan || 'N/A'}`, labelW: 55 },
+        { label: 'GSTIN', value: inv.seller_gstin || 'N/A', labelW: 95 },
+        { label: 'FSSAI License Number', value: inv.seller_fssai || 'N/A', labelW: 95 },
+        { label: 'CIN', value: inv.seller_cin || 'N/A', labelW: 95 },
+        { label: 'PAN', value: inv.seller_pan || 'N/A', labelW: 95 },
       ];
       const infoRowH = 13;
       let rowY = y + nameH;
@@ -408,7 +469,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
         doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
         t(row.label, L + 4, rowY + 3);
         doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-        t(row.value, L + row.labelW + 4, rowY + 3, { width: infoW - row.labelW - 10, ellipsis: true });
+        t(': ' + row.value, L + row.labelW + 4, rowY + 3, { width: infoW - row.labelW - 10, ellipsis: true });
         rowY += infoRowH;
       });
 
@@ -437,7 +498,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       const splitX = L + Math.round(W * 0.58);
       vLine(splitX, y, y + blockH);
 
-      const buyerLabelW = 75;
+      const buyerLabelW = 90;
       const invoiceDateStr = (() => {
         try {
           return new Date(inv.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', {
@@ -450,29 +511,29 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
 
       // Left: buyer details
       const buyerRows: [string, string][] = [
-        ['Invoice To', ': Near & Now'],
-        ['Name', `: ${inv.buyer_name}`],
-        ['Address Pin code', `: ${inv.buyer_address || ''}`],
-        ['State', `: ${inv.buyer_state || 'West Bengal'}`],
+        ['Invoice To', 'Near & Now'],
+        ['Name', inv.buyer_name],
+        ['Address Pin code', inv.buyer_address || ''],
+        ['State', inv.buyer_state || 'West Bengal'],
       ];
       let ly = y + 4;
       buyerRows.forEach(([label, value]) => {
         doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
         t(label, L + 4, ly);
         doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-        t(value, L + buyerLabelW + 4, ly, { width: splitX - L - buyerLabelW - 10, ellipsis: true });
+        t(': ' + value, L + buyerLabelW, ly, { width: splitX - L - buyerLabelW - 8, ellipsis: true });
         ly += 15;
       });
 
       // Right: order details
       const odX = splitX + 5;
-      const odLW = 55;
+      const odLW = 65;
       let oy = y + 4;
 
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('Order Id', odX, oy);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`: ${inv.order_id}`, odX + odLW, oy, { width: R - odX - odLW - 5, ellipsis: true });
+      t(': ' + inv.order_id, odX + odLW, oy, { width: R - odX - odLW - 5, ellipsis: true });
       oy += 14;
 
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
@@ -481,7 +542,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('Date', odX, oy);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`: ${invoiceDateStr}`, odX + odLW, oy);
+      t(': ' + invoiceDateStr, odX + odLW, oy);
       oy += 14;
 
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
@@ -490,7 +551,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('Supply', odX, oy);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`:${inv.place_of_supply || inv.buyer_state || 'West Bengal'}`, odX + odLW, oy);
+      t(': ' + (inv.place_of_supply || inv.buyer_state || 'West Bengal'), odX + odLW, oy);
 
       y += blockH;
     }
@@ -498,20 +559,20 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
     // ── 4. ITEMS TABLE ───────────────────────────────────────────────────────
     {
       const colDefs = [
-        { label: 'Sr. no',             w: 22 },
-        { label: 'UPC',                w: 32 },
-        { label: 'Item Description',   w: 90 },
-        { label: 'MRP',                w: 30 },
-        { label: 'Discount',           w: 30 },
-        { label: 'Qty.',               w: 20 },
-        { label: 'Taxable\nValue',     w: 38 },
-        { label: 'CGST\n(%)',          w: 26 },
-        { label: 'CGST\n(INR)',        w: 30 },
-        { label: 'SGST\n(%)',          w: 26 },
-        { label: 'SGST\n(INR)',        w: 30 },
-        { label: 'Cess\n(%)',          w: 26 },
-        { label: 'Additional\nCess Val', w: 37 },
-        { label: 'Total',              w: 22 },
+        { label: 'Sr. no',             w: 25 },
+        { label: 'UPC',                w: 35 },
+        { label: 'Item Description',   w: 95 },
+        { label: 'MRP',                w: 32 },
+        { label: 'Discount',           w: 32 },
+        { label: 'Qty.',               w: 22 },
+        { label: 'Taxable\nValue',     w: 40 },
+        { label: 'CGST\n(%)',          w: 28 },
+        { label: 'CGST\n(INR)',        w: 32 },
+        { label: 'SGST\n(%)',          w: 28 },
+        { label: 'SGST\n(INR)',        w: 32 },
+        { label: 'Cess\n(%)',          w: 28 },
+        { label: 'Additional\nCess Val', w: 40 },
+        { label: 'Total',              w: 36 },
       ];
       const rawW = colDefs.reduce((s, c) => s + c.w, 0);
       const scale = W / rawW;
@@ -613,26 +674,28 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       });
 
       const midX = L + infoW / 2;
+      const labelW1 = 30;
+      const labelW2 = 100;
 
       // Left column: GSTIN, CIN
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('GSTIN', L + 4, y + 22);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`  ${inv.seller_gstin || 'N/A'}`, L + 36, y + 22, { width: midX - L - 40, ellipsis: true });
+      t(': ' + (inv.seller_gstin || 'N/A'), L + labelW1 + 4, y + 22, { width: midX - L - labelW1 - 8, ellipsis: true });
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('CIN', L + 4, y + 36);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`  ${inv.seller_cin || 'N/A'}`, L + 36, y + 36, { width: midX - L - 40, ellipsis: true });
+      t(': ' + (inv.seller_cin || 'N/A'), L + labelW1 + 4, y + 36, { width: midX - L - labelW1 - 8, ellipsis: true });
 
       // Right column: FSSAI, PAN
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('FSSAI License Number', midX + 4, y + 22);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`  ${inv.seller_fssai || 'N/A'}`, midX + 95, y + 22, { width: sigX - midX - 100, ellipsis: true });
+      t(': ' + (inv.seller_fssai || 'N/A'), midX + labelW2 + 4, y + 22, { width: sigX - midX - labelW2 - 8, ellipsis: true });
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('PAN', midX + 4, y + 36);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(`  ${inv.seller_pan || 'N/A'}`, midX + 36, y + 36, { width: sigX - midX - 40, ellipsis: true });
+      t(': ' + (inv.seller_pan || 'N/A'), midX + labelW1 + 4, y + 36, { width: sigX - midX - labelW1 - 8, ellipsis: true });
 
       // Signature area
       doc.fillColor('#000000').fontSize(7).font('Helvetica');
@@ -717,17 +780,17 @@ function generateStorePDF(inv: InvoiceData): Promise<Buffer> {
     doc.moveDown(2.2);
 
     // Items table
-    const cols2 = { no: 0, name: 20, qty: 220, unit: 280, rate: 340, total: 430 };
+    const cols2 = { no: 0, name: 30, qty: 240, unit: 300, rate: 360, total: 440 };
 
     doc.rect(L, doc.y, W, 18).fill(BRAND_DARK);
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
-    const hY2 = doc.y + 4;
-    doc.text('#', L + cols2.no + 2, hY2);
-    doc.text('ITEM / PRODUCT', L + cols2.name, hY2);
-    doc.text('QTY', L + cols2.qty, hY2);
-    doc.text('UNIT', L + cols2.unit, hY2);
-    doc.text('RATE', L + cols2.rate, hY2);
-    doc.text('AMOUNT', L + cols2.total, hY2);
+    const hY2 = doc.y + 5;
+    doc.text('#', L + cols2.no + 4, hY2, { width: cols2.name - cols2.no - 8, align: 'center' });
+    doc.text('ITEM / PRODUCT', L + cols2.name + 2, hY2);
+    doc.text('QTY', L + cols2.qty + 2, hY2, { width: cols2.unit - cols2.qty - 4, align: 'right' });
+    doc.text('UNIT', L + cols2.unit + 2, hY2, { width: cols2.rate - cols2.unit - 4, align: 'center' });
+    doc.text('RATE', L + cols2.rate + 2, hY2, { width: cols2.total - cols2.rate - 4, align: 'right' });
+    doc.text('AMOUNT', L + cols2.total + 2, hY2, { width: W - cols2.total - 4, align: 'right' });
     doc.moveDown(1.6);
 
     let rowY2 = doc.y;
@@ -735,12 +798,12 @@ function generateStorePDF(inv: InvoiceData): Promise<Buffer> {
       const bg = i % 2 === 0 ? '#ffffff' : GREY_LIGHT;
       doc.rect(L, rowY2, W, 18).fill(bg);
       doc.fillColor('#333333').font('Helvetica').fontSize(9);
-      doc.text(String(item.line_no), L + cols2.no + 2, rowY2 + 4, { width: 18 });
-      doc.text(item.product_name, L + cols2.name, rowY2 + 4, { width: 195, ellipsis: true });
-      doc.text(item.quantity.toString(), L + cols2.qty, rowY2 + 4);
-      doc.text(item.unit || 'nos', L + cols2.unit, rowY2 + 4);
-      doc.text(r(item.selling_price), L + cols2.rate, rowY2 + 4);
-      doc.text(r(item.line_total), L + cols2.total, rowY2 + 4);
+      doc.text(String(item.line_no), L + cols2.no + 4, rowY2 + 5, { width: cols2.name - cols2.no - 8, align: 'center' });
+      doc.text(item.product_name, L + cols2.name + 2, rowY2 + 5, { width: cols2.qty - cols2.name - 4, ellipsis: true });
+      doc.text(item.quantity.toString(), L + cols2.qty + 2, rowY2 + 5, { width: cols2.unit - cols2.qty - 4, align: 'right' });
+      doc.text(item.unit || 'nos', L + cols2.unit + 2, rowY2 + 5, { width: cols2.rate - cols2.unit - 4, align: 'center' });
+      doc.text(r(item.selling_price), L + cols2.rate + 2, rowY2 + 5, { width: cols2.total - cols2.rate - 4, align: 'right' });
+      doc.text(r(item.line_total), L + cols2.total + 2, rowY2 + 5, { width: W - cols2.total - 4, align: 'right' });
       rowY2 += 18;
     });
 
@@ -749,39 +812,39 @@ function generateStorePDF(inv: InvoiceData): Promise<Buffer> {
     doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#cccccc').stroke();
 
     // Totals
-    const tX = L + W - 200;
+    const tX = L + W - 220;
     doc.moveDown(0.5);
     function totRow2(label: string, val: string, bold = false) {
       doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9)
         .fillColor(bold ? BRAND_DARK : '#333333')
-        .text(label, tX, doc.y, { width: 120 })
-        .text(val, tX + 120, doc.y - 11, { width: 80, align: 'right' });
+        .text(label, tX, doc.y, { width: 130, align: 'left' })
+        .text(val, tX + 130, doc.y - 11, { width: 90, align: 'right' });
       doc.moveDown(0.4);
     }
     totRow2('Subtotal:', r(inv.subtotal));
     if (inv.discount_amount > 0) totRow2('Discount:', `-${r(inv.discount_amount)}`);
     totRow2('Tax (incl.):', r(round2(inv.cgst_total + inv.sgst_total + inv.igst_total)));
     totRow2('Delivery Fee:', r(inv.delivery_fee));
-    doc.rect(tX, doc.y, 200, 22).fill(BRAND_DARK);
+    doc.rect(tX, doc.y, 220, 22).fill(BRAND_DARK);
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11)
-      .text('TOTAL:', tX + 6, doc.y + 5, { width: 120 })
-      .text(r(inv.grand_total), tX + 120, doc.y - 13, { width: 74, align: 'right' });
+      .text('TOTAL:', tX + 6, doc.y + 5, { width: 130, align: 'left' })
+      .text(r(inv.grand_total), tX + 130, doc.y - 13, { width: 84, align: 'right' });
     doc.moveDown(2.5);
 
     // Payment
     doc.rect(L, doc.y, W, 22).fill(GREY_LIGHT);
     doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(9)
-      .text(`Payment: ${inv.payment_method.toUpperCase()}  |  Status: ${inv.payment_status.toUpperCase()}  |  Ref: ${inv.razorpay_payment_id || 'N/A'}`, L + 8, doc.y + 5);
+      .text(`Payment: ${inv.payment_method.toUpperCase()}  |  Status: ${inv.payment_status.toUpperCase()}  |  Ref: ${inv.razorpay_payment_id || 'N/A'}`, L + 8, doc.y + 6, { width: W - 16 });
     doc.moveDown(2);
 
     // Note for merchant
     doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(8)
-      .text('Note: This is your merchant copy. Please retain for records and payout reconciliation.', L, doc.y, { width: W });
+      .text('Note: This is your merchant copy. Please retain for records and payout reconciliation.', L, doc.y, { width: W, align: 'left' });
 
     // Footer
     doc.moveDown(1.5);
     doc.rect(L, doc.y, W, 1).fill('#dddddd');
-    doc.moveDown(0.5);
+    doc.moveDown(0.6);
     doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(7.5)
       .text('Near & Now — Merchant Copy | Not for customer distribution', L, doc.y, { align: 'center', width: W });
 
@@ -802,11 +865,11 @@ function generateDeliveryPDF(inv: InvoiceData): Promise<Buffer> {
 
     // Header
     doc.rect(L, 30, W, 60).fill(BRAND_DARK);
-    doc.fillColor('#ffffff').fontSize(22).font('Helvetica-Bold').text('NEAR & NOW', L + 14, 44);
+    doc.fillColor('#ffffff').fontSize(22).font('Helvetica-Bold').text('NEAR & NOW', L + 14, 44, { width: W - 180 });
     doc.fillColor('#88ff88').fontSize(9).font('Helvetica').text('DELIVERY SLIP', L + 14, 68);
-    doc.fillColor('#ffffff').fontSize(9).text(`Slip: ${inv.invoice_number}`, L + W - 160, 44);
-    doc.fillColor('#ffffff').fontSize(9).text(`Date: ${inv.invoice_date}`, L + W - 160, 58);
-    doc.fillColor(BRAND_ACCENT).fontSize(9).text(`Order: ${inv.order_id.slice(0, 8).toUpperCase()}`, L + W - 160, 72);
+    doc.fillColor('#ffffff').fontSize(9).text(`Slip: ${inv.invoice_number}`, L + W - 160, 44, { width: 150, align: 'right' });
+    doc.fillColor('#ffffff').fontSize(9).text(`Date: ${inv.invoice_date}`, L + W - 160, 58, { width: 150, align: 'right' });
+    doc.fillColor(BRAND_ACCENT).fontSize(9).text(`Order: ${inv.order_id.slice(0, 8).toUpperCase()}`, L + W - 160, 72, { width: 150, align: 'right' });
 
     doc.moveDown(4.5);
 
@@ -814,61 +877,61 @@ function generateDeliveryPDF(inv: InvoiceData): Promise<Buffer> {
     doc.rect(L, doc.y, W, 70).fill(GREY_LIGHT);
     const ddY = doc.y + 8;
 
-    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(10).text('DELIVER TO:', L + 10, ddY);
+    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(10).text('DELIVER TO:', L + 10, ddY, { width: W - 20 });
     doc.fillColor('#222222').font('Helvetica-Bold').fontSize(12)
-      .text(inv.buyer_name, L + 10, ddY + 16);
+      .text(inv.buyer_name, L + 10, ddY + 16, { width: W - 20 });
     doc.font('Helvetica').fontSize(10)
-      .text(inv.buyer_phone, L + 10, doc.y + 2)
+      .text(inv.buyer_phone, L + 10, doc.y + 2, { width: W - 20 })
       .text(inv.buyer_address || '', L + 10, doc.y + 2, { width: W - 20, ellipsis: true });
 
     doc.moveDown(3.5);
     doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#dddddd').stroke();
-    doc.moveDown(0.5);
+    doc.moveDown(0.6);
 
     // Pickup from
-    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(9).text('PICKUP FROM:', L, doc.y);
+    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(9).text('PICKUP FROM:', L, doc.y, { width: W });
     doc.fillColor('#333333').font('Helvetica').fontSize(9)
-      .text(inv.seller_name, L)
-      .text(inv.seller_address || '', L);
+      .text(inv.seller_name, L, doc.y, { width: W })
+      .text(inv.seller_address || '', L, doc.y, { width: W });
 
     doc.moveDown(1);
     doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#dddddd').stroke();
-    doc.moveDown(0.5);
+    doc.moveDown(0.6);
 
     // Items summary (minimal - just count and names)
-    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(9).text('ORDER CONTENTS:', L, doc.y);
-    doc.moveDown(0.3);
+    doc.fillColor(BRAND_DARK).font('Helvetica-Bold').fontSize(9).text('ORDER CONTENTS:', L, doc.y, { width: W });
+    doc.moveDown(0.4);
 
     inv.items.forEach((item) => {
       doc.fillColor('#333333').font('Helvetica').fontSize(9)
-        .text(`• ${item.product_name}  ×  ${item.quantity} ${item.unit}`, L + 8, doc.y);
+        .text(`• ${item.product_name}  ×  ${item.quantity} ${item.unit}`, L + 8, doc.y, { width: W - 16 });
     });
 
     doc.moveDown(1);
     doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#dddddd').stroke();
-    doc.moveDown(0.5);
+    doc.moveDown(0.6);
 
     // Payment info
     doc.rect(L, doc.y, W, 26).fill(GREY_LIGHT);
-    const pyY = doc.y + 6;
+    const pyY = doc.y + 7;
     const isCOD = (inv.payment_method || '').toLowerCase().includes('cod') ||
                   (inv.payment_method || '').toLowerCase().includes('cash');
     const payLabel = isCOD ? `COLLECT CASH: ${r(inv.grand_total)}` : `PREPAID — DO NOT COLLECT`;
     doc.fillColor(isCOD ? BRAND_ACCENT : '#007700').font('Helvetica-Bold').fontSize(11)
-      .text(payLabel, L + 10, pyY, { align: 'center', width: W - 20 });
+      .text(payLabel, L, pyY, { align: 'center', width: W });
     doc.moveDown(2.5);
 
     // Delivery partner section
     if (inv.delivery_partner_name) {
       doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(8)
-        .text(`Assigned To: ${inv.delivery_partner_name}  |  ${inv.delivery_partner_phone}`, L, doc.y);
-      doc.moveDown(0.5);
+        .text(`Assigned To: ${inv.delivery_partner_name}  |  ${inv.delivery_partner_phone}`, L, doc.y, { width: W });
+      doc.moveDown(0.6);
     }
 
     // Footer
-    doc.moveDown(1);
+    doc.moveDown(1.2);
     doc.rect(L, doc.y, W, 1).fill('#dddddd');
-    doc.moveDown(0.5);
+    doc.moveDown(0.6);
     doc.fillColor(GREY_TEXT).font('Helvetica').fontSize(7.5)
       .text('Near & Now — Delivery Slip | Operational Use Only', L, doc.y, { align: 'center', width: W });
 

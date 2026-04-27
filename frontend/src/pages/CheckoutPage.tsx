@@ -9,14 +9,7 @@ import { getDeliveryFeeForSubtotal } from '../context/CartContext';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
-
-const calculateOrderTotals = (cartTotal: number) => {
-  const subtotal = cartTotal;
-  const deliveryFee = getDeliveryFeeForSubtotal(cartTotal);
-  const discount = 0;
-  const orderTotal = subtotal + deliveryFee - discount;
-  return { subtotal, deliveryFee, discount, orderTotal };
-};
+import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
 
 const CheckoutPage = () => {
   const { cartItems, cartTotal, clearCart, updateCartQuantity, removeFromCart } = useCart();
@@ -409,8 +402,9 @@ const CheckoutPage = () => {
         image: item.image
       }));
 
-      const { subtotal, deliveryFee, orderTotal } = calculateOrderTotals(cartTotal);
-      const finalOrderTotal = Math.round(orderTotal + tipAmount);
+      const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+      const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+      const finalOrderTotal = Math.round(totals.grandTotal + tipAmount);
 
       let shippingLat: number | undefined;
       let shippingLng: number | undefined;
@@ -443,8 +437,8 @@ const CheckoutPage = () => {
         payment_status: 'pending',
         payment_method: paymentMethodLabel,
         order_total: finalOrderTotal,
-        subtotal: subtotal,
-        delivery_fee: deliveryFee,
+        subtotal: totals.itemsSubtotal,
+        delivery_fee: totals.deliveryFee,
         items: orderItems,
         shipping_address: {
           address: formData.address,
@@ -520,8 +514,9 @@ const CheckoutPage = () => {
 
   const handleSplitToggle = () => {
     if (!splitEnabled) {
-      const { orderTotal } = calculateOrderTotals(cartTotal);
-      const currentFinalTotal = Math.round(orderTotal + tipAmount);
+      const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+      const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+      const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
       const half = Math.round(currentFinalTotal / 2);
       setSplitCashAmount(half.toString());
       setSplitUpiAmount((currentFinalTotal - half).toString());
@@ -534,8 +529,9 @@ const CheckoutPage = () => {
 
   const handleSplitCashChange = (value: string) => {
     setSplitCashAmount(value);
-    const { orderTotal } = calculateOrderTotals(cartTotal);
-    const currentFinalTotal = Math.round(orderTotal + tipAmount);
+    const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+    const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+    const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
     const cash = parseFloat(value) || 0;
     const upi = Math.max(0, currentFinalTotal - cash);
     setSplitUpiAmount(upi > 0 ? upi.toString() : '0');
@@ -543,8 +539,9 @@ const CheckoutPage = () => {
 
   const handleSplitUpiChange = (value: string) => {
     setSplitUpiAmount(value);
-    const { orderTotal } = calculateOrderTotals(cartTotal);
-    const currentFinalTotal = Math.round(orderTotal + tipAmount);
+    const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+    const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+    const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
     const upi = parseFloat(value) || 0;
     const cash = Math.max(0, currentFinalTotal - upi);
     setSplitCashAmount(cash > 0 ? cash.toString() : '0');
@@ -567,8 +564,9 @@ const CheckoutPage = () => {
     );
   }
 
-  const { deliveryFee, discount, orderTotal } = calculateOrderTotals(cartTotal);
-  const finalTotal = Math.round(orderTotal + tipAmount);
+  const deliveryFee = getDeliveryFeeForSubtotal(cartTotal);
+  const checkoutTotals = calculateCheckoutTotals(cartTotal, deliveryFee, 0);
+  const finalTotal = Math.round(checkoutTotals.grandTotal + tipAmount);
 
   return (
     <>
@@ -1247,19 +1245,31 @@ const CheckoutPage = () => {
                       {/* Totals */}
                       <div className="px-6 py-4 border-t border-gray-50 space-y-2.5">
                         <div className="flex justify-between text-sm text-gray-500">
-                          <span>Subtotal</span>
-                          <span className="font-semibold text-gray-700">₹{Math.round(cartTotal)}</span>
+                          <span>Item Total</span>
+                          <span className="font-semibold text-gray-700">₹{Math.round(checkoutTotals.itemsSubtotal)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm text-gray-500">
+                          <span>GST (5%)</span>
+                          <span className="font-semibold text-gray-700">₹{checkoutTotals.itemsGST.total.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm text-gray-500">
+                          <span>Platform Fee</span>
+                          <span className="font-semibold text-gray-700">₹{checkoutTotals.platformFeeTotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm text-gray-500">
+                          <span>Handling Fee</span>
+                          <span className="font-semibold text-gray-700">₹{checkoutTotals.handlingFeeTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-sm text-gray-500">
                           <span>Delivery</span>
-                          <span className={`font-semibold ${deliveryFee === 0 ? 'text-green-600' : 'text-gray-700'}`}>
-                            {deliveryFee === 0 ? 'Free' : `₹${deliveryFee}`}
+                          <span className={`font-semibold ${checkoutTotals.deliveryFee === 0 ? 'text-green-600' : 'text-gray-700'}`}>
+                            {checkoutTotals.deliveryFee === 0 ? 'Free' : `₹${checkoutTotals.deliveryFee}`}
                           </span>
                         </div>
-                        {discount > 0 && (
+                        {checkoutTotals.discount > 0 && (
                           <div className="flex justify-between text-sm text-green-600">
                             <span>Discount</span>
-                            <span className="font-semibold">−₹{Math.round(discount)}</span>
+                            <span className="font-semibold">−₹{Math.round(checkoutTotals.discount)}</span>
                           </div>
                         )}
                         {tipAmount > 0 && (
