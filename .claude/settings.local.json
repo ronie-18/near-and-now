@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Read(//Users/tiasmondal166/project/near-and-now-store-owner/**)",
+      "Read(//Users/tiasmondal166/project/**)",
+      "Read(//Users/tiasmondal166/projects/NAT_Near_now_rider/**)",
+      "Read(//Users/tiasmondal166/projects/**)"
     ]
   }
 }

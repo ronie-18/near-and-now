@@ -18,6 +18,7 @@ export interface TrackingFullResponse {
     delivery_latitude?: number;
     delivery_longitude?: number;
     estimated_delivery_time?: string;
+    eta_minutes?: number;
     store_orders?: Array<{
       id: string;
       store_id: string;

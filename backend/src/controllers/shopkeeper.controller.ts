@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabaseAdmin } from '../config/database.js';
 import { randomBytes } from 'crypto';
+import { supabaseAdmin } from '../config/database.js';
 
 declare module 'express' {
   interface Request {
@@ -9,15 +9,26 @@ declare module 'express' {
   }
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function pickupCode(): string {
+  return String((randomBytes(2).readUInt16BE(0) % 9000) + 1000);
+}
+
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371, toR = (d: number) => (d * Math.PI) / 180;
+  const dL = toR(lat2 - lat1), dG = toR(lng2 - lng1);
+  const a = Math.sin(dL / 2) ** 2 + Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(dG / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
 export async function requireShopkeeper(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing auth token' });
-  }
-  const token = auth.slice(7);
+  if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
 
+  const token = auth.slice(7);
   const { data: user, error } = await supabaseAdmin
     .from('app_users')
     .select('id, role')
@@ -25,11 +36,8 @@ export async function requireShopkeeper(req: Request, res: Response, next: NextF
     .eq('role', 'shopkeeper')
     .maybeSingle();
 
-  if (error || !user) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
+  if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
 
-  // Resolve their store
   const { data: store } = await supabaseAdmin
     .from('stores')
     .select('id')
@@ -37,62 +45,33 @@ export async function requireShopkeeper(req: Request, res: Response, next: NextF
     .eq('is_active', true)
     .maybeSingle();
 
-  if (!store) {
-    return res.status(403).json({ error: 'No active store found for this account' });
-  }
+  if (!store) return res.status(403).json({ error: 'No active store found for this account' });
 
   req.shopkeeperId = user.id;
   req.shopkeeperStoreId = store.id;
   next();
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-function generatePickupCode(): string {
-  // Cryptographically random 4-digit number, zero-padded
-  const n = randomBytes(2).readUInt16BE(0) % 9000 + 1000;
-  return String(n);
-}
-
 // ── Controller ─────────────────────────────────────────────────────────────────
 
 export class ShopkeeperController {
 
-  // POST /shopkeeper/auth/login
-  // Body: { phone, session_token } — simple token-based login
-  async login(req: Request, res: Response) {
+  // GET /shopkeeper/profile
+  async getProfile(req: Request, res: Response) {
     try {
-      const { session_token } = req.body as { session_token?: string };
-      if (!session_token) {
-        return res.status(400).json({ error: 'session_token required' });
-      }
-
-      const { data: user } = await supabaseAdmin
-        .from('app_users')
-        .select('id, name, email, phone, role')
-        .eq('session_token', session_token)
-        .eq('role', 'shopkeeper')
-        .maybeSingle();
-
-      if (!user) {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-
-      const { data: store } = await supabaseAdmin
-        .from('stores')
-        .select('id, name, address, latitude, longitude, is_active')
-        .eq('owner_id', user.id)
-        .maybeSingle();
-
+      const [{ data: user }, { data: store }] = await Promise.all([
+        supabaseAdmin.from('app_users').select('id, name, email, phone, created_at').eq('id', req.shopkeeperId!).single(),
+        supabaseAdmin.from('stores').select('id, name, address, latitude, longitude, is_active, phone').eq('owner_id', req.shopkeeperId!).maybeSingle(),
+      ]);
       res.json({ success: true, user, store });
     } catch (err) {
-      console.error('shopkeeper login error:', err);
-      res.status(500).json({ error: 'Login failed' });
+      console.error('shopkeeper getProfile:', err);
+      res.status(500).json({ error: 'Failed to fetch profile' });
     }
   }
 
   // GET /shopkeeper/orders
-  // Returns allocations for this store that need attention
+  // Returns all active allocations for this store, newest first.
   async getIncomingOrders(req: Request, res: Response) {
     try {
       const storeId = req.shopkeeperStoreId!;
@@ -101,7 +80,7 @@ export class ShopkeeperController {
         .from('order_store_allocations')
         .select('id, order_id, sequence_number, pickup_code, status, accepted_item_ids, accepted_at, created_at')
         .eq('store_id', storeId)
-        .in('status', ['pending_acceptance', 'accepted', 'code_verified'])
+        .in('status', ['pending_acceptance', 'accepted'])
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -109,71 +88,56 @@ export class ShopkeeperController {
 
       const orderIds = allocations.map((a: any) => a.order_id);
 
-      // Fetch customer orders
-      const { data: customerOrders } = await supabaseAdmin
-        .from('customer_orders')
-        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, notes')
-        .in('id', orderIds);
+      const [{ data: orders }, { data: items }, { data: storeRow }] = await Promise.all([
+        supabaseAdmin.from('customer_orders')
+          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at')
+          .in('id', orderIds),
+        supabaseAdmin.from('order_items')
+          .select('id, customer_order_id, product_name, quantity, unit, unit_price, image_url, item_status, assigned_store_id')
+          .in('customer_order_id', orderIds)
+          .eq('assigned_store_id', storeId),
+        supabaseAdmin.from('stores').select('latitude, longitude').eq('id', storeId).single(),
+      ]);
 
       const orderMap: Record<string, any> = {};
-      (customerOrders || []).forEach((o: any) => { orderMap[o.id] = o; });
-
-      // Fetch items assigned to this store
-      const { data: items } = await supabaseAdmin
-        .from('order_items')
-        .select('id, order_id:customer_order_id, product_id, product_name, quantity, unit, unit_price, image_url, item_status, assigned_store_id')
-        .in('customer_order_id', orderIds)
-        .eq('assigned_store_id', storeId);
+      (orders || []).forEach((o: any) => { orderMap[o.id] = o; });
 
       const itemsByOrder: Record<string, any[]> = {};
       (items || []).forEach((item: any) => {
-        const oid = item.order_id;
+        const oid = item.customer_order_id;
         if (!itemsByOrder[oid]) itemsByOrder[oid] = [];
         itemsByOrder[oid].push(item);
       });
 
-      // Compute customer distances from store
-      const { data: store } = await supabaseAdmin
-        .from('stores')
-        .select('latitude, longitude')
-        .eq('id', storeId)
-        .single();
-
-      const storeCoords = store as { latitude: number; longitude: number } | null;
+      const storeCoords = storeRow as { latitude: number; longitude: number } | null;
 
       const result = allocations.map((alloc: any) => {
         const order = orderMap[alloc.order_id] || {};
-        const orderItems = itemsByOrder[alloc.order_id] || [];
-
         let distance: string | null = null;
-        if (storeCoords && order.delivery_latitude && order.delivery_longitude) {
-          const d = haversineKm(
-            storeCoords.latitude, storeCoords.longitude,
-            order.delivery_latitude, order.delivery_longitude
-          );
+        if (storeCoords && order.delivery_latitude) {
+          const d = haversineKm(storeCoords.latitude, storeCoords.longitude, order.delivery_latitude, order.delivery_longitude);
           distance = `${d.toFixed(1)} km`;
         }
-
         return {
           allocation_id: alloc.id,
           order_id: alloc.order_id,
           order_code: order.order_code,
-          order_status: order.status,
           alloc_status: alloc.status,
           sequence_number: alloc.sequence_number,
-          pickup_code: alloc.status === 'pending_acceptance' ? null : alloc.pickup_code,
-          accepted_item_ids: alloc.accepted_item_ids,
+          // Only reveal the code after acceptance
+          pickup_code: alloc.status === 'accepted' ? alloc.pickup_code : null,
+          accepted_item_ids: alloc.accepted_item_ids || [],
           customer_area: order.delivery_address,
           customer_distance: distance,
           placed_at: order.placed_at,
-          items: orderItems,
+          items: itemsByOrder[alloc.order_id] || [],
           accepted_at: alloc.accepted_at,
         };
       });
 
       res.json({ success: true, orders: result });
     } catch (err) {
-      console.error('getIncomingOrders error:', err);
+      console.error('shopkeeper getIncomingOrders:', err);
       res.status(500).json({ error: 'Failed to fetch orders' });
     }
   }
@@ -189,25 +153,21 @@ export class ShopkeeperController {
         return res.status(400).json({ error: 'Select at least one item to accept' });
       }
 
-      // Verify this allocation belongs to this shopkeeper's store
-      const { data: alloc, error: fetchErr } = await supabaseAdmin
+      const { data: alloc } = await supabaseAdmin
         .from('order_store_allocations')
-        .select('id, order_id, store_id, status, pickup_code')
+        .select('id, order_id, store_id, status')
         .eq('id', allocationId)
         .eq('store_id', req.shopkeeperStoreId!)
         .maybeSingle();
 
-      if (fetchErr || !alloc) {
-        return res.status(404).json({ error: 'Allocation not found' });
-      }
-
+      if (!alloc) return res.status(404).json({ error: 'Allocation not found' });
       if (alloc.status !== 'pending_acceptance') {
-        return res.status(409).json({ error: `Allocation already in status: ${alloc.status}` });
+        return res.status(409).json({ error: `Already responded: ${alloc.status}` });
       }
 
-      const code = generatePickupCode();
+      const code = pickupCode();
 
-      // Mark accepted items as confirmed, others as unavailable
+      // Get all items assigned to this store for this order
       const { data: allItems } = await supabaseAdmin
         .from('order_items')
         .select('id')
@@ -217,79 +177,53 @@ export class ShopkeeperController {
       const allItemIds = (allItems || []).map((i: any) => i.id);
       const unavailableIds = allItemIds.filter((id: string) => !accepted_item_ids.includes(id));
 
-      // Update confirmed items
-      if (accepted_item_ids.length > 0) {
-        await supabaseAdmin
-          .from('order_items')
-          .update({ item_status: 'confirmed' })
-          .in('id', accepted_item_ids);
+      // Confirm accepted items, unassign unavailable ones for reallocation
+      await supabaseAdmin.from('order_store_allocations').update({
+        status: 'accepted', pickup_code: code, accepted_item_ids, accepted_at: new Date().toISOString(),
+      }).eq('id', allocationId);
+
+      if (accepted_item_ids.length) {
+        await supabaseAdmin.from('order_items').update({ item_status: 'confirmed' }).in('id', accepted_item_ids);
+      }
+      if (unavailableIds.length) {
+        await supabaseAdmin.from('order_items').update({ item_status: 'unavailable', assigned_store_id: null }).in('id', unavailableIds);
       }
 
-      // Mark unavailable items — backend will reallocate these
-      if (unavailableIds.length > 0) {
-        await supabaseAdmin
-          .from('order_items')
-          .update({ item_status: 'unavailable', assigned_store_id: null })
-          .in('id', unavailableIds);
-      }
-
-      // Accept the allocation
-      const { error: updateErr } = await supabaseAdmin
-        .from('order_store_allocations')
-        .update({
-          status: 'accepted',
-          pickup_code: code,
-          accepted_item_ids,
-          accepted_at: new Date().toISOString(),
-        })
-        .eq('id', allocationId);
-
-      if (updateErr) throw updateErr;
-
-      // Check if all allocations for this order are now accepted
+      // Check if any other allocations are still pending for this order
       const { data: pendingAllocs } = await supabaseAdmin
         .from('order_store_allocations')
         .select('id')
         .eq('order_id', alloc.order_id)
         .eq('status', 'pending_acceptance');
 
-      // If unavailable items exist, trigger reallocation (async, best-effort)
-      if (unavailableIds.length > 0) {
+      // Reallocate unavailable items to next nearest store (async, non-blocking)
+      if (unavailableIds.length) {
         reallocateMissingItems(alloc.order_id, unavailableIds).catch(console.error);
-      }
-
-      // If no more pending allocations → order is ready, broadcast to drivers
-      if (!pendingAllocs?.length) {
-        await supabaseAdmin
-          .from('customer_orders')
-          .update({ status: 'ready_for_pickup' })
-          .eq('id', alloc.order_id)
-          .in('status', ['pending_at_store', 'store_accepted', 'preparing_order']);
-
-        await supabaseAdmin.from('order_status_history').insert({
-          customer_order_id: alloc.order_id,
-          status: 'ready_for_pickup',
-          notes: 'All store allocations accepted — broadcasting to drivers',
-        });
-
+      } else if (!pendingAllocs?.length) {
+        // All stores accepted, no missing items → ready for drivers
+        await Promise.all([
+          supabaseAdmin.from('customer_orders')
+            .update({ status: 'ready_for_pickup' })
+            .eq('id', alloc.order_id)
+            .in('status', ['pending_at_store', 'store_accepted', 'preparing_order']),
+          supabaseAdmin.from('order_status_history').insert({
+            customer_order_id: alloc.order_id,
+            status: 'ready_for_pickup',
+            notes: 'All stores confirmed — broadcasting to drivers',
+          }),
+        ]);
         broadcastToNearbyDrivers(alloc.order_id).catch(console.error);
       } else {
-        // Mark parent order as store_accepted (partial)
-        await supabaseAdmin
-          .from('customer_orders')
+        // Partial acceptance — update parent order status
+        await supabaseAdmin.from('customer_orders')
           .update({ status: 'store_accepted' })
           .eq('id', alloc.order_id)
           .eq('status', 'pending_at_store');
       }
 
-      res.json({
-        success: true,
-        pickup_code: code,
-        accepted_count: accepted_item_ids.length,
-        unavailable_count: unavailableIds.length,
-      });
+      res.json({ success: true, pickup_code: code, accepted: accepted_item_ids.length, unavailable: unavailableIds.length });
     } catch (err) {
-      console.error('acceptAllocation error:', err);
+      console.error('shopkeeper acceptAllocation:', err);
       res.status(500).json({ error: 'Failed to accept allocation' });
     }
   }
@@ -307,16 +241,11 @@ export class ShopkeeperController {
         .maybeSingle();
 
       if (!alloc) return res.status(404).json({ error: 'Allocation not found' });
-      if (alloc.status !== 'pending_acceptance') {
-        return res.status(409).json({ error: 'Already responded' });
-      }
+      if (alloc.status !== 'pending_acceptance') return res.status(409).json({ error: 'Already responded' });
 
-      await supabaseAdmin
-        .from('order_store_allocations')
-        .update({ status: 'rejected' })
-        .eq('id', allocationId);
+      await supabaseAdmin.from('order_store_allocations').update({ status: 'rejected' }).eq('id', allocationId);
 
-      // Unassign items and trigger reallocation
+      // Unassign all items from this store and trigger reallocation
       const { data: items } = await supabaseAdmin
         .from('order_items')
         .select('id')
@@ -324,64 +253,26 @@ export class ShopkeeperController {
         .eq('assigned_store_id', alloc.store_id);
 
       const itemIds = (items || []).map((i: any) => i.id);
-      if (itemIds.length > 0) {
-        await supabaseAdmin
-          .from('order_items')
+      if (itemIds.length) {
+        await supabaseAdmin.from('order_items')
           .update({ item_status: 'pending', assigned_store_id: null })
           .in('id', itemIds);
-
         reallocateMissingItems(alloc.order_id, itemIds).catch(console.error);
       }
 
       res.json({ success: true });
     } catch (err) {
-      console.error('rejectAllocation error:', err);
+      console.error('shopkeeper rejectAllocation:', err);
       res.status(500).json({ error: 'Failed to reject allocation' });
     }
   }
-
-  // GET /shopkeeper/profile
-  async getProfile(req: Request, res: Response) {
-    try {
-      const { data: user } = await supabaseAdmin
-        .from('app_users')
-        .select('id, name, email, phone, created_at')
-        .eq('id', req.shopkeeperId!)
-        .single();
-
-      const { data: store } = await supabaseAdmin
-        .from('stores')
-        .select('id, name, address, latitude, longitude, is_active, phone')
-        .eq('owner_id', req.shopkeeperId!)
-        .maybeSingle();
-
-      res.json({ success: true, user, store });
-    } catch (err) {
-      console.error('getProfile error:', err);
-      res.status(500).json({ error: 'Failed to fetch profile' });
-    }
-  }
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────────────
-
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-    Math.cos((lat2 * Math.PI) / 180) *
-    Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
+// ── Internal async helpers ─────────────────────────────────────────────────────
 
 async function reallocateMissingItems(orderId: string, itemIds: string[]) {
   if (!itemIds.length) return;
 
-  // Fetch the order's customer location
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
     .select('delivery_latitude, delivery_longitude')
@@ -390,16 +281,14 @@ async function reallocateMissingItems(orderId: string, itemIds: string[]) {
 
   if (!order?.delivery_latitude) return;
 
-  // Fetch items needing reallocation
   const { data: items } = await supabaseAdmin
     .from('order_items')
-    .select('id, product_id, assigned_store_id')
+    .select('id, product_id')
     .in('id', itemIds)
     .is('assigned_store_id', null);
 
   if (!items?.length) return;
 
-  // Get already-used store IDs for this order
   const { data: existingAllocs } = await supabaseAdmin
     .from('order_store_allocations')
     .select('store_id, sequence_number')
@@ -408,33 +297,23 @@ async function reallocateMissingItems(orderId: string, itemIds: string[]) {
   const usedStoreIds = new Set((existingAllocs || []).map((a: any) => a.store_id));
   let maxSeq = Math.max(0, ...(existingAllocs || []).map((a: any) => a.sequence_number));
 
-  // Fallback: simple distance query
-  let candidateStores: any[] = [];
-  if (!candidateStores.length) {
-    const { data: rawStores } = await supabaseAdmin
-      .from('stores')
-      .select('id, latitude, longitude')
-      .eq('is_active', true)
-      .not('id', 'in', `(${[...usedStoreIds].join(',') || "''"} )`);
+  // Get all active stores within 4 km, ordered by distance
+  const { data: rawStores } = await supabaseAdmin
+    .from('stores')
+    .select('id, latitude, longitude')
+    .eq('is_active', true);
 
-    candidateStores = (rawStores || [])
-      .map((s: any) => ({
-        ...s,
-        dist: haversineKm(order.delivery_latitude, order.delivery_longitude, s.latitude, s.longitude),
-      }))
-      .filter((s: any) => s.dist <= 4)
-      .sort((a: any, b: any) => a.dist - b.dist);
-  }
+  const candidates = (rawStores || [])
+    .map((s: any) => ({ ...s, dist: haversineKm(order.delivery_latitude, order.delivery_longitude, s.latitude, s.longitude) }))
+    .filter((s: any) => s.dist <= 4 && !usedStoreIds.has(s.id))
+    .sort((a: any, b: any) => a.dist - b.dist);
 
-  // Greedy assignment: try to satisfy all items from next stores
-  const remainingItems = [...items];
+  const remaining = [...items];
 
-  for (const store of candidateStores) {
-    if (!remainingItems.length) break;
-    if (usedStoreIds.has(store.id)) continue;
+  for (const store of candidates) {
+    if (!remaining.length) break;
 
-    // Check which of the remaining products this store carries
-    const productIds = remainingItems.map((i: any) => i.product_id);
+    const productIds = remaining.map((i: any) => i.product_id);
     const { data: storeProducts } = await supabaseAdmin
       .from('products')
       .select('master_product_id')
@@ -442,50 +321,29 @@ async function reallocateMissingItems(orderId: string, itemIds: string[]) {
       .eq('is_active', true)
       .in('master_product_id', productIds);
 
-    const availableProductIds = new Set((storeProducts || []).map((p: any) => p.master_product_id));
-    const assignableItems = remainingItems.filter((i: any) => availableProductIds.has(i.product_id));
-
-    if (!assignableItems.length) continue;
+    const available = new Set((storeProducts || []).map((p: any) => p.master_product_id));
+    const assignable = remaining.filter((i: any) => available.has(i.product_id));
+    if (!assignable.length) continue;
 
     maxSeq += 1;
-    const code = generatePickupCode();
+    const code = pickupCode();
 
-    // Create new allocation for this store
     const { data: newAlloc } = await supabaseAdmin
       .from('order_store_allocations')
-      .insert({
-        order_id: orderId,
-        store_id: store.id,
-        sequence_number: maxSeq,
-        pickup_code: code,
-        status: 'pending_acceptance',
-      })
-      .select('id')
-      .single();
+      .insert({ order_id: orderId, store_id: store.id, sequence_number: maxSeq, pickup_code: code, status: 'pending_acceptance' })
+      .select('id').single();
 
     if (newAlloc) {
-      // Assign items to this store
-      await supabaseAdmin
-        .from('order_items')
-        .update({ assigned_store_id: store.id, item_status: 'pending' })
-        .in('id', assignableItems.map((i: any) => i.id));
-
-      // Create store_order if not exists
-      await supabaseAdmin
-        .from('store_orders')
-        .upsert(
+      await Promise.all([
+        supabaseAdmin.from('order_items').update({ assigned_store_id: store.id, item_status: 'pending' }).in('id', assignable.map((i: any) => i.id)),
+        supabaseAdmin.from('store_orders').upsert(
           { customer_order_id: orderId, store_id: store.id, status: 'pending_at_store', subtotal_amount: 0, delivery_fee: 0 },
           { onConflict: 'customer_order_id,store_id' }
-        );
-
+        ),
+      ]);
       usedStoreIds.add(store.id);
-
-      // Remove assigned items from remaining
-      const assignedIds = new Set(assignableItems.map((i: any) => i.id));
-      remainingItems.splice(0, remainingItems.length, ...remainingItems.filter((i: any) => !assignedIds.has(i.id)));
-
-      // Send push notification to store owner
-      notifyShopkeeperNewAllocation(store.id, orderId).catch(console.error);
+      const assignedIds = new Set(assignable.map((i: any) => i.id));
+      remaining.splice(0, remaining.length, ...remaining.filter((i: any) => !assignedIds.has(i.id)));
     }
   }
 }
@@ -499,74 +357,40 @@ async function broadcastToNearbyDrivers(orderId: string) {
 
   if (!order?.delivery_latitude) return;
 
-  // Find online drivers within 10 km
   const { data: locations } = await supabaseAdmin
     .from('driver_locations')
     .select('delivery_partner_id, latitude, longitude, updated_at');
 
   const twoMinsAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-  const nearbyDriverIds = (locations || [])
-    .filter((l: any) => {
-      if (l.updated_at < twoMinsAgo) return false;
-      const d = haversineKm(order.delivery_latitude, order.delivery_longitude, l.latitude, l.longitude);
-      return d <= 10;
-    })
+  const nearbyIds = (locations || [])
+    .filter((l: any) => l.updated_at >= twoMinsAgo && haversineKm(order.delivery_latitude, order.delivery_longitude, l.latitude, l.longitude) <= 10)
     .map((l: any) => l.delivery_partner_id);
 
-  if (!nearbyDriverIds.length) return;
+  if (!nearbyIds.length) return;
 
-  // Verify drivers are active/online
   const { data: partners } = await supabaseAdmin
     .from('delivery_partners')
-    .select('user_id, expo_push_token, is_online')
-    .in('user_id', nearbyDriverIds)
+    .select('user_id, expo_push_token')
+    .in('user_id', nearbyIds)
     .eq('is_online', true)
     .eq('status', 'active');
 
   if (!partners?.length) return;
 
-  // Insert offer rows
-  const offerRows = partners.map((p: any) => ({
-    order_id: orderId,
-    driver_id: p.user_id,
-    status: 'pending',
-  }));
+  await supabaseAdmin.from('driver_order_offers').upsert(
+    (partners as any[]).map((p) => ({ order_id: orderId, driver_id: p.user_id, status: 'pending' })),
+    { onConflict: 'order_id,driver_id', ignoreDuplicates: true }
+  );
 
-  await supabaseAdmin
-    .from('driver_order_offers')
-    .upsert(offerRows, { onConflict: 'order_id,driver_id', ignoreDuplicates: true });
-
-  // Push notifications
-  const pushTokens = partners
-    .map((p: any) => p.expo_push_token)
-    .filter(Boolean);
-
-  if (pushTokens.length > 0) {
-    const messages = pushTokens.map((token: string) => ({
-      to: token,
-      sound: 'default',
-      title: 'New Delivery Request',
-      body: `New order available near you. Tap to accept!`,
-      data: { orderId, type: 'new_order_offer' },
-    }));
-
-    await fetch('https://exp.host/--/api/v2/push/send', {
+  const tokens = (partners as any[]).map((p) => p.expo_push_token).filter(Boolean);
+  if (tokens.length) {
+    fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(messages),
+      body: JSON.stringify(tokens.map((t: string) => ({
+        to: t, sound: 'default', title: '🛵 New Delivery Request',
+        body: 'New order available — tap to accept!', data: { orderId, type: 'new_order_offer' },
+      }))),
     }).catch(console.error);
   }
-}
-
-async function notifyShopkeeperNewAllocation(storeId: string, orderId: string) {
-  const { data: store } = await supabaseAdmin
-    .from('stores')
-    .select('owner_id')
-    .eq('id', storeId)
-    .single();
-
-  if (!store) return;
-
-  // For now just log — can extend with push notification later
-  console.log(`[Shopkeeper] New allocation for store ${storeId}, order ${orderId}`);
 }

@@ -884,17 +884,17 @@ export class DatabaseService {
         throw new Error(itemsError.message || 'Failed to create order items');
       }
 
-      // Create order_store_allocation for this store
-      const pickupCode = String(Math.floor(Math.random() * 9000) + 1000);
-      const { error: allocError } = await supabaseAdmin.from('order_store_allocations').insert({
+      // Create order_store_allocation for this store so shopkeeper can see & accept it
+      const allocationCode = String(Math.floor(Math.random() * 9000) + 1000);
+      const { error: allocErr } = await supabaseAdmin.from('order_store_allocations').insert({
         order_id: customerOrder.id,
         store_id: storeId,
         sequence_number: i + 1,
-        pickup_code: pickupCode,
+        pickup_code: allocationCode,
         status: 'pending_acceptance',
       });
-      if (allocError) {
-        console.error('Failed to create store allocation (non-fatal):', allocError.message);
+      if (allocErr) {
+        console.error('[order placement] Failed to create store allocation (non-fatal):', allocErr.message);
       }
     }
 

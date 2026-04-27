@@ -1,19 +1,32 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+/**
+ * ShopkeeperApp — standalone web app for store owners.
+ * Routes: /shopkeeper
+ *
+ * Features:
+ *  - Phone OTP login (role=shopkeeper)
+ *  - Dashboard showing incoming order allocations
+ *  - Per-item availability toggles
+ *  - Accept (requires ≥1 item) / Reject
+ *  - Pickup code display after acceptance
+ *  - Realtime polling every 8 sec
+ */
+
+import { useState, useEffect, useCallback } from 'react';
 import {
-  ShoppingBag, CheckCircle, XCircle, Clock, MapPin,
-  LogOut, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Loader, Store,
+  Store, LogOut, RefreshCw, Package, MapPin, Clock,
+  CheckCircle, XCircle, ChevronDown, ChevronUp,
+  AlertCircle, Loader,
 } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const POLL_INTERVAL_MS = 8000;
+const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface OrderItem {
   id: string;
   product_name: string;
   quantity: number;
-  unit: string;
+  unit?: string;
   unit_price: number;
   image_url?: string;
   item_status: string;
@@ -23,8 +36,7 @@ interface IncomingOrder {
   allocation_id: string;
   order_id: string;
   order_code: string;
-  order_status: string;
-  alloc_status: string;
+  alloc_status: 'pending_acceptance' | 'accepted' | 'rejected' | 'picked_up';
   sequence_number: number;
   pickup_code: string | null;
   accepted_item_ids: string[];
@@ -35,242 +47,355 @@ interface IncomingOrder {
   accepted_at: string | null;
 }
 
-interface Profile {
-  user?: { id: string; name: string; phone: string };
-  store: { id: string; name: string; address: string; is_active: boolean } | null;
-  [key: string]: unknown;
-}
+// ── Auth helpers ──────────────────────────────────────────────────────────────
 
-type Screen = 'login' | 'orders' | 'code_display';
+function saveToken(t: string) { localStorage.setItem('sk_token', t); }
+function loadToken(): string | null { return localStorage.getItem('sk_token'); }
+function clearToken() { localStorage.removeItem('sk_token'); }
 
-// ── API calls ──────────────────────────────────────────────────────────────────
+// ── Login screen ──────────────────────────────────────────────────────────────
 
-async function apiGet(path: string, token: string) {
-  const r = await fetch(`${API_URL}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const json = await r.json();
-  if (!r.ok) throw new Error(json.error || 'Request failed');
-  return json;
-}
+function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
+  const [phone, setPhone] = useState('');
+  const [otp, setOtp] = useState('');
+  const [step, setStep] = useState<'phone' | 'otp'>('phone');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-async function apiPost(path: string, token: string, body?: object) {
-  const r = await fetch(`${API_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const json = await r.json();
-  if (!r.ok) throw new Error(json.error || 'Request failed');
-  return json;
-}
-
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    pending_acceptance: { label: 'Action Required', cls: 'bg-amber-100 text-amber-800 border-amber-300' },
-    accepted:          { label: 'Accepted',         cls: 'bg-green-100 text-green-800 border-green-300' },
-    code_verified:     { label: 'Code Verified',    cls: 'bg-blue-100 text-blue-800 border-blue-300' },
-    rejected:          { label: 'Rejected',         cls: 'bg-red-100 text-red-800 border-red-300' },
-    picked_up:         { label: 'Picked Up',        cls: 'bg-purple-100 text-purple-800 border-purple-300' },
+  const sendOtp = async () => {
+    if (!phone.trim()) { setError('Enter your phone number'); return; }
+    setLoading(true); setError('');
+    try {
+      const r = await fetch(`${API}/api/auth/otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim(), role: 'shopkeeper' }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to send OTP');
+      setStep('otp');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   };
-  const cfg = map[status] || { label: status, cls: 'bg-gray-100 text-gray-700 border-gray-300' };
-  return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${cfg.cls}`}>
-      {cfg.label}
-    </span>
-  );
-}
 
-function PickupCodeDisplay({ code }: { code: string }) {
+  const verifyOtp = async () => {
+    if (!otp.trim()) { setError('Enter the OTP'); return; }
+    setLoading(true); setError('');
+    try {
+      const r = await fetch(`${API}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim(), otp: otp.trim(), role: 'shopkeeper' }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Invalid OTP');
+      if (!d.token) throw new Error('No token received');
+      onLogin(d.token);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="mt-4 p-5 bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-400 rounded-2xl text-center">
-      <p className="text-sm font-semibold text-green-700 mb-1">Pickup Verification Code</p>
-      <p className="text-5xl font-black tracking-[0.3em] text-green-800 my-2 font-mono">{code}</p>
-      <p className="text-xs text-green-600">Share this code with the delivery driver at pickup</p>
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="w-20 h-20 bg-gradient-to-br from-orange-500 to-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+            <Store className="w-10 h-10 text-white" />
+          </div>
+          <h1 className="text-2xl font-black text-gray-900">Near & Now</h1>
+          <p className="text-gray-500 mt-1">Shopkeeper Portal</p>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-xl p-6">
+          {step === 'phone' ? (
+            <>
+              <h2 className="text-lg font-bold text-gray-800 mb-4">Sign In</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700 block mb-1">Phone Number</label>
+                  <div className="flex">
+                    <span className="inline-flex items-center px-3 rounded-l-xl border border-r-0 border-gray-200 bg-gray-50 text-gray-500 text-sm">+91</span>
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="9876543210"
+                      className="flex-1 px-3 py-3 border border-gray-200 rounded-r-xl focus:outline-none focus:border-orange-400 text-sm"
+                      onKeyDown={(e) => e.key === 'Enter' && sendOtp()}
+                    />
+                  </div>
+                </div>
+                {error && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 rounded-lg p-3">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    {error}
+                  </div>
+                )}
+                <button
+                  onClick={sendOtp}
+                  disabled={loading}
+                  className="w-full py-3 bg-orange-500 text-white font-bold rounded-xl hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                >
+                  {loading ? <Loader className="w-5 h-5 animate-spin mx-auto" /> : 'Get OTP'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => { setStep('phone'); setOtp(''); setError(''); }}
+                className="flex items-center gap-1 text-gray-500 text-sm mb-4 hover:text-gray-700"
+              >
+                ← Back
+              </button>
+              <h2 className="text-lg font-bold text-gray-800 mb-1">Enter OTP</h2>
+              <p className="text-sm text-gray-500 mb-4">Sent to +91 {phone}</p>
+              <div className="space-y-4">
+                <input
+                  type="number"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                  placeholder="6-digit OTP"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-orange-400 text-center text-2xl font-mono tracking-widest"
+                  onKeyDown={(e) => e.key === 'Enter' && verifyOtp()}
+                />
+                {error && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 rounded-lg p-3">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    {error}
+                  </div>
+                )}
+                <button
+                  onClick={verifyOtp}
+                  disabled={loading}
+                  className="w-full py-3 bg-orange-500 text-white font-bold rounded-xl hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                >
+                  {loading ? <Loader className="w-5 h-5 animate-spin mx-auto" /> : 'Verify & Sign In'}
+                </button>
+                <button onClick={sendOtp} className="w-full text-orange-600 text-sm font-medium hover:underline">
+                  Resend OTP
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
+// ── Order card ────────────────────────────────────────────────────────────────
+
 function OrderCard({
-  order,
-  token,
-  onRefresh,
+  order, token, onRefresh,
 }: {
   order: IncomingOrder;
   token: string;
   onRefresh: () => void;
 }) {
   const [expanded, setExpanded] = useState(order.alloc_status === 'pending_acceptance');
-  const [selected, setSelected] = useState<Set<string>>(new Set(order.items.map((i) => i.id)));
-  const [loading, setLoading] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(
+    () => new Set(order.items.map((i) => i.id))
+  );
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   const toggle = (id: string) => {
-    setSelected((prev) => {
+    setCheckedIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
 
-  const handleAccept = async () => {
-    if (!selected.size) return;
-    setLoading(true);
-    setError('');
+  const accept = async () => {
+    if (checkedIds.size === 0) { setError('Select at least one available item'); return; }
+    setSubmitting(true); setError('');
     try {
-      await apiPost(`/shopkeeper/allocations/${order.allocation_id}/accept`, token, {
-        accepted_item_ids: [...selected],
+      const r = await fetch(`${API}/shopkeeper/allocations/${order.allocation_id}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ accepted_item_ids: [...checkedIds] }),
       });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to accept');
       onRefresh();
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const handleReject = async () => {
-    if (!confirm('Reject this entire order? Missing items will be sourced from another store.')) return;
-    setLoading(true);
-    setError('');
+  const reject = async () => {
+    if (!confirm('Reject this order allocation?')) return;
+    setSubmitting(true); setError('');
     try {
-      await apiPost(`/shopkeeper/allocations/${order.allocation_id}/reject`, token);
+      const r = await fetch(`${API}/shopkeeper/allocations/${order.allocation_id}/reject`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to reject');
       onRefresh();
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  const formatTime = (s: string) => new Date(s).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   const isPending = order.alloc_status === 'pending_acceptance';
   const isAccepted = order.alloc_status === 'accepted';
+  const isPickedUp = order.alloc_status === 'picked_up';
 
   return (
-    <div className={`bg-white rounded-2xl shadow-sm border-2 transition-all ${
-      isPending ? 'border-amber-300' : isAccepted ? 'border-green-300' : 'border-gray-200'
-    }`}>
-      {/* Header */}
+    <div className={`bg-white rounded-2xl shadow-md overflow-hidden border-l-4 transition-all
+      ${isPending ? 'border-orange-400' : isAccepted ? 'border-green-500' : isPickedUp ? 'border-blue-500' : 'border-red-400'}`}>
+
+      {/* Card header */}
       <button
-        className="w-full flex items-center justify-between p-4 text-left"
-        onClick={() => setExpanded((p) => !p)}
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full text-left px-5 py-4 hover:bg-gray-50 transition-colors"
       >
-        <div className="flex items-start gap-3">
-          <div className={`mt-0.5 w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-            isPending ? 'bg-amber-100' : 'bg-green-100'
-          }`}>
-            <ShoppingBag className={`w-5 h-5 ${isPending ? 'text-amber-700' : 'text-green-700'}`} />
-          </div>
-          <div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-bold text-gray-900">#{order.order_code}</span>
-              <StatusBadge status={order.alloc_status} />
+              <span className="font-black text-gray-900">{order.order_code || order.order_id.substring(0, 8).toUpperCase()}</span>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full
+                ${isPending ? 'bg-orange-100 text-orange-700' :
+                  isAccepted ? 'bg-green-100 text-green-700' :
+                  isPickedUp ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                {isPending ? '⏳ Pending' : isAccepted ? '✅ Accepted' : isPickedUp ? '📦 Picked Up' : '❌ Rejected'}
+              </span>
             </div>
-            <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-              <MapPin className="w-3 h-3" />
-              <span>{order.customer_area?.split(',').slice(0, 2).join(',') || 'Customer area'}</span>
+            <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
+              <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" />{formatTime(order.placed_at)}</span>
               {order.customer_distance && (
-                <span className="ml-1 font-medium text-blue-600">{order.customer_distance}</span>
+                <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" />{order.customer_distance}</span>
               )}
+              <span className="flex items-center gap-1"><Package className="w-3.5 h-3.5" />{order.items.length} items</span>
             </div>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {order.items.length} item{order.items.length !== 1 ? 's' : ''} •{' '}
-              {new Date(order.placed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </p>
           </div>
+          {expanded ? <ChevronUp className="w-5 h-5 text-gray-400 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 text-gray-400 flex-shrink-0" />}
         </div>
-        {expanded ? (
-          <ChevronUp className="w-5 h-5 text-gray-400 flex-shrink-0" />
-        ) : (
-          <ChevronDown className="w-5 h-5 text-gray-400 flex-shrink-0" />
-        )}
       </button>
 
-      {/* Expanded body */}
+      {/* Expanded content */}
       {expanded && (
-        <div className="px-4 pb-4 border-t border-gray-100">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-4 mb-2">
-            {isPending ? 'Select available items to accept:' : 'Items for this order:'}
-          </p>
-
-          <div className="space-y-2">
-            {order.items.map((item) => (
-              <div
-                key={item.id}
-                className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                  isPending
-                    ? selected.has(item.id)
-                      ? 'border-green-400 bg-green-50'
-                      : 'border-gray-200 bg-gray-50'
-                    : 'border-gray-100 bg-gray-50'
-                }`}
-              >
-                {isPending && (
-                  <input
-                    type="checkbox"
-                    checked={selected.has(item.id)}
-                    onChange={() => toggle(item.id)}
-                    className="w-5 h-5 rounded text-green-600 border-gray-300 focus:ring-green-500 flex-shrink-0"
-                  />
-                )}
-                {!isPending && (
-                  <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-gray-900 text-sm truncate">{item.product_name}</p>
-                  <p className="text-xs text-gray-500">
-                    Qty: {item.quantity} {item.unit && `× ${item.unit}`} • ₹{item.unit_price}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Pickup code */}
+        <div className="border-t border-gray-100 px-5 pb-5">
+          {/* Pickup code (only after acceptance) */}
           {isAccepted && order.pickup_code && (
-            <PickupCodeDisplay code={order.pickup_code} />
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4 mt-4 text-center">
+              <p className="text-xs font-bold text-green-700 uppercase tracking-wider mb-1">Pickup Code</p>
+              <p className="text-4xl font-black text-green-800 tracking-[0.3em]">{order.pickup_code}</p>
+              <p className="text-xs text-green-600 mt-1">Share with delivery rider</p>
+            </div>
           )}
+
+          {/* Item list with toggles */}
+          <div className="mt-4 space-y-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-gray-400">
+              {isPending ? 'Mark Available / Unavailable' : 'Items'}
+            </p>
+            {order.items.map((item) => {
+              const checked = isPending ? checkedIds.has(item.id) : order.accepted_item_ids.includes(item.id);
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => isPending && toggle(item.id)}
+                  className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all
+                    ${isPending ? 'cursor-pointer' : ''}
+                    ${checked ? 'border-green-300 bg-green-50' : 'border-gray-200 bg-gray-50'}`}
+                >
+                  {/* Checkbox */}
+                  <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all
+                    ${checked ? 'bg-green-500 border-green-500' : 'border-gray-300 bg-white'}`}>
+                    {checked && <CheckCircle className="w-4 h-4 text-white" />}
+                  </div>
+
+                  {/* Item image */}
+                  {item.image_url ? (
+                    <img src={item.image_url} alt={item.product_name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-gray-200 flex items-center justify-center flex-shrink-0">
+                      <Package className="w-5 h-5 text-gray-400" />
+                    </div>
+                  )}
+
+                  {/* Name + qty */}
+                  <div className="flex-1 min-w-0">
+                    <p className={`font-medium text-sm truncate ${checked ? 'text-gray-900' : 'text-gray-400 line-through'}`}>
+                      {item.product_name}
+                    </p>
+                    <p className="text-xs text-gray-500">×{item.quantity} {item.unit || ''} · ₹{Math.round(item.unit_price * item.quantity)}</p>
+                  </div>
+
+                  {/* Available label */}
+                  <span className={`text-xs font-bold flex-shrink-0 ${checked ? 'text-green-600' : 'text-red-400'}`}>
+                    {checked ? 'Available' : 'N/A'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
 
           {/* Error */}
           {error && (
-            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-center gap-2">
+            <div className="mt-3 flex items-center gap-2 text-red-600 text-sm bg-red-50 rounded-lg p-3">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               {error}
             </div>
           )}
 
+          {/* Pending: require ≥1 item */}
+          {isPending && checkedIds.size === 0 && (
+            <div className="mt-3 text-center text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
+              Select at least one available item to accept
+            </div>
+          )}
+
           {/* Action buttons */}
           {isPending && (
-            <div className="mt-4 flex gap-3">
+            <div className="flex gap-3 mt-4">
               <button
-                onClick={handleAccept}
-                disabled={loading || !selected.size}
-                className="flex-1 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
+                onClick={reject}
+                disabled={submitting}
+                className="flex-1 py-3 border-2 border-red-300 text-red-600 font-bold rounded-xl hover:bg-red-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
               >
-                {loading ? (
-                  <Loader className="w-4 h-4 animate-spin" />
-                ) : (
-                  <CheckCircle className="w-4 h-4" />
-                )}
-                Accept ({selected.size} item{selected.size !== 1 ? 's' : ''})
+                <XCircle className="w-4 h-4" /> Reject
               </button>
               <button
-                onClick={handleReject}
-                disabled={loading}
-                className="px-4 py-3 border-2 border-red-200 text-red-600 hover:bg-red-50 font-bold rounded-xl transition-all flex items-center gap-2 text-sm"
+                onClick={accept}
+                disabled={submitting || checkedIds.size === 0}
+                className="flex-2 flex-[2] py-3 bg-green-500 text-white font-bold rounded-xl hover:bg-green-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
               >
-                <XCircle className="w-4 h-4" />
-                Reject
+                {submitting ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                Accept ({checkedIds.size}/{order.items.length})
               </button>
             </div>
           )}
 
-          {isPending && !selected.size && (
-            <p className="mt-2 text-xs text-center text-amber-600 font-medium">
-              Select at least 1 item to accept
-            </p>
+          {isAccepted && (
+            <div className="mt-4 flex items-center gap-2 text-green-700 text-sm">
+              <CheckCircle className="w-4 h-4" />
+              Accepted at {order.accepted_at ? formatTime(order.accepted_at) : '—'}
+            </div>
+          )}
+          {isPickedUp && (
+            <div className="mt-4 flex items-center gap-2 text-blue-700 text-sm font-medium">
+              <Package className="w-4 h-4" />
+              Rider has picked up this order
+            </div>
           )}
         </div>
       )}
@@ -278,289 +403,164 @@ function OrderCard({
   );
 }
 
-// ── Main Component ─────────────────────────────────────────────────────────────
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 
-const ShopkeeperApp = () => {
-  const [screen, setScreen] = useState<Screen>('login');
-  const [token, setToken] = useState(() => localStorage.getItem('sk_token') || '');
-  const [profile, setProfile] = useState<Profile | null>(null);
+function Dashboard({ token, onLogout }: { token: string; onLogout: () => void }) {
   const [orders, setOrders] = useState<IncomingOrder[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState<{ user?: { name?: string }; store?: { name?: string } } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Phone OTP login
-  const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState('');
+  const headers = { Authorization: `Bearer ${token}` };
 
-  const fetchOrders = useCallback(async (tok: string) => {
+  const fetchAll = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setRefreshing(true);
+    setError('');
     try {
-      const data = await apiGet('/shopkeeper/orders', tok);
-      setOrders(data.orders || []);
-      setLastRefresh(new Date());
-    } catch (e: any) {
-      console.error('fetchOrders error:', e);
-    }
-  }, []);
-
-  const startSession = useCallback(async (tok: string) => {
-    setLoading(true);
-    try {
-      const data = await apiGet('/shopkeeper/profile', tok);
-      setProfile(data);
-      setToken(tok);
-      localStorage.setItem('sk_token', tok);
-      await fetchOrders(tok);
-      setScreen('orders');
-    } catch (e: any) {
-      setError('Session expired. Please log in again.');
-      localStorage.removeItem('sk_token');
+      const [ordersRes, profileRes] = await Promise.all([
+        fetch(`${API}/shopkeeper/orders`, { headers }),
+        fetch(`${API}/shopkeeper/profile`, { headers }),
+      ]);
+      if (ordersRes.status === 401 || profileRes.status === 401) {
+        clearToken(); onLogout(); return;
+      }
+      const [ordersData, profileData] = await Promise.all([ordersRes.json(), profileRes.json()]);
+      if (ordersData.success) setOrders(ordersData.orders || []);
+      if (profileData.success) setProfile(profileData);
+    } catch {
+      setError('Failed to load. Check your connection.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [fetchOrders]);
+  }, [token, onLogout]);
 
-  // Auto-login if token stored
   useEffect(() => {
-    const stored = localStorage.getItem('sk_token');
-    if (stored) startSession(stored);
-  }, [startSession]);
+    fetchAll();
+    const interval = setInterval(() => fetchAll(), 8000);
+    return () => clearInterval(interval);
+  }, [fetchAll]);
 
-  // Polling for new orders
-  useEffect(() => {
-    if (screen !== 'orders' || !token) return;
-    pollRef.current = setInterval(() => fetchOrders(token), POLL_INTERVAL_MS);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [screen, token, fetchOrders]);
+  const pending = orders.filter((o) => o.alloc_status === 'pending_acceptance');
+  const active = orders.filter((o) => o.alloc_status === 'accepted');
+  const done = orders.filter((o) => ['rejected', 'picked_up'].includes(o.alloc_status));
 
-  const sendOtp = async () => {
-    if (!phone.trim()) { setLoginError('Enter your phone number'); return; }
-    setLoginLoading(true);
-    setLoginError('');
-    try {
-      const r = await fetch(`${API_URL}/api/auth/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phone.trim() }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Failed to send OTP');
-      setOtpSent(true);
-    } catch (e: any) {
-      setLoginError(e.message);
-    } finally {
-      setLoginLoading(false);
-    }
-  };
-
-  const verifyOtp = async () => {
-    if (!otp.trim()) { setLoginError('Enter the OTP'); return; }
-    setLoginLoading(true);
-    setLoginError('');
-    try {
-      const r = await fetch(`${API_URL}/api/auth/verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phone.trim(), otp: otp.trim(), role: 'shopkeeper' }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Failed to verify OTP');
-      if (d.mode === 'signup') {
-        setLoginError('No shopkeeper account found for this phone number. Contact admin.');
-        return;
-      }
-      await startSession(d.token);
-    } catch (e: any) {
-      setLoginError(e.message);
-    } finally {
-      setLoginLoading(false);
-    }
-  };
-
-  const logout = () => {
-    localStorage.removeItem('sk_token');
-    setToken('');
-    setProfile(null);
-    setOrders([]);
-    setScreen('login');
-    setOtpSent(false);
-    setPhone('');
-    setOtp('');
-    if (pollRef.current) clearInterval(pollRef.current);
-  };
-
-  const pendingCount = orders.filter((o) => o.alloc_status === 'pending_acceptance').length;
-
-  // ── Login Screen ─────────────────────────────────────────────────────────────
-  if (screen === 'login') {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-amber-50 flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-sm">
-          <div className="bg-white rounded-2xl shadow-xl p-8">
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-amber-600 rounded-xl flex items-center justify-center">
-                <Store className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">Shopkeeper</h1>
-                <p className="text-sm text-gray-500">Near & Now Partner</p>
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader className="w-6 h-6 animate-spin text-orange-500" />
-              </div>
-            ) : (
-              <>
-                {!otpSent ? (
-                  <>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      Phone Number
-                    </label>
-                    <input
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+91 98765 43210"
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-orange-400 transition-colors mb-4"
-                      onKeyDown={(e) => e.key === 'Enter' && sendOtp()}
-                    />
-                    <button
-                      onClick={sendOtp}
-                      disabled={loginLoading}
-                      className="w-full py-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
-                    >
-                      {loginLoading ? <Loader className="w-4 h-4 animate-spin" /> : null}
-                      Send OTP
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm text-gray-600 mb-4">
-                      Enter the 6-digit OTP sent to <strong>{phone}</strong>
-                    </p>
-                    <input
-                      type="text"
-                      value={otp}
-                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="123456"
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-orange-400 transition-colors font-mono text-center text-2xl tracking-widest mb-4"
-                      maxLength={6}
-                      onKeyDown={(e) => e.key === 'Enter' && verifyOtp()}
-                    />
-                    <button
-                      onClick={verifyOtp}
-                      disabled={loginLoading || otp.length !== 6}
-                      className="w-full py-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
-                    >
-                      {loginLoading ? <Loader className="w-4 h-4 animate-spin" /> : null}
-                      Verify & Login
-                    </button>
-                    <button
-                      onClick={() => setOtpSent(false)}
-                      className="w-full mt-2 text-sm text-gray-500 hover:text-gray-700"
-                    >
-                      ← Change number
-                    </button>
-                  </>
-                )}
-
-                {loginError && (
-                  <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    {loginError}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Orders Screen ─────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
+      {/* Top bar */}
+      <div className="bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-4 text-white">
+        <div className="max-w-lg mx-auto flex items-center justify-between">
           <div>
-            <div className="flex items-center gap-2">
-              <Store className="w-5 h-5 text-orange-600" />
-              <span className="font-bold text-gray-900">
-                {profile?.store?.name || profile?.user?.name || 'My Store'}
-              </span>
-              {pendingCount > 0 && (
-                <span className="ml-1 px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full animate-pulse">
-                  {pendingCount}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString()}` : 'Loading…'}
-            </p>
+            <p className="text-orange-100 text-xs">Shopkeeper Dashboard</p>
+            <p className="font-black text-lg leading-tight">{profile?.store?.name || profile?.user?.name || 'My Store'}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => fetchOrders(token)}
-              className="p-2 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+              onClick={() => fetchAll(true)}
+              disabled={refreshing}
+              className="p-2 rounded-xl bg-white/20 hover:bg-white/30 transition-colors"
             >
-              <RefreshCw className="w-5 h-5" />
+              <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
-            <button
-              onClick={logout}
-              className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"
-            >
+            <button onClick={onLogout} className="p-2 rounded-xl bg-white/20 hover:bg-white/30 transition-colors">
               <LogOut className="w-5 h-5" />
             </button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+      <div className="max-w-lg mx-auto px-4 py-5 space-y-5">
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'New Orders', count: pending.length, color: 'bg-orange-500' },
+            { label: 'In Progress', count: active.length, color: 'bg-green-500' },
+            { label: 'Completed', count: done.length, color: 'bg-gray-400' },
+          ].map(({ label, count, color }) => (
+            <div key={label} className="bg-white rounded-2xl shadow-sm p-4 text-center">
+              <p className={`text-2xl font-black ${count > 0 && color === 'bg-orange-500' ? 'text-orange-600' : 'text-gray-900'}`}>
+                {count}
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">{label}</p>
+            </div>
+          ))}
+        </div>
+
         {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 rounded-xl p-4">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
             {error}
           </div>
         )}
 
-        {orders.length === 0 ? (
-          <div className="text-center py-20">
-            <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <Clock className="w-8 h-8 text-gray-300" />
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2].map((i) => (
+              <div key={i} className="bg-white rounded-2xl shadow-md p-5 animate-pulse">
+                <div className="h-5 bg-gray-200 rounded w-1/3 mb-3" />
+                <div className="h-4 bg-gray-200 rounded w-2/3 mb-2" />
+                <div className="h-4 bg-gray-200 rounded w-1/2" />
+              </div>
+            ))}
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Package className="w-8 h-8 text-gray-300" />
             </div>
-            <p className="font-semibold text-gray-500">No active orders</p>
+            <p className="font-bold text-gray-500">No orders right now</p>
             <p className="text-sm text-gray-400 mt-1">New orders will appear here automatically</p>
           </div>
         ) : (
           <>
-            {/* Pending first */}
-            {orders
-              .filter((o) => o.alloc_status === 'pending_acceptance')
-              .map((order) => (
-                <OrderCard key={order.allocation_id} order={order} token={token} onRefresh={() => fetchOrders(token)} />
-              ))}
-            {/* Then accepted (show pickup code) */}
-            {orders
-              .filter((o) => o.alloc_status !== 'pending_acceptance')
-              .map((order) => (
-                <OrderCard key={order.allocation_id} order={order} token={token} onRefresh={() => fetchOrders(token)} />
-              ))}
+            {/* Pending orders — most urgent */}
+            {pending.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 bg-orange-500 rounded-full animate-pulse" />
+                  <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">New Orders</p>
+                </div>
+                {pending.map((o) => (
+                  <OrderCard key={o.allocation_id} order={o} token={token} onRefresh={() => fetchAll()} />
+                ))}
+              </div>
+            )}
+
+            {/* Active orders */}
+            {active.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Active</p>
+                {active.map((o) => (
+                  <OrderCard key={o.allocation_id} order={o} token={token} onRefresh={() => fetchAll()} />
+                ))}
+              </div>
+            )}
+
+            {/* Done */}
+            {done.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Completed / Rejected</p>
+                {done.map((o) => (
+                  <OrderCard key={o.allocation_id} order={o} token={token} onRefresh={() => fetchAll()} />
+                ))}
+              </div>
+            )}
           </>
         )}
-
-        <div className="text-center text-xs text-gray-400 pt-4">
-          Auto-refreshes every {POLL_INTERVAL_MS / 1000}s
-        </div>
       </div>
     </div>
   );
-};
+}
 
-export default ShopkeeperApp;
+// ── Root ──────────────────────────────────────────────────────────────────────
+
+export default function ShopkeeperApp() {
+  const [token, setToken] = useState<string | null>(() => loadToken());
+
+  const handleLogin = (t: string) => { saveToken(t); setToken(t); };
+  const handleLogout = () => { clearToken(); setToken(null); };
+
+  if (!token) return <LoginScreen onLogin={handleLogin} />;
+  return <Dashboard token={token} onLogout={handleLogout} />;
+}

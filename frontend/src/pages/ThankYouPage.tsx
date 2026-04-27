@@ -4,7 +4,7 @@ import { formatPrice } from '../utils/formatters';
 import { Order, OrderItem } from '../services/supabase';
 import axios from 'axios';
 
-const THANK_YOU_DISPLAY_SEC = 7;
+const THANK_YOU_DISPLAY_SEC = 3;
 
 const ThankYouPage = () => {
   const location = useLocation();

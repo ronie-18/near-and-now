@@ -4,15 +4,12 @@ import { ShopkeeperController, requireShopkeeper } from '../controllers/shopkeep
 const router = Router();
 const ctrl = new ShopkeeperController();
 
-// Public: login with session token
-router.post('/auth/login', ctrl.login.bind(ctrl));
-
-// All routes below require shopkeeper auth
+// Protected by shopkeeper session token (set after OTP login)
 router.use(requireShopkeeper);
 
-router.get('/profile',                                    ctrl.getProfile.bind(ctrl));
-router.get('/orders',                                     ctrl.getIncomingOrders.bind(ctrl));
-router.post('/allocations/:allocationId/accept',          ctrl.acceptAllocation.bind(ctrl));
-router.post('/allocations/:allocationId/reject',          ctrl.rejectAllocation.bind(ctrl));
+router.get('/profile',                               ctrl.getProfile.bind(ctrl));
+router.get('/orders',                                ctrl.getIncomingOrders.bind(ctrl));
+router.post('/allocations/:allocationId/accept',     ctrl.acceptAllocation.bind(ctrl));
+router.post('/allocations/:allocationId/reject',     ctrl.rejectAllocation.bind(ctrl));
 
 export default router;
