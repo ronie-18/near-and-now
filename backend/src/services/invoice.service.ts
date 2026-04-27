@@ -237,34 +237,37 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
   const isInterState = false; // assume intra-state (same state for now)
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CALCULATION FLOW (matching spreadsheet logic):
+  // CALCULATION FLOW:
   // ═══════════════════════════════════════════════════════════════════════════
-  // 1. Item price: ₹200 (base, taxable)
-  // 2. Platform fee: ₹9.50 total → ₹9.05 base + ₹0.45 GST (reverse calc)
-  // 3. Handling fee: ₹5.50 total → ₹5.24 base + ₹0.26 GST (reverse calc)
-  // 4. Delivery fee: ₹20 (no GST)
-  // 5. Subtotal: ₹200 + ₹10 (item GST) + ₹9.50 + ₹5.50 + ₹20 = ₹245
-  // 6. Total GST: ₹10 (items) + ₹0.45 (platform) + ₹0.26 (handling) = ₹10.71
-  // 7. Grand total: ₹245
+  // 1. Taxable value = Base price of product (without GST)
+  // 2. GST (5%) = Calculated on taxable value
+  // 3. MRP = Taxable value + GST (if no discount)
+  // 4. Final amount = MRP - discount
+  // 5. Platform fee: ₹9.50 (includes GST) → ₹9.05 base + ₹0.45 GST
+  // 6. Handling fee: ₹5.50 (includes GST) → ₹5.24 base + ₹0.26 GST
+  // 7. Delivery fee: No GST applicable
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Line items calculation
   const lineItems: InvoiceLineItem[] = items.map((item: any, idx: number) => {
     const qty = Number(item.quantity || 1);
     const unitPrice = Number(item.unit_price || 0);
-    const mrp = unitPrice; // no separate MRP in current schema
 
-    // Item price is the base price (without GST)
-    const itemSubtotal = round2(unitPrice * qty);
-    const discountAmt = 0;
-    const taxableValue = round2(itemSubtotal - discountAmt);
+    // Taxable value = Base price (without GST)
+    const taxableValue = round2(unitPrice * qty);
 
     // GST calculation on taxable value
     const gstPercent = DEFAULT_GST_RATE;
     const gst = calcGstSplit(taxableValue, gstPercent, isInterState);
 
-    // Line total = taxable value + GST
-    const lineTotal = round2(taxableValue + gst.cgst_amount + gst.sgst_amount + gst.igst_amount);
+    // MRP = Taxable value + GST
+    const mrp = round2(taxableValue + gst.cgst_amount + gst.sgst_amount + gst.igst_amount);
+
+    // Discount (if any)
+    const discountAmt = 0;
+
+    // Final line total = MRP - discount
+    const lineTotal = round2(mrp - discountAmt);
 
     return {
       line_no: idx + 1,

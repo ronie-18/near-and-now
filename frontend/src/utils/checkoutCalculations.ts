@@ -1,6 +1,12 @@
 /**
  * Checkout GST Calculations
  * Matches the invoice service calculation logic exactly
+ *
+ * CALCULATION FLOW:
+ * 1. Taxable value = Base price of product (without GST)
+ * 2. GST (5%) = Calculated on taxable value
+ * 3. MRP = Taxable value + GST (if no discount)
+ * 4. Final amount = MRP - discount
  */
 
 import { PLATFORM_FEE, HANDLING_FEE } from './deliveryFees';
@@ -17,25 +23,26 @@ interface GSTBreakdown {
 
 interface CheckoutTotals {
   // Item totals
-  itemsSubtotal: number; // Items price without GST
-  itemsGST: GSTBreakdown;
-  itemsTotal: number; // Items with GST
-  
+  itemsTaxableValue: number; // Base price without GST (taxable value)
+  itemsGST: GSTBreakdown; // GST calculated on taxable value
+  itemsMRP: number; // MRP = Taxable value + GST
+  itemsTotal: number; // Final = MRP - discount
+
   // Fee breakdown (with embedded GST)
   platformFeeTotal: number; // ₹9.50
   platformFeeBase: number; // ₹9.05
   platformFeeGST: number; // ₹0.45
-  
+
   handlingFeeTotal: number; // ₹5.50
   handlingFeeBase: number; // ₹5.24
   handlingFeeGST: number; // ₹0.26
-  
+
   // Delivery
   deliveryFee: number; // No GST
-  
+
   // Discount
   discount: number;
-  
+
   // Totals
   subtotal: number; // Items + platform + handling + delivery - discount
   totalGST: GSTBreakdown; // All GST combined
@@ -51,12 +58,12 @@ function round2(n: number): number {
  */
 function calcGSTSplit(taxableValue: number, gstPercent: number, isInterState: boolean = false): GSTBreakdown {
   const half = gstPercent / 2;
-  
+
   if (isInterState) {
     const igst = round2(taxableValue * gstPercent / 100);
     return { cgst: 0, sgst: 0, igst, total: igst };
   }
-  
+
   const cgst = round2(taxableValue * half / 100);
   const sgst = round2(taxableValue * half / 100);
   return { cgst, sgst, igst: 0, total: cgst + sgst };
@@ -72,53 +79,61 @@ export function calculateCheckoutTotals(
   discount: number = 0
 ): CheckoutTotals {
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1: Calculate Items GST (on cart subtotal)
+  // STEP 1: Calculate Items - Taxable value, GST, MRP
   // ═══════════════════════════════════════════════════════════════════════════
-  // Cart subtotal is the base price (taxable value)
-  const itemsSubtotal = round2(cartSubtotal);
-  const itemsGST = calcGSTSplit(itemsSubtotal, DEFAULT_GST_RATE);
-  const itemsTotal = round2(itemsSubtotal + itemsGST.total);
-  
+  // Cart subtotal is the taxable value (base price without GST)
+  const itemsTaxableValue = round2(cartSubtotal);
+
+  // GST calculated on taxable value
+  const itemsGST = calcGSTSplit(itemsTaxableValue, DEFAULT_GST_RATE);
+
+  // MRP = Taxable value + GST
+  const itemsMRP = round2(itemsTaxableValue + itemsGST.total);
+
+  // Final item total = MRP - discount
+  const itemsTotal = round2(itemsMRP - discount);
+
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: Platform & Handling Fees (Reverse GST Calculation)
   // ═══════════════════════════════════════════════════════════════════════════
   // These fees have GST embedded. We need to extract the base and GST.
   // Formula: base = total / (1 + gst_rate)
-  
+
   const platformFeeTotal = PLATFORM_FEE; // ₹9.50
   const platformFeeBase = round2(platformFeeTotal / (1 + FEE_GST_RATE / 100));
   const platformFeeGST = round2(platformFeeTotal - platformFeeBase);
-  
+
   const handlingFeeTotal = HANDLING_FEE; // ₹5.50
   const handlingFeeBase = round2(handlingFeeTotal / (1 + FEE_GST_RATE / 100));
   const handlingFeeGST = round2(handlingFeeTotal - handlingFeeBase);
-  
+
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 3: Calculate Totals
   // ═══════════════════════════════════════════════════════════════════════════
-  
-  // Subtotal = Items (with GST) + Platform fee + Handling fee + Delivery - Discount
+
+  // Subtotal = Items total + Platform fee + Handling fee + Delivery
   const subtotal = round2(
-    itemsTotal + platformFeeTotal + handlingFeeTotal + deliveryFee - discount
+    itemsTotal + platformFeeTotal + handlingFeeTotal + deliveryFee
   );
-  
+
   // Total GST = Items GST + Platform fee GST + Handling fee GST
   const totalFeeGST = round2(platformFeeGST + handlingFeeGST);
   const feeCGST = round2(totalFeeGST / 2);
   const feeSGST = round2(totalFeeGST / 2);
-  
+
   const totalGST: GSTBreakdown = {
     cgst: round2(itemsGST.cgst + feeCGST),
     sgst: round2(itemsGST.sgst + feeSGST),
     igst: 0,
     total: round2(itemsGST.total + totalFeeGST)
   };
-  
+
   const grandTotal = subtotal;
-  
+
   return {
-    itemsSubtotal,
+    itemsTaxableValue,
     itemsGST,
+    itemsMRP,
     itemsTotal,
     platformFeeTotal,
     platformFeeBase,
@@ -140,7 +155,7 @@ export function calculateCheckoutTotals(
 export function calculateOrderTotals(cartTotal: number, deliveryFee: number, discount: number = 0) {
   const totals = calculateCheckoutTotals(cartTotal, deliveryFee, discount);
   return {
-    subtotal: totals.itemsSubtotal,
+    subtotal: totals.itemsTaxableValue,
     deliveryFee: totals.deliveryFee,
     discount: totals.discount,
     orderTotal: totals.grandTotal

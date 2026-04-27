@@ -437,7 +437,7 @@ const CheckoutPage = () => {
         payment_status: 'pending',
         payment_method: paymentMethodLabel,
         order_total: finalOrderTotal,
-        subtotal: totals.itemsSubtotal,
+        subtotal: totals.itemsTaxableValue,
         delivery_fee: totals.deliveryFee,
         items: orderItems,
         shipping_address: {
@@ -1245,8 +1245,8 @@ const CheckoutPage = () => {
                       {/* Totals */}
                       <div className="px-6 py-4 border-t border-gray-50 space-y-2.5">
                         <div className="flex justify-between text-sm text-gray-500">
-                          <span>Item Total</span>
-                          <span className="font-semibold text-gray-700">₹{Math.round(checkoutTotals.itemsSubtotal)}</span>
+                          <span>Taxable Value</span>
+                          <span className="font-semibold text-gray-700">₹{Math.round(checkoutTotals.itemsTaxableValue)}</span>
                         </div>
                         <div className="flex justify-between text-sm text-gray-500">
                           <span>GST (5%)</span>
