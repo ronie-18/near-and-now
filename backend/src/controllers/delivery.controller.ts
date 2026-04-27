@@ -171,4 +171,71 @@ export class DeliveryController {
       res.status(500).json({ error: 'Failed to update delivery status' });
     }
   }
+
+  async broadcastToDrivers(req: Request, res: Response) {
+    try {
+      const { orderId } = req.params;
+      const { supabaseAdmin } = await import('../config/database.js');
+
+      const { data: order } = await supabaseAdmin
+        .from('customer_orders')
+        .select('id, status, delivery_latitude, delivery_longitude')
+        .eq('id', orderId)
+        .single();
+
+      if (!order) return res.status(404).json({ error: 'Order not found' });
+      if (!['ready_for_pickup', 'store_accepted'].includes((order as any).status)) {
+        return res.status(400).json({ error: `Order not ready for dispatch (status: ${(order as any).status})` });
+      }
+
+      const { data: locations } = await supabaseAdmin
+        .from('driver_locations')
+        .select('delivery_partner_id, latitude, longitude, updated_at');
+
+      const twoMinsAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+      const R = 6371;
+      const toRad = (v: number) => (v * Math.PI) / 180;
+      const haversine = (lt1: number, lg1: number, lt2: number, lg2: number) => {
+        const dL = toRad(lt2 - lt1), dG = toRad(lg2 - lg1);
+        const a = Math.sin(dL/2)**2 + Math.cos(toRad(lt1))*Math.cos(toRad(lt2))*Math.sin(dG/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      };
+      const o = order as any;
+
+      const nearbyIds = (locations || [])
+        .filter((l: any) => l.updated_at >= twoMinsAgo && haversine(o.delivery_latitude, o.delivery_longitude, l.latitude, l.longitude) <= 10)
+        .map((l: any) => l.delivery_partner_id);
+
+      if (!nearbyIds.length) return res.json({ success: true, broadcast_count: 0, message: 'No nearby drivers online' });
+
+      const { data: partners } = await supabaseAdmin
+        .from('delivery_partners')
+        .select('user_id, expo_push_token, is_online')
+        .in('user_id', nearbyIds)
+        .eq('is_online', true)
+        .eq('status', 'active');
+
+      if (!partners?.length) return res.json({ success: true, broadcast_count: 0 });
+
+      const offerRows = (partners as any[]).map((p) => ({ order_id: orderId, driver_id: p.user_id, status: 'pending' }));
+      await supabaseAdmin.from('driver_order_offers').upsert(offerRows, { onConflict: 'order_id,driver_id', ignoreDuplicates: true });
+
+      const tokens = (partners as any[]).map((p) => p.expo_push_token).filter(Boolean);
+      if (tokens.length) {
+        await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tokens.map((t: string) => ({
+            to: t, sound: 'default', title: 'New Delivery Request',
+            body: 'New order available near you!', data: { orderId, type: 'new_order_offer' },
+          }))),
+        }).catch(console.error);
+      }
+
+      res.json({ success: true, broadcast_count: (partners as any[]).length });
+    } catch (error) {
+      console.error('broadcastToDrivers error:', error);
+      res.status(500).json({ error: 'Failed to broadcast' });
+    }
+  }
 }

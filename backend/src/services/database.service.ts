@@ -866,12 +866,15 @@ export class DatabaseService {
         }
         return {
           store_order_id: storeOrder.id,
+          customer_order_id: customerOrder.id,
           product_id: productId,
           product_name: item.name,
           unit: item.unit || null,
           image_url: item.image || null,
           unit_price: item.price,
-          quantity: item.quantity
+          quantity: item.quantity,
+          assigned_store_id: storeId,
+          item_status: 'pending',
         };
       });
 
@@ -879,6 +882,19 @@ export class DatabaseService {
 
       if (itemsError) {
         throw new Error(itemsError.message || 'Failed to create order items');
+      }
+
+      // Create order_store_allocation for this store
+      const pickupCode = String(Math.floor(Math.random() * 9000) + 1000);
+      const { error: allocError } = await supabaseAdmin.from('order_store_allocations').insert({
+        order_id: customerOrder.id,
+        store_id: storeId,
+        sequence_number: i + 1,
+        pickup_code: pickupCode,
+        status: 'pending_acceptance',
+      });
+      if (allocError) {
+        console.error('Failed to create store allocation (non-fatal):', allocError.message);
       }
     }
 

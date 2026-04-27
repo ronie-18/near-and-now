@@ -19,6 +19,7 @@ import trackingRoutes from './routes/tracking.routes.js';
 import notificationsRoutes from './routes/notifications.routes.js';
 import paymentRoutes from './routes/payment.routes.js';
 import invoiceRoutes from './routes/invoice.routes.js';
+import shopkeeperRoutes from './routes/shopkeeper.routes.js';
 
 // Load .env from backend and project root
 dotenv.config();
@@ -67,6 +68,7 @@ app.use('/api/tracking', trackingRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/invoices', invoiceRoutes);
+app.use('/shopkeeper', shopkeeperRoutes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

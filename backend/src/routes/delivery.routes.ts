@@ -26,4 +26,7 @@ router.get('/agents/:agentId/schedule', deliveryController.getAgentSchedule.bind
 // Update delivery status
 router.put('/orders/:orderId/status', deliveryController.updateDeliveryStatus.bind(deliveryController));
 
+// (Re)broadcast ready order to nearby drivers
+router.post('/orders/:orderId/broadcast', deliveryController.broadcastToDrivers.bind(deliveryController));
+
 export default router;

@@ -26,6 +26,8 @@ import CartPage from './pages/CartPage';
 import AboutPage from './pages/AboutPage';
 import HelpPage from './pages/HelpPage';
 import DeliveryPartnerPage from './pages/DeliveryPartnerPage';
+import DriverApp from './pages/DriverApp';
+import ShopkeeperApp from './pages/ShopkeeperApp';
 
 // Policy pages
 import TermsOfServicePage from './pages/policies/TermsOfServicePage';
@@ -71,6 +73,8 @@ const AppContent: React.FC = () => {
             <Route path="/about" element={<AboutPage />} />
             <Route path="/help" element={<HelpPage />} />
             <Route path="/driver" element={<DeliveryPartnerPage />} />
+            <Route path="/driver-app" element={<DriverApp />} />
+            <Route path="/shopkeeper" element={<ShopkeeperApp />} />
             {/* Policy Pages */}
             <Route path="/terms" element={<TermsOfServicePage />} />
             <Route path="/shipping" element={<ShippingPolicyPage />} />
