@@ -99,7 +99,10 @@ export class ShopkeeperController {
         .gte('created_at', sevenDaysAgo)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('shopkeeper getIncomingOrders — allocation query failed:', JSON.stringify(error));
+        throw error;
+      }
       if (!allocations?.length) return res.json({ success: true, orders: [] });
 
       const orderIds = allocations.map((a: any) => a.order_id);
