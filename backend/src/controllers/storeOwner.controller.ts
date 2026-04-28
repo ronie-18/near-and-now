@@ -268,6 +268,12 @@ export async function signupComplete(req: Request, res: Response) {
     const token = crypto.randomUUID();
     const { password_hash: _, ...userWithoutPassword } = newUser;
 
+    // Persist the token so the shopkeeper middleware can authenticate subsequent requests
+    await supabaseAdmin
+      .from('app_users')
+      .update({ session_token: token })
+      .eq('id', newUser.id);
+
     console.log('✅ Store owner registered:', newUser.id, storeNameTrim);
 
     res.json({

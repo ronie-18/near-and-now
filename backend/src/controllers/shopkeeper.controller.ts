@@ -42,10 +42,9 @@ export async function requireShopkeeper(req: Request, res: Response, next: NextF
     .from('stores')
     .select('id')
     .eq('owner_id', user.id)
-    .eq('is_active', true)
     .maybeSingle();
 
-  if (!store) return res.status(403).json({ error: 'No active store found for this account' });
+  if (!store) return res.status(403).json({ error: 'No store found for this account' });
 
   req.shopkeeperId = user.id;
   req.shopkeeperStoreId = store.id;
