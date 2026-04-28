@@ -284,3 +284,49 @@ export async function signupComplete(req: Request, res: Response) {
     });
   }
 }
+
+/**
+ * Update store profile fields (name, address, phone, image_url, owner_image_url, description).
+ * Only whitelisted fields are applied — unknown keys are ignored.
+ */
+export async function updateStore(req: Request, res: Response) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const storeId = req.params.id;
+    const allowed = ['name', 'address', 'phone', 'image_url', 'owner_image_url', 'verification_document', 'verification_number'] as const;
+    type AllowedKey = typeof allowed[number];
+
+    const patch: Partial<Record<AllowedKey, string>> = {};
+    for (const key of allowed) {
+      const val = (req.body as Record<string, unknown>)[key];
+      if (typeof val === 'string' && val.trim() !== '') {
+        patch[key] = val.trim();
+      }
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid fields to update' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('stores')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', storeId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ updateStore error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true, store: data });
+  } catch (error: any) {
+    console.error('❌ updateStore error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to update store' });
+  }
+}

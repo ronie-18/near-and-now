@@ -71,16 +71,33 @@ export class ShopkeeperController {
   }
 
   // GET /shopkeeper/orders
-  // Returns all active allocations for this store, newest first.
+  // Returns all allocations for this store (last 7 days), newest first.
+  // ?active=true  → only pending_acceptance + accepted (default behaviour)
+  // ?history=true → only picked_up + rejected
+  // no param      → all statuses (used by the tabbed UI)
   async getIncomingOrders(req: Request, res: Response) {
     try {
       const storeId = req.shopkeeperStoreId!;
+      const { active, history } = req.query as { active?: string; history?: string };
+
+      let statuses: string[];
+      if (active === 'true') {
+        statuses = ['pending_acceptance', 'accepted'];
+      } else if (history === 'true') {
+        statuses = ['picked_up', 'rejected'];
+      } else {
+        statuses = ['pending_acceptance', 'accepted', 'picked_up', 'rejected'];
+      }
+
+      // Limit to last 7 days
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
       const { data: allocations, error } = await supabaseAdmin
         .from('order_store_allocations')
         .select('id, order_id, sequence_number, pickup_code, status, accepted_item_ids, accepted_at, created_at')
         .eq('store_id', storeId)
-        .in('status', ['pending_acceptance', 'accepted'])
+        .in('status', statuses)
+        .gte('created_at', sevenDaysAgo)
         .order('created_at', { ascending: false });
 
       if (error) throw error;

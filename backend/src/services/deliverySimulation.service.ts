@@ -2,39 +2,37 @@
  * Delivery simulation — drives the full order lifecycle end-to-end for demo/testing.
  *
  * Flow:
- *  1. Simulate shopkeeper accepting each allocation (updates order_store_allocations)
- *  2. Walk order status through store_accepted → preparing_order → ready_for_pickup
- *  3. Assign mock driver → delivery_partner_assigned
- *  4. For each store (in sequence order):
- *       a. Move driver along road route to that store
- *       b. Simulate pickup-code verification (set allocation → picked_up)
- *       c. Update store_orders accordingly
- *  5. After all pickups → order_picked_up → in_transit
- *  6. Move driver to customer → order_delivered
+ *  1. Wait up to 2 min for shopkeeper(s) to accept allocations manually.
+ *     After timeout, auto-accept remaining pending allocations so the sim can proceed.
+ *  2. Walk order status: store_accepted → preparing_order → ready_for_pickup
+ *  3. Find a real driver from delivery_partners (online+active preferred)
+ *  4. Auto-create & accept a driver offer, assign driver, place near first store
+ *  5. For each store (in sequence):
+ *       a. Drive along road route to that store
+ *       b. Auto-verify pickup code (simulation step)
+ *       c. Update store allocation → picked_up
+ *  6. After all pickups → order_picked_up → in_transit
+ *  7. Drive to customer → order_delivered
+ *
+ * Max total time: ~5 minutes
+ *  - Shopkeeper wait: up to 120 s
+ *  - Store phases: 6 s
+ *  - Per-store GPS: 12 steps × 300 ms ≈ 3.6 s + 1 s pause
+ *  - Customer GPS: 18 steps × 300 ms ≈ 5.4 s
  */
 
 import { supabaseAdmin } from '../config/database.js';
 import { fetchRoadRoute } from './directions.service.js';
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-// Fallback mock UUIDs — must exist in delivery_partners table OR the DB must not
-// enforce a FK on assigned_driver_id / store_orders.delivery_partner_id.
-// If the FK fails we gracefully skip the constrained field.
-const MOCK_DRIVER_IDS = [
-  'd1111111-1111-1111-1111-111111111111',
-  'd2222222-2222-2222-2222-222222222222',
-  'd3333333-3333-3333-3333-333333333333',
-];
+const WAIT_POLL_MS           = 5_000;   // poll interval while waiting for shopkeeper
+const SHOPKEEPER_WAIT_MAX_MS = 120_000; // max 2 min for shopkeeper acceptance
+const STORE_PHASE_MS         = 6_000;   // total time for store status transitions
+const STEPS_TO_STORE         = 12;      // GPS steps per store leg
+const STEPS_TO_CUSTOMER      = 18;      // GPS steps to customer
+const STEP_MS                = 300;     // ms between GPS steps
 
-// Timing — fast enough to be a useful demo
-const STORE_ACCEPT_PER_STORE_MS = 2_000;  // simulate each shopkeeper thinking
-const STORE_PHASE_MS            = 8_000;  // store_accepted → preparing → ready
-const STEPS_TO_STORE            = 20;     // route steps per store leg
-const STEPS_TO_CUSTOMER         = 30;     // route steps to customer
-const STEP_MS                   = 500;    // ms between each location update
-
-// Statuses that mean we should NOT re-simulate (already in progress or done)
 const TERMINAL_STATUSES = new Set([
   'delivery_partner_assigned',
   'order_picked_up',
@@ -43,7 +41,7 @@ const TERMINAL_STATUSES = new Set([
   'order_cancelled',
 ]);
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -98,10 +96,8 @@ async function spawnPointNearStore(
     { lat: deliveryLat, lng: deliveryLng }
   );
   if (route.length >= 3) {
-    // Spawn 15% along the route (between store and customer)
     return route[Math.max(0, Math.floor(route.length * 0.15))];
   }
-  // Fallback: small random offset from store
   const offset = 0.004;
   return {
     lat: storeLat + (Math.random() - 0.5) * 2 * offset,
@@ -166,25 +162,47 @@ async function updateAllStoreOrders(
   }
 }
 
-// ── Main simulation ────────────────────────────────────────────────────────────
+// ── Find a real driver ────────────────────────────────────────────────────────
+
+async function findRealDriver(): Promise<string | null> {
+  // Priority 1: online + active
+  const { data: onlineActive } = await supabaseAdmin
+    .from('delivery_partners')
+    .select('user_id')
+    .eq('is_online', true)
+    .eq('status', 'active')
+    .limit(1);
+  if (onlineActive?.[0]?.user_id) return onlineActive[0].user_id;
+
+  // Priority 2: any active driver
+  const { data: anyActive } = await supabaseAdmin
+    .from('delivery_partners')
+    .select('user_id')
+    .eq('status', 'active')
+    .limit(1);
+  if (anyActive?.[0]?.user_id) return anyActive[0].user_id;
+
+  // Priority 3: any partner at all (for dev environments with no active drivers)
+  const { data: anyPartner } = await supabaseAdmin
+    .from('delivery_partners')
+    .select('user_id')
+    .limit(1);
+  return anyPartner?.[0]?.user_id ?? null;
+}
+
+// ── Main simulation ───────────────────────────────────────────────────────────
 
 export async function runDeliverySimulation(orderId: string): Promise<void> {
   console.log(`[Sim] Starting simulation for order ${orderId}`);
 
-  // ── 1. Fetch order ─────────────────────────────────────────────────────────
-
+  // 1. Fetch order
   const { data: co } = await supabaseAdmin
     .from('customer_orders')
     .select('id, status, delivery_latitude, delivery_longitude')
     .eq('id', orderId)
     .maybeSingle();
 
-  if (!co) {
-    console.error(`[Sim] Order ${orderId} not found`);
-    return;
-  }
-
-  // Guard: skip if already running or completed
+  if (!co) { console.error(`[Sim] Order ${orderId} not found`); return; }
   if (TERMINAL_STATUSES.has(co.status)) {
     console.log(`[Sim] Order ${orderId} already at ${co.status} — skipping`);
     return;
@@ -197,71 +215,78 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
     return;
   }
 
-  // ── 2. Fetch supporting data ───────────────────────────────────────────────
+  // 2. Fetch store orders
+  const { data: storeOrders } = await supabaseAdmin
+    .from('store_orders')
+    .select('id, store_id')
+    .eq('customer_order_id', orderId);
 
-  const [{ data: allocations }, { data: storeOrders }] = await Promise.all([
-    supabaseAdmin
+  if (!storeOrders?.length) { console.error('[Sim] No store_orders found'); return; }
+  const soIds = storeOrders.map((so: any) => so.id as string);
+
+  // 3. Wait for shopkeeper(s) to accept allocations (up to 2 min)
+  console.log(`[Sim] Waiting for shopkeeper acceptance (up to ${SHOPKEEPER_WAIT_MAX_MS / 1000}s)…`);
+  const waitStart = Date.now();
+  let allocations: any[] = [];
+
+  while (Date.now() - waitStart < SHOPKEEPER_WAIT_MAX_MS) {
+    const { data: current } = await supabaseAdmin
       .from('order_store_allocations')
       .select('id, store_id, sequence_number, status, pickup_code, accepted_item_ids')
       .eq('order_id', orderId)
-      .order('sequence_number', { ascending: true }),
-    supabaseAdmin
-      .from('store_orders')
-      .select('id, store_id')
-      .eq('customer_order_id', orderId),
-  ]);
+      .order('sequence_number', { ascending: true });
 
-  if (!storeOrders?.length) {
-    console.error('[Sim] No store_orders found');
-    return;
+    allocations = current || [];
+    const pending = allocations.filter((a: any) => a.status === 'pending_acceptance');
+
+    if (pending.length === 0 && allocations.length > 0) {
+      console.log('[Sim] All allocations accepted by shopkeeper(s)');
+      break;
+    }
+
+    console.log(`[Sim] ${pending.length} allocation(s) still pending — waiting…`);
+    await sleep(WAIT_POLL_MS);
   }
 
-  const storeIds = [...new Set(storeOrders.map((so: any) => so.store_id))];
-  const { data: stores } = await supabaseAdmin
-    .from('stores')
-    .select('id, name, latitude, longitude')
-    .in('id', storeIds);
-
-  const storeMap = new Map((stores || []).map((s: any) => [s.id, s as { id: string; name: string; latitude: number; longitude: number }]));
-  const soIds = storeOrders.map((so: any) => so.id as string);
-
-  // Determine which driver ID to use
-  const mockDriverId = MOCK_DRIVER_IDS[0];
-
-  // ── 3. Simulate shopkeeper acceptance ─────────────────────────────────────
-
-  if (allocations && allocations.length > 0) {
-    for (const alloc of allocations) {
-      if ((alloc as any).status !== 'pending_acceptance') continue;
-
-      // Fetch item IDs assigned to this store
+  // Timeout fallback: auto-accept any remaining pending allocations
+  const stillPending = allocations.filter((a: any) => a.status === 'pending_acceptance');
+  if (stillPending.length > 0) {
+    console.log(`[Sim] Timeout — auto-accepting ${stillPending.length} remaining allocation(s)`);
+    for (const alloc of stillPending) {
       const { data: items } = await supabaseAdmin
         .from('order_items')
         .select('id')
         .eq('customer_order_id', orderId)
-        .eq('assigned_store_id', (alloc as any).store_id);
+        .eq('assigned_store_id', alloc.store_id);
 
       const itemIds = (items || []).map((i: any) => i.id);
-
-      await supabaseAdmin
-        .from('order_store_allocations')
-        .update({
-          status: 'accepted',
-          accepted_item_ids: itemIds,
-          accepted_at: new Date().toISOString(),
-        })
-        .eq('id', (alloc as any).id);
-
-      console.log(`[Sim] Accepted allocation ${(alloc as any).id} (store ${(alloc as any).store_id})`);
-      await sleep(STORE_ACCEPT_PER_STORE_MS);
+      await supabaseAdmin.from('order_store_allocations').update({
+        status: 'accepted',
+        accepted_item_ids: itemIds,
+        accepted_at: new Date().toISOString(),
+      }).eq('id', alloc.id);
     }
+
+    // Refresh allocations after auto-accept
+    const { data: refreshed } = await supabaseAdmin
+      .from('order_store_allocations')
+      .select('id, store_id, sequence_number, status, pickup_code, accepted_item_ids')
+      .eq('order_id', orderId)
+      .order('sequence_number', { ascending: true });
+    allocations = refreshed || [];
   }
 
-  // ── 4. Walk through store statuses ────────────────────────────────────────
+  // Keep only accepted/picked_up allocations
+  const acceptedAllocs = allocations.filter((a: any) =>
+    ['accepted', 'picked_up'].includes(a.status)
+  );
+  if (!acceptedAllocs.length) {
+    console.error('[Sim] No accepted allocations — cannot proceed');
+    return;
+  }
 
+  // 4. Walk through store status phases
   const storePhaseStep = Math.floor(STORE_PHASE_MS / 3);
-
-  // ETA will be calculated after orderedStops is built (step 6)
   await updateOrderStatus(orderId, 'store_accepted', 'Store accepted the order');
   await updateAllStoreOrders(soIds, { status: 'store_accepted' });
   await sleep(storePhaseStep);
@@ -274,72 +299,80 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
   await updateAllStoreOrders(soIds, { status: 'ready_for_pickup' });
   await sleep(storePhaseStep);
 
-  // ── 5. Assign mock driver ─────────────────────────────────────────────────
+  // 5. Find a real driver from delivery_partners
+  const driverId = await findRealDriver();
+  if (!driverId) {
+    console.error('[Sim] No delivery_partners found — cannot assign driver');
+    return;
+  }
+  console.log(`[Sim] Using driver ${driverId}`);
 
-  // Try to set assigned_driver_id; gracefully skip if FK constraint rejects it
+  // 6. Assign driver
   try {
-    await supabaseAdmin
-      .from('customer_orders')
-      .update({
-        status: 'delivery_partner_assigned',
-        assigned_driver_id: mockDriverId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId);
+    await supabaseAdmin.from('customer_orders').update({
+      status: 'delivery_partner_assigned',
+      assigned_driver_id: driverId,
+      updated_at: new Date().toISOString(),
+    }).eq('id', orderId);
   } catch {
-    // FK constraint on assigned_driver_id — update status only
-    await supabaseAdmin
-      .from('customer_orders')
-      .update({ status: 'delivery_partner_assigned', updated_at: new Date().toISOString() })
-      .eq('id', orderId);
+    await supabaseAdmin.from('customer_orders').update({
+      status: 'delivery_partner_assigned',
+      updated_at: new Date().toISOString(),
+    }).eq('id', orderId);
   }
 
-  await supabaseAdmin
-    .from('order_status_history')
-    .insert({ customer_order_id: orderId, status: 'delivery_partner_assigned', notes: 'Driver assigned' });
+  await supabaseAdmin.from('order_status_history').insert({
+    customer_order_id: orderId, status: 'delivery_partner_assigned', notes: 'Driver assigned',
+  });
 
   for (const so of storeOrders) {
     await supabaseAdmin.from('store_orders').update({
       status: 'delivery_partner_assigned',
-      delivery_partner_id: mockDriverId,
+      delivery_partner_id: driverId,
       assigned_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', (so as any).id);
   }
 
-  console.log('[Sim] Driver assigned, starting pickup sequence');
+  // Also create / accept a driver_order_offer so the DriverApp can see the order
+  await supabaseAdmin.from('driver_order_offers').upsert(
+    [{ order_id: orderId, driver_id: driverId, status: 'accepted', responded_at: new Date().toISOString() }],
+    { onConflict: 'order_id,driver_id' }
+  );
 
-  // ── 6. Pickup sequence (one store at a time) ──────────────────────────────
+  // 7. Build ordered stops
+  const storeIds = [...new Set(storeOrders.map((so: any) => so.store_id))];
+  const { data: stores } = await supabaseAdmin
+    .from('stores')
+    .select('id, name, latitude, longitude')
+    .in('id', storeIds);
+  const storeMap = new Map((stores || []).map((s: any) => [s.id, s as { id: string; name: string; latitude: number; longitude: number }]));
 
-  // Ordered stops: prefer real allocations (new system), fall back to storeOrders
   type SimStop = { allocId: string | null; storeId: string; seq: number };
-  const orderedStops: SimStop[] = (allocations && allocations.length > 0)
-    ? allocations
-        .slice()
-        .sort((a: any, b: any) => a.sequence_number - b.sequence_number)
-        .map((a: any) => ({ allocId: a.id, storeId: a.store_id, seq: a.sequence_number }))
-    : storeOrders.map((so: any, i: number) => ({ allocId: null, storeId: so.store_id, seq: i + 1 }));
+  const orderedStops: SimStop[] = acceptedAllocs
+    .slice()
+    .sort((a: any, b: any) => a.sequence_number - b.sequence_number)
+    .map((a: any) => ({ allocId: a.id, storeId: a.store_id, seq: a.sequence_number }));
 
-  // Calculate ETA now that we know the number of stops
+  // ETA
   const totalStoreSteps = orderedStops.length * STEPS_TO_STORE;
   const roughEtaMins = Math.ceil(((totalStoreSteps + STEPS_TO_CUSTOMER) * STEP_MS) / 60000) + 1;
   await updateEta(orderId, roughEtaMins);
 
-  // Find first store for driver spawn point
+  // 8. Spawn driver near first store
   const firstStop = orderedStops[0];
   const firstStore = firstStop ? storeMap.get(firstStop.storeId) : null;
 
   let currentPos: { lat: number; lng: number } = firstStore
     ? await spawnPointNearStore(
-        Number(firstStore.latitude),
-        Number(firstStore.longitude),
-        deliveryLat,
-        deliveryLng
+        Number(firstStore.latitude), Number(firstStore.longitude),
+        deliveryLat, deliveryLng
       )
     : { lat: deliveryLat + 0.01, lng: deliveryLng + 0.01 };
 
-  await upsertDriverLocation(mockDriverId, currentPos.lat, currentPos.lng);
+  await upsertDriverLocation(driverId, currentPos.lat, currentPos.lng);
 
+  // 9. Pickup sequence
   for (const stop of orderedStops) {
     const store = storeMap.get(stop.storeId);
     if (!store) continue;
@@ -347,26 +380,17 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
     const storeLat = Number(store.latitude);
     const storeLng = Number(store.longitude);
 
-    console.log(`[Sim] Driving to store ${store.name} (stop ${stop.seq})`);
-
-    // Drive to this store
-    await moveDriverAlongRoute(
-      mockDriverId,
-      currentPos,
-      { lat: storeLat, lng: storeLng },
-      STEPS_TO_STORE
-    );
+    console.log(`[Sim] Driving to ${store.name} (stop ${stop.seq})`);
+    await moveDriverAlongRoute(driverId, currentPos, { lat: storeLat, lng: storeLng }, STEPS_TO_STORE);
     currentPos = { lat: storeLat, lng: storeLng };
 
-    // Simulate pickup-code verification
+    // Auto-verify pickup code at this store
     if (stop.allocId) {
-      await supabaseAdmin
-        .from('order_store_allocations')
-        .update({ status: 'picked_up', picked_up_at: new Date().toISOString() })
-        .eq('id', stop.allocId);
+      await supabaseAdmin.from('order_store_allocations').update({
+        status: 'picked_up', picked_up_at: new Date().toISOString(),
+      }).eq('id', stop.allocId);
     }
 
-    // Update matching store_order
     const matchingSO = storeOrders.find((so: any) => so.store_id === stop.storeId);
     if (matchingSO) {
       await supabaseAdmin.from('store_orders').update({
@@ -386,26 +410,21 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
     await sleep(1_000);
   }
 
-  // All stores done
+  // 10. All stores done → in_transit
   const customerEtaMins = Math.ceil((STEPS_TO_CUSTOMER * STEP_MS) / 60000);
-  await supabaseAdmin
-    .from('customer_orders')
-    .update({ status: 'order_picked_up', eta_minutes: customerEtaMins, eta_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', orderId);
-
-  // ── 7. Drive to customer & deliver ────────────────────────────────────────
+  await supabaseAdmin.from('customer_orders').update({
+    status: 'order_picked_up',
+    eta_minutes: customerEtaMins,
+    eta_updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', orderId);
 
   await updateOrderStatus(orderId, 'in_transit', 'Order out for delivery', customerEtaMins);
   await updateAllStoreOrders(soIds, { status: 'in_transit' });
 
-  console.log('[Sim] Driving to customer for delivery');
-
-  await moveDriverAlongRoute(
-    mockDriverId,
-    currentPos,
-    { lat: deliveryLat, lng: deliveryLng },
-    STEPS_TO_CUSTOMER
-  );
+  // 11. Drive to customer
+  console.log('[Sim] Driving to customer');
+  await moveDriverAlongRoute(driverId, currentPos, { lat: deliveryLat, lng: deliveryLng }, STEPS_TO_CUSTOMER);
 
   await updateOrderStatus(orderId, 'order_delivered', 'Order delivered successfully');
   await updateAllStoreOrders(soIds, { status: 'order_delivered', delivered_at: new Date().toISOString() });

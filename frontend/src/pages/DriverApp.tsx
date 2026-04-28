@@ -4,25 +4,37 @@
  *
  * Features:
  *  - Phone OTP login (role=delivery_partner)
- *  - Online / Offline toggle with GPS heartbeat (every 10 s)
- *  - Available offers tab (Accept / Ignore)
- *  - Active order tab:
- *      • Multi-store pickup sequence
- *      • Pickup code entry per store
- *      • Mark all stores done → out for delivery
- *      • Mark delivered
+ *  - Bottom nav: Home | Orders | Profile
+ *  - Home: Online/Offline toggle (only when status=active) + new order offers
+ *  - Orders tab: Active Orders section + Past Orders section
+ *  - Profile tab: rider profile details
+ *  - GPS heartbeat every 10 s while online
+ *  - Pickup code entry per store (4-digit, manual)
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Navigation, LogOut, Truck, MapPin, Package, Phone,
   CheckCircle, XCircle, AlertCircle, Loader, Wifi, WifiOff,
-  Clock, ChevronDown, ChevronUp, KeyRound, Star,
+  Clock, ChevronDown, ChevronUp, KeyRound, Star, User,
+  Home, ShoppingBag, UserCircle,
 } from 'lucide-react';
 
 const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+interface Profile {
+  id: string;
+  name?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  vehicle_number?: string;
+  is_online: boolean;
+  status: string; // pending_verification | active | suspended | offboarded
+  total_deliveries?: number;
+}
 
 interface Offer {
   offer_id: string;
@@ -58,6 +70,18 @@ interface ActiveOrder {
   all_picked_up: boolean;
 }
 
+interface PastOrder {
+  id: string;
+  order_code: string;
+  status: string;
+  total_amount: number;
+  delivery_address: string;
+  placed_at: string;
+  order_items: { product_name: string; quantity: number; unit?: string }[];
+}
+
+type AppTab = 'home' | 'orders' | 'profile';
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 function saveToken(t: string) { localStorage.setItem('dp_token', t); }
@@ -85,11 +109,8 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to send OTP');
       setStep('otp');
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   const verifyOtp = async () => {
@@ -105,11 +126,8 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
       if (!r.ok) throw new Error(d.error || 'Invalid OTP');
       if (!d.token) throw new Error('No token received');
       onLogin(d.token);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   return (
@@ -119,7 +137,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
           <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
             <Navigation className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-2xl font-black text-gray-900">Near & Now</h1>
+          <h1 className="text-2xl font-black text-gray-900">Near &amp; Now</h1>
           <p className="text-gray-500 mt-1">Delivery Partner App</p>
         </div>
 
@@ -147,18 +165,16 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
                     <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
                   </div>
                 )}
-                <button
-                  onClick={sendOtp}
-                  disabled={loading}
-                  className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                >
+                <button onClick={sendOtp} disabled={loading}
+                  className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">
                   {loading ? <Loader className="w-5 h-5 animate-spin mx-auto" /> : 'Get OTP'}
                 </button>
               </div>
             </>
           ) : (
             <>
-              <button onClick={() => { setStep('phone'); setOtp(''); setError(''); }} className="flex items-center gap-1 text-gray-500 text-sm mb-4 hover:text-gray-700">← Back</button>
+              <button onClick={() => { setStep('phone'); setOtp(''); setError(''); }}
+                className="flex items-center gap-1 text-gray-500 text-sm mb-4 hover:text-gray-700">← Back</button>
               <h2 className="text-lg font-bold text-gray-800 mb-1">Enter OTP</h2>
               <p className="text-sm text-gray-500 mb-4">Sent to +91 {phone}</p>
               <div className="space-y-4">
@@ -175,11 +191,8 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
                     <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
                   </div>
                 )}
-                <button
-                  onClick={verifyOtp}
-                  disabled={loading}
-                  className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                >
+                <button onClick={verifyOtp} disabled={loading}
+                  className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">
                   {loading ? <Loader className="w-5 h-5 animate-spin mx-auto" /> : 'Verify & Sign In'}
                 </button>
                 <button onClick={sendOtp} className="w-full text-blue-600 text-sm font-medium hover:underline">Resend OTP</button>
@@ -188,39 +201,6 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── Online toggle card ────────────────────────────────────────────────────────
-
-function OnlineToggle({
-  isOnline, onToggle, profile,
-}: { isOnline: boolean; onToggle: () => void; profile: any }) {
-  return (
-    <div className={`rounded-2xl p-5 text-white transition-all duration-500 ${isOnline ? 'bg-gradient-to-br from-green-500 to-emerald-600' : 'bg-gradient-to-br from-gray-500 to-gray-700'}`}>
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <p className="text-white/80 text-sm">{isOnline ? 'You are online' : 'You are offline'}</p>
-          <p className="font-black text-xl">{profile?.name || 'Delivery Partner'}</p>
-          {profile?.vehicle_number && <p className="text-white/70 text-sm">{profile.vehicle_number}</p>}
-        </div>
-        <div className={`w-16 h-16 rounded-full flex items-center justify-center ${isOnline ? 'bg-white/20' : 'bg-white/10'}`}>
-          {isOnline ? <Wifi className="w-8 h-8" /> : <WifiOff className="w-8 h-8" />}
-        </div>
-      </div>
-      <button
-        onClick={onToggle}
-        className={`w-full py-3 rounded-xl font-bold text-lg transition-all active:scale-95
-          ${isOnline ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white text-green-600 hover:bg-green-50'}`}
-      >
-        {isOnline ? '🔴 Go Offline' : '🟢 Go Online'}
-      </button>
-      {isOnline && (
-        <p className="text-white/60 text-xs text-center mt-2">
-          Location updates every 10 s. Orders will appear below.
-        </p>
-      )}
     </div>
   );
 }
@@ -244,16 +224,12 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
       if (!r.ok && d.result !== 'already_taken') throw new Error(d.error || 'Failed');
       if (d.result === 'already_taken') { setError('Another rider accepted first'); return; }
       onAccepted(offer.order_id);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   return (
     <div className="bg-white rounded-2xl shadow-md overflow-hidden border border-gray-100">
-      {/* Header */}
       <div className="bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-3 text-white">
         <div className="flex items-center justify-between">
           <span className="font-bold">{offer.order_code || offer.order_id.substring(0, 8).toUpperCase()}</span>
@@ -261,7 +237,6 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
         </div>
       </div>
       <div className="p-4 space-y-3">
-        {/* Stores */}
         <div className="flex items-start gap-2">
           <MapPin className="w-4 h-4 text-orange-500 mt-0.5 flex-shrink-0" />
           <div>
@@ -271,7 +246,6 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
             ))}
           </div>
         </div>
-        {/* Delivery */}
         <div className="flex items-start gap-2">
           <Truck className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
           <div>
@@ -279,10 +253,9 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
             <p className="text-sm font-medium text-gray-800 line-clamp-2">{offer.delivery_address}</p>
           </div>
         </div>
-        {/* Tags */}
         <div className="flex gap-2 flex-wrap">
           <span className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-lg font-medium">
-            {offer.store_count} store{offer.store_count > 1 ? 's' : ''}
+            {offer.store_count} stop{offer.store_count > 1 ? 's' : ''}
           </span>
         </div>
         {error && (
@@ -291,19 +264,13 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
           </div>
         )}
         <div className="flex gap-2">
-          <button
-            onClick={onIgnored}
-            className="flex-1 py-2.5 border-2 border-gray-200 text-gray-500 font-bold rounded-xl hover:bg-gray-50 transition-colors text-sm"
-          >
+          <button onClick={onIgnored}
+            className="flex-1 py-2.5 border-2 border-gray-200 text-gray-500 font-bold rounded-xl hover:bg-gray-50 transition-colors text-sm">
             Ignore
           </button>
-          <button
-            onClick={accept}
-            disabled={loading}
-            className="flex-[2] py-2.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm flex items-center justify-center gap-2"
-          >
-            {loading ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-            Accept
+          <button onClick={accept} disabled={loading}
+            className="flex-[2] py-2.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm flex items-center justify-center gap-2">
+            {loading ? <Loader className="w-4 h-4 animate-spin" /> : <><CheckCircle className="w-4 h-4" /> Accept</>}
           </button>
         </div>
       </div>
@@ -311,13 +278,13 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
   );
 }
 
-// ── Active order ──────────────────────────────────────────────────────────────
+// ── Active order view ─────────────────────────────────────────────────────────
 
 function ActiveOrderView({ orderId, token, onDelivered }: {
   orderId: string; token: string; onDelivered: () => void;
 }) {
   const [data, setData] = useState<{ order: ActiveOrder; stops: Stop[] } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loadingSeq, setLoadingSeq] = useState(true);
   const [codeInputs, setCodeInputs] = useState<Record<string, string>>({});
   const [codeErrors, setCodeErrors] = useState<Record<string, string>>({});
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
@@ -332,12 +299,11 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
       const d = await r.json();
       if (d.success) {
         setData(d);
-        // Auto-expand first non-picked stop
         const firstPending = d.stops.find((s: Stop) => !s.picked_up);
         if (firstPending) setExpandedStops(new Set([firstPending.allocation_id]));
       }
     } catch { /* non-critical */ }
-    finally { setLoading(false); }
+    finally { setLoadingSeq(false); }
   }, [orderId, token]);
 
   useEffect(() => {
@@ -381,11 +347,11 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
     finally { setDelivering(false); }
   };
 
-  if (loading) {
+  if (loadingSeq) {
     return (
       <div className="space-y-3">
         {[1, 2].map((i) => (
-          <div key={i} className="bg-white rounded-2xl shadow-md p-5 animate-pulse">
+          <div key={i} className="bg-white rounded-2xl p-5 animate-pulse">
             <div className="h-5 bg-gray-200 rounded w-1/2 mb-3" />
             <div className="h-4 bg-gray-200 rounded w-full mb-2" />
             <div className="h-4 bg-gray-200 rounded w-2/3" />
@@ -416,10 +382,10 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
           <span>·</span>
           <span>{order.total_stores} stop{order.total_stores > 1 ? 's' : ''}</span>
         </div>
-        {/* Progress mini bar */}
         <div className="mt-3 flex gap-1">
           {stops.map((s) => (
-            <div key={s.allocation_id} className={`flex-1 h-1.5 rounded-full transition-all ${s.picked_up ? 'bg-white' : 'bg-white/30'}`} />
+            <div key={s.allocation_id}
+              className={`flex-1 h-1.5 rounded-full transition-all ${s.picked_up ? 'bg-white' : 'bg-white/30'}`} />
           ))}
           <div className={`flex-1 h-1.5 rounded-full ${allDone ? 'bg-white' : 'bg-white/30'}`} />
         </div>
@@ -430,17 +396,16 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
         const isExpanded = expandedStops.has(stop.allocation_id);
         const isNext = !stop.picked_up && stops.slice(0, idx).every((s) => s.picked_up);
         return (
-          <div key={stop.allocation_id} className={`bg-white rounded-2xl shadow-md overflow-hidden border-l-4
-            ${stop.picked_up ? 'border-green-500' : isNext ? 'border-blue-500' : 'border-gray-200'}`}>
-            <button
-              type="button"
+          <div key={stop.allocation_id}
+            className={`bg-white rounded-2xl shadow-md overflow-hidden border-l-4
+              ${stop.picked_up ? 'border-green-500' : isNext ? 'border-blue-500' : 'border-gray-200'}`}>
+            <button type="button"
               onClick={() => setExpandedStops((prev) => {
                 const next = new Set(prev);
                 next.has(stop.allocation_id) ? next.delete(stop.allocation_id) : next.add(stop.allocation_id);
                 return next;
               })}
-              className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
-            >
+              className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors">
               <div className="flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-black
                   ${stop.picked_up ? 'bg-green-500 text-white' : isNext ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500'}`}>
@@ -460,23 +425,19 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
 
             {isExpanded && (
               <div className="px-4 pb-4 border-t border-gray-100">
-                {/* Items */}
                 <div className="mt-3 space-y-1.5">
                   {stop.items.map((item) => (
                     <div key={item.id} className="flex items-center gap-2 text-sm">
                       <Package className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                       <span className="text-gray-700">{item.product_name}</span>
-                      <span className="text-gray-400">×{item.quantity}</span>
+                      <span className="text-gray-400">×{item.quantity} {item.unit || ''}</span>
                     </div>
                   ))}
                 </div>
 
-                {/* Store phone */}
                 {stop.store.phone && (
-                  <a
-                    href={`tel:${stop.store.phone}`}
-                    className="mt-3 flex items-center gap-2 text-blue-600 text-sm hover:underline"
-                  >
+                  <a href={`tel:${stop.store.phone}`}
+                    className="mt-3 flex items-center gap-2 text-blue-600 text-sm hover:underline">
                     <Phone className="w-4 h-4" /> Call Store
                   </a>
                 )}
@@ -484,11 +445,11 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
                 {/* Pickup code entry */}
                 {!stop.picked_up && stop.pickup_code_required && (
                   <div className="mt-4 bg-blue-50 rounded-xl p-4">
-                    <div className="flex items-center gap-2 mb-3">
+                    <div className="flex items-center gap-2 mb-2">
                       <KeyRound className="w-4 h-4 text-blue-600" />
                       <p className="text-sm font-bold text-blue-800">Enter Pickup Code</p>
                     </div>
-                    <p className="text-xs text-blue-600 mb-3">Ask the store for the 4-digit pickup code</p>
+                    <p className="text-xs text-blue-600 mb-3">Ask the shopkeeper for the 4-digit code</p>
                     <div className="flex gap-2">
                       <input
                         type="number"
@@ -501,8 +462,7 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
                       <button
                         onClick={() => verifyCode(stop)}
                         disabled={verifying[stop.allocation_id]}
-                        className="px-5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                      >
+                        className="px-5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">
                         {verifying[stop.allocation_id] ? <Loader className="w-5 h-5 animate-spin" /> : 'Verify'}
                       </button>
                     </div>
@@ -531,13 +491,9 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
             <p className="text-xs text-gray-500 mt-0.5">{order.customer_address}</p>
           </div>
         </div>
-
         {allDone && (
-          <button
-            onClick={markDelivered}
-            disabled={delivering}
-            className="mt-4 w-full py-3.5 bg-green-500 text-white font-black text-lg rounded-xl hover:bg-green-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-green-200"
-          >
+          <button onClick={markDelivered} disabled={delivering}
+            className="mt-4 w-full py-3.5 bg-green-500 text-white font-black text-lg rounded-xl hover:bg-green-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-green-200">
             {delivering ? <Loader className="w-5 h-5 animate-spin" /> : <>🎉 Mark Delivered</>}
           </button>
         )}
@@ -549,38 +505,53 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
   );
 }
 
+// ── Status badge ──────────────────────────────────────────────────────────────
+
+function statusLabel(status: string): { text: string; color: string } {
+  switch (status) {
+    case 'active':               return { text: 'Active Agent',          color: 'text-green-700 bg-green-100' };
+    case 'pending_verification': return { text: 'Verification Pending',  color: 'text-amber-700 bg-amber-100' };
+    case 'suspended':            return { text: 'Account Suspended',     color: 'text-red-700 bg-red-100' };
+    case 'offboarded':           return { text: 'Offboarded',            color: 'text-gray-700 bg-gray-100' };
+    default:                     return { text: status,                  color: 'text-gray-600 bg-gray-100' };
+  }
+}
+
 // ── Main dashboard ─────────────────────────────────────────────────────────────
 
 function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => void }) {
-  const [isOnline, setIsOnline] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
-  const [tab, setTab] = useState<'offers' | 'active'>('offers');
-  const [offers, setOffers] = useState<Offer[]>([]);
-  const [ignoredOfferIds, setIgnoredOfferIds] = useState<Set<string>>(new Set());
+  const [isOnline, setIsOnline]       = useState(false);
+  const [profile, setProfile]         = useState<Profile | null>(null);
+  const [tab, setTab]                 = useState<AppTab>('home');
+  const [offers, setOffers]           = useState<Offer[]>([]);
+  const [ignoredIds, setIgnoredIds]   = useState<Set<string>>(new Set());
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
-  const [delivered, setDelivered] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const locationWatchRef = useRef<number | null>(null);
-  const locationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const latestPos = useRef<GeolocationPosition | null>(null);
+  const [pastOrders, setPastOrders]   = useState<PastOrder[]>([]);
+  const [delivered, setDelivered]     = useState(false);
+  const [loading, setLoading]         = useState(true);
+  const locationWatchRef              = useRef<number | null>(null);
+  const locationIntervalRef           = useRef<ReturnType<typeof setInterval> | null>(null);
+  const latestPos                     = useRef<GeolocationPosition | null>(null);
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
-  // Push location to backend
   const pushLocation = useCallback(async (pos: GeolocationPosition) => {
-    if (!isOnline) return;
     const { latitude, longitude } = pos.coords;
     await fetch(`${API}/delivery-partner/location`, {
-      method: 'POST',
-      headers,
+      method: 'POST', headers,
       body: JSON.stringify({ latitude, longitude }),
     }).catch(console.error);
-  }, [isOnline, token]);
+  }, [token]);
 
-  // Start/stop GPS + heartbeat
+  // Start/stop GPS heartbeat based on online state
   useEffect(() => {
     if (isOnline && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition((pos) => { latestPos.current = pos; pushLocation(pos); }, console.warn, { enableHighAccuracy: true });
+      // Immediately send current location when going online
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { latestPos.current = pos; pushLocation(pos); },
+        console.warn,
+        { enableHighAccuracy: true }
+      );
       locationWatchRef.current = navigator.geolocation.watchPosition(
         (p) => { latestPos.current = p; },
         console.warn,
@@ -601,14 +572,17 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
     };
   }, [isOnline, pushLocation]);
 
-  // Toggle online/offline
+  // Toggle online/offline — only allowed when status is 'active'
   const toggleOnline = async () => {
+    if (profile?.status !== 'active') return;
     const next = !isOnline;
     setIsOnline(next);
-    await fetch(`${API}/delivery-partner/status`, {
-      method: 'PATCH', headers,
-      body: JSON.stringify({ is_online: next }),
-    }).catch(console.error);
+    try {
+      await fetch(`${API}/delivery-partner/status`, {
+        method: 'PATCH', headers,
+        body: JSON.stringify({ is_online: next }),
+      });
+    } catch (e) { console.error(e); }
   };
 
   // Load profile
@@ -625,7 +599,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
       .finally(() => setLoading(false));
   }, [token]);
 
-  // Poll for offers (when online)
+  // Poll for offers
   useEffect(() => {
     if (!isOnline) { setOffers([]); return; }
     const poll = async () => {
@@ -639,23 +613,37 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
     return () => clearInterval(t);
   }, [isOnline, token]);
 
-  // Poll for active orders (assigned but not delivered)
+  // Poll for active and past orders
   useEffect(() => {
     const poll = async () => {
-      const r = await fetch(`${API}/delivery-partner/orders`, { headers }).catch(() => null);
-      if (!r?.ok) return;
-      const d = await r.json();
-      const active = (d.orders || []).find((o: any) =>
-        ['rider_assigned', 'en_route_delivery', 'picked_up'].includes(o.status)
-      );
-      if (active) { setActiveOrderId(active.id); setTab('active'); }
+      const [activeRes, pastRes] = await Promise.all([
+        fetch(`${API}/delivery-partner/orders`, { headers }).catch(() => null),
+        fetch(`${API}/delivery-partner/orders?status=completed`, { headers }).catch(() => null),
+      ]);
+
+      if (activeRes?.ok) {
+        const d = await activeRes.json();
+        const active = (d.orders || []).find((o: any) =>
+          ['rider_assigned', 'en_route_delivery', 'picked_up'].includes(o.status)
+        );
+        if (active && !delivered) {
+          setActiveOrderId(active.id);
+        }
+      }
+
+      if (pastRes?.ok) {
+        const d = await pastRes.json();
+        setPastOrders(d.orders || []);
+      }
     };
     poll();
     const t = setInterval(poll, 6000);
     return () => clearInterval(t);
-  }, [token]);
+  }, [token, delivered]);
 
-  const visibleOffers = offers.filter((o) => !ignoredOfferIds.has(o.offer_id));
+  const visibleOffers = offers.filter((o) => !ignoredIds.has(o.offer_id));
+  const isActive = profile?.status === 'active';
+  const st = statusLabel(profile?.status || '');
 
   if (loading) {
     return (
@@ -666,7 +654,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 pb-20">
       {/* Top bar */}
       <div className="bg-gradient-to-r from-blue-600 to-indigo-700 px-4 py-4 text-white">
         <div className="max-w-lg mx-auto flex items-center justify-between">
@@ -687,95 +675,304 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
         </div>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
-        {/* Online/offline toggle */}
-        <OnlineToggle isOnline={isOnline} onToggle={toggleOnline} profile={profile} />
+      <div className="max-w-lg mx-auto px-4 py-4">
 
-        {/* Tab switcher */}
-        <div className="flex bg-gray-200 rounded-xl p-1">
-          <button
-            onClick={() => setTab('offers')}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${tab === 'offers' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}
-          >
-            New Requests {isOnline && visibleOffers.length > 0 && (
-              <span className="ml-1 bg-red-500 text-white text-xs rounded-full px-1.5">{visibleOffers.length}</span>
+        {/* ── Home tab ─────────────────────────────────────────────────────── */}
+        {tab === 'home' && (
+          <div className="space-y-4">
+            {/* Online/offline toggle */}
+            <div className={`rounded-2xl p-5 text-white transition-all duration-500
+              ${isOnline
+                ? 'bg-gradient-to-br from-green-500 to-emerald-600'
+                : isActive
+                  ? 'bg-gradient-to-br from-gray-500 to-gray-700'
+                  : 'bg-gradient-to-br from-amber-500 to-orange-600'}`}>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-white/80 text-sm">
+                    {isActive ? (isOnline ? 'You are online' : 'You are offline') : 'Account status'}
+                  </p>
+                  <p className="font-black text-xl">{profile?.name || 'Delivery Partner'}</p>
+                  {profile?.vehicle_number && (
+                    <p className="text-white/70 text-sm">{profile.vehicle_number}</p>
+                  )}
+                </div>
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center ${isOnline ? 'bg-white/20' : 'bg-white/10'}`}>
+                  {isOnline ? <Wifi className="w-8 h-8" /> : <WifiOff className="w-8 h-8" />}
+                </div>
+              </div>
+
+              {isActive ? (
+                <>
+                  <button
+                    onClick={toggleOnline}
+                    className={`w-full py-3 rounded-xl font-bold text-lg transition-all active:scale-95
+                      ${isOnline ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white text-green-600 hover:bg-green-50'}`}
+                  >
+                    {isOnline ? '🔴 Go Offline' : '🟢 Go Online'}
+                  </button>
+                  {isOnline && (
+                    <p className="text-white/60 text-xs text-center mt-2">
+                      Location updates every 10 s. New orders will appear below.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className={`rounded-xl px-4 py-3 text-center font-bold ${st.color}`}>
+                  {st.text}
+                  {profile?.status === 'pending_verification' && (
+                    <p className="text-xs font-normal mt-1 opacity-80">
+                      You can go online once your verification is complete
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* New order offers */}
+            {isOnline && (
+              <div>
+                {visibleOffers.length === 0 ? (
+                  <div className="text-center py-10">
+                    <Clock className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <p className="font-bold text-gray-500">No orders nearby</p>
+                    <p className="text-sm text-gray-400 mt-1">New requests will appear here automatically</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">
+                      New Requests ({visibleOffers.length})
+                    </p>
+                    {visibleOffers.map((offer) => (
+                      <OfferCard
+                        key={offer.offer_id}
+                        offer={offer}
+                        token={token}
+                        onAccepted={(orderId) => {
+                          setActiveOrderId(orderId);
+                          setTab('orders');
+                        }}
+                        onIgnored={() => setIgnoredIds((p) => new Set([...p, offer.offer_id]))}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
-          </button>
-          <button
-            onClick={() => setTab('active')}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${tab === 'active' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}
-          >
-            Active Order {activeOrderId && <span className="ml-1 bg-green-500 text-white text-xs rounded-full px-1.5">1</span>}
-          </button>
-        </div>
 
-        {/* Offers tab */}
-        {tab === 'offers' && (
-          <div>
-            {!isOnline ? (
-              <div className="text-center py-12">
+            {!isOnline && isActive && (
+              <div className="text-center py-10">
                 <WifiOff className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                 <p className="font-bold text-gray-500">You are offline</p>
-                <p className="text-sm text-gray-400 mt-1">Go online to see order requests</p>
-              </div>
-            ) : visibleOffers.length === 0 ? (
-              <div className="text-center py-12">
-                <Clock className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="font-bold text-gray-500">No orders nearby</p>
-                <p className="text-sm text-gray-400 mt-1">New requests will appear here automatically</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {visibleOffers.map((offer) => (
-                  <OfferCard
-                    key={offer.offer_id}
-                    offer={offer}
-                    token={token}
-                    onAccepted={(orderId) => {
-                      setActiveOrderId(orderId);
-                      setTab('active');
-                    }}
-                    onIgnored={() => setIgnoredOfferIds((p) => new Set([...p, offer.offer_id]))}
-                  />
-                ))}
+                <p className="text-sm text-gray-400 mt-1">Go online to receive order requests</p>
               </div>
             )}
           </div>
         )}
 
-        {/* Active order tab */}
-        {tab === 'active' && (
-          <div>
-            {delivered ? (
-              <div className="text-center py-12">
-                <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Star className="w-10 h-10 text-green-500" />
+        {/* ── Orders tab ───────────────────────────────────────────────────── */}
+        {tab === 'orders' && (
+          <div className="space-y-6">
+            {/* Active orders section */}
+            <div>
+              <p className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Active Order</p>
+              {delivered ? (
+                <div className="text-center py-10">
+                  <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Star className="w-10 h-10 text-green-500" />
+                  </div>
+                  <p className="font-black text-2xl text-green-600">Delivered!</p>
+                  <p className="text-gray-500 mt-1">Great job. Looking for next order…</p>
+                  <button
+                    onClick={() => { setDelivered(false); setActiveOrderId(null); setTab('home'); }}
+                    className="mt-5 px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors"
+                  >
+                    Find Next Order
+                  </button>
                 </div>
-                <p className="font-black text-2xl text-green-600">Delivered!</p>
-                <p className="text-gray-500 mt-1">Great job. Looking for next order…</p>
-                <button
-                  onClick={() => { setDelivered(false); setActiveOrderId(null); setTab('offers'); }}
-                  className="mt-5 px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors"
-                >
-                  Find Next Order
-                </button>
-              </div>
-            ) : !activeOrderId ? (
-              <div className="text-center py-12">
-                <Truck className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="font-bold text-gray-500">No active order</p>
-                <p className="text-sm text-gray-400 mt-1">Accept an order from the requests tab</p>
-              </div>
-            ) : (
-              <ActiveOrderView
-                orderId={activeOrderId}
-                token={token}
-                onDelivered={() => setDelivered(true)}
-              />
-            )}
+              ) : !activeOrderId ? (
+                <div className="text-center py-8 bg-white rounded-2xl shadow-sm">
+                  <Truck className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                  <p className="font-bold text-gray-500">No active order</p>
+                  <p className="text-sm text-gray-400 mt-1">Accept an order from the Home tab</p>
+                </div>
+              ) : (
+                <ActiveOrderView
+                  orderId={activeOrderId}
+                  token={token}
+                  onDelivered={() => setDelivered(true)}
+                />
+              )}
+            </div>
+
+            {/* Past orders section */}
+            <div>
+              <p className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Past Orders</p>
+              {pastOrders.length === 0 ? (
+                <div className="text-center py-8 bg-white rounded-2xl shadow-sm">
+                  <Package className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                  <p className="font-bold text-gray-500">No past orders</p>
+                  <p className="text-sm text-gray-400 mt-1">Completed deliveries will appear here</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {pastOrders.map((o) => (
+                    <PastOrderCard key={o.id} order={o} />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
+
+        {/* ── Profile tab ──────────────────────────────────────────────────── */}
+        {tab === 'profile' && (
+          <ProfileTab profile={profile} onLogout={onLogout} />
+        )}
       </div>
+
+      {/* Bottom navigation */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex z-40">
+        {([
+          { key: 'home',    label: 'Home',    Icon: Home,        badge: isOnline ? visibleOffers.length : 0 },
+          { key: 'orders',  label: 'Orders',  Icon: ShoppingBag, badge: activeOrderId && !delivered ? 1 : 0 },
+          { key: 'profile', label: 'Profile', Icon: UserCircle,  badge: 0 },
+        ] as const).map(({ key, label, Icon, badge }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex-1 flex flex-col items-center gap-1 py-3 transition-colors relative
+              ${tab === key ? 'text-blue-600' : 'text-gray-400'}`}
+          >
+            <div className="relative">
+              <Icon className="w-6 h-6" />
+              {badge > 0 && (
+                <span className="absolute -top-1 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
+                  {badge > 9 ? '9+' : badge}
+                </span>
+              )}
+            </div>
+            <span className="text-xs font-medium">{label}</span>
+            {tab === key && (
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-600 rounded-full" />
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Past order card ───────────────────────────────────────────────────────────
+
+function PastOrderCard({ order }: { order: PastOrder }) {
+  const [expanded, setExpanded] = useState(false);
+  const formatDate = (s: string) =>
+    new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border-l-4 border-green-400 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full text-left px-4 py-3.5 hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-black text-gray-900 text-sm">
+                {order.order_code || order.id.substring(0, 8).toUpperCase()}
+              </span>
+              <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold">
+                ✅ Delivered
+              </span>
+            </div>
+            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+              <Clock className="w-3 h-3" />{formatDate(order.placed_at)}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-gray-700 text-sm">₹{Math.round(order.total_amount)}</span>
+            <span className="text-gray-300 text-lg">{expanded ? '▲' : '▼'}</span>
+          </div>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100 px-4 pb-4">
+          <div className="mt-3 space-y-1.5">
+            {order.order_items?.map((item, i) => (
+              <div key={i} className="flex items-center gap-2 text-sm text-gray-600">
+                <Package className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                <span>{item.product_name}</span>
+                <span className="text-gray-400">× {item.quantity} {item.unit || ''}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-start gap-2 text-xs text-gray-500">
+            <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" />
+            <span>{order.delivery_address}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Profile tab ───────────────────────────────────────────────────────────────
+
+function ProfileTab({ profile, onLogout }: { profile: Profile | null; onLogout: () => void }) {
+  if (!profile) return (
+    <div className="text-center py-16">
+      <User className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+      <p className="text-gray-500">Profile unavailable</p>
+    </div>
+  );
+
+  const st = statusLabel(profile.status);
+
+  return (
+    <div className="space-y-4">
+      {/* Avatar + name */}
+      <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 text-white text-center">
+        <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+          <User className="w-10 h-10 text-white" />
+        </div>
+        <p className="font-black text-xl">{profile.name || 'Rider'}</p>
+        <p className="text-blue-200 text-sm mt-0.5">{profile.phone || '—'}</p>
+        <div className="mt-3 inline-block">
+          <span className={`text-xs font-bold px-3 py-1 rounded-full ${st.color}`}>{st.text}</span>
+        </div>
+      </div>
+
+      {/* Details */}
+      <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
+        {[
+          { label: 'Vehicle Number', value: profile.vehicle_number },
+          { label: 'Total Deliveries', value: profile.total_deliveries?.toString() },
+          { label: 'Address', value: profile.address },
+        ].map(({ label, value }) => value ? (
+          <div key={label}>
+            <p className="text-xs font-bold uppercase tracking-wider text-gray-400">{label}</p>
+            <p className="text-sm font-medium text-gray-800 mt-0.5">{value}</p>
+          </div>
+        ) : null)}
+      </div>
+
+      {/* Online/offline status note */}
+      {profile.status === 'active' && (
+        <div className="bg-blue-50 rounded-2xl p-4 text-sm text-blue-700">
+          <p className="font-bold mb-1">Online / Offline</p>
+          <p className="text-xs">Use the Home tab toggle to go online and receive order requests.</p>
+        </div>
+      )}
+
+      <button
+        onClick={onLogout}
+        className="w-full py-3 border-2 border-red-200 text-red-600 font-bold rounded-xl hover:bg-red-50 transition-colors flex items-center justify-center gap-2"
+      >
+        <LogOut className="w-5 h-5" /> Sign Out
+      </button>
     </div>
   );
 }
@@ -784,7 +981,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
 
 export default function DriverApp() {
   const [token, setToken] = useState<string | null>(() => loadToken());
-  const handleLogin = (t: string) => { saveToken(t); setToken(t); };
+  const handleLogin  = (t: string) => { saveToken(t); setToken(t); };
   const handleLogout = () => { clearToken(); setToken(null); };
 
   if (!token) return <LoginScreen onLogin={handleLogin} />;
