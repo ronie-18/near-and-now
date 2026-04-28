@@ -64,7 +64,7 @@ export class DeliveryPartnerController {
 
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, verification_document, verification_number, is_online, status, expo_push_token')
+        .select('address, vehicle_number, verification_document, verification_number, is_online, status, expo_push_token, profile_image_url')
         .eq('user_id', req.riderId!)
         .maybeSingle();
 
@@ -106,10 +106,12 @@ export class DeliveryPartnerController {
         return res.status(400).json({ error: 'is_online must be a boolean' });
       }
 
-      await supabaseAdmin
+      const { error } = await supabaseAdmin
         .from('delivery_partners')
         .update({ is_online })
         .eq('user_id', req.riderId!);
+
+      if (error) throw error;
 
       res.json({ success: true, is_online });
     } catch (err) {
@@ -414,6 +416,71 @@ export class DeliveryPartnerController {
     } catch (err) {
       console.error('markDelivered error:', err);
       res.status(500).json({ error: 'Failed to update delivery status' });
+    }
+  }
+
+  async updateProfile(req: Request, res: Response) {
+    try {
+      const { name, email, address } = req.body as { name?: string; email?: string; address?: string };
+
+      if (name !== undefined) {
+        await supabaseAdmin.from('app_users').update({ name }).eq('id', req.riderId!);
+      }
+
+      const dpUpdates: Record<string, unknown> = {};
+      if (email !== undefined) dpUpdates.email = email || null;
+      if (address !== undefined) dpUpdates.address = address || null;
+
+      if (Object.keys(dpUpdates).length) {
+        await supabaseAdmin.from('delivery_partners').update(dpUpdates).eq('user_id', req.riderId!);
+      }
+
+      // Re-fetch full profile to return
+      const { data: user } = await supabaseAdmin
+        .from('app_users').select('id, name, email, phone, created_at').eq('id', req.riderId!).single();
+      const { data: profile } = await supabaseAdmin
+        .from('delivery_partners')
+        .select('address, vehicle_number, verification_document, verification_number, is_online, status, expo_push_token, profile_image_url')
+        .eq('user_id', req.riderId!).maybeSingle();
+
+      res.json({ success: true, profile: { ...user, ...profile } });
+    } catch (err) {
+      console.error('updateProfile error:', err);
+      res.status(500).json({ error: 'Failed to update profile' });
+    }
+  }
+
+  async updateProfileImage(req: Request, res: Response) {
+    try {
+      const { image_base64, mime_type } = req.body as { image_base64?: string; mime_type?: string };
+      if (!image_base64) {
+        return res.status(400).json({ error: 'image_base64 required' });
+      }
+
+      const contentType = mime_type || 'image/jpeg';
+      const ext = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg';
+      const path = `${req.riderId!}.${ext}`;
+      const buffer = Buffer.from(image_base64, 'base64');
+
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from('rider-avatars')
+        .upload(path, buffer, { contentType, upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabaseAdmin.storage.from('rider-avatars').getPublicUrl(path);
+
+      // Bust cache with a version query param
+      const profile_image_url = `${publicUrl}?v=${Date.now()}`;
+
+      await supabaseAdmin.from('delivery_partners')
+        .update({ profile_image_url })
+        .eq('user_id', req.riderId!);
+
+      res.json({ success: true, profile_image_url });
+    } catch (err) {
+      console.error('updateProfileImage error:', err);
+      res.status(500).json({ error: 'Failed to upload profile image' });
     }
   }
 

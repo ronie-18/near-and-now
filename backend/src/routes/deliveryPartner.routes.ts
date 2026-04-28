@@ -9,6 +9,8 @@ router.use(requireRider);
 
 // Profile & status
 router.get('/profile',                                            ctrl.getProfile.bind(ctrl));
+router.patch('/profile',                                          ctrl.updateProfile.bind(ctrl));
+router.patch('/profile-image',                                    ctrl.updateProfileImage.bind(ctrl));
 router.patch('/status',                                           ctrl.updateStatus.bind(ctrl));
 router.post('/location',                                          ctrl.updateLocation.bind(ctrl));
 router.patch('/push-token',                                       ctrl.updatePushToken.bind(ctrl));
