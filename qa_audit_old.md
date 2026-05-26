@@ -878,15 +878,104 @@ The Near & Now hyperlocal commerce platform is a monorepo (Express/TypeScript ba
 
 ---
 
+---
+
+## JIRA TICKETS — PART 5: SHOPKEEPER & RIDER PROFILE / ADMIN ACCESS (Added 2026-05-26)
+
+---
+
+### SHOP-PROF-001 · HIGH · P1
+**Summary:** Shopkeeper document number field is always editable — `editing` prop hardcoded to `true`  
+**Affected Apps:** Shopkeeper Mobile App  
+**Root Cause:** `near-now-store_owner/app/profile.tsx:403` — `<Field label="Document Number" ... editing />` passes the JSX boolean shorthand `editing` which evaluates to the literal `true`, not the component's `editing` state variable. The field is permanently an active `TextInput` regardless of whether the user has clicked the Edit button.  
+**Current Behavior:** Document number can be changed at any time without clicking Edit.  
+**Suggested Fix:** Change `editing` (boolean shorthand) to `editing={editing}` to pass the state variable.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### SHOP-PROF-002 · HIGH · P1
+**Summary:** Shopkeeper document image upload and document type picker are not gated by edit mode  
+**Affected Apps:** Shopkeeper Mobile App  
+**Root Cause:** `near-now-store_owner/app/profile.tsx:415` — `onPress={pickDocImage}` has no `editing` check. `near-now-store_owner/app/profile.tsx:394` — the document type picker `onPress={() => setDocPickerVisible(true)}` likewise has no `editing` check. Compare with store image (line 295) and owner image (line 323) which correctly use `onPress={editing ? pickStoreImage : undefined}`.  
+**Current Behavior:** Users can change their document type, upload a new document image, and save directly to the DB at any time — no Edit button required.  
+**Suggested Fix:** Gate all three: `onPress={editing ? pickDocImage : undefined}`, `onPress={editing ? () => setDocPickerVisible(true) : undefined}`.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### SHOP-PROF-003 · HIGH · P1
+**Summary:** No admin approval gate on online/offline toggle — stores can go live immediately after registration  
+**Affected Apps:** Shopkeeper Mobile App, Backend  
+**Root Cause:** `near-now-store_owner/app/(tabs)/home.tsx` — the online/offline toggle calls `PATCH /api/store-owner/stores/{id}/online` with no check on admin approval status. A newly registered store can toggle itself online with zero admin review. The delivery partner app gates the equivalent toggle behind `driverStatus !== "active"` with a 30-second polling loop to detect approval.  
+**Suggested Fix:** Add an `approval_status` field to the stores record (e.g. `pending | approved | rejected`). Prevent the toggle when `approval_status !== 'approved'`. Poll or use realtime to detect when admin grants approval.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### SHOP-PROF-004 · MEDIUM · P2
+**Summary:** No approval-status polling for shopkeeper — no feedback on when admin approves their store  
+**Affected Apps:** Shopkeeper Mobile App  
+**Root Cause:** The delivery partner app polls `GET /delivery-partner/profile` every 30 seconds while pending and shows a banner when status changes to `active`. The shopkeeper app has no equivalent polling and no UI showing approval state. After registering, the shopkeeper has no indication of their pending status or when they will be allowed to go online.  
+**Suggested Fix:** Mirror the rider pattern: poll the store status every 30 seconds while `approval_status === 'pending'`; show an inline banner; enable the toggle only when approved.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### SHOP-PROF-005 · MEDIUM · P2
+**Summary:** Store images support only a single image — multi-image upload and carousel/scroll are not implemented  
+**Affected Apps:** Shopkeeper Mobile App  
+**Root Cause:** `near-now-store_owner/app/profile.tsx:53` — `storeImageUri: string | null`. Single value, not an array. No gallery picker, no horizontal carousel, no scrollable image row. The Supabase bucket `store-images` and DB column `image_url` support one URL. Multiple store photos (interior, menu, signage) are a standard shopfront feature.  
+**Suggested Fix:** Change state to `storeImageUris: string[]`, use `allowsMultipleSelection: true` in the image picker, upload each, store as an array column or a separate `store_images` table, render as a `FlatList` horizontal carousel.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### CROSS-PROF-001 · HIGH · P1
+**Summary:** No admin notification when Edit button is clicked — 24-hour change-approval workflow missing in both apps  
+**Affected Apps:** Shopkeeper Mobile App, Delivery Partner Mobile App, Backend, Admin Web  
+**Root Cause:** Neither `near-now-store_owner/app/profile.tsx` nor `NAT_Near-Now_Rider-/app/(tabs)/profile.tsx` sends any event to the backend when the Edit button is pressed. Changes are saved directly to the DB via `PATCH /api/store-owner/stores/{id}` and `PATCH /delivery-partner/profile` with no admin awareness, no approval queue, and no audit trail. The intended design is: user clicks Edit → backend creates a `profile_change_request` record → admin is notified within 24 hours → admin approves/rejects → only then is the change committed.  
+**Suggested Fix:** Create `profile_change_requests` table with `requester_id`, `requester_type`, `requested_changes` (JSONB), `status` (pending/approved/rejected), `created_at`, `reviewed_at`. Add backend endpoints to submit and review requests. Add admin panel UI. Send push notification to admin on new request. Block direct PATCH on sensitive fields until request is approved.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### RIDER-PROF-001 · HIGH · P1
+**Summary:** Delivery partner rating is hardcoded at 4.8 — not sourced from actual user ratings  
+**Affected Apps:** Delivery Partner Mobile App  
+**Root Cause:** `NAT_Near-Now_Rider-/app/(tabs)/profile.tsx:353` — `<Text style={styles.statValue}>4.8</Text>` is a hardcoded string literal. There is no `delivery_partner_ratings` table, no rating collection flow, and no `GET /delivery-partner/stats` endpoint that aggregates a real average. Every rider always shows 4.8 regardless of their actual performance.  
+**Suggested Fix:** Create `delivery_partner_ratings` table. Allow customers to rate deliveries post-drop-off. Expose average via `/delivery-partner/stats`. Replace hardcoded `4.8` with the fetched value; display `--` when no ratings yet.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### RIDER-PROF-002 · HIGH · P1
+**Summary:** Vehicle type selector and vehicle image upload are missing from the delivery partner profile  
+**Affected Apps:** Delivery Partner Mobile App, Backend  
+**Root Cause:** The backend `delivery_partners` table has only a `vehicle_number` column (populated at signup). There is no `vehicle_type` column (bike/scooter/cycle) and no `vehicle_image_url` column. `NAT_Near-Now_Rider-/app/(tabs)/profile.tsx` has no vehicle type picker, no vehicle photo upload, and does not even display the `vehicle_number` that was collected during signup. The intended design is one vehicle photo per partner.  
+**Suggested Fix:** Add `vehicle_type` (enum: bike/scooter/cycle/other) and `vehicle_image_url` to `delivery_partners`. Add a vehicle section to the profile screen with a type selector and image upload (gated by edit mode). Upload image to a new `vehicle-images` Supabase Storage bucket.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### RIDER-PROF-003 · MEDIUM · P2
+**Summary:** Document image upload missing from delivery partner profile — only text fields exist  
+**Affected Apps:** Delivery Partner Mobile App, Backend  
+**Root Cause:** `NAT_Near-Now_Rider-/app/(tabs)/profile.tsx` lines 369–403 render `verification_document` and `verification_number` as read-only `Text` components. There is no document image upload, no image preview, and no Supabase Storage bucket for rider documents. The shopkeeper app correctly uploads document images to the `store-documents` bucket. Delivery partners cannot submit scanned/photographed documents for admin verification.  
+**Suggested Fix:** Add a `documents` section to the profile screen (gated by edit mode/admin approval flow). Create a `rider-documents` Supabase Storage bucket. Add a `verification_document_url` column to `delivery_partners`. Add `PATCH /delivery-partner/documents` backend endpoint.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
 ## Severity Summary
 
 | Severity | Count |
 |----------|-------|
 | Critical | 15 |
-| High | 48 |
-| Medium | 33 |
+| High | 48 + 7 new = 55 |
+| Medium | 33 + 3 new = 36 |
 | Low | 8 |
-| **Total** | **104** |
+| **Total** | **114** |
 
 ---
 
@@ -899,10 +988,10 @@ AUTH-001, AUTH-002, PAY-001, PAY-002, PAY-003, PAY-005, PAY-006, BACKEND-001, BA
 ORDER-001, ORDER-002, ORDER-003, ORDER-005, ORDER-006, ORDER-007, ORDER-008, DELIVERY-001, DELIVERY-002, DELIVERY-003, DELIVERY-004, DELIVERY-005, NOTIF-001, NOTIF-002, NOTIF-003, NOTIF-004, NOTIF-005, NOTIF-006, NOTIF-007, COUPON-001, COUPON-002, BACKEND-004, PERF-001, PERF-002, PERF-003, CROSS-001, CROSS-003
 
 ### Dev 3 — Mobile Apps (Customer + Rider)
-MOBILE-SEC-001, MOBILE-SEC-002, MOBILE-SEC-003, MOBILE-SEC-004, MOBILE-AUTH-001, MOBILE-AUTH-002, MOBILE-BUG-001, MOBILE-NOTIF-001, MOBILE-PAYMENT-001, MOBILE-PAYMENT-002, MOBILE-UX-001, MOBILE-UX-002, MOBILE-UX-003, MOBILE-PERF-001, MOBILE-PERF-003, MOBILE-PERF-004, WEB-002, WEB-003
+MOBILE-SEC-001, MOBILE-SEC-002, MOBILE-SEC-003, MOBILE-SEC-004, MOBILE-AUTH-001, MOBILE-AUTH-002, MOBILE-BUG-001, MOBILE-NOTIF-001, MOBILE-PAYMENT-001, MOBILE-PAYMENT-002, MOBILE-UX-001, MOBILE-UX-002, MOBILE-UX-003, MOBILE-PERF-001, MOBILE-PERF-003, MOBILE-PERF-004, WEB-002, WEB-003, RIDER-PROF-001, RIDER-PROF-002, RIDER-PROF-003
 
 ### Dev 4 — Frontend Web, Admin & Shopkeeper App
-WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, ADMIN-001, ADMIN-002, ADMIN-003, ADMIN-004, ADMIN-005, ADMIN-006, ADMIN-007, ADMIN-008, ADMIN-009, ADMIN-010, MOBILE-AUTH-003, MOBILE-ORDER-001, MOBILE-ORDER-002, MOBILE-ORDER-003, MOBILE-ORDER-004, MOBILE-ORDER-005, MOBILE-ORDER-006, MOBILE-ORDER-007, MOBILE-ORDER-008, MOBILE-NOTIF-002, MOBILE-UX-004, MOBILE-PERF-002, CROSS-002, DB-001, DB-002
+WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, ADMIN-001, ADMIN-002, ADMIN-003, ADMIN-004, ADMIN-005, ADMIN-006, ADMIN-007, ADMIN-008, ADMIN-009, ADMIN-010, MOBILE-AUTH-003, MOBILE-ORDER-001, MOBILE-ORDER-002, MOBILE-ORDER-003, MOBILE-ORDER-004, MOBILE-ORDER-005, MOBILE-ORDER-006, MOBILE-ORDER-007, MOBILE-ORDER-008, MOBILE-NOTIF-002, MOBILE-UX-004, MOBILE-PERF-002, CROSS-002, DB-001, DB-002, SHOP-PROF-001, SHOP-PROF-002, SHOP-PROF-003, SHOP-PROF-004, SHOP-PROF-005, CROSS-PROF-001
 
 ---
 

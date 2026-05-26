@@ -589,3 +589,51 @@ Shopkeeper and rider apps use a randomly generated `session_token` stored in the
 # [Cross-App][Bug] Pickup code generation timing is inconsistent — codes may exist before shopkeeper acceptance
 
 `orders.controller.ts` comments state pickup codes are generated at shopkeeper acceptance time. `shopkeeper.controller.ts:reallocateMissingItems` generates the pickup code at allocation insert time, before acceptance. The two code paths behave differently, and pickup codes may be created prematurely depending on which path triggered the allocation.
+
+---
+
+# [Shopkeeper App][Profile] Document upload and document number field are not gated by edit mode — documents can be changed without clicking Edit
+
+`near-now-store_owner/app/profile.tsx` line 415: `onPress={pickDocImage}` has no `editing` check, so the document image picker can be opened at any time. Line 403: the `Field` component for the verification number is rendered with `editing={true}` hardcoded, making it permanently editable regardless of whether the user clicked the Edit button. By contrast, store image and owner image are correctly gated (`onPress={editing ? pickStoreImage : undefined}`). This is inconsistent and allows document tampering outside of edit mode. The rider app (`NAT_Near-Now_Rider-/app/(tabs)/profile.tsx` lines 374–386) displays verification fields as read-only text components with no edit capability at all.
+
+---
+
+# [Shopkeeper App][Missing] No admin approval gate on the online/offline toggle — stores can go live immediately after registration
+
+`near-now-store_owner/app/(tabs)/home.tsx` lines 260–319: the online/offline toggle calls `PATCH /api/store-owner/stores/{id}/online` directly with no check on admin approval status. A newly registered store can toggle itself online with zero admin review. The delivery partner app (`NAT_Near-Now_Rider-/app/(tabs)/home.tsx` line 365) gates the equivalent toggle behind `if (toggling || driverStatus !== "active") return;` and polls for status changes every 30 seconds (`lines 160–189`). The shopkeeper app needs the same pattern: fetch an approval status field on the store record, prevent the toggle when status is not `active`/`approved`, and poll periodically to detect when admin grants approval.
+
+---
+
+# [Shopkeeper App][Missing] No approval-status polling — shopkeeper has no way to know when admin approves their store
+
+The delivery partner app polls `GET /delivery-partner/profile` every 30 seconds while in `pending_verification` state and shows an in-app banner when status changes to `active` (`NAT_Near-Now_Rider-/app/(tabs)/home.tsx` lines 160–189`). The shopkeeper app has no equivalent polling loop and no UI feedback about approval state. After registering, the shopkeeper has no indication of their approval status or when they will be allowed to go online.
+
+---
+
+# [Shopkeeper App][Missing] Store images support only a single image — multi-image upload and carousel/scroll are not implemented
+
+`near-now-store_owner/app/profile.tsx` stores the store image as `storeImageUri: string | null` (line 53) — a single value, not an array. There is no gallery picker, no carousel, and no scrollable image row for the store's photos. Likewise the document upload supports only one document image at a time (`docImageUri: string | null`, line 60). Only the owner profile image is expected to be a single image and is correctly implemented that way. Store images and supporting documents likely need multi-image support with a horizontal scroll/carousel view; this is currently missing entirely.
+
+---
+
+# [Cross-App][Missing] No admin notification when Edit button is clicked — 24-hour change-approval workflow not implemented
+
+Neither the shopkeeper app (`near-now-store_owner/app/profile.tsx`) nor the delivery partner app (`NAT_Near-Now_Rider-/app/(tabs)/profile.tsx`) sends any flag or notification to the admin when a user clicks the Edit button. The intended flow should be: (1) user clicks Edit → backend receives a "change requested" event, (2) admin receives a notification with a 24-hour SLA to approve or reject the change, (3) the edit is only committed once the admin approves. Currently, changes are saved directly to the database (`PATCH /api/store-owner/stores/{id}` and `PATCH /delivery-partner/profile`) with no admin awareness, no approval gate, and no audit trail. This needs a `profile_change_requests` table, a backend endpoint to create the request, admin panel UI to review/approve/reject requests, and a push notification to the admin.
+
+---
+
+# [Delivery Partner App][Profile] Rating is hardcoded at 4.8 — not sourced from user ratings
+
+`NAT_Near-Now_Rider-/app/(tabs)/profile.tsx:353` renders `<Text style={styles.statValue}>4.8</Text>` unconditionally. The value is a hardcoded string literal, not fetched from any ratings table or API. Every delivery partner always shows exactly 4.8 stars regardless of their actual performance. There is no ratings table, no endpoint, and no rating collection flow anywhere on the platform. This needs a backend `delivery_partner_ratings` table, a `GET /delivery-partner/stats` endpoint that aggregates the average, and the profile screen must use that value.
+
+---
+
+# [Delivery Partner App][Missing] Vehicle type selector and vehicle image are not implemented in the profile
+
+The backend `delivery_partners` table has a `vehicle_number` column (collected at signup via `NAT_Near-Now_Rider-/app/signup.tsx:38`) but no `vehicle_type` column and no `vehicle_image_url` column. The profile screen (`NAT_Near-Now_Rider-/app/(tabs)/profile.tsx`) has no vehicle type picker (bike / scooter / cycle), no vehicle photo upload, and no display of the vehicle number that was collected at signup. The intended design is one vehicle image per partner. This is entirely missing from both the profile UI and the backend schema.
+
+---
+
+# [Delivery Partner App][Missing] Document image upload is absent from the profile — only text fields stored
+
+`NAT_Near-Now_Rider-/app/(tabs)/profile.tsx` lines 369–403 render `verification_document` and `verification_number` as read-only `Text` components. There is no document image upload, no document image preview, and no backend endpoint or Supabase Storage bucket for rider document images. The shopkeeper app correctly uploads document images to the `store-documents` Supabase Storage bucket, but the equivalent flow for delivery partners does not exist. Riders cannot submit document images for verification through the app.
