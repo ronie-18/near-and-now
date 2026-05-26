@@ -21,7 +21,6 @@ import ProfilePage from './pages/ProfilePage';
 import OrdersPage from './pages/OrdersPage';
 import OrderTrackingPage from './pages/OrderTrackingPage';
 import AddressesPage from './pages/AddressesPage';
-import CartPage from './pages/CartPage';
 import AboutPage from './pages/AboutPage';
 import HelpPage from './pages/HelpPage';
 import DeliveryPartnerPage from './pages/DeliveryPartnerPage';
@@ -60,7 +59,6 @@ const AppContent: React.FC = () => {
             <Route path="/track" element={<OrderTrackingPage />} />
             <Route path="/track/:orderId" element={<OrderTrackingPage />} />
             <Route path="/addresses" element={<AddressesPage />} />
-            <Route path="/cart" element={<CartPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/help" element={<HelpPage />} />
             <Route path="/driver-legacy" element={<DeliveryPartnerPage />} />
