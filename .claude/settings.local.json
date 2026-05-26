@@ -27,7 +27,11 @@
       "Read(//f/Coding/Near-Now/nearandnowcustomerapp/**)",
       "Read(//f/Coding/Near-Now/near-now-store_owner/**)",
       "Read(//f/Coding/Near-Now/NAT_Near-Now_Rider-/**)",
-      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")"
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(curl *)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 *)"
     ]
   }
 }

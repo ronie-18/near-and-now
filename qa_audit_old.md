@@ -2,7 +2,7 @@
 **Date:** 2026-05-26  
 **Auditor Role:** Senior QA Engineer / Full-Stack Architect / Product Analyst  
 **Scope:** All platforms — Backend API, Admin Web, Customer Web, Customer Mobile App, Shopkeeper Mobile App, Delivery Partner Mobile App  
-**Total Issues Found:** 104 Tickets
+**Total Issues Found:** 137 Tickets
 
 ---
 
@@ -16,7 +16,7 @@ The Near & Now hyperlocal commerce platform is a monorepo (Express/TypeScript ba
 - Security posture has critical gaps: service-role key in APK, UUID used as Bearer token, store owner controller reads userId from query param, invoice endpoint has zero auth
 - Admin panel has its own internal inconsistencies: mixes anon and admin Supabase clients, sends push directly to Expo from browser
 
-**Release Readiness Verdict: BLOCKED — 15 launch blockers identified**
+**Release Readiness Verdict: BLOCKED — 17 launch blockers identified**
 
 ---
 
@@ -967,31 +967,215 @@ The Near & Now hyperlocal commerce platform is a monorepo (Express/TypeScript ba
 
 ---
 
+## JIRA TICKETS — PART 6: LIVE DATABASE & API AUDIT (2026-05-26)
+
+*Findings from direct Supabase REST API inspection and cross-app route analysis conducted May 2026. All bugs confirmed against the live database — not local SQL files.*
+
+---
+
+### DB-003 · HIGH · P1
+**Summary:** Supabase RPC `alculate_customer_order_total` has a typo — missing leading `c`  
+**Affected Apps:** Backend  
+**Root Cause:** The function registered in Supabase is named `alculate_customer_order_total` (confirmed via OpenAPI introspection of the live DB). Any backend or client code calling `calculate_customer_order_total` (the correct spelling) receives a "function not found" error from PostgREST. The function is effectively unreachable under its intended name.  
+**Suggested Fix:** Run `ALTER FUNCTION alculate_customer_order_total RENAME TO calculate_customer_order_total;` in the Supabase SQL editor. Update any call-sites to use the corrected name.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### DB-004 · MEDIUM · P2
+**Summary:** `products` table has four spurious columns that do not belong — schema pollution from a bad migration  
+**Affected Apps:** Backend  
+**Root Cause:** The `products` table (which exists solely to join `stores` to `master_products`) contains four extra columns that should not be there: `name` (duplicates `master_products.name`), `phone` (a phone number on a product record — structurally wrong), `product_name` (further duplication of `master_products.name`), and `deleted_at` (soft-delete column with no application code using it). These were introduced via a migration that incorrectly targeted the `products` table. Any ORM or type-gen tool consuming this schema will expose these garbage columns in product-related TypeScript types.  
+**Suggested Fix:** Create a migration to `ALTER TABLE products DROP COLUMN name, DROP COLUMN phone, DROP COLUMN product_name, DROP COLUMN deleted_at;` after verifying no code writes to these columns.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### DB-005 · HIGH · P1
+**Summary:** Two separate admin identity tables exist with cross-wired foreign keys — admin auth is structurally split  
+**Affected Apps:** Backend, Admin Web  
+**Root Cause:** The database has both an `admins` table (3 rows, used by the current admin panel auth flow) and an `admin_users` table (separate set of records). Foreign keys are cross-wired: `admin_sessions` and `admin_activity_logs` reference `admin_users.id`, while `admin_refresh_tokens` and `audit_logs` reference `admins.id`. The two tables are not linked to each other. This means session records created in `admin_sessions` can never be joined to the `admins` table for validation, and audit records in `audit_logs` cannot be joined to `admin_sessions`. Any code path that tries to cross-reference these will silently return empty results.  
+**Suggested Fix:** Decide on one canonical admin table (`admins` is preferred — it has role/permission columns). Migrate all FK references to point to `admins.id`. Drop `admin_users` after migration. Update `admin_sessions` and `admin_activity_logs` FK constraints accordingly.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### DB-006 · LOW · P3
+**Summary:** `master_products_old` backup table is still publicly accessible via the REST API  
+**Affected Apps:** Backend  
+**Root Cause:** The `master_products_old` table (a pre-migration backup of the product catalog) is still present in the `public` schema and therefore exposed by PostgREST. It has no primary key constraint (no `id*` in the OpenAPI definition) and no RLS policies. Any caller with the anon key can read its full contents. The table serves no production purpose.  
+**Suggested Fix:** Drop the table: `DROP TABLE master_products_old;`. If a backup is needed, move it to a non-public schema before dropping from `public`.  
+**Severity:** Low | **Priority:** P3
+
+---
+
+### DB-007 · HIGH · P1
+**Summary:** `customers` profile rows exist for only 5 of 18 `app_users` — profile creation is not firing for most users  
+**Affected Apps:** Backend, Customer Web, Customer Mobile App  
+**Root Cause:** Live DB shows 18 rows in `app_users` but only 5 rows in the `customers` table (which stores extended profile data: name, address, landmark, delivery instructions, etc.). This means 13 registered customers have no profile record. Any backend query that JOINs `app_users` to `customers` will return no data for 72% of users — address resolution, delivery instructions, and profile display will all silently fail for those accounts. The root cause is that the customer profile insert is not triggered consistently after OTP verification, likely because the new-user branch in `auth.controller.ts` omits or skips the `customers` table insert.  
+**Suggested Fix:** Audit `auth.controller.ts` verify-OTP path for the customer role. Ensure that on first registration a `customers` row is created. Add a backfill migration for the 13 existing users.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### DB-008 · MEDIUM · P2
+**Summary:** 15 `customer_orders` have no corresponding `customer_payments` row — payment records silently absent for 21% of orders  
+**Affected Apps:** Backend  
+**Root Cause:** Live DB shows 70 rows in `customer_orders` but only 55 in `customer_payments`. The 15 gap orders either went through the COD path (which may intentionally skip payment record creation) or the payment record insert failed silently. If these are all COD orders, the missing payment rows are expected but should have a COD record created for accounting. If any are online-payment orders, the payment record was lost — which would mean those payments cannot be refunded or reconciled. The backend does not distinguish these two cases in its current logging.  
+**Suggested Fix:** Add a COD `customer_payments` row (with `status: 'pending'` and `payment_method: 'cod'`) for every COD order at placement time, matching the same accounting approach used for online orders. Log and alert on any online order missing a payment row.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### ORDER-009 · CRITICAL · P0
+**Summary:** `order_store_allocations` rows exist for only 26 of 70 orders — multi-store dispatch is not running for 63% of orders  
+**Affected Apps:** Backend, Shopkeeper Mobile App, Delivery Partner Mobile App  
+**Root Cause:** Live DB shows only 26 rows in `order_store_allocations` against 70 rows in `customer_orders`. The allocation table is the backbone of the multi-store dispatch system — without a row here, shopkeepers never receive the order, no pickup code is generated, and driver dispatch cannot reference a store for pickup. The 44 unallocated orders are effectively invisible to the entire fulfillment chain. Root cause is likely that `orders.controller.ts:placeCheckout` creates the order but the allocation-row creation block fails silently (possibly due to the `alculate_customer_order_total` RPC typo or a null store resolution) and the error is swallowed without rolling back the order.  
+**Suggested Fix:** Wrap the entire order placement flow in a transaction or Supabase RPC so that if allocation creation fails the order is also rolled back. Add explicit error logging on the allocation insert. Cross-reference with DB-003 (RPC typo) as a likely contributing cause.  
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### ORDER-010 · MEDIUM · P2
+**Summary:** `invoice_documents` has 87 rows for only 29 invoices — duplicate PDFs being generated per order  
+**Affected Apps:** Backend  
+**Root Cause:** Live DB shows 87 rows in `invoice_documents` against 29 rows in `invoices` — an average of ~3 PDF documents per invoice. The `POST /api/invoices/generate/:orderId` endpoint has no auth middleware (see SECURITY-007) and no idempotency guard. Each time a page loads or a customer retries the download, a new PDF record is inserted rather than returning the existing one. This wastes Supabase Storage space and creates confusion about which document is canonical.  
+**Suggested Fix:** Before inserting a new `invoice_documents` row, check if one already exists for the given `invoice_id` and `document_type`. Return the existing document URL if found. This requires fixing SECURITY-007 first so the endpoint is gated.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### DELIVERY-006 · HIGH · P1
+**Summary:** `tracking_events` table is permanently empty — the POST endpoint exists but no code ever calls it  
+**Affected Apps:** Backend, Customer Web, Customer Mobile App  
+**Root Cause:** Live DB shows 0 rows in `tracking_events` despite the table being created in migration `20260427000001_tracking_enhancements.sql`. The backend has a `POST /api/tracking/orders/:orderId/updates` endpoint (`tracking.controller.ts`) that is designed to write to this table, but no part of the backend order lifecycle (order placement, shopkeeper acceptance, driver assignment, pickup, delivery) ever calls this endpoint or writes to `tracking_events` directly. All tracking state visible to customers is derived exclusively from `order_status_history`. The `tracking_events` table and its endpoint are entirely dead.  
+**Suggested Fix:** In each status transition (accept allocation, assign driver, pick up, deliver), insert a corresponding `tracking_events` row with `event_type`, `title`, `description`, and `icon`. This enables the rich timeline UI the table was designed to power. Alternatively, create a DB trigger on `order_status_history` that auto-populates `tracking_events`.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### WEB-008 · MEDIUM · P2
+**Summary:** Website's internal DriverApp.tsx and ShopkeeperApp.tsx call wrong auth endpoint paths — both test flows are broken  
+**Affected Apps:** Customer Web  
+**Root Cause:** `frontend/src/pages/DriverApp.tsx` and `frontend/src/pages/ShopkeeperApp.tsx` (internal web-based test interfaces for the driver and shopkeeper flows) make auth calls to `POST /api/auth/otp` and `POST /api/auth/verify`. Neither endpoint exists — the correct paths are `POST /api/auth/send-otp` and `POST /api/auth/verify-otp`. Both test apps fail at the login step with a 404 and cannot be used for any manual QA of the delivery or shopkeeper flow from the web.  
+**Suggested Fix:** In both files, replace `/api/auth/otp` with `/api/auth/send-otp` and `/api/auth/verify` with `/api/auth/verify-otp`.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-ORDER-009 · HIGH · P1
+**Summary:** Shopkeeper inventory screen calls `GET /store-owner/stores/:storeId/products` — this route does not exist in the backend  
+**Affected Apps:** Shopkeeper Mobile App, Backend  
+**Root Cause:** `near-now-store_owner/services/storeService.ts` and `near-now-store_owner/app/(tabs)/inventory.tsx` make a request to `GET /store-owner/stores/:storeId/products` to load the store's product list. This route is not registered anywhere in `storeOwner.routes.ts` or any other route file. The inventory screen returns a 404 on every load, making inventory management completely non-functional. The backend only has `PATCH /store-owner/products/:productId/quantity` and `DELETE /store-owner/products/:productId` — no GET for listing a store's products.  
+**Suggested Fix:** Add `GET /store-owner/stores/:storeId/products` to `storeOwner.routes.ts` and implement the controller handler to query `products` JOIN `master_products` WHERE `store_id = :storeId`.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### MOBILE-ORDER-010 · HIGH · P1
+**Summary:** Shopkeeper invoice screen calls `GET /api/store-owner/orders/:id` — this route does not exist  
+**Affected Apps:** Shopkeeper Mobile App, Backend  
+**Root Cause:** The shopkeeper app's invoice screen makes a `GET /api/store-owner/orders/:id` request to fetch order details for invoice display. No such route exists in `storeOwner.routes.ts`. The `/store-owner` router has no GET order endpoints at all. The invoice screen will always 404, making invoice viewing on the shopkeeper side non-functional. (Note: `/api/invoices/order/:orderId/store` does exist and is the correct invoice download endpoint, but this screen appears to be trying to fetch raw order data separately.)  
+**Suggested Fix:** Either add `GET /store-owner/orders/:orderId` to `storeOwner.routes.ts` returning order+items data, or update the invoice screen to use the existing `/api/invoices/order/:orderId/store` endpoint and remove the separate order fetch.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### MOBILE-ORDER-011 · MEDIUM · P2
+**Summary:** Shopkeeper app calls `/api/store-owner/*` but backend router is mounted at `/store-owner/*` — requests 404 in production  
+**Affected Apps:** Shopkeeper Mobile App, Backend  
+**Root Cause:** Several screens in `near-now-store_owner` construct API URLs with the `/api/store-owner/` prefix (e.g. `store-owner-signup.tsx`, `inventory.tsx`). The backend `server.ts` mounts the store owner router at `/store-owner` (no `/api` prefix). In development this may be masked by a proxy rewrite, but in production all these requests will 404. The shopkeeper router is intentionally outside the `/api` namespace (same as `/shopkeeper` and `/delivery-partner`), so the clients need to remove the `/api` prefix from their `store-owner` calls.  
+**Suggested Fix:** Audit all API calls in the shopkeeper app and strip the `/api` prefix from any URL targeting `store-owner/*`. Alternatively, re-mount the backend router under `/api/store-owner` for consistency — but this requires coordinating the change with all callers.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-ORDER-012 · HIGH · P1
+**Summary:** Delivery partner app calls pickup code verification with `:storeId` param but backend expects `:allocationId`  
+**Affected Apps:** Delivery Partner Mobile App, Backend  
+**Root Cause:** `NAT_Near-Now_Rider-/app/delivery/[orderId].tsx` constructs the verify-code URL as `POST /delivery-partner/orders/:orderId/stores/:storeId/verify-code`, passing the `store_id` from the pickup sequence. The backend route in `deliveryPartner.routes.ts` is `POST /delivery-partner/orders/:orderId/stores/:allocationId/verify-code` — it expects the `order_store_allocations.id` (UUID), not the `store_id`. The handler looks up the allocation by its primary key, so passing a `store_id` will always return "allocation not found" and the pickup code verification step will never succeed for any delivery.  
+**Suggested Fix:** Update `delivery/[orderId].tsx` to pass `stop.allocation_id` (not `stop.store_id`) in the URL. Verify that the pickup sequence endpoint (`GET /delivery-partner/orders/:orderId/pickup-sequence`) returns the `allocation_id` field; add it if missing.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### MOBILE-ORDER-013 · MEDIUM · P2
+**Summary:** Delivery partner signup.tsx sends PATCH to `/api/delivery/partners/:partnerId` but the backend expects PUT  
+**Affected Apps:** Delivery Partner Mobile App, Backend  
+**Root Cause:** `NAT_Near-Now_Rider-/app/signup.tsx` submits the new rider's registration details using `PATCH /api/delivery/partners/:partnerId`. The backend `delivery.routes.ts` registers this as `PUT /api/delivery/partners/:partnerId`. Express does not treat PUT and PATCH as interchangeable — a PATCH request to this path returns 404. New rider profile saves (vehicle number, address, verification document) after OTP verification are silently dropped.  
+**Suggested Fix:** Either change `signup.tsx` to use `PUT` instead of `PATCH`, or add a `PATCH` alias on the backend route. `PUT` is semantically more correct here since the call replaces the full partner profile.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-ORDER-014 · CRITICAL · P0
+**Summary:** Shopkeeper `hooks/useOrders.ts` calls `/api/shopkeeper/*` — wrong prefix, all order operations in the hook are broken  
+**Affected Apps:** Shopkeeper Mobile App, Backend  
+**Root Cause:** `near-now-store_owner/hooks/useOrders.ts` constructs URLs with an `/api/shopkeeper/` prefix:  
+- `GET ${API_BASE}/api/shopkeeper/orders` (line 117)  
+- `POST ${API_BASE}/api/shopkeeper/allocations/:id/accept` (line 160)  
+- `POST ${API_BASE}/api/shopkeeper/allocations/:id/reject` (line 71)  
+
+The backend mounts the shopkeeper router at `/shopkeeper` with **no `/api/` prefix** (confirmed in `server.ts`). All three calls return 404 in production. `useOrders.ts` is the primary hook driving the order accept/reject flow — it is distinct from and not the same as the app-screen-level calls already documented in MOBILE-ORDER-011 (which covers the `/api/store-owner/` prefix on store management screens). This means the **core order management functionality of the shopkeeper app is completely broken** via this hook.  
+
+Note: `near-now-store_owner/app/(tabs)/previous-orders.tsx` (lines 273, 297, 387, 420) makes the same mistake independently, calling `/api/shopkeeper/orders` and `/api/shopkeeper/allocations/*` directly. The broken calls span both the hook layer and the screen layer.  
+**Suggested Fix:** In `hooks/useOrders.ts` and `app/(tabs)/previous-orders.tsx`, change all `${API_BASE}/api/shopkeeper/*` URLs to `${API_BASE}/shopkeeper/*`. Cross-reference with MOBILE-ORDER-011 (same pattern for `/store-owner/`).  
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### ADMIN-011 · HIGH · P1
+**Summary:** Admin panel queries `newsletter_subscriptions` table which does not exist in Supabase — admin will crash on affected pages  
+**Affected Apps:** Admin Web  
+**Root Cause:** `admin/src/services/adminService.ts` (or a related admin service file) calls `supabase.from('newsletter_subscriptions')`. Live DB inspection confirms this table is **not present** in the Supabase public schema — it does not appear in the PostgREST OpenAPI spec or any migration file. Any admin page that triggers this query will throw a PostgREST 404/error, crashing the component or returning empty data without surfacing the missing table as a visible error. The table was likely planned but never created.  
+**Suggested Fix:** Either create the `newsletter_subscriptions` table (with `id`, `email`, `name`, `subscribed_at`, `is_active` columns and appropriate RLS) if newsletters are a planned feature, or remove the `from('newsletter_subscriptions')` calls from the admin service until the feature is built.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### STORAGE-001 · LOW · P3
+**Summary:** Two product image storage buckets exist (`product-image` and `product-images`) — one is empty and unused, causing confusion  
+**Affected Apps:** Backend, Admin Web  
+**Root Cause:** Live Supabase Storage has both `product-image` (0 files, created 2026-01-18T12:36) and `product-images` (1 file, created 2026-01-18T13:13). The second was likely created to correct a naming mistake and the first was never deleted. Any code that uploads to `product-image` stores files in a bucket nothing reads from, and vice versa — the inconsistency means a product image upload could go to either bucket depending on which client code is running. With 44,562 master products and only 1 file in the active bucket, most products rely on external image URLs or have none at all.  
+**Suggested Fix:** Delete the empty `product-image` bucket. Confirm all upload code references `product-images`. Consider auditing why only 1 of 44,562 products has a file in Storage (most likely using external URLs stored in `master_products.image_url` — verify this is intentional).  
+**Severity:** Low | **Priority:** P3
+
+---
+
+### MOBILE-NOTIF-003 · MEDIUM · P2
+**Summary:** Customer app push token registration calls `POST /api/push-token` — this route does not exist in the backend  
+**Affected Apps:** Customer Mobile App, Backend  
+**Root Cause:** `nearandnowcustomerapp/hooks/usePushNotifications.dev.ts:110` calls `apiFetch('/api/push-token', { method: 'POST', body: { token } })`. No such route is registered in `server.ts` or any route file — the backend has no `/api/push-token` endpoint. The Expo push token is captured from the device but the HTTP call to persist it returns 404. This is distinct from (but compounds) MOBILE-NOTIF-001 (no `expo_push_token` column in `app_users`) and NOTIF-002 (backend `sendPushNotification` only queries `delivery_partners`): even if the column and query were fixed, the token would still never be saved because the API route is missing.  
+**Suggested Fix:** Add `PATCH /api/auth/push-token` (or `PATCH /delivery-partner/push-token` pattern) to the backend, guarded by customer auth middleware, that writes the token to `app_users.expo_push_token`. This must be implemented alongside MOBILE-NOTIF-001 (add column) and NOTIF-002 (update query) for push to work end-to-end.  
+**Severity:** Medium | **Priority:** P2
+
+---
+
 ## Severity Summary
 
 | Severity | Count |
 |----------|-------|
-| Critical | 15 |
-| High | 48 + 7 new = 55 |
-| Medium | 33 + 3 new = 36 |
-| Low | 8 |
-| **Total** | **114** |
+| Critical | 17 |
+| High | 63 |
+| Medium | 43 |
+| Low | 10 |
+| **Total** | **133** |
 
 ---
 
 ## Team Assignment (4 Developers)
 
 ### Dev 1 — Backend Core (Auth, Payments, Security)
-AUTH-001, AUTH-002, PAY-001, PAY-002, PAY-003, PAY-005, PAY-006, BACKEND-001, BACKEND-002, SECURITY-001, SECURITY-002, SECURITY-003, SECURITY-004, SECURITY-005, SECURITY-006, SECURITY-007, SECURITY-008, SECURITY-009
+AUTH-001, AUTH-002, PAY-001, PAY-002, PAY-003, PAY-005, PAY-006, BACKEND-001, BACKEND-002, SECURITY-001, SECURITY-002, SECURITY-003, SECURITY-004, SECURITY-005, SECURITY-006, SECURITY-007, SECURITY-008, SECURITY-009, DB-003, DB-005, MOBILE-NOTIF-003
 
 ### Dev 2 — Order Lifecycle, Delivery & Notifications
-ORDER-001, ORDER-002, ORDER-003, ORDER-005, ORDER-006, ORDER-007, ORDER-008, DELIVERY-001, DELIVERY-002, DELIVERY-003, DELIVERY-004, DELIVERY-005, NOTIF-001, NOTIF-002, NOTIF-003, NOTIF-004, NOTIF-005, NOTIF-006, NOTIF-007, COUPON-001, COUPON-002, BACKEND-004, PERF-001, PERF-002, PERF-003, CROSS-001, CROSS-003
+ORDER-001, ORDER-002, ORDER-003, ORDER-005, ORDER-006, ORDER-007, ORDER-008, ORDER-009, ORDER-010, DELIVERY-001, DELIVERY-002, DELIVERY-003, DELIVERY-004, DELIVERY-005, DELIVERY-006, NOTIF-001, NOTIF-002, NOTIF-003, NOTIF-004, NOTIF-005, NOTIF-006, NOTIF-007, COUPON-001, COUPON-002, BACKEND-004, PERF-001, PERF-002, PERF-003, CROSS-001, CROSS-003, DB-007, DB-008
 
 ### Dev 3 — Mobile Apps (Customer + Rider)
-MOBILE-SEC-001, MOBILE-SEC-002, MOBILE-SEC-003, MOBILE-SEC-004, MOBILE-AUTH-001, MOBILE-AUTH-002, MOBILE-BUG-001, MOBILE-NOTIF-001, MOBILE-PAYMENT-001, MOBILE-PAYMENT-002, MOBILE-UX-001, MOBILE-UX-002, MOBILE-UX-003, MOBILE-PERF-001, MOBILE-PERF-003, MOBILE-PERF-004, WEB-002, WEB-003, RIDER-PROF-001, RIDER-PROF-002, RIDER-PROF-003
+MOBILE-SEC-001, MOBILE-SEC-002, MOBILE-SEC-003, MOBILE-SEC-004, MOBILE-AUTH-001, MOBILE-AUTH-002, MOBILE-BUG-001, MOBILE-NOTIF-001, MOBILE-NOTIF-002, MOBILE-PAYMENT-001, MOBILE-PAYMENT-002, MOBILE-UX-001, MOBILE-UX-002, MOBILE-UX-003, MOBILE-PERF-001, MOBILE-PERF-003, MOBILE-PERF-004, WEB-002, WEB-003, RIDER-PROF-001, RIDER-PROF-002, RIDER-PROF-003, MOBILE-ORDER-012, MOBILE-ORDER-013
 
 ### Dev 4 — Frontend Web, Admin & Shopkeeper App
-WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, ADMIN-001, ADMIN-002, ADMIN-003, ADMIN-004, ADMIN-005, ADMIN-006, ADMIN-007, ADMIN-008, ADMIN-009, ADMIN-010, MOBILE-AUTH-003, MOBILE-ORDER-001, MOBILE-ORDER-002, MOBILE-ORDER-003, MOBILE-ORDER-004, MOBILE-ORDER-005, MOBILE-ORDER-006, MOBILE-ORDER-007, MOBILE-ORDER-008, MOBILE-NOTIF-002, MOBILE-UX-004, MOBILE-PERF-002, CROSS-002, DB-001, DB-002, SHOP-PROF-001, SHOP-PROF-002, SHOP-PROF-003, SHOP-PROF-004, SHOP-PROF-005, CROSS-PROF-001
+WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, WEB-008, ADMIN-001, ADMIN-002, ADMIN-003, ADMIN-004, ADMIN-005, ADMIN-006, ADMIN-007, ADMIN-008, ADMIN-009, ADMIN-010, ADMIN-011, MOBILE-AUTH-003, MOBILE-ORDER-001, MOBILE-ORDER-002, MOBILE-ORDER-003, MOBILE-ORDER-004, MOBILE-ORDER-005, MOBILE-ORDER-006, MOBILE-ORDER-007, MOBILE-ORDER-008, MOBILE-ORDER-009, MOBILE-ORDER-010, MOBILE-ORDER-011, MOBILE-ORDER-014, MOBILE-UX-004, MOBILE-PERF-002, CROSS-002, DB-001, DB-002, DB-004, DB-006, SHOP-PROF-001, SHOP-PROF-002, SHOP-PROF-003, SHOP-PROF-004, SHOP-PROF-005, CROSS-PROF-001, STORAGE-001
 
 ---
 
@@ -1015,6 +1199,8 @@ WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, ADMIN-001, ADMIN-002, ADMIN-003, AD
 13. **MOBILE-AUTH-001** — Session restore fails without service-role key
 14. **WEB-001** — Checkout email required blocks OTP-only users
 15. **SECURITY-003** — CORS wildcard accepts all origins
+16. **ORDER-009** — `order_store_allocations` missing for 63% of orders (shopkeepers never see them)
+17. **MOBILE-ORDER-014** — Shopkeeper `useOrders.ts` uses `/api/shopkeeper/` prefix — all accept/reject calls 404
 
 ### Recommended Sprint Plan:
 - **Sprint 1 (Critical Security + Auth):** SECURITY-004, SECURITY-005, SECURITY-007, MOBILE-SEC-001, MOBILE-SEC-004, AUTH-001, AUTH-002, ADMIN-009
@@ -1022,6 +1208,59 @@ WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, ADMIN-001, ADMIN-002, ADMIN-003, AD
 - **Sprint 3 (Stability + Stubs):** ORDER-007, ORDER-008, NOTIF-002 through NOTIF-007, SECURITY-006, SECURITY-008, SECURITY-009, ADMIN-003, ADMIN-006, MOBILE-ORDER-004 through MOBILE-ORDER-008
 - **Sprint 4 (Commercial Viability):** CROSS-001 (payout system), MOBILE-UX-003, MOBILE-UX-004, MOBILE-BUG-001
 - **Sprint 5 (Polish):** All remaining P2 and P3 items, performance optimizations
+
+---
+
+## JIRA TICKETS — PART 7: EMAIL (RESEND) & PUSH (FCM / EXPO) INTEGRATION GAPS
+
+These tickets capture the third-party notification provider integrations that are entirely absent. The underlying stub code exists but the actual SDKs, API keys, and backend routes are not configured. All tickets in this section block real user communication and must be resolved before any production traffic.
+
+---
+
+### RESEND-001 · HIGH · P1
+**Summary:** Email delivery provider (Resend / SendGrid / SES) not configured — all transactional emails silently dropped  
+**Affected Apps:** Backend (all apps indirectly)  
+**Root Cause:** `backend/src/services/notification.service.ts:53-56` — `sendEmail(to, subject, body)` contains a `// TODO: SendGrid / AWS SES` comment and only calls `console.log`. No email SDK (Resend, `@sendgrid/mail`, `@aws-sdk/client-ses`, `nodemailer`) is installed in `backend/package.json`. No `RESEND_API_KEY`, `SENDGRID_API_KEY`, or SES credentials are present in the `.env` file. Every call to `sendEmail` across the order lifecycle (order confirmation, refund notification, invoice delivery) writes a log line and returns `{ success: true }` — the customer never receives an email.  
+**Impact:** Order confirmation emails, refund notifications, invoice delivery emails, and any OTP fallback emails are permanently lost. Customers have no paper trail for their orders.  
+**Suggested Fix:** (1) Choose a provider — Resend is recommended for transactional email; (2) `npm install resend` in backend; (3) add `RESEND_API_KEY` to `.env` and Vercel environment; (4) replace the stub body in `sendEmail` with `new Resend(process.env.RESEND_API_KEY).emails.send({ from, to, subject, html: body })`; (5) wire `sendOrderPlacedNotification` (currently empty) to call `sendEmail` with an order confirmation template.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### FCM-001 · HIGH · P1
+**Summary:** Shopkeeper app registers Expo push token at `POST /store-owner/notifications/register` — this backend route does not exist  
+**Affected Apps:** Shopkeeper Mobile App, Backend  
+**Root Cause:** `near-now-store_owner/lib/notifications.ts:155-172` — `registerTokenWithBackend(token)` calls `apiClient.post('/store-owner/notifications/register', { pushToken, platform, deviceId })`. The backend mounts `storeOwnerRoutes` at `/store-owner` (server.ts:59), and `storeOwner.routes.ts` registers only: `POST /signup/complete`, `GET /stores`, `PATCH /stores/:id`, `PATCH /stores/:id/online`, `PATCH /products/:productId/quantity`, `DELETE /products/:productId`. There is no `/store-owner/notifications/register` route. The `apiClient.post` call returns 404, the catch block silently swallows the error (line 169: `console.error` only), and the shopkeeper's push token is never persisted in the database. The `delivery_partners` table has an `expo_push_token` column and a working `PUT /delivery-partner/push-token` endpoint — no equivalent exists for shopkeepers. As a result, the backend can never send a new-order push notification to a shopkeeper device even though the Expo send infrastructure in `shopkeeper.controller.ts:broadcastToNearbyDrivers` expects tokens from `delivery_partners`, not shopkeepers. Shopkeeper notification preference updates (`POST /store-owner/notifications/preferences`, line 283) also call a non-existent endpoint.  
+**Impact:** Shopkeepers only learn of new orders by opening the app and waiting for the 10–30s poll cycle (MOBILE-NOTIF-002). Push-based new-order alerts are structurally impossible until this is fixed.  
+**Suggested Fix:** (1) Add a `shopkeeper_push_tokens` table (or `expo_push_token` column on `stores` or a junction table keyed by `user_id`); (2) register `POST /store-owner/notifications/register` in `storeOwner.routes.ts` with shopkeeper auth middleware that writes the token; (3) register `POST /store-owner/notifications/preferences` similarly; (4) update `broadcastToNearbyDrivers` (or add a parallel `broadcastToShopkeeper`) to look up the shopkeeper's token and send via Expo Push API.  
+**Severity:** High | **Priority:** P1
+
+---
+
+### FCM-002 · HIGH · P1
+**Summary:** Customer Expo push integration has three coordinated gaps — end-to-end push delivery is structurally impossible  
+**Affected Apps:** Customer Mobile App, Backend  
+**Root Cause:** Three independent defects must all be fixed together for customers to receive push notifications:  
+1. **Missing DB column** (MOBILE-NOTIF-001): `app_users` has no `expo_push_token` column — there is nowhere in the database to store a customer's push token.  
+2. **Missing backend API route** (MOBILE-NOTIF-003): `usePushNotifications.dev.ts:110` calls `POST /api/push-token` to save the token after registration. No such route is registered in `server.ts` or any route file — the HTTP call always returns 404.  
+3. **Wrong table in send path** (NOTIF-002): `notification.service.ts:sendPushNotification` queries only `delivery_partners` for `expo_push_token`. Even if steps 1 and 2 were fixed, the notification send would still fail because it never looks in `app_users`.  
+**Impact:** Customers never receive order status push notifications (placed, confirmed, out-for-delivery, delivered, cancelled). The `usePushNotifications` hook registers and requests the device token successfully, but it is immediately discarded.  
+**Suggested Fix:** Fix all three in a single sprint: (a) migration to add `expo_push_token TEXT` to `app_users`; (b) add `POST /api/auth/push-token` endpoint guarded by customer auth middleware; (c) update `sendPushNotification` to check both `delivery_partners` (for riders) and `app_users` (for customers), using the `role` column to route correctly. Reference the working rider implementation in `deliveryPartner.controller.ts:549-553` as the pattern.  
+**Severity:** High | **Priority:** P1
+
+---
+
+## JIRA TICKETS — PART 8: ADDITIONAL FINDINGS
+
+---
+
+### WEB-009 · MEDIUM · P2
+**Summary:** `CheckoutPage.tsx` uses hardcoded ₹30 delivery fee — dynamic fee calculator is bypassed  
+**Affected Apps:** Customer Web  
+**Root Cause:** `frontend/src/context/CartContext.tsx:31-32` exports `getDeliveryFeeForSubtotal = (_cartSubtotal: number): number => 30` — a function that ignores its argument and always returns ₹30. `frontend/src/pages/CheckoutPage.tsx` imports and calls this function on lines 426, 538, 553, 563, and 592 for every payment path (Razorpay, COD, split). A fully-functional dynamic calculator already exists in `frontend/src/utils/deliveryFees.ts` — `calculateFeeBreakdown(distanceKm, cartSubtotal)` applies distance tiers, minimum fees, and a free-delivery threshold. The checkout never calls it. Customers are charged ₹30 regardless of distance (1 km or 15 km), and orders placed with the correct multi-store routing via `placeCheckoutOrder` receive the client-calculated ₹30 as `delivery_fee` — not a server-calculated value.  
+**Impact:** Customers within walking distance pay the same as those far away. No revenue-optimised delivery pricing. Cannot offer free delivery above a cart threshold without changing a hardcoded constant.  
+**Suggested Fix:** Replace `getDeliveryFeeForSubtotal(cartTotal)` calls in `CheckoutPage.tsx` with `getCompleteFeeBreakdown(distanceKm, cartTotal).deliveryFee` (already exported from `CartContext.tsx:34`). Ensure `distanceKm` is sourced from `LocationContext` (which already computes distance to the nearest store via `calculateDistance`).  
+**Severity:** Medium | **Priority:** P2
 
 ---
 

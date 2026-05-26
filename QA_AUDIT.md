@@ -637,3 +637,135 @@ The backend `delivery_partners` table has a `vehicle_number` column (collected a
 # [Delivery Partner App][Missing] Document image upload is absent from the profile — only text fields stored
 
 `NAT_Near-Now_Rider-/app/(tabs)/profile.tsx` lines 369–403 render `verification_document` and `verification_number` as read-only `Text` components. There is no document image upload, no document image preview, and no backend endpoint or Supabase Storage bucket for rider document images. The shopkeeper app correctly uploads document images to the `store-documents` Supabase Storage bucket, but the equivalent flow for delivery partners does not exist. Riders cannot submit document images for verification through the app.
+
+---
+
+# [Backend][Database] Supabase RPC `alculate_customer_order_total` has a typo — function is unreachable under its correct name
+
+The live Supabase database (confirmed via OpenAPI introspection) has the function registered as `alculate_customer_order_total` — missing the leading `c`. Any backend or client code that calls `calculate_customer_order_total` receives a PostgREST "function not found" error. The function is effectively dead under its intended name. Fix: `ALTER FUNCTION alculate_customer_order_total RENAME TO calculate_customer_order_total;` in the Supabase SQL editor.
+
+---
+
+# [Backend][Database] `products` table has four spurious columns from a bad migration — schema pollution
+
+The `products` table (which exists only to join `stores` to `master_products`) contains `name`, `phone`, `product_name`, and `deleted_at` columns that do not belong there. A `phone` column on a product record is structurally incorrect. `name` and `product_name` duplicate `master_products.name`. `deleted_at` has no application code reading it. These inflate the PostgREST OpenAPI schema and appear in generated TypeScript types, causing confusion. Migration needed to drop these four columns.
+
+---
+
+# [Backend][Database] Two admin tables (`admins` and `admin_users`) with cross-wired foreign keys — admin auth is structurally split
+
+The live database has both `admins` (3 rows, used by the current admin panel auth) and `admin_users` (separate table). Foreign keys are cross-wired: `admin_sessions` and `admin_activity_logs` reference `admin_users.id`, while `admin_refresh_tokens` and `audit_logs` reference `admins.id`. The two tables are not linked to each other. Cross-joining them (e.g. session → admin profile) silently returns empty results. The system needs one canonical admin table with all FK references pointing to it.
+
+---
+
+# [Backend][Database] `master_products_old` backup table is still publicly exposed via the REST API
+
+`master_products_old` (a pre-migration backup) remains in the `public` schema and is therefore served by PostgREST. It has no primary key constraint and no RLS policies, so any caller with the anon key can read its full contents. The table has no production purpose. It should be dropped or moved to a non-public schema.
+
+---
+
+# [Backend][Database] `customers` profile rows exist for only 5 of 18 `app_users` — profile creation not firing for most registered users
+
+Live DB shows 18 rows in `app_users` but only 5 rows in `customers`. Thirteen registered customers have no profile record. Any query that JOINs `app_users` to `customers` returns nothing for 72% of users — address resolution, delivery instructions, and profile display silently fail for those accounts. The customer profile insert in the `auth.controller.ts` OTP-verify path is either absent or swallowed on error for new registrations.
+
+---
+
+# [Backend][Database] 15 `customer_orders` have no `customer_payments` row — payment records missing for 21% of orders
+
+Live DB has 70 rows in `customer_orders` and only 55 in `customer_payments`. The 15 gap orders either went through COD (which may intentionally skip a payment row) or the payment record insert failed silently. COD orders should still generate a `customer_payments` row with `status: 'pending'` and `payment_method: 'cod'` for accounting. Any online-payment order missing a row cannot be refunded or reconciled.
+
+---
+
+# [Backend][Order] `order_store_allocations` rows exist for only 26 of 70 orders — shopkeeper dispatch broken for 63% of orders
+
+Live DB shows 26 rows in `order_store_allocations` against 70 `customer_orders`. Without an allocation row, shopkeepers never receive the order, no pickup code is generated, and driver dispatch has no store location to reference. The 44 unallocated orders are invisible to the entire fulfillment chain. Root cause is likely that the allocation insert in `orders.controller.ts:placeCheckout` fails silently — possibly caused by the `alculate_customer_order_total` RPC typo — and the error is swallowed without rolling back the order.
+
+---
+
+# [Backend][Invoice] `invoice_documents` has 87 rows for only 29 invoices — duplicate PDFs generated on every request
+
+Live DB shows 87 `invoice_documents` rows for 29 `invoices` (~3 PDFs per invoice). `POST /api/invoices/generate/:orderId` has no idempotency guard — each call inserts a new document row rather than returning the existing PDF. Since the endpoint also has no auth (see SECURITY-007), retries and page reloads each create another record. Add a check-before-insert: if a document for this `invoice_id` + `document_type` already exists, return it.
+
+---
+
+# [Backend][Delivery] `tracking_events` table is permanently empty — the POST endpoint exists but nothing calls it
+
+Live DB shows 0 rows in `tracking_events` despite the table being created in migration `20260427000001_tracking_enhancements.sql`. The backend has `POST /api/tracking/orders/:orderId/updates` for writing to this table, but no part of the order lifecycle (placement, shopkeeper acceptance, driver assignment, pickup, delivery) ever calls it. All customer-facing tracking state comes from `order_status_history` only. The `tracking_events` table and its write endpoint are entirely dead code. Each status transition should insert a corresponding tracking event row.
+
+---
+
+# [Customer Web][Bug] DriverApp.tsx and ShopkeeperApp.tsx call wrong auth endpoint paths — both internal test flows 404
+
+`frontend/src/pages/DriverApp.tsx` and `frontend/src/pages/ShopkeeperApp.tsx` make auth requests to `POST /api/auth/otp` and `POST /api/auth/verify`. Neither path exists — the correct endpoints are `POST /api/auth/send-otp` and `POST /api/auth/verify-otp`. Both internal test interfaces fail at the login step with a 404 and cannot be used for any manual QA of the delivery or shopkeeper flow from the web.
+
+---
+
+# [Shopkeeper App][Bug] Inventory screen calls `GET /store-owner/stores/:storeId/products` — this route does not exist in the backend
+
+`near-now-store_owner/services/storeService.ts` and `near-now-store_owner/app/(tabs)/inventory.tsx` request `GET /store-owner/stores/:storeId/products` to load the store's product list. This route is not registered in `storeOwner.routes.ts` or any other route file. The backend only has `PATCH /store-owner/products/:productId/quantity` and `DELETE /store-owner/products/:productId`. The inventory screen 404s on every load, making inventory management completely non-functional.
+
+---
+
+# [Shopkeeper App][Bug] Invoice screen calls `GET /api/store-owner/orders/:id` — this route does not exist in the backend
+
+The shopkeeper invoice screen fetches order details from `GET /api/store-owner/orders/:id`. No such route is registered in `storeOwner.routes.ts`. The `/store-owner` router has no GET order endpoints at all. The invoice screen will always receive a 404, making invoice viewing on the shopkeeper side non-functional. The correct invoice download endpoint is `GET /api/invoices/order/:orderId/store`, which exists but is a separate flow.
+
+---
+
+# [Shopkeeper App][Bug] App calls `/api/store-owner/*` but backend router is mounted at `/store-owner/*` — path prefix mismatch causes 404 in production
+
+Multiple screens in the shopkeeper app construct URLs with an `/api/store-owner/` prefix (e.g. `store-owner-signup.tsx`, `inventory.tsx`). The backend mounts the store owner router at `/store-owner` with no `/api` prefix — consistent with `/shopkeeper` and `/delivery-partner` routers. In development a proxy may rewrite these, but in production all `/api/store-owner/*` requests return 404. All call-sites in the shopkeeper app need to remove the `/api` prefix from `store-owner` URLs.
+
+---
+
+# [Delivery Partner App][Bug] Pickup code verification sends `:storeId` in the URL but the backend expects `:allocationId`
+
+`NAT_Near-Now_Rider-/app/delivery/[orderId].tsx` constructs the verify-code URL as `POST /delivery-partner/orders/:orderId/stores/:storeId/verify-code`, passing the store's `store_id`. The backend route is `POST /delivery-partner/orders/:orderId/stores/:allocationId/verify-code` and the handler looks up the allocation by its primary key (`order_store_allocations.id`), not by `store_id`. Passing a `store_id` will always return "allocation not found" — pickup code verification never succeeds for any delivery.
+
+---
+
+# [Delivery Partner App][Bug] Signup.tsx sends PATCH to `/api/delivery/partners/:partnerId` but the backend registers this as PUT — new rider profile saves are silently dropped
+
+`NAT_Near-Now_Rider-/app/signup.tsx` submits new rider profile data (vehicle number, address, verification document) using HTTP PATCH. The backend `delivery.routes.ts` registers the update endpoint as `PUT /api/delivery/partners/:partnerId`. Express does not treat PUT and PATCH interchangeably — PATCH requests to this path return 404. New rider profile data submitted after OTP verification is silently lost.
+
+---
+
+# [Shopkeeper App][Bug] `hooks/useOrders.ts` calls `/api/shopkeeper/*` — wrong prefix, ALL order accept/reject operations are broken
+
+`near-now-store_owner/hooks/useOrders.ts` constructs URLs as `${API_BASE}/api/shopkeeper/orders` (line 117), `${API_BASE}/api/shopkeeper/allocations/:id/accept` (line 160), and `${API_BASE}/api/shopkeeper/allocations/:id/reject` (line 71). The backend mounts the shopkeeper router at `/shopkeeper` with no `/api/` prefix. All three return 404 in production. `useOrders.ts` is the primary hook driving order management — this breaks the core function of the shopkeeper app. `app/(tabs)/previous-orders.tsx` independently duplicates the same wrong prefix on lines 273, 297, 387, and 420. This is a separate finding from the `/api/store-owner/` prefix bug in MOBILE-ORDER-011 — this covers the `/shopkeeper` router's prefix being wrong in both the hook layer and the screen layer.
+
+---
+
+# [Admin Web][Bug] Admin panel queries `newsletter_subscriptions` table which does not exist in Supabase — crash on affected pages
+
+`admin/src/services/adminService.ts` calls `supabase.from('newsletter_subscriptions')`. This table is not present in the Supabase public schema — confirmed by live DB inspection (not in PostgREST OpenAPI spec or any migration). Any admin page that triggers this query receives a PostgREST error and crashes or renders empty without surfacing the root cause. Either create the table (if newsletters are a planned feature) or remove the call.
+
+---
+
+# [Backend][Storage] Two product image buckets exist — `product-image` is empty and unused, `product-images` is active
+
+Supabase Storage has both `product-image` (0 files, created Jan 2026) and `product-images` (1 file, created Jan 2026 13 minutes later). The second was created to fix a naming mistake but the first was never deleted. Any upload code targeting `product-image` stores files in a dead bucket. With 44,562 master products and only 1 file in Storage, virtually all product images rely on external URLs in `master_products.image_url`. Delete the empty `product-image` bucket and confirm all upload code targets `product-images`.
+
+---
+
+# [Customer App][Notification] `usePushNotifications.dev.ts` calls `POST /api/push-token` but this route does not exist in the backend
+
+`nearandnowcustomerapp/hooks/usePushNotifications.dev.ts:110` calls `apiFetch('/api/push-token', { method: 'POST', body: { token } })`. No such endpoint is registered in `server.ts` or any route file. The Expo push token is captured from the device but the 404 response means it is never persisted. This is distinct from (and compounds) the missing `expo_push_token` column on `app_users` and the `sendPushNotification` function not querying customer tables — even if those were fixed, push tokens would still be lost because the API route itself is missing.
+
+---
+
+# [Backend][Email] Resend email provider not configured — `sendEmail` is a `console.log` stub, all transactional emails are silently dropped
+
+`backend/src/services/notification.service.ts:53-56` — `sendEmail(to, subject, body)` contains a `// TODO: SendGrid / AWS SES` comment and only calls `console.log`. No email SDK (Resend, `@sendgrid/mail`, SES, nodemailer) is installed in `backend/package.json`. No email API key is present in the `.env` file. Every call to `sendEmail` across the order lifecycle returns `{ success: true }` while doing nothing. Order confirmation emails, refund notifications, and invoice delivery emails are permanently lost. Fix: install Resend SDK, add `RESEND_API_KEY` to env, replace the stub with `new Resend(key).emails.send(...)`, and wire the empty `sendOrderPlacedNotification` to call `sendEmail` with an order template. (See RESEND-001 in qa_audit_old.md)
+
+---
+
+# [Shopkeeper App][Notification] Push token registration calls non-existent `POST /store-owner/notifications/register` — shopkeeper push is structurally impossible
+
+`near-now-store_owner/lib/notifications.ts:155-172` — `registerTokenWithBackend(token)` calls `apiClient.post('/store-owner/notifications/register', ...)`. The backend mounts `storeOwnerRoutes` at `/store-owner` with only six routes registered; `notifications/register` is not one of them. The 404 is swallowed by the catch block. Shopkeeper Expo push tokens are never persisted — there is no table column for them and no write path. The delivery partner push works end-to-end (`PUT /delivery-partner/push-token` → `delivery_partners.expo_push_token`), but shopkeepers have no equivalent. New-order push alerts can never reach a shopkeeper device. Fix: add a push-token column for shopkeepers, register the endpoint in `storeOwner.routes.ts` behind shopkeeper auth middleware, and update the broadcast logic to query it. (See FCM-001 in qa_audit_old.md)
+
+---
+
+# [Customer Web][Checkout] `CheckoutPage.tsx` hardcodes ₹30 delivery fee — dynamic distance-based calculator is completely bypassed
+
+`frontend/src/context/CartContext.tsx:31-32` exports `getDeliveryFeeForSubtotal = (_cartSubtotal) => 30` — ignores all arguments and always returns ₹30. `frontend/src/pages/CheckoutPage.tsx` imports and calls this function on lines 426, 538, 553, 563, and 592 for every payment path (Razorpay, COD, split). A working dynamic calculator already exists in `frontend/src/utils/deliveryFees.ts` — `calculateFeeBreakdown(distanceKm, cartSubtotal)` applies distance tiers, minimum fees, and a free-delivery threshold. The checkout ignores it. Customers 1 km away pay the same as customers 15 km away. Fix: replace `getDeliveryFeeForSubtotal(cartTotal)` calls with `getCompleteFeeBreakdown(distanceKm, cartTotal).deliveryFee` using `distanceKm` from `LocationContext`. (See WEB-009 in qa_audit_old.md)
