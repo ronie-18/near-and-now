@@ -1,746 +1,591 @@
-# Near & Now — Enterprise QA Audit Report
-**Date:** 2026-05-25  
-**Auditor Role:** Senior QA Engineer / Full-Stack Architect / Product Analyst  
-**Scope:** All platforms — Backend API, Admin Web, Customer Web, Customer Mobile App, Shopkeeper Mobile App, Delivery Partner Mobile App  
-**Total Issues Found:** 62 Jira Tickets
+# [Backend][Auth] Customer OTP token generated but never persisted — auth is non-functional
 
+In `auth.controller.ts:320`, `crypto.randomUUID()` is returned to the client but never written to `app_users.session_token`. Unlike shopkeeper (line 208) and delivery partner (line 199) flows, the customer path skips the DB write entirely. All protected customer routes silently accept any arbitrary Bearer token string.
+
+---
+
+# [Backend][Auth][Rate Limiting] No rate limiting on OTP send and verify endpoints
+
+`server.ts` registers no rate-limiting middleware on `/api/auth/send-otp` or `/api/auth/verify-otp`. An attacker can exhaust Twilio credits by spamming OTP sends, or brute-force the 6-digit code on the verify endpoint with no lockout.
+
+---
+
+# [Delivery Partner App][Auth] verifyOTP in authService.ts omits the role field and silently creates a customer account for new riders
+
+`NAT_Near-Now_Rider-/lib/authService.ts:verifyOTP` sends only `{ phone, otp, name }` with no `role` field. The backend `auth.controller.ts:120–126` defaults a missing role to `'customer'`. Note: `otp.tsx:107` correctly sends `role: 'delivery_partner'` — the bug is isolated to the shared `authService.ts`.
+
+---
+
+# [Admin Web][Auth] navigator.userAgent called directly in admin service — crashes in non-browser contexts
+
+`adminAuthService.ts:119` reads `navigator.userAgent` inside a service function rather than guarding it. This throws a ReferenceError in SSR environments, test runners, or any Node.js context where `navigator` is undefined.
+
+---
+
+# [Android][Customer App][Auth] Customer app uses user UUID directly as Bearer token — trivially forgeable
+
+`nearandnowcustomerapp/context/AuthContext.tsx` uses the customer's `userId` (UUID) as the Bearer token on all API calls. UUIDs are not secrets — they appear in API responses, URLs, and logs. Any party who observes a customer UUID can forge authenticated requests on their behalf.
+
+---
+
+# [Backend][Payment] Webhook HMAC verification always fails — all Razorpay webhooks are silently rejected
+
+`payment.service.ts:verifyWebhook` calls `JSON.stringify(body)` on an already-parsed JS object, producing a different byte sequence than the raw body Razorpay signed. The HMAC never matches, so every `payment.captured`, `payment.failed`, and `refund.processed` event returns 400 and payment status is never auto-updated.
+
+---
+
+# [Backend][Payment] updateOrderStatus returns 501 Not Implemented
+
+`orders.controller.ts:144–152` returns `501 { error: 'Not implemented yet' }` immediately, voiding both the `orderId` and `status` params. Any call to `PATCH /api/orders/:orderId/status` is completely non-functional, making manual order status management broken.
+
+---
+
+# [Customer Web][Payment][Split Payment] UPI portion of a split payment is never charged through Razorpay
+
+In `CheckoutPage.tsx`, `isOnlineRazorpay` is only true when `paymentMethod === 'online' && !splitEnabled`. When split payment is active, the Razorpay flow is skipped and the UPI amount is silently dropped — only the COD portion is recorded.
+
+---
+
+# [Customer Web][Payment] GSTIN and business name are collected at checkout but excluded from the order payload
+
+`CheckoutPage.tsx` maintains `gstin` and `invoiceName` in local form state but neither is included in the `orderData` object passed to `createOrder()`. Business customers who enter their GSTIN will find it absent from backend records and invoices.
+
+---
+
+# [Backend][Payment] Payment order creation has no idempotency key — network retries can cause double charges
+
+`payment.service.ts:createPaymentOrder` creates Razorpay orders without an `X-Razorpay-Idempotency-Key` header. Since the customer mobile app's `apiFetch` includes retry logic, a failed or timed-out request can result in multiple Razorpay charges for the same order.
+
+---
+
+# [Backend][Payment] Webhook verification falls back to the Razorpay API key when the webhook secret is missing
+
+`payment.service.ts:verifyWebhook` uses `RAZORPAY_KEY_SECRET` as a fallback when `RAZORPAY_WEBHOOK_SECRET` is unset. Using the API key for webhook HMAC verification is incorrect and will accept forged webhook events from any attacker who knows the API key.
+
+---
+
+# [Backend][Coupon] Coupon validation ignores the min_order_value column entirely
+
+`database.service.ts:validateCoupon` checks expiry, usage counts, and per-user limits but never reads `min_order_value`. A coupon marked "minimum ₹500 order" can be applied to a ₹50 cart and the discount is granted.
+
+---
+
+# [Backend][Coupon] Coupon usage count has a race condition — concurrent orders can both exceed max_uses
+
+`validateCoupon` reads the current count and writes the update in two separate DB operations. Two concurrent requests can both pass the `max_uses` check before either write completes. Fix requires an atomic `UPDATE ... WHERE usage_count < max_uses RETURNING *` or a Supabase RPC.
+
+---
+
+# [Customer Web][Coupon][UI] Expired coupons appear in the coupon list and only fail at checkout
+
+The coupon list endpoint returns all coupons without filtering on `is_active` or `expiry_date >= now()`. Customers can select an expired coupon, fill out the entire checkout, and only learn it is invalid when they attempt to place the order.
+
+---
+
+# [Backend][Order] Legacy createOrder endpoint hardcodes delivery_fee at ₹20 and sets all financial totals to zero
+
+`orders.controller.ts:createOrder` (the `POST /api/orders` path, distinct from `placeCheckout`) hardcodes `delivery_fee: 20` and writes `total_amount: 0` and `subtotal: 0`. Orders placed through this path generate ₹0 Razorpay payment orders.
+
+---
+
+# [Backend][Order] cancelOrder does not update order_store_allocations — shopkeepers and riders keep seeing cancelled orders
+
+`database.service.ts:cancelOrder` updates `customer_orders` and triggers a refund but never sets associated `order_store_allocations` rows to `cancelled`. Shopkeepers continue seeing them as `pending_acceptance` and drivers may continue receiving dispatches.
+
+---
+
+# [Backend][Order] Rider acceptOrder sets status to in_transit, skipping delivery_partner_assigned and picking_up
+
+`deliveryPartner.controller.ts:327` writes `status: 'in_transit'` directly. The expected sequence is `pending → delivery_partner_assigned → picking_up → in_transit → delivered`. The customer tracking page skips two status steps.
+
+---
+
+# [Backend][Order] getDeliveryAgents ignores the _partnerId parameter and always returns all delivery partners
+
+`database.service.ts:getDeliveryAgents` declares `_partnerId` in its signature but the parameter is never referenced in the query. The endpoint always returns the complete list regardless of the filter passed by the admin dashboard.
+
+---
+
+# [Shopkeeper App][Order] Bulk-reject silently drops items when reallocation finds no replacement store within 4km
+
+`useOrders.ts:rejectOrder` triggers `reallocateMissingItems` which has a hard 4km radius constraint. When no store is found, the function returns without notifying the customer, and the order ships with a reduced item set the customer was never told about.
+
+---
+
+# [Backend][Order] deliveryPartner.controller.ts — acceptOffer follow-up DB writes are non-atomic
+
+The RPC `accept_driver_offer` is called atomically first (correct), but several subsequent Supabase update calls run separately. If any of these fail after the RPC succeeds, the system lands in a partially-updated state — the driver holds the offer but downstream order and allocation state may not reflect it.
+
+---
+
+# [Backend][Order][Customer] customers.controller.ts — updateAddress is a 501 stub
+
+`PUT /api/customers/:customerId/addresses/:addressId` returns `501 Not implemented yet` immediately, voiding the `addressId` param. Customers cannot update any saved delivery address.
+
 ---
+
+# [Backend][Order][Customer] customers.controller.ts — deleteAddress is a 501 stub
 
-## Executive Summary
+`DELETE /api/customers/:customerId/addresses/:addressId` returns `501 Not implemented yet` immediately. Customers cannot delete any saved delivery address.
 
-The Near & Now hyperlocal commerce platform is a monorepo (Express/TypeScript backend + React SPA frontend + React Native Expo mobile apps) backed by Supabase PostgreSQL with RLS. The codebase is under active development with 22+ recent migrations. The system implements a sophisticated multi-store dispatch and delivery architecture with Razorpay payment integration and Twilio OTP authentication.
+---
 
-**Codebase Health Assessment:**
-- Architecture is sound — role-scoped auth, atomic offer acceptance via DB RPCs, realtime + polling hybrid tracking
-- Core business logic is largely correct but several critical integration points are broken or incomplete
-- Security posture has significant gaps (unauthenticated endpoints, service-role key exposure in mobile apps)
-- Notification infrastructure is entirely stubbed — all email/SMS notification methods have no implementation
-- Customer token is never persisted server-side, creating a silent auth bypass across all customer API calls
-- Webhook HMAC verification is broken by design (parsed body re-serialized before signing)
+# [Backend][Notification] All order notification methods are empty stubs — zero notifications sent throughout the entire order lifecycle
 
-**Release Readiness Verdict: BLOCKED — 10 launch blockers across all platforms**
+`notification.service.ts` defines `sendOrderPlacedNotification`, `sendOrderConfirmedNotification`, `sendOrderShippedNotification`, `sendOrderDeliveredNotification`, and `sendOrderCancelledNotification` all with empty bodies `{}`. The underlying `sendEmail` and `sendSMS` functions are `console.log` stubs with `// TODO: SendGrid / AWS SES` comments.
 
 ---
+
+# [Backend][Notification] sendPushNotification only queries delivery_partners — customer push is structurally impossible
 
-## Architecture Risk Report
+`notification.service.ts:sendPushNotification` looks up `expo_push_token` only in the `delivery_partners` table. Neither `app_users` nor `customers` has this column, so customer push notifications cannot be sent even when notification methods are eventually implemented.
 
-### Risk 1: Service-Role Key Exposure in Customer Mobile App (CRITICAL)
-`nearandnowcustomerapp/lib/supabase.ts` reads `EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY` — the `EXPO_PUBLIC_` prefix bundles it directly into the APK/IPA binary. Anyone with a decompiler gains full database access bypassing all RLS policies. The file documents this risk but leaves the workaround in place.
+---
 
-### Risk 2: Customer Session Token Never Validated Server-Side
-The backend's `verifyOTP` for customers generates a `crypto.randomUUID()` token but never stores it anywhere. All subsequent API calls that send `Authorization: Bearer <token>` pass validation only if the middleware doesn't check customer tokens (which it doesn't — customer routes have no auth middleware). This means any token string authenticates any customer endpoint.
+# [Backend][Notification] getUserNotifications ignores all parameters and always returns an empty array
 
-### Risk 3: Webhook HMAC Always Fails
-`payment.service.ts verifyWebhook` signs `JSON.stringify(body)` where `body` is already a parsed JavaScript object. Express parsed the raw bytes → object; re-serializing produces a different byte sequence (key ordering, whitespace). The HMAC will never match Razorpay's signature. The fallback to `RAZORPAY_KEY_SECRET` instead of the webhook secret compounds this.
+`database.service.ts:getUserNotifications(_userId, _unreadOnly?)` ignores both params and returns `[]` without making any DB query. The in-app notification inbox is permanently empty for every user.
+
+---
 
-### Risk 4: Notification Infrastructure is Completely Hollow
-`notification.service.ts` contains `sendOrderPlacedNotification`, `sendOrderConfirmedNotification`, `sendDriverAssignedNotification`, etc. — all are empty private methods. No customer ever receives an email, SMS, or in-app notification about their order.
+# [Backend][Notification] markNotificationAsRead returns success without touching the database
 
-### Risk 5: Single-Store Assumption in Shopkeeper App
-`homeTab` at `near-now-store_owner/app/(tabs)/home.tsx:92` — `const selectedStore = stores[0]` — a shopkeeper with multiple stores only ever sees the first one. The backend supports `req.shopkeeperStoreIds[]`, but the UI doesn't expose store switching.
+`database.service.ts:markNotificationAsRead` returns `{ success: true }` without executing any DB write. Read state is never persisted — notifications always appear unread.
 
 ---
 
-## Critical Production Risks Table
+# [Backend][Notification] markAllNotificationsAsRead returns success without touching the database
 
-| Risk | Affected Flow | Impact | Ticket |
-|------|--------------|--------|--------|
-| Webhook HMAC always fails | Razorpay webhooks | Payment status never auto-updated | PAY-001 |
-| Customer token not persisted | All customer API calls | Silent security gap | AUTH-001 |
-| Service-role key in APK | Customer mobile app | Full DB breach possible | MOBILE-SEC-001 |
-| `updateOrderStatus` returns 501 | Order status management | Shopkeeper/admin can't update orders | PAY-002 |
-| All notification methods empty | Order lifecycle | Zero customer/partner notifications | NOTIF-001 |
-| Delivery simulation unauthenticated | `/api/delivery/simulate` | Anyone can corrupt any order's lifecycle | DELIVERY-001 |
-| Shopkeeper token persisted to `app_users` but customer token is not | Customer auth | Customers' tokens non-functional for any future auth middleware | AUTH-001 |
-| No rate limiting on OTP endpoints | `/api/auth/send-otp` | Twilio account draining attack | AUTH-002 |
-| CORS wildcard when `ALLOWED_ORIGINS` unset | Backend server | Cross-origin attacks in prod | SECURITY-003 |
-| `getOrderTrackingFull` writes to `stores` table on every fetch | Tracking | Unintended data mutation on reads | DELIVERY-004 |
+`database.service.ts:markAllNotificationsAsRead` returns `{ success: true }` without any DB operation. The "mark all as read" action has no effect.
 
 ---
 
-## JIRA TICKETS — PART 1: BACKEND & WEB PLATFORM
+# [Backend][Notification] getNotificationPreferences returns hardcoded values — user preferences are never loaded
 
+`database.service.ts:getNotificationPreferences` returns `{ email: true, sms: true, push: true }` unconditionally with no DB read. All users always appear to have all notification channels enabled regardless of what they have actually set.
+
 ---
+
+# [Backend][Notification] updateNotificationPreferences echoes back the input without writing to the database
 
-### AUTH-001 · CRITICAL · P0
-**Summary:** Customer OTP token generated but never persisted — auth is non-functional  
-**Affected Apps:** Customer Web, Customer Mobile App, Backend  
-**Root Cause:** `auth.controller.ts:320` — `const token = crypto.randomUUID()` is returned in the response but never written to `app_users.session_token`. Shopkeeper tokens are persisted at line 208; delivery_partner tokens at line 199. Customer path has no equivalent write.  
-**Current Behavior:** Customer receives a token, stores it in localStorage/AsyncStorage, sends it as `Authorization: Bearer <token>` on subsequent requests — but no backend middleware validates customer tokens, so all customer routes accept any string as auth.  
-**Expected Behavior:** Token should be persisted to `app_users.session_token` and validated by customer-facing middleware on protected routes.  
-**Suggested Fix:** In `auth.controller.ts` after line 320, add:
-```ts
-await supabaseAdmin.from('app_users').update({ session_token: token }).eq('id', appUser.id);
-```
-Then add `requireCustomer` middleware to customer routes that validates `app_users.session_token`.  
-**Severity:** Critical | **Priority:** P0
+`database.service.ts:updateNotificationPreferences` returns the input object unchanged without executing any DB write. User notification preferences can never be persistently changed.
 
 ---
 
-### AUTH-002 · HIGH · P1
-**Summary:** No rate limiting on OTP send/verify endpoints  
-**Affected Apps:** Backend, all client apps  
-**Root Cause:** `server.ts` has no rate-limiting middleware. `sendOTP` and `verifyOTP` are open endpoints with no per-IP or per-phone throttle.  
-**Current Behavior:** Attacker can call `/api/auth/send-otp` thousands of times draining Twilio credits; can brute-force 6-digit OTP via `/api/auth/verify-otp`.  
-**Expected Behavior:** Max 3–5 OTP sends per phone per hour; max 5 OTP verify attempts before lockout.  
-**Suggested Fix:** Add `express-rate-limit` middleware scoped per phone number on auth routes.  
-**Severity:** High | **Priority:** P1
+# [Backend][Delivery] The delivery simulation endpoint has no authentication — anyone can corrupt live order data
 
+`delivery.controller.ts:startSimulation` has no auth middleware. Any actor who knows the URL can POST to `/api/delivery/simulate` with any real `orderId` and advance that order through every status automatically.
+
 ---
 
-### AUTH-003 · MEDIUM · P2
-**Summary:** Delivery partner app `verifyOTP` sends no `role` field — will create customer account  
-**Affected Apps:** Delivery Partner Mobile App  
-**Root Cause:** `NAT_Near-Now_Rider-/lib/authService.ts:verifyOTP` sends `{ phone, otp, name }` with no `role` field. The backend `auth.controller.ts:120–126` defaults missing role to `'customer'`.  
-**Current Behavior:** New rider OTP verification triggers customer account creation flow.  
-**Expected Behavior:** Rider app must send `role: 'delivery_partner'` in the verify-OTP request body.  
-**Note:** `otp.tsx` in the rider app DOES pass `role: 'delivery_partner'` at line 107 — the bug is only in the standalone `authService.ts` file that is imported by legacy flows.  
-**Severity:** Medium | **Priority:** P2
+# [Backend][Delivery] Driver broadcast uses customer delivery address instead of store location for proximity
 
+`delivery.controller.ts:broadcastToDrivers` and `shopkeeper.controller.ts:broadcastToNearbyDrivers` both use `order.delivery_latitude/longitude` (the drop-off address) as the search center. Drivers should be found near the pickup store — the current logic dispatches from the wrong location.
+
 ---
+
+# [Backend][Delivery] Customer is not notified when item reallocation fails — the order silently ships with missing items
 
-### AUTH-004 · LOW · P3
-**Summary:** `navigator.userAgent` called in admin service — fails in non-browser contexts  
-**Affected Apps:** Admin Web  
-**Root Cause:** `adminAuthService.ts:119` — `user_agent: navigator.userAgent` inside a service function. Will throw in SSR, test environments, or Node.js execution context.  
-**Suggested Fix:** Pass `userAgent` as a parameter or guard with `typeof navigator !== 'undefined'`.  
-**Severity:** Low | **Priority:** P3
+`shopkeeper.controller.ts:reallocateMissingItems` has a 4km radius constraint. When no replacement store is found, the function proceeds with a reduced item set with no notification to the customer and no visible change in order status.
 
 ---
 
-### PAY-001 · CRITICAL · P0
-**Summary:** Webhook HMAC verification always fails — Razorpay webhooks silently rejected  
-**Affected Apps:** Backend  
-**Root Cause:** `payment.service.ts:verifyWebhook` calls `JSON.stringify(body)` where `body` is already a parsed JavaScript object. Razorpay signs the raw HTTP body bytes; re-serializing produces a different string (different key order, no trailing whitespace). HMAC never matches.  
-**Current Behavior:** All `payment.captured`, `payment.failed`, `refund.processed` webhooks return 400 Invalid signature. Payment status is never auto-updated via webhook.  
-**Expected Behavior:** Receive raw body bytes before Express JSON parsing; compute HMAC over the raw bytes.  
-**Suggested Fix:**
-```ts
-// server.ts — webhook route must use raw body
-app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
-// payment.service.ts
-const rawBody = body instanceof Buffer ? body.toString('utf8') : JSON.stringify(body);
-```
-**Also:** The fallback to `RAZORPAY_KEY_SECRET` instead of `RAZORPAY_WEBHOOK_SECRET` should be removed.  
-**Severity:** Critical | **Priority:** P0  
-**Dependencies:** PAY-002
+# [Backend][Delivery] getOrderTrackingFull writes to the stores table on every tracking poll — hundreds of DB writes per active order
 
+`database.service.ts:getOrderTrackingFull` calls `reverseGeocode` and writes the result back to `stores.address` as a side effect inside a GET handler. Since tracking is polled every 3–5 seconds, this produces continuous unintended data mutations on reads.
+
 ---
+
+# [Backend][Delivery] shopkeeper.controller.ts broadcastToNearbyDrivers has no driver staleness filter
 
-### PAY-002 · CRITICAL · P0
-**Summary:** `updateOrderStatus` returns 501 Not Implemented  
-**Affected Apps:** Backend, Admin Web  
-**Root Cause:** `orders.controller.ts:144–152` — the `updateOrderStatus` method immediately returns `501 { error: 'Not implemented yet' }`. Used by admin dashboard to manually update order statuses.  
-**Current Behavior:** Any call to `PATCH /api/orders/:id/status` returns 501.  
-**Suggested Fix:** Implement by delegating to `databaseService.updateOrderStatus(id, status)`.  
-**Severity:** Critical | **Priority:** P0
+`delivery.controller.ts:broadcastToDrivers` correctly filters drivers with `updated_at >= tenMinsAgo`, but `shopkeeper.controller.ts:broadcastToNearbyDrivers` applies no staleness filter. Shopkeeper-triggered broadcasts reach drivers who have been offline for hours.
 
 ---
 
-### PAY-003 · HIGH · P1
-**Summary:** Split payment — UPI portion never routed through Razorpay  
-**Affected Apps:** Customer Web (CheckoutPage)  
-**Root Cause:** `CheckoutPage.tsx` — `isOnlineRazorpay` is only true when `paymentMethod === 'online' && !splitEnabled`. When split payment is active, only the COD portion is processed; the Razorpay UPI split amount is collected in the UI but never actually charged.  
-**Current Behavior:** Customer selects split payment (COD + UPI), confirms order — UPI amount silently dropped.  
-**Severity:** High | **Priority:** P1
+# [Customer Web][UI][Checkout] The checkout email field has the HTML required attribute — OTP-only users cannot place orders
 
+`CheckoutPage.tsx` sets `required` on the email input. Customers who registered via OTP only have no email on their account and are blocked from submitting the checkout form by browser validation.
+
 ---
 
-### PAY-004 · MEDIUM · P2
-**Summary:** GSTIN/business name collected at checkout but never sent to backend  
-**Affected Apps:** Customer Web, Customer Mobile App  
-**Root Cause:** `CheckoutPage.tsx` — `gstin` and `invoiceName` fields exist in form state but are not included in the `orderData` object passed to `createOrder()`.  
-**Current Behavior:** Business customers fill GSTIN, confirm order — GSTIN never reaches backend or invoice.  
-**Severity:** Medium | **Priority:** P2
+# [Customer Web][Auth] getCurrentUserFromSession uses the anon Supabase client which RLS blocks — always returns null
 
+`frontend/src/services/authService.ts:getCurrentUserFromSession` queries `app_users` using the anon Supabase client. RLS prevents anon clients from reading any `app_users` rows, so this function always returns null. Every page refresh shows the user as logged out.
+
 ---
+
+# [Customer Web][Security] The order tracking hook imports supabaseAdmin — service-role key is bundled into browser JavaScript
 
-### PAY-005 · MEDIUM · P2
-**Summary:** Payment order creation has no idempotency key — double-charges on retry  
-**Affected Apps:** Backend, all client apps  
-**Root Cause:** `payment.service.ts:createPaymentOrder` creates a Razorpay order with no idempotency key. Network retries (customer mobile app has retry logic in `apiFetch`) can create multiple Razorpay orders for the same internal order.  
-**Suggested Fix:** Use `internalOrderId` as the idempotency key header: `X-Razorpay-Idempotency-Key`.  
-**Severity:** Medium | **Priority:** P2
+`frontend/src/hooks/useOrderTrackingRealtime.ts` imports `supabaseAdmin` for realtime subscriptions. The admin client carries the service-role key, which Vite bundles into the browser JS bundle where any user with DevTools can extract it.
 
 ---
 
-### COUPON-001 · HIGH · P1
-**Summary:** Coupon validation ignores `min_order_value` field  
-**Affected Apps:** Backend  
-**Root Cause:** `database.service.ts:validateCoupon` checks expiry, usage count, and per-user limits — but does NOT check `min_order_value` even though the column exists in the schema.  
-**Current Behavior:** Customer applies a "min ₹500 order" coupon to a ₹50 cart and gets the discount.  
-**Severity:** High | **Priority:** P1
+# [Customer Web][Performance] Order tracking runs a realtime subscription and a 3-second setInterval simultaneously — redundant when realtime is active
 
+Both `useOrderTrackingRealtime.ts` and `useOrderTracking.ts` maintain a Supabase realtime channel alongside a polling interval. When realtime is in `SUBSCRIBED` state, the interval is pure wasted network traffic. The interval should only run as a fallback.
+
 ---
+
+# [Customer Web][Performance] In-flight tracking fetches have no AbortController — can update state on unmounted components
 
-### COUPON-002 · MEDIUM · P2
-**Summary:** Coupon usage count not atomically incremented — race condition under concurrent orders  
-**Affected Apps:** Backend  
-**Root Cause:** `validateCoupon` reads usage count then separately updates it. Two concurrent orders can both pass the `max_uses` check and both succeed.  
-**Suggested Fix:** Use a Supabase RPC or `UPDATE ... WHERE usage_count < max_uses RETURNING *` to make it atomic.  
-**Severity:** Medium | **Priority:** P2
+`useOrderTrackingRealtime.ts` calls `fetchOrderTrackingFull()` on realtime events with no cancellation mechanism. If the component unmounts while a fetch is pending, the resolved response will attempt to update state on an unmounted component.
 
 ---
 
-### COUPON-003 · LOW · P3
-**Summary:** Expired coupons still visible in frontend coupon list  
-**Affected Apps:** Customer Web, Customer Mobile App  
-**Root Cause:** The coupon list endpoint does not filter by `is_active` and `expiry_date >= now()` — expired coupons appear in the UI and only fail at checkout.  
-**Severity:** Low | **Priority:** P3
+# [Customer Web][UI] CartContext.addToCart mutates the cart item object directly — React may skip re-renders
 
+`CartContext.tsx:addToCart` modifies the existing cart item object in place rather than creating a new reference. React's shallow comparison will not detect this mutation, potentially causing the cart UI to display stale item counts or prices.
+
 ---
 
-### ORDER-001 · HIGH · P1
-**Summary:** Legacy `createOrder` path hardcodes delivery_fee ₹20 and leaves totals at 0  
-**Affected Apps:** Backend  
-**Root Cause:** `orders.controller.ts:createOrder` (distinct from `placeCheckout`) hardcodes `delivery_fee: 20` and sets `total_amount: 0`, `subtotal: 0`. This path is reachable via `POST /api/orders`.  
-**Current Behavior:** Orders created via legacy path have zero totals, leading to ₹0 Razorpay orders.  
-**Suggested Fix:** Either remove the legacy path and redirect to `placeCheckout`, or compute totals properly.  
-**Severity:** High | **Priority:** P1
+# [Customer Web][Checkout] Address geocoding and order placement run in parallel — orders can be created with null delivery coordinates
 
+`CheckoutPage.tsx` fires address save and geocoding concurrently with order creation. If geocoding is slow, `createOrder()` receives `delivery_latitude: null` and `delivery_longitude: null`, which breaks the store dispatch algorithm and makes the order undeliverable.
+
 ---
+
+# [Backend][API] No global Express error handler registered — unhandled errors return HTML to JSON clients
 
-### ORDER-002 · HIGH · P1
-**Summary:** `cancelOrder` does not cancel `order_store_allocations`  
-**Affected Apps:** Backend, Shopkeeper App  
-**Root Cause:** `database.service.ts:cancelOrder` cancels the `customer_orders` row and triggers refund, but does not update `order_store_allocations` to `cancelled`. Shopkeepers continue seeing the allocation as `pending_acceptance`.  
-**Severity:** High | **Priority:** P1
+`server.ts` has no four-argument `(err, req, res, next)` error middleware. Unhandled promise rejections and thrown errors produce Express's default 500 HTML response page, breaking any client expecting a JSON error body.
 
 ---
 
-### ORDER-003 · MEDIUM · P2
-**Summary:** Rider `acceptOrder` sets status `in_transit`, skipping `delivery_partner_assigned`  
-**Affected Apps:** Backend, Delivery Partner App  
-**Root Cause:** `deliveryPartner.controller.ts:327` — `status: 'in_transit'` is set directly. The expected status sequence is `pending → delivery_partner_assigned → picking_up → in_transit → delivered`.  
-**Current Behavior:** Customer tracking page jumps from "Shopkeeper accepted" straight to "In transit" with no "Partner assigned" step.  
-**Severity:** Medium | **Priority:** P2
+# [Backend][Security] express.json() has no body size limit — large payloads can exhaust server memory
 
+`server.ts` registers `express.json()` without a `limit` option. A single malformed large-payload request can consume enough memory to crash the Node.js process, enabling a trivial DoS.
+
 ---
+
+# [Backend][Code Quality] Three independent haversine distance implementations exist with no shared utility
 
-### ORDER-004 · LOW · P3
-**Summary:** `getDeliveryAgents` ignores `_partnerId` parameter — always returns all partners  
-**Affected Apps:** Backend, Admin Web  
-**Root Cause:** `database.service.ts:getDeliveryAgents` declares `_partnerId` parameter but never uses it in the query.  
-**Severity:** Low | **Priority:** P3
+`database.service.ts`, `delivery.controller.ts`, and `NAT_Near-Now_Rider-/app/(tabs)/home.tsx` each define their own `haversineKm` function. A bug fixed in one will not propagate to the others, and the implementations can silently diverge.
 
 ---
 
-### ORDER-005 · MEDIUM · P2
-**Summary:** Shopkeeper bulk-reject (`rejectOrder` in `useOrders` hook) has no partial-accept flow for multi-store orders  
-**Affected Apps:** Shopkeeper Mobile App  
-**Root Cause:** `useOrders.ts:rejectOrder` calls `POST /shopkeeper/allocations/:id/reject` which triggers `reallocateMissingItems`. However, the customer app receives no notification that items were reallocated or lost. `reallocateMissingItems` has a 4km radius constraint — if no store is found, items are silently dropped.  
-**Severity:** Medium | **Priority:** P2  
-**Dependencies:** NOTIF-001
+# [Backend][Scheduling] getAgentSchedule ignores all parameters and returns an empty array
 
+`database.service.ts:getAgentSchedule(_agentId, _date?)` ignores both params and returns `[]` with no DB query. Any scheduling or routing feature that relies on this function is entirely broken.
+
 ---
 
-### NOTIF-001 · CRITICAL · P0
-**Summary:** All notification methods (email, SMS, push to customers) are empty stubs  
-**Affected Apps:** Backend  
-**Root Cause:** `notification.service.ts` — `sendOrderPlacedNotification`, `sendOrderConfirmedNotification`, `sendDriverAssignedNotification`, `sendOrderDeliveredNotification`, `sendCancellationNotification` are all empty private methods. `sendEmail` and `sendSMS` are `console.log` stubs with `// TODO: SendGrid / AWS SES` comments.  
-**Current Behavior:** Zero notifications sent to customers throughout entire order lifecycle.  
-**Severity:** Critical | **Priority:** P0
+# [Backend][Security] supabaseAdmin silently falls back to the anon client when SUPABASE_SERVICE_ROLE_KEY is missing
 
+`backend/src/config/database.ts` falls back to the anon `supabase` client when `SUPABASE_SERVICE_ROLE_KEY` is not set. All "admin" DB operations that should bypass RLS will silently run under the anon key and be filtered by RLS, returning empty results or failing without any error.
+
 ---
+
+# [Backend][Security] storeOwner.controller.ts getStores reads userId from a query parameter — any caller can impersonate any store owner
 
-### NOTIF-002 · HIGH · P1
-**Summary:** `sendPushNotification` only queries `delivery_partners` table — cannot notify customers  
-**Affected Apps:** Backend  
-**Root Cause:** `notification.service.ts:sendPushNotification` looks up `expo_push_token` only in `delivery_partners`. Customers have no push token storage in `app_users` or `customers` tables.  
-**Current Behavior:** Customer push notifications are impossible even when notification methods are implemented.  
-**Suggested Fix:** Add `expo_push_token` column to `app_users`; customer app should register token on login.  
-**Severity:** High | **Priority:** P1
+`storeOwner.controller.ts:getStores` reads `req.query.userId` with a comment explicitly marking it "TEMPORARY — NOT secure — just for development." The Bearer token is never validated. Any unauthenticated caller who knows a store owner's user ID gets full store data disclosure.
 
 ---
 
-### DELIVERY-001 · CRITICAL · P0
-**Summary:** Delivery simulation endpoint is unauthenticated in production  
-**Affected Apps:** Backend  
-**Root Cause:** `delivery.controller.ts:startSimulation` — no auth middleware. Any actor with knowledge of the URL can trigger a full order lifecycle simulation on any real order ID.  
-**Current Behavior:** `POST /api/delivery/simulate` with any `orderId` advances that order through all statuses automatically.  
-**Suggested Fix:** Gate behind admin auth or remove entirely from production builds.  
-**Severity:** Critical | **Priority:** P0
+# [Backend][Security] storeOwner.controller.ts updateStoreStatus and updateProductQuantity have no ownership verification
 
+Both handlers check for Bearer token presence but never validate that the authenticated store owner owns the target store or product. Any authenticated store owner can change another store's open/closed status or manipulate another store's inventory.
+
 ---
+
+# [Backend][Security] Invoice generation endpoint has zero authentication — anyone can generate and download any customer invoice
 
-### DELIVERY-002 · HIGH · P1
-**Summary:** Driver broadcast uses customer delivery address, not store location — wrong proximity calculation  
-**Affected Apps:** Backend  
-**Root Cause:** `delivery.controller.ts:broadcastToDrivers` and `shopkeeper.controller.ts:broadcastToNearbyDrivers` both use `order.delivery_latitude/longitude` (the customer's address) as the center point for finding nearby drivers. Drivers should be dispatched from store proximity.  
-**Current Behavior:** A driver 1km from the customer but 15km from the store receives an offer; a driver next to the store but 5km from customer does not.  
-**Severity:** High | **Priority:** P1
+`invoice.routes.ts` registers `POST /api/invoices/generate/:orderId` without any auth middleware. Any caller who knows an order ID can download the invoice, which contains the customer's full name, phone number, delivery address, and itemized order details.
 
 ---
 
-### DELIVERY-003 · HIGH · P1
-**Summary:** Customer not notified when item reallocation fails — order silently degrades  
-**Affected Apps:** Backend  
-**Root Cause:** `shopkeeper.controller.ts:reallocateMissingItems` has a 4km radius constraint. If no replacement store is found, the order proceeds with fewer items but the customer is never notified.  
-**Severity:** High | **Priority:** P1  
-**Dependencies:** NOTIF-001
+# [Backend][Security] Invoice controller requireCustomer uses the customer UUID as a Bearer token — UUIDs are not secrets
 
+`invoice.controller.ts:requireCustomer` authenticates by looking up `app_users` where `.eq('id', token)` — meaning the "token" IS the UUID primary key. UUIDs appear in URLs, logs, and API responses and are not secret. Any party who knows a customer's UUID can forge valid auth for invoice endpoints.
+
 ---
 
-### DELIVERY-004 · MEDIUM · P2
-**Summary:** `getOrderTrackingFull` writes to `stores` table on every tracking fetch  
-**Affected Apps:** Backend  
-**Root Cause:** `database.service.ts:getOrderTrackingFull` calls `reverseGeocode` AND writes the result back to `stores.address` on every call. Tracking is polled every 3–5 seconds, causing hundreds of unnecessary DB writes per active order.  
-**Severity:** Medium | **Priority:** P2
+# [Backend][Security] Invoice controller requireShopkeeper looks up by id instead of session_token — all shopkeeper invoice requests fail
 
+`invoice.controller.ts:requireShopkeeper` queries shopkeepers with `.eq('id', token)` while shopkeeper session tokens are stored in `session_token`, not `id`. The correct lookup is in `shopkeeper.controller.ts:requireShopkeeper` which uses `.eq('session_token', token)`. Any legitimate shopkeeper using a real session token is rejected.
+
 ---
+
+# [Backend][Performance] products.controller.ts getProductById fetches all products then finds the target in JavaScript
 
-### WEB-001 · HIGH · P1
-**Summary:** Checkout email field is `required` — blocks OTP-only users without email  
-**Affected Apps:** Customer Web  
-**Root Cause:** `CheckoutPage.tsx` — email input has HTML `required` attribute. Customers who signed up via OTP only (no email) cannot submit the checkout form.  
-**Severity:** High | **Priority:** P1
+`products.controller.ts` calls `databaseService.getProductsWithDetails()` which returns the entire product catalog, then uses `.find()` in JS to locate the single requested product. This is an O(N) full catalog transfer to serve a single product detail request.
 
 ---
 
-### WEB-002 · HIGH · P1
-**Summary:** `getCurrentUserFromSession` uses anon Supabase client — blocked by RLS, always returns null  
-**Affected Apps:** Customer Web  
-**Root Cause:** `frontend/src/services/authService.ts:getCurrentUserFromSession` queries `app_users` using the anon Supabase client. RLS prevents anon clients from reading `app_users` rows.  
-**Current Behavior:** Session restore always fails — user is shown as logged out on page refresh even when session data exists in localStorage.  
-**Severity:** High | **Priority:** P1
+# [Backend][Performance] getNearbyStores fetches all stores and filters by distance in JavaScript — no DB-level geospatial query
 
+`database.service.ts:getNearbyStores` fetches every store from Supabase and applies haversine filtering in JavaScript. There is no bounding-box pre-filter or PostGIS query. This performs a full table scan and full data transfer for every "nearby stores" request and will not scale beyond a few hundred stores.
+
 ---
+
+# [Backend][Performance] getProductsWithDetails fetches all products and filters by radius in JavaScript — same full-scan problem as getNearbyStores
 
-### WEB-003 · HIGH · P1
-**Summary:** Order tracking page imports `supabaseAdmin` — service-role key exposed in browser  
-**Affected Apps:** Customer Web  
-**Root Cause:** `frontend/src/hooks/useOrderTrackingRealtime.ts` imports `supabaseAdmin` for realtime subscriptions. The admin client uses the service-role key, which is then bundled into the browser JS. Any user with DevTools can extract the key.  
-**Severity:** High | **Priority:** P1
+`database.service.ts:getProductsWithDetails` fetches the entire product catalog before filtering by distance in JavaScript. The same scaling problem as `getNearbyStores` applies — full table scan and full data transfer for every search or browse request.
 
 ---
 
-### WEB-004 · MEDIUM · P2
-**Summary:** Dual polling strategy — realtime + 3s setInterval creates redundant network traffic  
-**Affected Apps:** Customer Web, Customer Mobile App  
-**Root Cause:** Both `useOrderTrackingRealtime.ts` (web) and `useOrderTracking.ts` (mobile) subscribe to Supabase realtime AND maintain a 3–5 second polling interval. When realtime works, polling is pure waste.  
-**Suggested Fix:** Only poll when the realtime channel is not in `SUBSCRIBED` state.  
-**Severity:** Medium | **Priority:** P2
+# [Admin Web][Security] NotificationsPage sends push notifications directly from the browser to Expo's API — no backend audit trail
 
+`admin/src/pages/admin/NotificationsPage.tsx` POSTs directly from the browser to `https://exp.host/--/api/v2/push/send`. This bypasses the backend entirely — no authentication, no logging, no rate limiting, and no audit trail. Any compromised admin account can send arbitrary push notifications to all users with zero oversight.
+
 ---
 
-### WEB-005 · MEDIUM · P2
-**Summary:** No AbortController for in-flight tracking fetches on unmount — potential state-on-unmounted-component warnings  
-**Affected Apps:** Customer Web  
-**Root Cause:** `useOrderTrackingRealtime.ts` fires `fetchOrderTrackingFull()` on realtime events but has no cancellation for these in-flight fetches when the component unmounts.  
-**Severity:** Medium | **Priority:** P2
+# [Admin Web][Security][Data] StoresPage.tsx uses the anon Supabase client instead of the admin client
 
+`admin/src/pages/admin/StoresPage.tsx` imports and uses the anon `supabase` client rather than `getAdminClient()`. All store queries run under the anon key and are subject to RLS, potentially returning incomplete data or silently failing for privileged operations. This is inconsistent with every other admin page.
+
 ---
+
+# [Admin Web][Security] Admin dashboard has no per-endpoint permission enforcement — role checks are UI-only
 
-### WEB-006 · MEDIUM · P2
-**Summary:** `CartContext.addToCart` mutates object in place — React immutability violation  
-**Affected Apps:** Customer Web  
-**Root Cause:** `CartContext.tsx:addToCart` — the cart item object is mutated directly instead of creating a new object reference. React may not detect this change and skip re-renders.  
-**Severity:** Medium | **Priority:** P2
+`adminAuthService.ts` exposes `hasPermission()` but it is never applied as middleware on any admin API route. A `viewer`-role admin can call any mutation endpoint directly, bypassing the UI role restrictions entirely.
 
 ---
 
-### WEB-007 · HIGH · P1
-**Summary:** Address save race condition at checkout — order placed without delivery coordinates  
-**Affected Apps:** Customer Web  
-**Root Cause:** `CheckoutPage.tsx` — the address save and coordinate fetch run in parallel with order placement. If the geocoding call is slow, the order is placed with `delivery_latitude: null`, breaking the dispatch algorithm entirely.  
-**Severity:** High | **Priority:** P1
+# [Admin Web][Security] The admin creation endpoint has no server-side role check — any authenticated admin can create new admins
 
+The backend route for creating admin accounts performs no server-side verification that the requester is a `super_admin`. Only the frontend hides the button for lower-role users, making the restriction trivially bypassable with a direct API call.
+
 ---
+
+# [Backend][Security] CORS allows all origins when ALLOWED_ORIGINS environment variable is not set
 
-### BACKEND-001 · HIGH · P1
-**Summary:** No global Express error handler — unhandled errors return HTML error pages  
-**Affected Apps:** Backend  
-**Root Cause:** `server.ts` — no `(err, req, res, next)` error middleware registered. Unhandled promise rejections or thrown errors propagate as 500 HTML responses, breaking JSON-expecting clients.  
-**Severity:** High | **Priority:** P1
+`server.ts` CORS `origin` callback returns `true` (allow all) when `ALLOWED_ORIGINS` is missing. In a misconfigured production deployment this permits cross-origin requests from any domain, enabling CSRF and data exfiltration attacks.
 
 ---
 
-### BACKEND-002 · MEDIUM · P2
-**Summary:** No request body size limit on `express.json()` — DoS via large payloads  
-**Affected Apps:** Backend  
-**Root Cause:** `server.ts` — `express.json()` without a `limit` option accepts arbitrarily large payloads.  
-**Suggested Fix:** `app.use(express.json({ limit: '1mb' }))`.  
-**Severity:** Medium | **Priority:** P2
+# [Admin Web][Bug] adminService.ts getCustomers returns all app_users including shopkeepers and delivery partners
 
+`admin/src/services/adminService.ts:getCustomers` queries `app_users` with no role filter. All user records — shopkeepers, delivery partners, and customers — appear in the admin Customers list, inflating the customer count and showing incorrect data.
+
 ---
+
+# [Admin Web][Bug] adminService.ts status mapping collapses fine-grained order statuses into only 5 frontend states
 
-### BACKEND-003 · HIGH · P1
-**Summary:** Webhook verification falls back to API key secret when webhook secret is missing  
-**Affected Apps:** Backend  
-**Root Cause:** `payment.service.ts:verifyWebhook` — if `RAZORPAY_WEBHOOK_SECRET` is unset, it falls back to `RAZORPAY_KEY_SECRET`. These are different secrets with different purposes; using the API key for webhook verification is incorrect and accepts forged webhooks.  
-**Severity:** High | **Priority:** P1
+`admin/src/services/adminService.ts:mapDbStatusToFrontend` maps DB statuses like `preparing_order`, `picking_up`, and `out_for_delivery` into only 5 coarse frontend states. The admin UI cannot distinguish between preparation and pickup phases, making order monitoring inaccurate.
 
 ---
 
-### BACKEND-004 · LOW · P3
-**Summary:** Three separate haversine implementations across the codebase  
-**Affected Apps:** Backend, Rider App, Shopkeeper App  
-**Root Cause:** `database.service.ts`, `NAT_Near-Now_Rider-/app/(tabs)/home.tsx`, `NAT_Near-Now_Rider-/app/delivery/[orderId].tsx` each have their own `haversineKm` function.  
-**Suggested Fix:** Extract to a shared utility. Risk of divergence if one implementation has a bug.  
-**Severity:** Low | **Priority:** P3
+# [Admin Web][Bug] adminService.ts updateOrderStatus maps 'confirmed' to 'store_accepted' — skips the preparing_order stage
 
+When an admin selects "confirmed," the service writes `store_accepted` to the DB instead of going through `preparing_order`. This skips a defined workflow stage and causes inconsistent order state between admin, shopkeeper, and customer views.
+
 ---
+
+# [Admin Web][Performance] adminService.ts getOrders performs an N+1 fetch pattern for customer data
 
-### SECURITY-001 · HIGH · P1
-**Summary:** Admin dashboard has no per-endpoint permission enforcement  
-**Affected Apps:** Admin Web  
-**Root Cause:** `adminAuthService.ts` has `hasPermission()` utility but admin API routes do not apply it as middleware. A `viewer` role admin can call any admin mutation if they bypass the UI.  
-**Severity:** High | **Priority:** P1
+`admin/src/services/adminService.ts:getOrders` fetches all orders in one query then fetches customer data in a separate query. This is an N+1 anti-pattern that adds a full round-trip minimum and scales poorly as the order count grows.
 
 ---
 
-### SECURITY-002 · HIGH · P1
-**Summary:** Admin route for creating admins accessible to non-super_admin roles at API level  
-**Affected Apps:** Admin Web, Backend  
-**Root Cause:** No server-side role check on the admin creation endpoint. Only the UI hides the button for non-super_admin users.  
-**Severity:** High | **Priority:** P1
+# [Admin Web][Auth] Admin session is stored in sessionStorage only — admins are logged out on every tab close
 
+`adminAuthService.ts` persists the session to `sessionStorage`, which is cleared when the browser tab is closed. Admins are logged out every time they close and reopen the tab, even well within the 12-hour session window stored in the database. There is no option for persistent login.
+
 ---
 
-### SECURITY-003 · HIGH · P1
-**Summary:** CORS wildcard when `ALLOWED_ORIGINS` is not set  
-**Affected Apps:** Backend  
-**Root Cause:** `server.ts` — CORS `origin` callback returns `true` (allow all) when `ALLOWED_ORIGINS` env var is missing.  
-**Severity:** High | **Priority:** P1
+# [Admin Web][Auth] Admin session is not deleted on logout — tokens remain valid for up to 12 hours after logout
 
+`adminAuthService.ts` logout path does not delete the `admin_sessions` row. A logged-out session token continues to authenticate API requests until the natural 12-hour TTL expires.
+
 ---
+
+# [Admin Web][Auth] Failed login audit logging can throw and mask the authentication failure response
 
-### DB-001 · MEDIUM · P2
-**Summary:** `PaymentStatus` type uses `'completed'` but code uses `'paid'` — type mismatch  
-**Affected Apps:** Backend  
-**Root Cause:** `database.types.ts:PaymentStatus` includes `'completed'` but all actual DB writes use `'paid'`. TypeScript may accept `'completed'` where `'paid'` is required.  
-**Severity:** Medium | **Priority:** P2
+`authenticateAdmin` calls `logFailedLogin` and `logSecurityEvent` sequentially without isolating their errors. If the database is unavailable during logging, the function throws an unhandled error instead of returning null, causing the login endpoint to 500 instead of returning a clean auth failure.
 
 ---
 
-### DB-002 · MEDIUM · P2
-**Summary:** `OrderStatus` type missing `'picking_up'` — added in migration but not in types  
-**Affected Apps:** Backend  
-**Root Cause:** Migration `20260505000000_add_picking_up_order_status.sql` added this status but `database.types.ts` was not updated.  
-**Severity:** Medium | **Priority:** P2
+# [Admin Web][Missing] SettingsPage settings are not persisted — all configuration is lost on page reload
 
+The admin `SettingsPage.tsx` renders UI for general, notification, and payment settings but changes are never written to the database or backend API. Every reload resets all settings to defaults.
+
 ---
+
+# [Backend][Database] PaymentStatus TypeScript type includes 'completed' but all database writes use 'paid'
 
-### PERF-001 · MEDIUM · P2
-**Summary:** Driver location polled every 2s regardless of realtime subscription state  
-**Affected Apps:** Customer Web, Customer Mobile App  
-**Root Cause:** A separate `setInterval` fires every 2 seconds for driver location updates, independent of the Supabase realtime subscription. Under good conditions this is redundant; under poor conditions the polling and realtime events race each other.  
-**Severity:** Medium | **Priority:** P2
+`database.types.ts:PaymentStatus` defines `'completed'` as a valid value while every actual payment status write uses `'paid'`. TypeScript will accept code that writes `'completed'` without complaint, producing records that downstream queries filtering for `'paid'` will miss.
 
 ---
 
-### UX-001 · LOW · P3
-**Summary:** No empty-cart guard on checkout — user can reach checkout with 0 items via direct URL  
-**Affected Apps:** Customer Web, Customer Mobile App  
-**Root Cause:** `CheckoutPage.tsx` and `checkout.tsx` don't redirect when `items.length === 0`.  
-**Severity:** Low | **Priority:** P3
+# [Backend][Database] OrderStatus type is missing 'picking_up' — added in migration but types were not updated
 
+Migration `20260505000000_add_picking_up_order_status.sql` added `picking_up` as a valid status but `database.types.ts:OrderStatus` was not updated. Exhaustive switch statements on order status will silently miss this value.
+
 ---
 
-### ADMIN-001 · MEDIUM · P2
-**Summary:** Admin session not invalidated on logout — tokens remain valid until 12h expiry  
-**Affected Apps:** Admin Web  
-**Root Cause:** `adminAuthService.ts` logout path does not delete the `admin_sessions` row. Sessions expire naturally after 12 hours but are not explicitly invalidated.  
-**Severity:** Medium | **Priority:** P2
+# [Customer Web][Performance] Driver location is polled every 2 seconds unconditionally regardless of realtime subscription state
 
+A `setInterval` firing every 2 seconds fetches driver location independently of the Supabase realtime subscription, running even when the realtime channel is active and delivering updates. Polling and realtime events race each other under normal conditions.
+
 ---
+
+# [Customer Web][UI] No empty-cart redirect at checkout — users can navigate directly to /checkout with zero items
 
-### ADMIN-002 · LOW · P3
-**Summary:** Failed login audit log fires even when `logSecurityEvent` itself throws  
-**Affected Apps:** Admin Web  
-**Root Cause:** `authenticateAdmin` calls `logFailedLogin` then `logSecurityEvent` in sequence without catching individual errors. If the DB is unavailable, the auth function throws without returning null cleanly.  
-**Severity:** Low | **Priority:** P3
+`CheckoutPage.tsx` does not check `items.length === 0` on mount and redirect away. A user who navigates directly to the checkout URL with an empty cart sees the full checkout form and can attempt to submit an empty order.
 
 ---
 
-## JIRA TICKETS — PART 2: MOBILE APPS
+# [Android][Security] Service-role Supabase key is bundled into the Customer App APK and IPA via the EXPO_PUBLIC_ prefix
 
+`nearandnowcustomerapp/lib/supabase.ts:26` reads `process.env.EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY`. Expo bakes every `EXPO_PUBLIC_` variable into the JavaScript bundle inside the APK and IPA. The service-role key bypasses all RLS — anyone who decompiles the app with Jadx or apktool has unrestricted read/write access to the entire database.
+
 ---
+
+# [Android][Customer App][Auth] getCurrentUserFromSession uses supabaseAdmin — session restore breaks when the service-role key is removed
 
-### MOBILE-SEC-001 · CRITICAL · P0
-**Summary:** Service-role Supabase key bundled into Customer App APK/IPA via `EXPO_PUBLIC_` prefix  
-**Affected Apps:** Customer Mobile App (nearandnowcustomerapp)  
-**Root Cause:** `nearandnowcustomerapp/lib/supabase.ts:26` — reads `process.env.EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY`. Any variable prefixed `EXPO_PUBLIC_` is baked into the JavaScript bundle inside the APK/IPA. A decompiler (Jadx, apktool) exposes the key in seconds.  
-**Current Behavior:** The service-role key bypasses all RLS policies. An attacker can read/write any table in the database including `app_users`, `customers`, `customer_orders`, `payments`.  
-**Expected Behavior:** Service-role key must NEVER appear in client-side code. All privileged operations must go through the Railway backend API.  
-**Suggested Fix:**
-1. Remove `EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY` from all `.env` files immediately.
-2. Move all `supabaseAdmin` calls in `lib/authService.ts` (`getCurrentUserFromSession`, `updateCustomerProfile`) to backend API endpoints.
-3. Use `SUPABASE_SERVICE_ROLE_KEY` (without `EXPO_PUBLIC_`) only in backend/EAS build server contexts.  
-**QA Validation:** Build APK, run `apktool d app.apk`, grep for the service-role key string — it must not appear.  
-**Severity:** Critical | **Priority:** P0
+`nearandnowcustomerapp/lib/authService.ts:getCurrentUserFromSession` calls `supabaseAdmin.from('app_users').select(...)` which only works because the service-role key is currently bundled. Removing that key will silently break session restore and log out every customer on every cold start.
 
 ---
 
-### MOBILE-AUTH-001 · CRITICAL · P0
-**Summary:** Customer Mobile App `getCurrentUserFromSession` uses service-role client — bypasses RLS silently  
-**Affected Apps:** Customer Mobile App  
-**Root Cause:** `nearandnowcustomerapp/lib/authService.ts:getCurrentUserFromSession` calls `supabaseAdmin.from('app_users').select(...)`. This bypasses RLS and works only because the service-role key is bundled (see MOBILE-SEC-001). When the key is removed, session restore will silently fail and all users will be logged out on every app restart.  
-**Suggested Fix:** Create `GET /api/auth/me` backend endpoint that reads the session and returns `{user, customer}` using the server-side service-role key. Mobile app calls this with Bearer token.  
-**Severity:** Critical | **Priority:** P0  
-**Dependencies:** MOBILE-SEC-001
+# [Android][Delivery Partner App][Auth] Rider authService.ts verifyOTP omits role field — new riders get customer accounts
 
+`NAT_Near-Now_Rider-/lib/authService.ts:verifyOTP` sends `{ phone, otp, name }` with no `role` field, causing the backend to default to `'customer'` role. The dedicated `otp.tsx:107` sends the correct `role: 'delivery_partner'`, but the shared service used in other flows will register riders as customers.
+
 ---
 
-### MOBILE-AUTH-002 · HIGH · P1
-**Summary:** Rider App OTP verification does not send `role` field in `authService.ts` — creates customer account  
-**Affected Apps:** Delivery Partner Mobile App (NAT_Near-Now_Rider-)  
-**Root Cause:** `NAT_Near-Now_Rider-/lib/authService.ts:verifyOTP` sends `{ phone, otp, name }` with no `role` field. The backend defaults to `'customer'` role. The rider's dedicated `otp.tsx` screen correctly sends `role: 'delivery_partner'` at line 107, but the shared `authService.ts` is used in other flows and will silently create customer accounts for riders.  
-**Suggested Fix:** Always include `role: 'delivery_partner'` in the `verifyOTP` call in `authService.ts`.  
-**Severity:** High | **Priority:** P1
+# [Android][Shopkeeper App][UI] Multi-store shopkeepers can only manage their first store — stores[0] is hardcoded
 
+`near-now-store_owner/app/(tabs)/home.tsx:92` sets `const selectedStore = stores[0]` unconditionally. A shopkeeper with multiple locations has no way to switch context — all accept/reject and inventory actions apply only to store index 0.
+
 ---
+
+# [Android][Shopkeeper App][Order] Shopkeeper order cache does not invalidate on incoming realtime events — stale orders shown for up to 30 seconds
 
-### MOBILE-AUTH-003 · HIGH · P1
-**Summary:** Shopkeeper App multi-store — only first store ever used (`stores[0]`)  
-**Affected Apps:** Shopkeeper Mobile App (near-now-store_owner)  
-**Root Cause:** `near-now-store_owner/app/(tabs)/home.tsx:92` — `const selectedStore = stores[0]`. A shopkeeper with multiple locations only manages store index 0 regardless of which store they intend to operate.  
-**Current Behavior:** Multi-store shopkeeper can never switch store context in the mobile app. All accept/reject actions apply only to store 0.  
-**Suggested Fix:** Add a store-picker UI (dropdown or tab strip) and persist `selectedStoreId` to AsyncStorage.  
-**Severity:** High | **Priority:** P1
+`near-now-store_owner/services/orderService.ts:fetchOrders` uses a module-level 30-second cache. Invalidation only happens on `acceptOrder` or `rejectOrder`, not on incoming realtime or push events. A new order appears in the popup but the main list may remain stale until the cache expires.
 
 ---
 
-### MOBILE-ORDER-001 · HIGH · P1
-**Summary:** Shopkeeper order cache returns stale data — 30s cache with no invalidation on status change  
-**Affected Apps:** Shopkeeper Mobile App  
-**Root Cause:** `near-now-store_owner/services/orderService.ts:fetchOrders` caches responses for 30 seconds using module-level `ordersCache`. The `useOrders` hook runs `useSmartPoll` at 10s/30s intervals, but also hits the same cached `OrderService.getInstance()` singleton — cache invalidation only happens on `acceptOrder`/`rejectOrder`, not on incoming realtime events.  
-**Current Behavior:** A new order that arrives via realtime/push is shown in the popup but the main orders list may show the cached (stale) version for up to 30 seconds after interaction.  
-**Severity:** High | **Priority:** P1
+# [Android][Shopkeeper App][Order] Two separate order-fetching paths exist and are never reconciled
 
+`near-now-store_owner/hooks/useOrders.ts` fetches from `/shopkeeper/orders` while `near-now-store_owner/services/orderService.ts` fetches from `/store-owner/stores/:id/orders` — a completely different endpoint. These two data sources are never synchronized, creating inconsistent order state across UI components.
+
 ---
+
+# [Android][Shopkeeper App][Order] The OrderService class references four endpoints that do not exist in the backend — dead code
 
-### MOBILE-ORDER-002 · MEDIUM · P2
-**Summary:** Shopkeeper App uses two separate order-fetching paths — `useOrders` hook and `OrderService` singleton are out of sync  
-**Affected Apps:** Shopkeeper Mobile App  
-**Root Cause:** `near-now-store_owner/hooks/useOrders.ts` fetches from `/shopkeeper/orders` directly using raw `fetch`. `near-now-store_owner/services/orderService.ts` fetches from `/store-owner/stores/:id/orders` — a different endpoint. These two data sources are never reconciled.  
-**Severity:** Medium | **Priority:** P2
+`near-now-store_owner/services/orderService.ts` calls `/store-owner/stores/${storeId}/orders`, `/store-owner/orders/${orderId}/accept`, `/store-owner/orders/${orderId}/reject`, and `/store-owner/orders/${orderId}/verify-qr`. None of these routes are registered in the backend. The class is not used by the working `useOrders.ts` hook and is entirely dead code.
 
 ---
 
-### MOBILE-ORDER-003 · MEDIUM · P2
-**Summary:** Rider delivery screen polls pickup-sequence every 10s but has no realtime subscription  
-**Affected Apps:** Delivery Partner Mobile App  
-**Root Cause:** `delivery/[orderId].tsx:300` — `pollRef.current = setInterval(() => loadSequence(token, true), 10000)`. Unlike the home screen which has a Supabase realtime subscription on `driver_order_offers`, the active delivery screen has no realtime channel. Store pickup code arrival requires waiting up to 10 seconds.  
-**Suggested Fix:** Add a realtime subscription on `order_store_allocations` filtered by `order_id`.  
-**Severity:** Medium | **Priority:** P2
+# [Android][Shopkeeper App][Order] fetchOrderDetails is a stub that always returns null
 
+`near-now-store_owner/hooks/useOrders.ts:fetchOrderDetails` is defined as `async (_id: string) => null` — it never fetches from any endpoint. Any component that calls this function to get order detail data receives null unconditionally.
+
 ---
 
-### MOBILE-NOTIF-001 · HIGH · P1
-**Summary:** Customer Mobile App has no push notification registration — customers never receive push notifications  
-**Affected Apps:** Customer Mobile App  
-**Root Cause:** `nearandnowcustomerapp/hooks/usePushNotifications.ts` exists but there is no column to store customer push tokens in the backend DB schema (`app_users` or `customers` tables have no `expo_push_token`). Even if registered, the backend's `sendPushNotification` only queries `delivery_partners` (NOTIF-002).  
-**Severity:** High | **Priority:** P1  
-**Dependencies:** NOTIF-001, NOTIF-002
+# [Android][Shopkeeper App][Order] verifyQR always returns failure — shopkeeper QR verification is non-functional
 
+`near-now-store_owner/hooks/useOrders.ts:verifyQR` returns `{ success: false, error: 'Not supported' }` unconditionally. The pickup code QR verification flow from the shopkeeper side is completely broken.
+
 ---
+
+# [Android][Shopkeeper App][Bug] setSelectedOrder is a no-op — selecting an order has no effect
 
-### MOBILE-NOTIF-002 · MEDIUM · P2
-**Summary:** Shopkeeper App incoming order popup relies solely on polling — no Expo push notification for new orders  
-**Affected Apps:** Shopkeeper Mobile App  
-**Root Cause:** `useOrders.ts:useSmartPoll` drives order discovery at 10s–30s intervals. There is no FCM/APNs/Expo push channel for instant "new order" notification. If the shopkeeper's screen is off or the app is backgrounded, new orders may wait up to 30 seconds before the timeout popup appears — and the 60-second accept timer has already been counting down.  
-**Severity:** Medium | **Priority:** P2
+`near-now-store_owner/hooks/useOrders.ts:setSelectedOrder` is defined as `() => {}`. Any UI flow that relies on selecting an order to drive a detail view or action panel is broken.
 
 ---
 
-### MOBILE-PAYMENT-001 · HIGH · P1
-**Summary:** Customer Mobile App payment reconcile loop has no circuit breaker for cancelled/failed orders  
-**Affected Apps:** Customer Mobile App  
-**Root Cause:** `usePaymentFlow.ts:reconcile` polls `getOrderPaymentStatus` every 1.5s for up to 10 seconds when `verifyPayment` fails. If the customer cancelled (`status: 'pending'`, `reason: 'cancelled'`), the reconcile loop still runs 6 extra DB polls before resolving. Should short-circuit immediately on `status !== 'pending'` in DB.  
-**Severity:** High | **Priority:** P1
+# [Android][Shopkeeper App][Bug] Home screen activeOrderCount is hardcoded to 0
 
+`near-now-store_owner/app/(tabs)/home.tsx` sets `const activeOrderCount = 0` unconditionally. The home screen always displays 0 active orders regardless of actual pending order state.
+
 ---
+
+# [Android][Shopkeeper App][Missing] Payments screen is a static placeholder — no payout data or backend integration exists
 
-### MOBILE-PAYMENT-002 · MEDIUM · P2
-**Summary:** Saved payment methods feature flag disabled by default but UI shows skeleton permanently  
-**Affected Apps:** Customer Mobile App  
-**Root Cause:** `razorpayService.ts:SAVED_METHODS_ENABLED` is false by default (env var not set). When disabled, `getSavedPaymentMethods` returns `[]` synchronously. However the `settings/payments.tsx` screen still renders a "Preferred Payment" section skeleton that never populates, which is confusing UX.  
-**Severity:** Medium | **Priority:** P2
+`near-now-store_owner/app/(tabs)/payments.tsx` unconditionally renders "No payouts yet" with no API calls. No backend payout endpoint, earnings calculation, or settlement logic exists anywhere in the platform.
 
 ---
 
-### MOBILE-UX-001 · MEDIUM · P2
-**Summary:** Rider App `pending_verification` status shows hardcoded admin phone number in UI  
-**Affected Apps:** Delivery Partner Mobile App  
-**Root Cause:** `NAT_Near-Now_Rider-/app/(tabs)/home.tsx:549` — `Linking.openURL("tel:+919062692914")`. Admin phone number is hardcoded in the UI. Will break when admin changes.  
-**Suggested Fix:** Source from backend config or environment variable.  
-**Severity:** Medium | **Priority:** P2
+# [Android][Shopkeeper App][Notification] Incoming order popup relies solely on polling — no push for new orders in background
 
+`useOrders.ts:useSmartPoll` checks for new orders every 10–30 seconds with no FCM or Expo push channel. If the shopkeeper's screen is off or the app is backgrounded, a new order may not be visible for up to 30 seconds while the 60-second acceptance timer counts down.
+
 ---
 
-### MOBILE-UX-002 · MEDIUM · P2
-**Summary:** Delivery partner app OTP auto-submit fires before all 6 digits confirmed — can submit partial OTP on slow keyboards  
-**Affected Apps:** Delivery Partner Mobile App  
-**Root Cause:** `otp.tsx:54–59` — `useEffect` triggers `handleVerify(otp)` whenever `isComplete` becomes true (all 6 digits filled). On some Android keyboards, IME commits characters one-by-one but the 6th character event may fire twice (once partial), triggering a premature API call.  
-**Severity:** Medium | **Priority:** P2
+# [Android][Delivery Partner App][Order] Rider delivery screen polls pickup sequence every 10 seconds with no realtime subscription
 
+`delivery/[orderId].tsx:300` uses only a `setInterval` for active delivery updates. Unlike the home screen which has a Supabase realtime subscription, the delivery screen has no realtime channel, so pickup code arrival requires waiting up to 10 seconds.
+
 ---
+
+# [Android][Customer App][Notification] Customer app has no push notification registration — no backend storage for customer push tokens
 
-### MOBILE-UX-003 · LOW · P3
-**Summary:** Customer App wallet screen is a placeholder with no functionality  
-**Affected Apps:** Customer Mobile App  
-**Root Cause:** `nearandnowcustomerapp/app/wallet.tsx` exists in the routing but renders a static screen. No wallet balance, no transaction history, no top-up functionality.  
-**Severity:** Low | **Priority:** P3
+`nearandnowcustomerapp/hooks/usePushNotifications.ts` handles Expo token registration but neither `app_users` nor `customers` has an `expo_push_token` column in the DB schema. Even if a token were captured, there is nowhere to store it and the backend's `sendPushNotification` does not query customer tables.
 
 ---
 
-### MOBILE-PERF-001 · MEDIUM · P2
-**Summary:** Rider App home screen creates a new Supabase `createClient` instance on every render  
-**Affected Apps:** Delivery Partner Mobile App  
-**Root Cause:** `NAT_Near-Now_Rider-/app/(tabs)/home.tsx:28` — `const supabase = createClient(SUPABASE_CONFIG.URL, SUPABASE_CONFIG.ANON_KEY)` is declared at module scope, which is fine, but it's inside the module body (not in a component) — the real issue is a new WebSocket connection is established on every cold start without connection pooling or reuse from a singleton.  
-**Suggested Fix:** Extract to `lib/supabase.ts` singleton (same pattern as customer and shopkeeper apps).  
-**Severity:** Medium | **Priority:** P2
+# [Android][Customer App][Payment] Payment reconcile loop has no circuit breaker for cancelled or failed orders
 
+`usePaymentFlow.ts:reconcile` polls `getOrderPaymentStatus` every 1.5 seconds for up to 10 seconds even when the order is already cancelled. It runs up to 6 redundant DB polls before resolving instead of short-circuiting the moment the status is confirmed non-pending.
+
 ---
+
+# [Android][Customer App][Payment] Saved payment methods skeleton renders permanently when the feature flag is off
 
-### MOBILE-PERF-002 · LOW · P3
-**Summary:** Shopkeeper App `fetchStoreProducts` called twice on first mount (initial useEffect + useFocusEffect)  
-**Affected Apps:** Shopkeeper Mobile App  
-**Root Cause:** `home.tsx:167–172` (initial data load) and `useFocusEffect:208–220` both call `fetchStoreProducts` but `firstFocusRef` guard only prevents the focus-effect call, not the useEffect call. The guard works correctly but the comment above it is misleading — a fresh read of the code suggests the double-call risk if the guard is ever changed.  
-**Severity:** Low | **Priority:** P3
+`razorpayService.ts:SAVED_METHODS_ENABLED` defaults to `false` when its env var is unset. The `settings/payments.tsx` screen still renders a "Preferred Payment" skeleton section that never populates, leaving a permanently empty UI block with no explanation to the user.
 
 ---
 
-### MOBILE-SEC-002 · HIGH · P1
-**Summary:** Shopkeeper App session token stored in plain AsyncStorage with no encryption  
-**Affected Apps:** Shopkeeper Mobile App, Delivery Partner Mobile App, Customer Mobile App  
-**Root Cause:** All three apps store session tokens (and in some cases full user objects) in AsyncStorage without encryption. On rooted Android devices, AsyncStorage is readable by other apps. The tokens grant full API access.  
-**Suggested Fix:** Use `expo-secure-store` for auth tokens. User data (name, phone) can remain in AsyncStorage.  
-**Severity:** High | **Priority:** P1
+# [Android][Customer App][Bug] Checkout extra fields (GSTIN, tip, receiver details) are concatenated into a notes string — backend never parses them
 
+`nearandnowcustomerapp/app/support/checkout.tsx` collects `gstin`, `invoiceName`, `tipAmount`, `orderFor`, `receiverName`, `receiverPhone`, and `receiverAddress` in the UI, then concatenates them into a single freeform `notes` string before sending to the backend. The backend never parses this string — GST invoicing, tip handling, and third-party delivery are all structurally broken.
+
 ---
 
-### MOBILE-SEC-003 · MEDIUM · P2
-**Summary:** Rider App has no session expiry — old tokens persist indefinitely  
-**Affected Apps:** Delivery Partner Mobile App  
-**Root Cause:** `session.ts` stores `{ token, user }` but has no `expiresAt` field. The `delivery_partners.session_token` column has no TTL enforcement on the backend. A stolen device with an old token can access all rider API endpoints forever.  
-**Suggested Fix:** Add `expiresAt` to session storage; backend should validate token age (e.g., 30-day rolling window).  
-**Severity:** Medium | **Priority:** P2
+# [Android][Customer App][Missing] Wallet screen is a full UI implementation backed by nothing — "Add Money" shows a "coming soon" alert
 
+`nearandnowcustomerapp/app/wallet.tsx` renders balance display, transaction history, and an "Add Money" button which fires `Alert.alert("Payment gateway integration coming soon.")`. No backend wallet, balance API, or payment integration exists anywhere on the platform.
+
 ---
 
-## Severity Summary
+# [Android][Delivery Partner App][Missing] Rider earnings are estimated at 15% of order total — no real payout system exists
 
-| Severity | Count |
-|----------|-------|
-| Critical | 10 |
-| High | 24 |
-| Medium | 20 |
-| Low | 8 |
-| **Total** | **62** |
+`NAT_Near-Now_Rider-/app/(tabs)/earnings.tsx` calculates `todayEarnings` as `Number(order.total_amount) * 0.15` for each order. There is no payout table, no backend earnings endpoint, and no agreed payout rate. Riders see entirely fabricated estimates.
 
 ---
 
-## Team Assignment (4 Developers)
+# [Android][Delivery Partner App][Performance] Rider app polls for active orders every 6 seconds even when the rider is offline
 
-### Dev 1 — Backend Core (Auth, Payments, Security)
-AUTH-001, AUTH-002, PAY-001, PAY-002, PAY-003, PAY-005, BACKEND-001, BACKEND-002, BACKEND-003, SECURITY-001, SECURITY-002, SECURITY-003
+`NAT_Near-Now_Rider-/app/(tabs)/home.tsx` fires an order polling interval every 6 seconds regardless of the rider's online/offline status, causing unnecessary network traffic and battery drain when the rider is not on duty.
 
-### Dev 2 — Order Lifecycle & Delivery
-ORDER-001, ORDER-002, ORDER-003, DELIVERY-001, DELIVERY-002, DELIVERY-003, DELIVERY-004, COUPON-001, COUPON-002, ORDER-005
+---
 
-### Dev 3 — Mobile Apps (Customer + Rider)
-MOBILE-SEC-001, MOBILE-AUTH-001, MOBILE-AUTH-002, MOBILE-NOTIF-001, MOBILE-PAYMENT-001, MOBILE-UX-001, MOBILE-UX-002, MOBILE-SEC-002, MOBILE-SEC-003, MOBILE-PERF-001, WEB-002, WEB-003
+# [Android][Delivery Partner App][UI] Rider app pending_verification screen shows a hardcoded admin phone number
 
-### Dev 4 — Frontend Web + Admin + Shopkeeper App
-WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, ADMIN-001, ADMIN-002, MOBILE-AUTH-003, MOBILE-ORDER-001, MOBILE-ORDER-002, MOBILE-ORDER-003, MOBILE-NOTIF-002, NOTIF-001, NOTIF-002, DB-001, DB-002
+`NAT_Near-Now_Rider-/app/(tabs)/home.tsx:549` calls `Linking.openURL("tel:+919062692914")` directly in source. This phone number must be updated with a code change and app store release whenever the admin contact changes.
 
 ---
 
-## Regression Testing Checklist
+# [Android][Delivery Partner App][UI] OTP auto-submit can fire before all 6 digits are confirmed on slow Android keyboards
 
-### Authentication
-- [ ] Customer OTP login — new user creates account and customer profile
-- [ ] Customer OTP login — existing user logs in with session token
-- [ ] Customer session persisted across app restart
-- [ ] Shopkeeper OTP login — existing shopkeeper logs in with correct role
-- [ ] Delivery partner OTP login — sends `role: 'delivery_partner'` in request
-- [ ] Admin login with correct email + password
-- [ ] Admin login with wrong password — logs audit event
-- [ ] Invalid OTP returns 400
-- [ ] OTP rate limiting — > 5 sends per phone blocked
+`otp.tsx:54–59` calls `handleVerify(otp)` as soon as `isComplete` is true. Some Android IME implementations fire the 6th character event more than once before settling, triggering a premature API call with an incomplete OTP.
 
-### Payments
-- [ ] Razorpay order created with correct amount in paise
-- [ ] Razorpay signature verified server-side
-- [ ] Payment captured successfully via explicit capture call
-- [ ] `payment_status` updated to `paid` in DB after verification
-- [ ] Webhook `payment.captured` event updates order status
-- [ ] Webhook `payment.failed` event updates order status  
-- [ ] Webhook HMAC validated against raw body bytes (not parsed JSON)
-- [ ] Refund triggered on order cancellation for paid orders
-- [ ] GSTIN included in payment order metadata
+---
 
-### Order Lifecycle
-- [ ] Customer places order → store allocation created for each store
-- [ ] Shopkeeper receives new allocation within 30 seconds
-- [ ] Shopkeeper accepts all items → pickup code generated
-- [ ] Shopkeeper partial-accept → missing items reallocated
-- [ ] Customer notified of item reallocation failure
-- [ ] Order cancellation cancels all `order_store_allocations`
-- [ ] Cancelled order does not appear in shopkeeper queue
-- [ ] Paid order cancellation triggers refund
+# [Android][Security] Session tokens are stored in plain AsyncStorage across all three mobile apps — readable on rooted devices
 
-### Delivery
-- [ ] Driver goes online → location recorded in `driver_locations`
-- [ ] Driver proximity calculated from STORE location (not customer)
-- [ ] Driver receives push notification for new offer within 5 seconds
-- [ ] Driver accepts offer → atomically assigned via DB RPC
-- [ ] Second driver attempting same offer gets `already_taken` response
-- [ ] Pickup code verification succeeds with correct 4-digit code
-- [ ] Pickup code verification fails with wrong code
-- [ ] Delivery OTP verified before "Mark Delivered" button enabled
-- [ ] Order status progresses: `pending → accepted → delivery_partner_assigned → picking_up → in_transit → delivered`
-- [ ] Customer tracking page reflects each status change in real time
+All three apps store session tokens and user objects in AsyncStorage without encryption. On a rooted Android device, AsyncStorage is world-readable by any app with root access, giving an attacker full API access using a stolen token.
 
-### Notifications
-- [ ] Customer receives order confirmation notification
-- [ ] Customer receives delivery partner assigned notification
-- [ ] Customer receives out-for-delivery notification
-- [ ] Customer receives delivered notification
-- [ ] Shopkeeper receives push notification for new order (background)
-- [ ] Driver receives push notification for new offer (background)
+---
 
-### Security
-- [ ] `/api/delivery/simulate` returns 401 without admin auth
-- [ ] Anon Supabase client cannot read `app_users` rows
-- [ ] Service-role key NOT present in APK bundle (grep test)
-- [ ] Customer auth token validated server-side on protected routes
-- [ ] Admin `viewer` role cannot access mutation endpoints via API
-- [ ] CORS rejects requests from unlisted origins in production
+# [Android][Delivery Partner App][Security] Rider session tokens have no expiry — compromised tokens grant permanent API access
 
-### Mobile App
-- [ ] Customer app session restored on cold start without login prompt
-- [ ] Customer app works correctly when no service-role key (production mode)
-- [ ] Shopkeeper with multiple stores can switch store context
-- [ ] Rider app `pending_verification` screen shows configurable contact info
-- [ ] All three apps handle network timeout gracefully (30s timeout shows error)
+`session.ts` stores `{ token, user }` with no `expiresAt` field and the backend `delivery_partners.session_token` column has no TTL enforcement. A stolen device or extracted token can authenticate all rider endpoints indefinitely.
 
 ---
 
-## Release Readiness Verdict
+# [Cross-App][Missing] No payout or earnings system exists anywhere on the platform
 
-**STATUS: BLOCKED — DO NOT RELEASE**
+The rider app estimates earnings at 15% of order total (hardcoded). The shopkeeper app shows "No payouts yet" unconditionally. No backend payout endpoint, no DB payout table, no financial settlement logic, and no agreed payout rate exist. Neither riders nor store owners have any accurate financial data — the platform cannot operate commercially without this.
 
-### Launch Blockers (must fix before any production traffic):
-1. **MOBILE-SEC-001** — Service-role key in APK (full DB breach possible)
-2. **AUTH-001** — Customer token never validated (auth bypass)
-3. **PAY-001** — Webhook HMAC broken (payments never auto-confirmed)
-4. **PAY-002** — `updateOrderStatus` returns 501 (order management broken)
-5. **NOTIF-001** — All notifications are stubs (zero customer communication)
-6. **DELIVERY-001** — Simulation endpoint unauthenticated in production
-7. **MOBILE-AUTH-001** — Session restore fails without service-role key
-8. **WEB-001** — Checkout email required field blocks OTP-only users
-9. **WEB-002** — Customer session restore always fails on web (RLS blocks anon client)
-10. **SECURITY-003** — CORS wildcard accepts all origins
+---
 
-### Recommended Sprint Plan:
-- **Sprint 1 (Blockers):** MOBILE-SEC-001, AUTH-001, PAY-001, DELIVERY-001, NOTIF-001 skeleton (Expo push for critical events only)
-- **Sprint 2 (Core Stability):** PAY-002, WEB-001, WEB-002, ORDER-002, DELIVERY-002, MOBILE-AUTH-003
-- **Sprint 3 (Quality):** All remaining P1 items
-- **Sprint 4 (Polish):** P2 and P3 items, performance optimizations
+# [Cross-App][Bug] Auth token strategy is inconsistent across apps and controllers — some legitimate callers are always rejected
 
+Shopkeeper and rider apps use a randomly generated `session_token` stored in the DB. Customer app uses the raw `user_id` UUID. The main shopkeeper controller correctly validates via `session_token`, but `invoice.controller.ts` validates shopkeepers via the `id` field — meaning every legitimate shopkeeper invoice request fails. This inconsistency makes cross-feature auth unpredictable.
+
 ---
+
+# [Cross-App][Bug] Pickup code generation timing is inconsistent — codes may exist before shopkeeper acceptance
 
-*Audit generated by Claude Code — Near & Now QA Report v1.0 — 2026-05-25*
+`orders.controller.ts` comments state pickup codes are generated at shopkeeper acceptance time. `shopkeeper.controller.ts:reallocateMissingItems` generates the pickup code at allocation insert time, before acceptance. The two code paths behave differently, and pickup codes may be created prematurely depending on which path triggered the allocation.
