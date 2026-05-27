@@ -3,8 +3,8 @@
  * Direct browser calls to Google REST APIs fail due to CORS.
  */
 
-const API_ORIGIN = (import.meta.env.VITE_API_URL || window.location.origin).toString().replace(/\/$/, '');
-const API_BASE = `${API_ORIGIN}/api/places`;
+import { getApiBase } from '../utils/apiBase';
+const API_BASE = `${getApiBase()}/api/places`;
 
 export interface LocationData {
   address: string;

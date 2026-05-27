@@ -3,7 +3,8 @@
  * Use this instead of direct Supabase for order_status_history and stores.
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+import { getApiBase } from '../utils/apiBase';
+const API_BASE = getApiBase();
 
 export interface TrackingFullResponse {
   order: {

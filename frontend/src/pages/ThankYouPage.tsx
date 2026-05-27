@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { formatPrice } from '../utils/formatters';
 import { Order, OrderItem } from '../services/supabase';
-import axios from 'axios';
+import { apiUrl } from '../utils/apiBase';
 
 const THANK_YOU_DISPLAY_SEC = 3;
 
@@ -55,11 +55,12 @@ const ThankYouPage = () => {
 
     const checkDeliveryPartner = async () => {
       try {
-        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-        const response = await axios.get(`${API_URL}/api/orders/${orderId}`);
+        const res = await fetch(apiUrl(`/api/orders/${orderId}`));
+        if (!res.ok) throw new Error(`Failed: ${res.status}`);
+        const data = await res.json();
 
-        if (response.data?.store_orders) {
-          const hasPartner = response.data.store_orders.some(
+        if (data?.store_orders) {
+          const hasPartner = data.store_orders.some(
             (so: any) => so.delivery_partner_id !== null
           );
           setHasDeliveryPartner(hasPartner);
@@ -82,10 +83,14 @@ const ThankYouPage = () => {
     setCancelError('');
 
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-      const response = await axios.post(`${API_URL}/api/orders/${orderId}/cancel`);
+      const res = await fetch(apiUrl(`/api/orders/${orderId}/cancel`), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const data = await res.json();
 
-      if (response.data.success) {
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to cancel order');
+      }
+
+      if (data.success) {
         setCancelSuccess(true);
         setTimeout(() => {
           navigate('/orders');
@@ -94,7 +99,7 @@ const ThankYouPage = () => {
     } catch (error: any) {
       console.error('Error cancelling order:', error);
       setCancelError(
-        error.response?.data?.error || 'Failed to cancel order. Please try again.'
+        error?.message || 'Failed to cancel order. Please try again.'
       );
     } finally {
       setIsCancelling(false);

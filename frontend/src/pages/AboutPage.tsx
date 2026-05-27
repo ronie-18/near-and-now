@@ -12,16 +12,16 @@ const AboutPage = () => {
           </p>
         </div>
       </div>
-      
+
       {/* Our Story */}
       <div className="max-w-4xl mx-auto mb-16">
         <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6">Our Story</h2>
         <div className="bg-white rounded-lg shadow-md p-6 md:p-8">
           <div className="flex flex-col md:flex-row items-center gap-8">
             <div className="md:w-1/3">
-              <img 
-                src="/about-story.jpg" 
-                alt="Near & Now Story" 
+              <img
+                src="/about-story.jpg"
+                alt="Near & Now Story"
                 className="rounded-lg w-full h-auto"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
@@ -43,7 +43,7 @@ const AboutPage = () => {
           </div>
         </div>
       </div>
-      
+
       {/* Our Mission & Values */}
       <div className="max-w-4xl mx-auto mb-16">
         <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6">Our Mission & Values</h2>
@@ -59,7 +59,7 @@ const AboutPage = () => {
               We never compromise on quality. Every product on our platform undergoes strict quality checks before reaching your doorstep.
             </p>
           </div>
-          
+
           <div className="bg-white rounded-lg shadow-md p-6">
             <div className="w-12 h-12 bg-primary bg-opacity-10 rounded-full flex items-center justify-center mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -71,7 +71,7 @@ const AboutPage = () => {
               We believe in supporting local businesses and farmers. By shopping with us, you're helping sustain your local economy.
             </p>
           </div>
-          
+
           <div className="bg-white rounded-lg shadow-md p-6">
             <div className="w-12 h-12 bg-primary bg-opacity-10 rounded-full flex items-center justify-center mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -85,7 +85,7 @@ const AboutPage = () => {
           </div>
         </div>
       </div>
-      
+
       {/* Team Section */}
       <div className="max-w-4xl mx-auto mb-16">
         <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6">Our Team</h2>
@@ -93,9 +93,9 @@ const AboutPage = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8">
             <div className="text-center">
               <div className="w-32 h-32 rounded-full overflow-hidden mx-auto mb-4">
-                <img 
-                  src="/team-1.jpg" 
-                  alt="Team Member" 
+                <img
+                  src="/team-1.jpg"
+                  alt="Team Member"
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
@@ -103,15 +103,15 @@ const AboutPage = () => {
                   }}
                 />
               </div>
-              <h3 className="text-lg font-semibold text-gray-800">Rahul Sharma</h3>
+              <h3 className="text-lg font-semibold text-gray-800">Raj Shaw</h3>
               <p className="text-gray-600">Founder & CEO</p>
             </div>
-            
+
             <div className="text-center">
               <div className="w-32 h-32 rounded-full overflow-hidden mx-auto mb-4">
-                <img 
-                  src="/team-2.jpg" 
-                  alt="Team Member" 
+                <img
+                  src="/team-2.jpg"
+                  alt="Team Member"
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
@@ -119,15 +119,15 @@ const AboutPage = () => {
                   }}
                 />
               </div>
-              <h3 className="text-lg font-semibold text-gray-800">Priya Patel</h3>
-              <p className="text-gray-600">COO</p>
+              <h3 className="text-lg font-semibold text-gray-800">Priya Singh</h3>
+              <p className="text-gray-600">CFO</p>
             </div>
-            
-            <div className="text-center">
+
+            {/* <div className="text-center">
               <div className="w-32 h-32 rounded-full overflow-hidden mx-auto mb-4">
-                <img 
-                  src="/team-3.jpg" 
-                  alt="Team Member" 
+                <img
+                  src="/team-3.jpg"
+                  alt="Team Member"
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
@@ -137,9 +137,9 @@ const AboutPage = () => {
               </div>
               <h3 className="text-lg font-semibold text-gray-800">Arjun Nair</h3>
               <p className="text-gray-600">CTO</p>
-            </div>
+            </div> */}
           </div>
-          
+
           <div className="text-center mt-8">
             <p className="text-gray-600">
               Our team consists of passionate individuals dedicated to revolutionizing the grocery shopping experience in India.
@@ -147,7 +147,7 @@ const AboutPage = () => {
           </div>
         </div>
       </div>
-      
+
       {/* Contact Section */}
       <div className="max-w-4xl mx-auto">
         <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6">Get In Touch</h2>
@@ -167,7 +167,7 @@ const AboutPage = () => {
                     <p className="text-gray-600">Bangalore, Karnataka 560038</p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-start">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary mr-3 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -177,7 +177,7 @@ const AboutPage = () => {
                     <p className="text-gray-600">support@nearnow.com</p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-start">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary mr-3 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
@@ -188,7 +188,7 @@ const AboutPage = () => {
                   </div>
                 </div>
               </div>
-              
+
               <div className="mt-6">
                 <h3 className="text-lg font-semibold text-gray-800 mb-4">Follow Us</h3>
                 <div className="flex space-x-4">
@@ -210,7 +210,7 @@ const AboutPage = () => {
                 </div>
               </div>
             </div>
-            
+
             <div>
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Send Us a Message</h3>
               <form className="space-y-4">
@@ -224,7 +224,7 @@ const AboutPage = () => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
-                
+
                 <div>
                   <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
                     Email Address
@@ -235,7 +235,7 @@ const AboutPage = () => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
-                
+
                 <div>
                   <label htmlFor="message" className="block text-sm font-medium text-gray-700 mb-1">
                     Message
@@ -246,7 +246,7 @@ const AboutPage = () => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
                   ></textarea>
                 </div>
-                
+
                 <button
                   type="submit"
                   className="bg-primary hover:bg-secondary text-white px-6 py-2 rounded-md transition-colors"
@@ -258,7 +258,7 @@ const AboutPage = () => {
           </div>
         </div>
       </div>
-      
+
       {/* CTA Section */}
       <div className="max-w-4xl mx-auto mt-16 text-center">
         <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-4">Ready to Shop with Near & Now?</h2>

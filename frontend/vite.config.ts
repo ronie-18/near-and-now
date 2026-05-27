@@ -66,6 +66,21 @@ export default defineConfig(({ mode }) => {
         changeOrigin: true,
         // `secure: true` with an http:// target can cause flaky proxy errors (e.g. ECONNRESET) on some setups.
         secure: proxySecure
+      },
+      '/delivery-partner': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        secure: proxySecure
+      },
+      '/shopkeeper': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        secure: proxySecure
+      },
+      '/store-owner': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        secure: proxySecure
       }
     }
   },

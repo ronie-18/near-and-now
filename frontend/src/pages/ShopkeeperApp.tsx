@@ -18,7 +18,8 @@ import {
   Bell, ClipboardList, History, Check, X,
 } from 'lucide-react';
 
-const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+import { getApiBase } from '../utils/apiBase';
+const API = getApiBase();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
     if (!phone.trim()) { setError('Enter your phone number'); return; }
     setLoading(true); setError('');
     try {
-      const r = await fetch(`${API}/api/auth/otp`, {
+      const r = await fetch(`${API}/api/auth/send-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phone.trim(), role: 'shopkeeper' }),
@@ -84,7 +85,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
     if (!otp.trim()) { setError('Enter the OTP'); return; }
     setLoading(true); setError('');
     try {
-      const r = await fetch(`${API}/api/auth/verify`, {
+      const r = await fetch(`${API}/api/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phone.trim(), otp: otp.trim(), role: 'shopkeeper' }),
