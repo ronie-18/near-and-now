@@ -1,23 +1,25 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 export class CustomersController {
-  /** Query: userId (required), phone, customerPhone — merges all app_users / customers rows sharing those phones. */
+  /**
+   * Resolves the authenticated customer's saved addresses, merging in any
+   * app_users/customers/customer_saved_addresses rows that share their own
+   * phone number (handles accounts split across phone formats).
+   *
+   * IMPORTANT: the userId/phone hints are now derived solely from the
+   * authenticated session (req.customerId), never from client-supplied query
+   * params. Previously this route was unauthenticated AND accepted
+   * client-supplied `phone`/`customerPhone` query params that were merged in
+   * verbatim — passing a stranger's phone number pulled in *their* saved
+   * addresses too. getCustomerSavedAddressesResolved already looks up the
+   * caller's own phone (via app_users/customers) server-side, so no
+   * client-supplied phone hints are needed.
+   */
   async getResolvedAddresses(req: Request, res: Response) {
     try {
-      const userId = typeof req.query.userId === 'string' ? req.query.userId.trim() : '';
-      const phone = typeof req.query.phone === 'string' ? req.query.phone.trim() : '';
-      const customerPhone =
-        typeof req.query.customerPhone === 'string' ? req.query.customerPhone.trim() : '';
-
-      if (!userId || !UUID_RE.test(userId)) {
-        return res.status(400).json({ error: 'Valid userId is required' });
-      }
-
-      const hints = [phone, customerPhone].filter(Boolean);
-      const addresses = await databaseService.getCustomerSavedAddressesResolved(userId, hints);
+      const userId = req.customerId!;
+      const addresses = await databaseService.getCustomerSavedAddressesResolved(userId, []);
       res.json(addresses);
     } catch (error) {
       console.error('Error fetching resolved addresses:', error);
@@ -28,6 +30,9 @@ export class CustomersController {
   async getAddresses(req: Request, res: Response) {
     try {
       const { customerId } = req.params;
+      if (customerId !== req.customerId) {
+        return res.status(403).json({ error: 'Not authorized to view these addresses' });
+      }
       const addresses = await databaseService.getCustomerSavedAddresses(customerId);
       res.json(addresses);
     } catch (error) {
@@ -39,11 +44,14 @@ export class CustomersController {
   async createAddress(req: Request, res: Response) {
     try {
       const { customerId } = req.params;
+      if (customerId !== req.customerId) {
+        return res.status(403).json({ error: 'Not authorized to create an address for this customer' });
+      }
       const addressData = {
         ...req.body,
         customer_id: customerId
       };
-      
+
       const address = await databaseService.createCustomerSavedAddress(addressData);
       res.status(201).json(address);
     } catch (error) {

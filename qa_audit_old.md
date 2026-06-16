@@ -4,6 +4,188 @@
 **Scope:** All platforms — Backend API, Admin Web, Customer Web, Customer Mobile App, Shopkeeper Mobile App, Delivery Partner Mobile App  
 **Total Issues Found:** 137 Tickets
 
+> ## ⚠️ RE-AUDITED 2026-06-16 — see status index below and Part 9
+> Every ticket in this document was re-verified against the current codebase on 2026-06-16 (7 parallel deep-dive agents: 4 covering `admin/`/`backend/`/`frontend/`/`supabase/` in this repo, 3 covering the sibling mobile repos `nearandnowcustomerapp/`, `near-now-store_owner/`, `NAT_Near-Now_Rider-/`). Static code analysis only — no live DB/Storage connection, so live-row-count claims (Part 6) remain ⚠️ unconfirmed by design.
+> - The **Re-Audit Status Index** immediately below gives a one-line current verdict for every ticket ID in this file.
+> - **`QA_AUDIT.md`** is the condensed, currently-maintained version of this report — read it first for the prioritized punch list. This file remains the canonical ticket-ID reference (AUTH-001, SECURITY-007, etc.) that `QA_AUDIT.md` and code comments cross-reference.
+> - **Part 9** (new, appended below Part 8) contains every new defect found in the re-audit, ticketed in the same ID scheme as Parts 1–8.
+> - Legend: ✅ FIXED · ❌ STILL BROKEN · 🟡 PARTIALLY FIXED · ⚠️ COULD NOT VERIFY (live DB/Storage/device needed) · ⬜ NOT RE-VERIFIED THIS ROUND
+
+---
+
+## Re-Audit Status Index (2026-06-16)
+
+### Part 1 — Backend
+| Ticket | Status | Note |
+|---|---|---|
+| AUTH-001 | ✅ FIXED (2026-06-16) | `session_token` persisted on customer OTP (`auth.controller.ts:320-336`) **and** enforced — new `requireCustomer` middleware (`middleware/customerAuth.middleware.ts`) checks it, wired into `customers.routes.ts` and the customer-scoped `orders.routes.ts` routes with ownership checks. Also fixed SECURITY-008/009 as a side effect by deleting the broken local auth helpers in `invoice.controller.ts`. `tracking`/`notifications`/`coupons`/`delivery` routers and checkout (`/place`,`/create`) remain unauthenticated — tracked separately under SECURITY-012/014/015 (still broken) and a new checkout-auth gap. |
+| AUTH-002 | ✅ FIXED | `auth.routes.ts:22-42` now registers `express-rate-limit` (5/10min send, 10/15min verify), keyed by phone. |
+| AUTH-003 | 🟡 PARTIALLY FIXED | Bug still literally present in `lib/authService.ts`, but that file is now dead code with zero importers — the live OTP screen sends the correct `role` field. |
+| AUTH-004 | ❌ STILL BROKEN | `adminAuthService.ts:119` still unguarded; same pattern now also in `auditLog.ts:37,62,78`. |
+| PAY-001 | 🟡 PARTIALLY FIXED | Body is now pre-parsed by `express.json()` and `payment.service.ts:393` still `JSON.stringify`s it — no raw-body capture exists anywhere. Same root cause, still broken in practice despite commit `a174547`'s message. |
+| PAY-002 | ❌ STILL BROKEN | `orders.controller.ts:144-153` still returns 501. |
+| PAY-003 | ❌ STILL BROKEN | `CheckoutPage.tsx:478` unchanged. |
+| PAY-004 | ❌ STILL BROKEN | GSTIN/business name still excluded from `orderData` (`CheckoutPage.tsx:452-475`). |
+| PAY-005 | ❌ STILL BROKEN | No idempotency key anywhere in `payment.service.ts`. |
+| PAY-006 | ❌ STILL BROKEN | `payment.service.ts:389` unchanged fallback. |
+| COUPON-001 | ❌ STILL BROKEN | `min_order_value` still never read. |
+| COUPON-002 | ❌ STILL BROKEN, worse | No code anywhere increments `usage_count` at all — the limit can never be enforced regardless of concurrency. |
+| COUPON-003 | ❌ STILL BROKEN | `GET /api/coupons/` still has no active/expiry filter. Also now confirmed on the customer mobile app, which bypasses the backend entirely for coupons (see MOBILE-CUST-001). |
+| ORDER-001 | ❌ STILL BROKEN | `orders.controller.ts:74`, `database.service.ts:303-306` unchanged. |
+| ORDER-002 | ❌ STILL BROKEN | `database.service.ts:cancelOrder` still only touches `store_orders`/`customer_orders`. |
+| ORDER-003 | ❌ STILL BROKEN | `deliveryPartner.controller.ts:327` unchanged. |
+| ORDER-004 | ❌ STILL BROKEN | `database.service.ts:1372-1379` unchanged. |
+| ORDER-005 | ❌ STILL BROKEN | Same 4km cap, no notification, in `shopkeeper.controller.ts:reallocateMissingItems`. |
+| ORDER-006 | ❌ STILL BROKEN | `deliveryPartner.controller.ts:639-678` unchanged. |
+| ORDER-007 | ❌ STILL BROKEN | Still a 501 stub (`customers.controller.ts:55-63`). Also now confirmed the *route itself* has no auth either (see SECURITY-011). |
+| ORDER-008 | ❌ STILL BROKEN | Still a 501 stub (`customers.controller.ts:65-73`). |
+| NOTIF-001 | ❌ STILL BROKEN | All 5 methods still `{}`; `sendEmail`/`sendSMS` still `console.log`. |
+| NOTIF-002 | ❌ STILL BROKEN | Still queries only `delivery_partners`. |
+| NOTIF-003 | ❌ STILL BROKEN | Still returns `[]` unconditionally. |
+| NOTIF-004 | ❌ STILL BROKEN | Still no DB write. |
+| NOTIF-005 | ❌ STILL BROKEN | Still no DB write. |
+| NOTIF-006 | ❌ STILL BROKEN | Still hardcoded `{ email: true, sms: true, push: true }`. |
+| NOTIF-007 | ❌ STILL BROKEN | Still echoes input with no write. |
+| DELIVERY-001 | ❌ STILL BROKEN | `delivery.controller.ts:startSimulation` still has no auth middleware. |
+| DELIVERY-002 | ❌ STILL BROKEN | Both broadcast functions still use delivery address, not store location. |
+| DELIVERY-003 | ❌ STILL BROKEN | Still no customer notification on reallocation failure. |
+| DELIVERY-004 | ❌ STILL BROKEN | `getOrderTrackingFull` still writes to `stores` on every poll. |
+| DELIVERY-005 | ❌ STILL BROKEN | `shopkeeper.controller.ts:broadcastToNearbyDrivers` still has no staleness filter (contrast the correct `delivery.controller.ts` version). |
+| WEB-001 | ❌ STILL BROKEN | `CheckoutPage.tsx:803` still has `required` on the email field. |
+| WEB-002 | 🟡 PARTIALLY FIXED | Still uses the anon client and still broken in isolation, but `AuthContext.tsx:44` now hydrates from `localStorage` on mount, masking the user-facing symptom for already-logged-in users. |
+| WEB-003 | ✅ FIXED | `services/supabase.ts:34` now builds `supabaseAdmin` from the anon key — no service-role key anywhere in `frontend/src`. |
+| WEB-004 | ❌ STILL BROKEN | `useOrderTrackingRealtime.ts:141` still runs both unconditionally. |
+| WEB-005 | ❌ STILL BROKEN | Still no `AbortController`. |
+| WEB-006 | 🟡 PARTIALLY FIXED | Array reference now replaced (top-level re-render fires), but the item object at that index is still mutated in place — latent bug for any future per-item `React.memo`. |
+| WEB-007 | ❌ STILL BROKEN | Still runs in parallel; `shipping_address` can still omit lat/lng. |
+| BACKEND-001 | ❌ STILL BROKEN | `server.ts` still has no 4-arg error middleware. |
+| BACKEND-002 | ❌ STILL BROKEN | Still `express.json()` with no `limit`. |
+| BACKEND-003 | ❌ STILL BROKEN | Now 3 confirmed independent copies within the backend alone (`database.service.ts`, `delivery.controller.ts`, `shopkeeper.controller.ts`) plus the rider app's own copy. |
+| BACKEND-004 | ❌ STILL BROKEN | `database.service.ts:1406-1408` unchanged. |
+| SECURITY-001 | ❌ STILL BROKEN | `hasPermission()` still UI-only; confirmed no RLS/middleware enforces it anywhere. |
+| SECURITY-002 | ❌ STILL BROKEN | Still no server-side role check; confirmed zero RLS policy on `admins` table in any migration (see SECURITY-018). |
+| SECURITY-003 | ❌ STILL BROKEN | `server.ts:42-45` unchanged. |
+| SECURITY-004 | 🟡 PARTIALLY FIXED | `config/database.ts:18-48` now validates the service-role key's JWT role claim and logs loudly — diagnostics fixed, but the fallback to the anon client still happens and DB ops still silently degrade instead of failing closed. |
+| SECURITY-005 | ❌ STILL BROKEN | `storeOwner.controller.ts:8-67` unchanged, "TEMPORARY... NOT secure" comment still present. |
+| SECURITY-006 | ❌ STILL BROKEN | Still no ownership check on either handler. Also now confirmed on a third handler, `updateStore` (see SECURITY-013). |
+| SECURITY-007 | ❌ STILL BROKEN | `invoice.routes.ts:44-47` still has no auth middleware. |
+| SECURITY-008 | ✅ FIXED (2026-06-16) | Broken local `requireCustomer` deleted from `invoice.controller.ts`; `invoice.routes.ts` now imports the real, session-token-checking implementation from `middleware/customerAuth.middleware.ts`. |
+| SECURITY-009 | ✅ FIXED (2026-06-16) | Broken local `requireShopkeeper` deleted from `invoice.controller.ts`; `invoice.routes.ts` now imports the correct one from `shopkeeper.controller.ts` (`.eq('session_token', token)`). |
+| DB-001 | ❌ STILL BROKEN, worse | `database.types.ts:14` has `'completed'` (not a real enum value at all) and is still missing `'paid'`, `'authorized'`, `'cancelled'`, `'partially_refunded'`. |
+| DB-002 | ❌ STILL BROKEN | `database.types.ts:3-12` still missing `'picking_up'`. |
+| PERF-001 | ❌ STILL BROKEN | `getNearbyStores` unchanged. |
+| PERF-002 | ❌ STILL BROKEN | `getProductsWithDetails` unchanged. |
+| PERF-003 | ❌ STILL BROKEN | `getProductById` unchanged. |
+
+### Part 2 — Admin Panel
+| Ticket | Status | Note |
+|---|---|---|
+| ADMIN-001 | ❌ STILL BROKEN, worse | Confirmed two parallel auth systems: logout calls `secureAdminLogout()` against `admin_refresh_tokens`, a table the actual login flow (`adminAuthService.ts`) never wrote to — the real `admin_sessions` row from login is never touched at all (see ADMIN-012). |
+| ADMIN-002 | ⚠️ NOT REPRODUCIBLE AS DESCRIBED | `auditLog.ts:25-45,50-67` now catch and swallow their own errors internally — cannot currently throw and mask the caller. |
+| ADMIN-003 | ❌ STILL BROKEN | `StoresPage.tsx:17,40` still uses the anon client. |
+| ADMIN-004 | ❌ STILL BROKEN | `mapDbStatusToFrontend` (447-454) unchanged. |
+| ADMIN-005 | ❌ STILL BROKEN | `statusMap` (662-668) unchanged. |
+| ADMIN-006 | ❌ STILL BROKEN | `getCustomers` (703-706) still no role filter. |
+| ADMIN-007 | ❌ STILL BROKEN | `getOrders`/`getOrderById` still N+1. |
+| ADMIN-008 | ❌ STILL BROKEN | `AdminLoginPage.tsx:46-48` still writes to `sessionStorage`. |
+| ADMIN-009 | 🟡 PARTIALLY FIXED | Direct browser→Expo call is gone — but the replacement code is now a no-op that fabricates a "Notification sent" success message without sending anything. |
+| ADMIN-010 | 🟡 PARTIALLY FIXED | Notification + Appearance prefs now persist to `localStorage`; password persists to DB. The "Payment settings" tab was removed entirely rather than fixed. |
+
+### Part 3 — Customer Mobile App (`nearandnowcustomerapp/`)
+| Ticket | Status | Note |
+|---|---|---|
+| MOBILE-SEC-001 | ❌ STILL BROKEN, worse | Key still bundleable via `EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY`. Worse: `lib/supabase.ts:62-69` (`assertSupabaseAdminConfigured`) now *throws* without it, gating `createOrder`, all address CRUD, and session restore — the key can't be safely removed until those flows move to the backend. |
+| MOBILE-SEC-004 | ✅ FIXED (2026-06-16) | The app already sent a real persisted `session_token`; the backend's `requireCustomer` was fixed to actually check it (see SECURITY-008), so this is now enforced end-to-end with zero app-side change required. |
+| MOBILE-AUTH-001 | 🟡 PARTIALLY FIXED | Still calls `supabaseAdmin` at `lib/authService.ts:135`; symptom now masked by `AuthContext.tsx:72-81` optimistic AsyncStorage hydration for already-logged-in users. Underlying dependency on the privileged key for any *fresh* lookup is unchanged, and is now confirmed load-bearing for purchase/address flows too (see MOBILE-SEC-001). |
+
+### Part 3 — Delivery Partner App (`NAT_Near-Now_Rider-/`)
+| Ticket | Status | Note |
+|---|---|---|
+| MOBILE-AUTH-002 | 🟡 PARTIALLY FIXED | Bug literal still in `lib/authService.ts` but the file has zero importers; live `app/otp.tsx:107` correctly sends `role: "delivery_partner"`. |
+| MOBILE-SEC-002 | ❌ STILL BROKEN | Confirmed on customer + rider apps (shopkeeper not independently re-checked this round); no `expo-secure-store` anywhere. |
+| MOBILE-SEC-003 | ❌ STILL BROKEN | Confirmed on **both** ends now: client `lib/session.ts` never sets `expiresAt`; server `deliveryPartner.controller.ts:requireRider` (24-43) has no TTL check either. |
+
+### Part 3 — Shopkeeper App (`near-now-store_owner/`)
+| Ticket | Status | Note |
+|---|---|---|
+| MOBILE-AUTH-003 | ❌ STILL BROKEN, worse | `stores[0]` hardcoding has spread from 1 file to 6 (`home.tsx`, `payments.tsx`, `previous-orders.tsx`, `stock.tsx`, `inventory.tsx`, `profile.tsx`) while a correct `hooks/useStore.ts` sits completely unused (zero importers). |
+| MOBILE-ORDER-001 | ✅ FIXED | No module-level cache remains; `lib/useSmartPoll.ts` is now AppState-aware. |
+| MOBILE-ORDER-002 | 🟡 PARTIALLY FIXED | The broken path (`services/orderService.ts`) still targets non-existent endpoints, but now has zero importers — dead code, not a live inconsistency. |
+| MOBILE-ORDER-003 | ⬜ NOT RE-VERIFIED THIS ROUND | |
+| MOBILE-ORDER-004 | 🟡 PARTIALLY FIXED (dead code) | Same 4 non-existent endpoints, but the class has zero importers now. |
+| MOBILE-ORDER-005 | 🟡 PARTIALLY FIXED (dead code) | Stub unchanged, zero call sites. |
+| MOBILE-ORDER-006 | 🟡 PARTIALLY FIXED (superseded) | QR flow replaced entirely by a working `pickup_code` text-display flow; the stub is vestigial. |
+| MOBILE-ORDER-007 | 🟡 PARTIALLY FIXED (dead code) | Stub unchanged, zero call sites. |
+| MOBILE-ORDER-008 | ❌ STILL BROKEN | `app/(tabs)/home.tsx:104` still hardcodes 0. |
+| MOBILE-NOTIF-001 | ❌ STILL BROKEN | Still no `expo_push_token` column path, still no `/api/push-token` route (see MOBILE-NOTIF-003 below). |
+| MOBILE-NOTIF-002 | ❌ STILL BROKEN | Still polling-only; push registration itself is also structurally broken (see FCM-001). |
+| MOBILE-PAYMENT-001 | ❌ STILL BROKEN | `hooks/usePaymentFlow.ts:72-88` still polls the full window, only short-circuits on `'paid'`. |
+| MOBILE-PAYMENT-002 | 🟡 PARTIALLY FIXED | `app/support/payment-options.tsx:131-137` now renders a proper empty state instead of a permanent skeleton; the underlying feature is still unimplemented. |
+| MOBILE-BUG-001 | ❌ STILL BROKEN | `app/support/checkout.tsx:262-280`, `lib/orderService.ts:272-280,370` unchanged. |
+| MOBILE-UX-001 | ❌ STILL BROKEN | `app/(tabs)/home.tsx:544` unchanged. |
+| MOBILE-UX-002 | ❌ STILL BROKEN | `app/otp.tsx:54-59` unchanged race window. |
+| MOBILE-UX-003 | ❌ STILL BROKEN | `app/wallet.tsx:37-45,79` unchanged. |
+| MOBILE-UX-004 | ✅ FIXED | `app/(tabs)/payments.tsx` now computes real Today/Week/All-Time payout totals from delivered orders. |
+| MOBILE-PERF-001 | 🟡 PARTIALLY FIXED | Still no shared singleton file, but now module-scope rather than per-render. |
+| MOBILE-PERF-002 | ⬜ NOT RE-VERIFIED THIS ROUND | |
+| MOBILE-PERF-003 | ❌ STILL BROKEN | `app/(tabs)/home.tsx:294-317` still polls every 6s regardless of online status (per the code's own comment). |
+| MOBILE-PERF-004 | ❌ STILL BROKEN | `hooks/useOrderTracking.ts:78-153` still runs realtime + 5s fallback + separate 2s driver poll, all concurrently. |
+
+### Part 4 — Cross-App & System
+| Ticket | Status | Note |
+|---|---|---|
+| CROSS-001 | ❌ STILL BROKEN | Confirmed still nothing on either side; rider `earnings.tsx`/`profile.tsx` still hardcode `* 0.15`. |
+| CROSS-002 | ❌ STILL BROKEN | Confirmed: `shopkeeper.controller.ts:36` uses `session_token`, `invoice.controller.ts:66` uses `id` for the same role — unchanged. |
+| CROSS-003 | ❌ STILL BROKEN | Both code paths still diverge as described. |
+
+### Part 5 — Shopkeeper & Rider Profile / Admin Access
+| Ticket | Status | Note |
+|---|---|---|
+| SHOP-PROF-001 | ❌ STILL BROKEN | `app/profile.tsx:403` still passes literal `true`. |
+| SHOP-PROF-002 | ❌ STILL BROKEN | `app/profile.tsx:394,415` still ungated. |
+| SHOP-PROF-003 | ❌ STILL BROKEN | Zero matches anywhere for `approval_status`/`is_approved`. Contrast the rider app, which implements this correctly (see MOBILE-AUTH-003 area, rider home.tsx:365). |
+| SHOP-PROF-004 | ❌ STILL BROKEN | Same — no polling/banner code exists. |
+| SHOP-PROF-005 | ❌ STILL BROKEN | `app/profile.tsx:53`, `lib/storage.ts:75-78` still single-image only. |
+| CROSS-PROF-001 | ❌ STILL BROKEN | No `profile_change_request` concept anywhere in either app's repo. |
+| RIDER-PROF-001 | ❌ STILL BROKEN | `app/(tabs)/profile.tsx:353` still hardcoded `4.8`. |
+| RIDER-PROF-002 | ❌ STILL BROKEN | Backend now returns `vehicle_number` (`deliveryPartner.controller.ts:81`) but the profile UI still never displays it; no `vehicle_type`/`vehicle_image_url` anywhere. |
+| RIDER-PROF-003 | ❌ STILL BROKEN | Still read-only text only. |
+
+### Part 6 — Live Database & API Audit
+| Ticket | Status | Note |
+|---|---|---|
+| DB-003 | ⚠️ COULD NOT VERIFY | Live DB/PostgREST introspection needed; no backend code calls either spelling. |
+| DB-004 | 🟡 PARTIALLY VERIFIED | `product_name` confirmed real via migration; `name`/`phone`/`deleted_at` unverifiable without live DB. |
+| DB-005 | ⚠️ COULD NOT VERIFY, contradicted by static evidence | `admin_users` appears nowhere in any tracked migration or app code — if it exists live, it's entirely untracked. |
+| DB-006 | ⚠️ COULD NOT VERIFY | Live Storage/schema state. |
+| DB-007 | ⚠️ COULD NOT VERIFY (live row count) | The current new-customer signup code path (`auth.controller.ts:294-315`) does insert into `customers` and rolls back `app_users` on failure — looks correct for new signups; the historical gap may predate this code or affect only old rows. |
+| DB-008 | ⚠️ COULD NOT VERIFY (live row count) | Mechanism plausible: `upsertCustomerPaymentSnapshot` is only called from `updateOrderPaymentStatus`, so COD orders that never reach that function would have no row. |
+| ORDER-009 | 🟡 LIKELY STILL TRUE | Row count unverified, but the silent-swallow mechanism that would cause it is confirmed still present (`orders.controller.ts:97-107`, `console.error('...non-fatal...')`). |
+| ORDER-010 | ✅ FIXED (code-level) | `invoice.service.ts:1084` now upserts on `(invoice_id, document_type)` with a check-before-generate at 1113-1120. Historical row counts can't be re-verified, but the bug causing them is closed. |
+| DELIVERY-006 | 🟡 LIKELY STILL TRUE | Table and route both confirmed to exist; zero insert call-sites found anywhere in `backend/src`. |
+| WEB-008 | ✅ FIXED | Both pages now call `/api/auth/send-otp` and `/api/auth/verify-otp` correctly. |
+| MOBILE-ORDER-009 | 🟡 PARTIALLY FIXED (different mechanism) | The dead `services/storeService.ts` call still targets the missing route, but the *live* inventory path now bypasses the backend API entirely via direct Supabase queries (`lib/storeProducts.ts`) — same underlying route gap, no longer a live 404. |
+| MOBILE-ORDER-010 | ✅ FIXED | `app/invoice/[orderId].tsx:135` now calls the real `GET /api/orders/:id`. |
+| MOBILE-ORDER-011 | ✅ FIXED | Zero remaining `/api/store-owner` or `/api/shopkeeper` references anywhere in the shopkeeper app. |
+| MOBILE-ORDER-012 | ✅ FIXED | `app/delivery/[orderId].tsx:96` now correctly sends `allocation_id`. |
+| MOBILE-ORDER-013 | ✅ FIXED | `app/signup.tsx:58` now uses `PUT`. |
+| MOBILE-ORDER-014 | ✅ FIXED | `hooks/useOrders.ts` and `previous-orders.tsx` all now use the correct bare `/shopkeeper` prefix. |
+| ADMIN-011 | ❌ STILL BROKEN (but dead/unused) | `admin/src/services/supabase.ts:889-956` still queries the non-existent table, but no admin page currently calls it — latent, not live. |
+| STORAGE-001 | ⚠️ COULD NOT VERIFY | Live Storage state. |
+| MOBILE-NOTIF-003 | ❌ STILL BROKEN | `hooks/usePushNotifications.dev.ts:110` still calls the non-existent `/api/push-token`. |
+
+### Part 7 — Email & Push Integration Gaps
+| Ticket | Status | Note |
+|---|---|---|
+| RESEND-001 | ❌ STILL BROKEN | No email SDK installed, no key in `.env.example`, `sendEmail` still `console.log`. |
+| FCM-001 | ❌ STILL BROKEN | `lib/notifications.ts:160-168,283-287` still call non-existent routes; 404s silently swallowed. |
+| FCM-002 | ❌ STILL BROKEN | All three sub-parts confirmed still broken (route missing, send-path still `delivery_partners`-only; DB column unverifiable live but consistent with route gap). |
+
+### Part 8 — Additional Findings
+| Ticket | Status | Note |
+|---|---|---|
+| WEB-009 | ❌ STILL BROKEN | `CartContext.tsx:32` still hardcodes ₹30; `utils/deliveryFees.ts` calculator still unwired. Now also confirmed duplicated on the customer mobile app as a hardcoded ₹25 (see MOBILE-CUST-002). |
+
 ---
 
 ## Executive Summary
@@ -22,23 +204,28 @@ The Near & Now hyperlocal commerce platform is a monorepo (Express/TypeScript ba
 
 ## Critical Production Risks Table
 
-| Risk | Affected Flow | Impact | Ticket |
-|------|--------------|--------|--------|
-| Invoice endpoint has no auth | Invoice generation | Full customer PII exposed to any caller | SECURITY-007 |
-| storeOwner.getStores reads userId from query param | Store owner API | Any caller can impersonate any store owner | SECURITY-005 |
-| Service-role key in APK | Customer mobile app | Full DB breach via decompiler | MOBILE-SEC-001 |
-| Customer uses UUID as Bearer token | Customer API | Any observer can forge auth | MOBILE-SEC-004 |
-| Webhook HMAC always fails | Razorpay webhooks | Payment status never auto-updated | PAY-001 |
-| Customer token never persisted | All customer APIs | Silent auth bypass | AUTH-001 |
-| updateOrderStatus returns 501 | Order management | No REST-level status management | PAY-002 |
-| All notification methods empty | Entire order lifecycle | Zero customer/partner notifications | NOTIF-001 |
-| No payout system exists | Rider + shopkeeper financials | Platform cannot operate commercially | CROSS-001 |
-| supabaseAdmin silently falls back to anon key | All privileged DB ops | RLS blocks all backend-only operations in misconfigured env | SECURITY-004 |
-| cancelOrder does not cancel allocations | Order cancellation | Riders/shopkeepers process cancelled orders | ORDER-002 |
-| Delivery simulation endpoint unauthenticated | Delivery lifecycle | Anyone can corrupt any live order | DELIVERY-001 |
-| All in-app notification DB methods are stubs | Notification inbox | Notification inbox permanently empty | NOTIF-003/004/005 |
-| No rate limiting on OTP | Auth endpoints | Twilio draining + OTP brute-force | AUTH-002 |
-| CORS wildcard when ALLOWED_ORIGINS unset | Backend | Cross-origin attacks in prod | SECURITY-003 |
+*Re-audit status column added 2026-06-16.*
+
+| Risk | Affected Flow | Impact | Ticket | Re-Audit Status |
+|------|--------------|--------|--------|--------|
+| Invoice endpoint has no auth | Invoice generation | Full customer PII exposed to any caller | SECURITY-007 | ❌ STILL BROKEN |
+| storeOwner.getStores reads userId from query param | Store owner API | Any caller can impersonate any store owner | SECURITY-005 | ❌ STILL BROKEN |
+| Service-role key in APK | Customer mobile app | Full DB breach via decompiler | MOBILE-SEC-001 | ❌ STILL BROKEN, worse — now structurally load-bearing for core purchase flow, see Part 9 |
+| Customer uses UUID as Bearer token | Customer API | Any observer can forge auth | MOBILE-SEC-004 | ✅ FIXED (2026-06-16) |
+| Webhook HMAC always fails | Razorpay webhooks | Payment status never auto-updated | PAY-001 | 🟡 PARTIALLY FIXED — root cause unchanged despite commit `a174547` |
+| Customer token never persisted | All customer APIs | Silent auth bypass | AUTH-001 | ✅ FIXED (2026-06-16) — token persisted and now enforced by `requireCustomer` on customers/orders/invoice routes |
+| updateOrderStatus returns 501 | Order management | No REST-level status management | PAY-002 | ❌ STILL BROKEN |
+| All notification methods empty | Entire order lifecycle | Zero customer/partner notifications | NOTIF-001 | ❌ STILL BROKEN |
+| No payout system exists | Rider + shopkeeper financials | Platform cannot operate commercially | CROSS-001 | ❌ STILL BROKEN |
+| supabaseAdmin silently falls back to anon key | All privileged DB ops | RLS blocks all backend-only operations in misconfigured env | SECURITY-004 | 🟡 PARTIALLY FIXED — diagnostics hardened, fallback behavior unchanged |
+| cancelOrder does not cancel allocations | Order cancellation | Riders/shopkeepers process cancelled orders | ORDER-002 | ❌ STILL BROKEN |
+| Delivery simulation endpoint unauthenticated | Delivery lifecycle | Anyone can corrupt any live order | DELIVERY-001 | ❌ STILL BROKEN — and now also true of `tracking.routes.ts` (SECURITY-012) |
+| All in-app notification DB methods are stubs | Notification inbox | Notification inbox permanently empty | NOTIF-003/004/005 | ❌ STILL BROKEN |
+| No rate limiting on OTP | Auth endpoints | Twilio draining + OTP brute-force | AUTH-002 | ✅ FIXED |
+| CORS wildcard when ALLOWED_ORIGINS unset | Backend | Cross-origin attacks in prod | SECURITY-003 | ❌ STILL BROKEN |
+| **NEW:** Half the backend's routers have zero auth at all | Orders, addresses, tracking, coupons, delivery partners | Anyone who knows/guesses a UUID reads/writes other users' data | SECURITY-010/011/012/015 | ❌ NEW, CRITICAL |
+| **NEW:** Two parallel admin auth systems — logout doesn't invalidate the real session | Admin panel | Stolen admin token valid up to 12h after "logout" | ADMIN-012 | ❌ NEW, CRITICAL |
+| **NEW:** Admin invoice endpoint has zero auth | Admin invoice download | Any customer's PII retrievable by guessing an order ID | SECURITY-016 | ❌ NEW, CRITICAL |
 
 ---
 
@@ -1151,7 +1338,315 @@ Note: `near-now-store_owner/app/(tabs)/previous-orders.tsx` (lines 273, 297, 387
 
 ---
 
+## JIRA TICKETS — PART 9: NEW FINDINGS FROM THE 2026-06-16 RE-AUDIT
+
+*All tickets below are new defects found during the 2026-06-16 re-audit that were not in the original 2026-05-26 report. Numbered as a continuation of the existing ID scheme.*
+
+---
+
+### SECURITY-010 · CRITICAL · P0 · ✅ FIXED 2026-06-16
+**Summary:** `orders.routes.ts` has no authentication or ownership checks on any route
+**Affected Apps:** Backend
+**Root Cause:** `GET /:orderId`, `GET /customer/:customerId`, `POST /:orderId/cancel` (`orders.routes.ts:61-66`) register zero auth middleware. `getOrderById`/`cancelOrder` never verify the caller owns the order.
+**Fix applied:** All three routes now require the new `requireCustomer` middleware (`middleware/customerAuth.middleware.ts`); `orders.controller.ts` adds an explicit `order.customer_id !== req.customerId` → 403 check in `getCustomerOrders`, `getOrderById`, and `cancelOrder`. `POST /place`/`POST /create` (checkout) remain unauthenticated — out of this ticket's original scope, tracked as a follow-up.
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### SECURITY-011 · CRITICAL · P0 · ✅ FIXED 2026-06-16
+**Summary:** `customers.routes.ts` has no authentication on any address route
+**Affected Apps:** Backend
+**Root Cause:** `customers.routes.ts:7-11` — `GET/POST /:customerId/addresses`, `PATCH/DELETE /addresses/:addressId` have zero auth middleware. Separate from the already-known 501-stub issue (ORDER-007/008) — even once implemented, these routes would still have no caller verification.
+**Fix applied:** All 5 routes now require `requireCustomer`; `getAddresses`/`createAddress` add ownership checks (`customerId !== req.customerId` → 403). `getResolvedAddresses` now derives the user id from the authenticated token instead of a client-supplied query param (see new ticket SECURITY-018 for a related disclosure bug found and fixed in the same pass). `updateAddress`/`deleteAddress` are gated too but remain 501 stubs — ORDER-007/008 unchanged.
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### SECURITY-012 · CRITICAL · P0
+**Summary:** `tracking.routes.ts` has no authentication — anyone can forge order status updates
+**Affected Apps:** Backend
+**Root Cause:** `POST /orders/:orderId/updates` (`tracking.routes.ts:18`) has no auth middleware. The handler writes arbitrary status/location/notes and overwrites `customer_orders`/`store_orders` status for the given order — same severity class as DELIVERY-001 but on a different router.
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### SECURITY-013 · HIGH · P1
+**Summary:** `storeOwner.controller.ts updateStore` has no ownership verification
+**Affected Apps:** Backend
+**Root Cause:** `updateStore` (353-393) only checks that *a* Bearer header is present — never validates it or checks store ownership. Any caller can PATCH any store's name/address/phone/images/verification document. Third handler in this controller with this exact gap (alongside SECURITY-005, SECURITY-006).
+**Severity:** High | **Priority:** P1
+
+---
+
+### SECURITY-014 · MEDIUM · P2
+**Summary:** `notifications.routes.ts` has no authentication on any route
+**Affected Apps:** Backend
+**Root Cause:** `GET /users/:userId`, `PUT /:notificationId/read`, `PUT /users/:userId/read-all`, `POST /send`, `GET/PUT /users/:userId/preferences` (`notifications.routes.ts:8-23`) have zero auth middleware. Currently low-impact since the backing functions are stubs (NOTIF-003 through NOTIF-007), but `POST /send` already triggers a real notification call — becomes a spam/exposure vector once those stubs are implemented.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### SECURITY-015 · HIGH · P1
+**Summary:** `coupons.routes.ts` and `delivery.routes.ts` have zero authentication — full CRUD on coupons and delivery partners is open to anyone
+**Affected Apps:** Backend, Admin Web
+**Root Cause:** `coupons.routes.ts:8-16` and `delivery.routes.ts:8-30` register GET/POST/PUT/DELETE with no auth middleware at all. `admin/src/pages/admin/OffersPage.tsx` and `DeliveryPage.tsx` call these endpoints directly. Any unauthenticated caller who finds the API base URL can create/delete coupons or delivery partner records, bypassing Supabase RLS entirely via the backend's own service-role client — worse than the anon-client issues elsewhere because there's no RLS backstop at all.
+**Severity:** High | **Priority:** P1
+
+---
+
+### SECURITY-016 · CRITICAL · P0
+**Summary:** `getAdminInvoice` has zero authentication — full customer invoice data exposed to anyone who guesses an order ID
+**Affected Apps:** Backend, Admin Web
+**Root Cause:** `invoice.controller.ts:getAdminInvoice` (255-285) has no auth check whatsoever. Compounded by the admin UI's own Bearer token for this route being permanently empty — `OrderDetailPage.tsx:120` reads `localStorage.getItem('admin_id')`, a key nothing in the admin app ever writes (admin identity actually lives in `sessionStorage['adminData']`). Even if that were fixed, the backend route still has no check.
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### SECURITY-017 · HIGH · P1
+**Summary:** No RLS policy on the `admins` table exists in any tracked migration
+**Affected Apps:** Backend, Admin Web, Supabase
+**Root Cause:** Neither `20260515000000_admin_tables_and_seed.sql`, `20260515000002_admin_data_access_rls.sql`, nor any other migration contains `ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY` or any `CREATE POLICY` referencing `admins`. The single most sensitive table in the system (password hashes) has its actual live RLS state entirely outside version control.
+**Severity:** High | **Priority:** P1
+
+---
+
+### SECURITY-018 · HIGH · P1 · ✅ FOUND AND FIXED 2026-06-16 (not in the original audit)
+**Summary:** `getResolvedAddresses` let any caller pull in another account's saved addresses by passing their phone number as a query param
+**Affected Apps:** Backend
+**Root Cause:** `customers.controller.ts:getResolvedAddresses` (now fixed) forwarded client-supplied `phone`/`customerPhone` query params straight into `database.service.ts:getCustomerSavedAddressesResolved`, which merges in *every* `app_users`/`customers`/`customer_saved_addresses` row matching those phone numbers — independent of the `userId` param and independent of the (separately tracked, also-fixed) total lack of auth on this route. An attacker who knew or guessed a target's phone number could retrieve their full name, saved addresses, and delivery instructions. Discovered while implementing the AUTH-001/SECURITY-011 fix, not in the original 2026-05-26 audit.
+**Fix applied:** The controller now derives the user id from `req.customerId` (the authenticated session) only, and calls the service with an empty phone-hints array — the service already independently looks up the authenticated user's own phone from `app_users`/`customers` server-side, so no client-supplied hint is needed for the legitimate "merge my own accounts across phone formats" use case.
+**Severity:** High | **Priority:** P1
+
+---
+
+### ADMIN-012 · CRITICAL · P0
+**Summary:** Two parallel, inconsistently-wired admin auth systems — logout never invalidates the real session
+**Affected Apps:** Admin Web, Supabase
+**Root Cause:** `adminAuthService.ts` (direct-DB login, writes `admin_sessions`) and `secureAdminAuth.ts`/the `admin-auth` edge function (JWT-based, reads/writes `admin_refresh_tokens`) coexist. `AdminLoginPage.tsx:33` logs in via the former exclusively. Route guards (`AdminRoutes.tsx:25,32`) and logout buttons (`AdminHeader.tsx:4`, `AdminSidebar.tsx:24`) use the latter. Net effect: clicking Logout clears `sessionStorage` locally but never touches the real `admin_sessions` row created at login — a stolen/leaked `x-admin-token` stays valid for its full 12-hour TTL regardless of logout. This is the precise mechanism behind the already-known ADMIN-001.
+**Severity:** Critical | **Priority:** P0
+
+---
+
+### ADMIN-013 · HIGH · P1
+**Summary:** `CustomerDetailPage` order-history filter compares the wrong field — always empty
+**Affected Apps:** Admin Web
+**Root Cause:** `CustomerDetailPage.tsx:27` filters `o.customer_id === id`, but `getOrders()` maps the field as `user_id` (`adminService.ts:529`). The filter always evaluates `undefined === id` → false. Every customer's order history table renders empty regardless of actual order count.
+**Severity:** High | **Priority:** P1
+
+---
+
+### ADMIN-014 · MEDIUM · P2
+**Summary:** Admin login rate limiting is in-memory/client-side only — trivially bypassed
+**Affected Apps:** Admin Web
+**Root Cause:** `utils/rateLimit.ts` is a singleton in-memory `Map` that resets on every page refresh. The DB-backed `is_account_locked()` RPC (5 attempts/15min) is a real backstop, but the advertised client-side throttle is cosmetic and doesn't apply to anyone scripting the Supabase REST API directly.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### ADMIN-015 · MEDIUM · P2
+**Summary:** Password-strength schemas defined but never used — weak passwords accepted
+**Affected Apps:** Admin Web
+**Root Cause:** `admin/src/schemas/admin.schema.ts:11-39,41-68` enforce upper/lower/digit/special-char requirements but are never imported anywhere. The actually-used `CreateAdminPage.tsx:65-68`/`EditAdminPage.tsx:110-113` only check `length < 8` — an 8-character password like `aaaaaaaa` is accepted in practice.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### ADMIN-016 · LOW · P3
+**Summary:** Several admin pages parse `sessionStorage['adminData']` directly instead of using the shared `getCurrentAdmin()` helper
+**Affected Apps:** Admin Web
+**Root Cause:** `AdminManagementPage.tsx:125-126`, `CreateAdminPage.tsx:33-34`, `EditAdminPage.tsx:38-39` each independently `JSON.parse(sessionStorage.getItem('adminData'))` with no try/catch, duplicating logic that already exists in `secureAdminAuth.ts:getCurrentAdmin()` (211-223).
+**Severity:** Low | **Priority:** P3
+
+---
+
+### ADMIN-017 · LOW · P3
+**Summary:** `admin/vercel.json` has no backend rewrite — relies entirely on `VITE_API_URL` being set correctly
+**Affected Apps:** Admin Web
+**Root Cause:** Unlike the root `vercel.json` (which the `45db3e4` commit updated with explicit `/store-owner/(.*)`, `/shopkeeper/(.*)`, `/delivery-partner/(.*)` rewrites), `admin/vercel.json` has only an SPA fallback (`/(.*) → /index.html`). If `VITE_API_URL` is ever unset on the admin's own Vercel project, every `fetch()` call silently becomes a same-origin request to the admin's static site. Currently low-impact since no admin page calls the bare-prefix routers — a configuration risk, not a live bug.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### PAY-007 · MEDIUM · P2
+**Summary:** Payment flow throws a hard error on legacy zero-total orders instead of charging ₹0 silently
+**Affected Apps:** Backend
+**Root Cause:** `payment.service.ts:createPaymentOrder` (118-125) throws "Invalid order amount in database" when `total_amount <= 0`. Since `database.service.ts:createCustomerOrder` (the legacy `POST /api/orders` path, ORDER-001) always writes `total_amount: 0`, any payment attempt against an order created via that path now hard-fails with an explicit exception rather than silently creating a ₹0 Razorpay charge. Surfacing-wise this is an improvement (visible failure vs. silent ₹0 charge), but it means the legacy order-creation path is now fully blocking, not just incorrect.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### ENV-001 · MEDIUM · P2
+**Summary:** `RAZORPAY_WEBHOOK_SECRET` and email-provider keys are referenced in code but absent from both `.env.example` files
+**Affected Apps:** Backend
+**Root Cause:** `payment.service.ts:7,389` reads `process.env.RAZORPAY_WEBHOOK_SECRET` (present in the real `.env`, but no template entry exists in `/.env.example` or `backend/.env.example`), making PAY-006 more likely in real deployments since operators have no prompt to set it. Likewise no `RESEND_API_KEY` (or any provider key) appears in either example file, consistent with RESEND-001 never being wired up.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### ENV-002 · LOW · P3
+**Summary:** Stale and undocumented frontend Vite env vars
+**Affected Apps:** Customer Web
+**Root Cause:** `.env.example` documents `VITE_SUPABASE_SERVICE_ROLE_KEY`, which nothing in `frontend/src` reads anymore (since WEB-003 was fixed). Conversely `VITE_ENCRYPTION_KEY` is read by `frontend/src/utils/encryption.ts:5` (itself dead/unused code) but is undocumented anywhere and silently falls back to the hardcoded literal `'default-key-change-in-production'`.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### ENV-003 · LOW · P3
+**Summary:** `backend/.env.example` documents non-`VITE_`-prefixed Supabase vars that don't exist in the real root `.env`
+**Affected Apps:** Backend
+**Root Cause:** `backend/.env.example:6,9,15` documents `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` (no prefix), but the actual root `.env` only has the `VITE_`/`EXPO_PUBLIC_`-prefixed variants. Functional today only because `database.ts:15-16,32-33` falls back across both naming schemes — exactly the kind of documentation drift that has caused real service-role-key incidents before in this codebase (see SECURITY-004's history).
+**Severity:** Low | **Priority:** P3
+
+---
+
+### WEB-010 · MEDIUM · P2
+**Summary:** `OrderTrackingPage` "Invoice" link points to a non-existent backend route
+**Affected Apps:** Customer Web
+**Root Cause:** `OrderTrackingPage.tsx:738` links to `/api/invoices/${orderId}`. No such route exists — the real routes are `/api/invoices/order/:orderId/{customer,store,delivery}`. Always 404s. Contrast `OrdersPage.tsx:252`, which calls the correct path.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### WEB-011 · HIGH · P1
+**Summary:** Address update/delete/set-default bypass the backend entirely, hitting Supabase directly with the anon client
+**Affected Apps:** Customer Web
+**Root Cause:** `frontend/src/services/supabase.ts:1188` (`updateAddress`), `:1246` (`deleteAddress`), `:1269` (`setDefaultAddress`) always call `supabaseAdmin.from('customer_saved_addresses')` directly — unlike `getUserAddresses`/`createAddress`, which correctly route through `/api/customers/...`. This depends entirely on RLS permitting anon writes, a separate, undocumented failure mode on top of the backend's own 501 stubs (ORDER-007/008).
+**Severity:** High | **Priority:** P1
+
+---
+
+### WEB-012 · LOW · P3
+**Summary:** `ProtectedRoute` component defined but never used — every protected page reimplements its own guard
+**Affected Apps:** Customer Web
+**Root Cause:** `frontend/src/components/ProtectedRoute.tsx` is a fully-built auth guard never wrapped around any route in `App.tsx`. `CheckoutPage`, `ProfilePage`, `OrdersPage`, `AddressesPage` each duplicate their own inline redirect guard instead — works today, but is drift risk for any future page author.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### WEB-013 · LOW · P3
+**Summary:** "Claim GST credit" checkout copy is misleading given PAY-004
+**Affected Apps:** Customer Web
+**Root Cause:** `CheckoutPage.tsx:1090` — "Claim GST credit up to 18% on the order" is shown next to the GSTIN toggle, but since GSTIN/business name are never sent to the backend (PAY-004), no GST credit or invoice line is ever actually generated.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### MOBILE-CUST-001 · MEDIUM · P2
+**Summary:** Customer app coupons screen bypasses the backend entirely, never filters expired coupons
+**Affected Apps:** Customer Mobile App
+**Root Cause:** `app/product/coupons.tsx:38-46` queries `supabaseAdmin.from('coupons')` directly, filters only `is_active`, never checks `expires_at`. The customer-app-side instance of COUPON-003, but worse — it doesn't even reach the backend's partially-filtered `/active` endpoint.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-CUST-002 · MEDIUM · P2
+**Summary:** Customer app hardcodes a flat ₹25 delivery fee, ignoring distance — duplicate of WEB-009 in a second codebase
+**Affected Apps:** Customer Mobile App
+**Root Cause:** `constants/fees.ts:3,7-9` — `DELIVERY_FEE = 25`, used unconditionally in `calcOrderTotal`. Real per-item distance is computed (`lib/distanceUtils.ts`) but only used for a UI warning, never for pricing. Fixing WEB-009 on the web does not fix this — it's a separate codebase with its own hardcoded value.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-CUST-003 · MEDIUM · P2
+**Summary:** Customer app calls the Google Maps API directly from the device instead of through the backend's existing proxy
+**Affected Apps:** Customer Mobile App, Backend
+**Root Cause:** `app/location/add.tsx`, `edit.tsx`, `select-map.tsx`, `app/profile-setup.tsx` all call `maps.googleapis.com` directly using a bundled `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`. The backend already has `backend/src/routes/places.routes.ts` providing exactly this proxy (`/autocomplete`, `/details`, `/geocode`, `/reverse-geocode`, `/directions`, `/road-route`) — zero references to it anywhere in the customer app. The Maps key is extractable from the APK and usable against the project's billing quota by anyone who decompiles it.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-CUST-004 · MEDIUM · P2
+**Summary:** Customer app invoice screen is entirely fabricated client-side, never calls the real backend invoice endpoint
+**Affected Apps:** Customer Mobile App
+**Root Cause:** `app/order/invoice/[id].tsx:38-54` builds a fake invoice from cached order data via `lib/invoiceService.ts:orderToInvoice`, which hardcodes a placeholder GSTIN (`'29XXXXXXXXXXXXX'`, line 108) instead of calling the working `GET /api/invoices/order/:orderId/customer`. "Download PDF" shows a "coming in next update" alert; Share assembles a manually-formatted plaintext string, not a real document.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-CUST-005 · HIGH · P1 · ✅ FIXED 2026-06-16
+**Summary:** `requireCustomer` backend middleware doesn't validate the real session token the customer app now sends
+**Affected Apps:** Customer Mobile App, Backend
+**Root Cause:** `lib/apiClient.ts:38,52` sends the real persisted `session_token` (from the AUTH-001 fix), but `invoice.controller.ts:requireCustomer` (26-49) looked up `app_users` by `.eq('id', userId)` — a bare customer UUID (trivially obtainable from any API response) passed this check exactly as well as the real token.
+**Fix applied:** Same fix as SECURITY-008 — the broken local `requireCustomer` was deleted from `invoice.controller.ts`; `invoice.routes.ts` now imports the real, session-token-checking implementation. No customer-app-side change was needed since it already sent the correct token.
+**Severity:** High | **Priority:** P1
+
+---
+
+### MOBILE-RIDER-001 · LOW · P3
+**Summary:** `lib/authService.ts` is fully dead code that still contains the original AUTH-003/MOBILE-AUTH-002 bug
+**Affected Apps:** Delivery Partner Mobile App
+**Root Cause:** `lib/authService.ts:61-101` (`verifyOTP`) still sends no `role` field; confirmed zero importers anywhere in the repo. Recommend deleting the file — leaving it risks a future regression if someone reconnects it.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### MOBILE-RIDER-002 · LOW · P3
+**Summary:** Orders screen status badge config references a status the backend never produces
+**Affected Apps:** Delivery Partner Mobile App
+**Root Cause:** `app/(tabs)/orders.tsx:30-34` defines a badge for `en_route_delivery`, but `deliveryPartner.controller.ts:55-65` (`mapDbStatusToRider`) only ever emits `rider_assigned`, `picking_up`, `picked_up`, `completed`. Live `picking_up`/`picked_up` orders fall through to a generic unstyled fallback badge.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### MOBILE-RIDER-003 · LOW · P3
+**Summary:** Service-role key is still plumbed into the rider app's client bundle via `app.config.js`, even though unused today
+**Affected Apps:** Delivery Partner Mobile App
+**Root Cause:** `constants/config.ts:33-37` defines `SUPABASE_CONFIG.SERVICE_ROLE_KEY`, and `app.config.js:83-84` forwards it into Expo's `extra` config (embedded in the build). No live code reads it today (only `.URL`/`.ANON_KEY` are used) — latent rather than active, but the var is pre-filled as a template in `.env.example:17`, so it ships the moment a build pipeline sets it.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### MOBILE-SHOP-001 · MEDIUM · P2
+**Summary:** Two complete dead duplicate service classes target non-existent endpoints with near-identical names to the real ones
+**Affected Apps:** Shopkeeper Mobile App
+**Root Cause:** `services/orderService.ts` and `services/storeService.ts` (both class-based, both hitting non-existent `/store-owner/*` endpoints — same bugs as MOBILE-ORDER-004/009) have zero importers; confirmed real, used equivalents are `lib/order-service.ts` and `lib/store-service.ts`. The near-identical class names (`OrderService`/`StoreService` in both) create a real risk of editing the wrong file — the commit that fixed `toggleStoreStatus` correctly targeted `lib/store-service.ts`, but a less careful future change could easily target the dead file instead.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-SHOP-002 · MEDIUM · P2
+**Summary:** `toggleStoreStatus` is implemented three separate times; only one is actually wired to the UI
+**Affected Apps:** Shopkeeper Mobile App
+**Root Cause:** `lib/store-service.ts:146-172`, `hooks/useStore.ts:75-107`, and an inline copy in `app/(tabs)/home.tsx:203-225` all independently implement the online/offline PATCH call. Only the inline `home.tsx` copy is live — the other two have zero callers. A fix applied to either of the unused two would silently never take effect.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-SHOP-003 · MEDIUM · P2
+**Summary:** `setAllProductsOffline`/`restoreActiveProductsOnline` are silent no-ops called from the online-toggle critical path
+**Affected Apps:** Shopkeeper Mobile App
+**Root Cause:** `lib/storeProducts.ts:436-446` — both are `async (_storeId): Promise<boolean> { return true; }` with a comment "no-op now that quantity/in_stock are removed," but are still called unconditionally from `app/(tabs)/home.tsx:210,217` on every toggle, falsely implying that going offline affects product visibility.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-SHOP-004 · MEDIUM · P2
+**Summary:** `lib/orders-db.ts` has a silent 4-strategy fallback chain with no error surfaced to the UI
+**Affected Apps:** Shopkeeper Mobile App
+**Root Cause:** `getOrdersFromDb` (166-296) tries an RPC (`get_orders_for_store`), then a direct table query, then a join fallback, then a 90-day full-scan fallback — all swallow failures into an indistinguishable "no orders" empty state, masking potential RLS misconfiguration as normal emptiness.
+**Severity:** Medium | **Priority:** P2
+
+---
+
+### MOBILE-SHOP-005 · LOW · P3
+**Summary:** The shopkeeper app's own `supabase/` folder is untracked, manually-run ad-hoc SQL, not migrations
+**Affected Apps:** Shopkeeper Mobile App, Supabase
+**Root Cause:** `near-now-store_owner/supabase/` contains `custom-master-products-rls.sql`, `orders-rpc-and-rls.sql`, and four other ad-hoc scripts — none timestamped, none corresponding to anything in the main backend's `supabase/migrations/`. Several live code paths (`lib/orders-db.ts`'s RPC call, `lib/storeProducts.ts`'s direct table writes) depend on these having been run manually against the live DB, with no way to verify from static analysis whether they were applied or will survive a future schema change.
+**Severity:** Low | **Priority:** P3
+
+---
+
+### MOBILE-SHOP-006 · LOW · P3
+**Summary:** `storeProducts.ts` fallback path calls a route missing the `/quantity` suffix
+**Affected Apps:** Shopkeeper Mobile App, Backend
+**Root Cause:** `lib/storeProducts.ts:414` (inside `updateProductActiveState`, only reached if the primary direct-Supabase update fails) calls `PATCH /store-owner/products/:id`, but the only registered route is `PATCH /store-owner/products/:productId/quantity`. Would 404 if ever reached — low-impact since the Supabase-first path succeeds in the common case.
+**Severity:** Low | **Priority:** P3
+
+---
+
 ## Severity Summary
+
+**Original audit (2026-05-26):**
 
 | Severity | Count |
 |----------|-------|
@@ -1160,6 +1655,22 @@ Note: `near-now-store_owner/app/(tabs)/previous-orders.tsx` (lines 273, 297, 387
 | Medium | 43 |
 | Low | 10 |
 | **Total** | **133** |
+
+**New tickets added in the 2026-06-16 re-audit (Part 9), including SECURITY-018 found mid-fix the same day:**
+
+| Severity | Count |
+|----------|-------|
+| Critical | 4 |
+| High | 7 |
+| Medium | 13 |
+| Low | 11 |
+| **Total** | **35** |
+
+**Grand total tracked: 168 tickets.**
+
+Of the **original 133**: confirmed **✅ fully fixed: 15** (AUTH-001, AUTH-002, SECURITY-008, SECURITY-009, WEB-003, WEB-008, MOBILE-SEC-004, MOBILE-ORDER-001, MOBILE-ORDER-010/011/012/013/014, MOBILE-UX-004, ORDER-010), **🟡 partially fixed: 18**, **⚠️ unverifiable without live DB/device: 9**, **⬜ not re-checked this round: 2**, and **❌ still fully broken: 89** (down from 92 after the 2026-06-16 auth-chain fix; see updated verdict below).
+
+Of the **35 new (Part 9) tickets**: **✅ fully fixed: 4** (SECURITY-010, SECURITY-011, SECURITY-018, MOBILE-CUST-005 — all closed in the same 2026-06-16 session that found them), **❌ open: 31**.
 
 ---
 
@@ -1181,26 +1692,28 @@ WEB-001, WEB-004, WEB-005, WEB-006, WEB-007, WEB-008, ADMIN-001, ADMIN-002, ADMI
 
 ## Release Readiness Verdict
 
-**STATUS: BLOCKED — DO NOT RELEASE**
+**STATUS (re-verified 2026-06-16): STILL BLOCKED — DO NOT RELEASE**
 
-### Launch Blockers (must fix before any production traffic):
-1. **SECURITY-007** — Invoice endpoint has zero auth (any caller gets customer PII)
-2. **SECURITY-005** — storeOwner.getStores reads userId from query param (impersonation)
-3. **MOBILE-SEC-001** — Service-role key in APK (full DB breach via decompiler)
-4. **MOBILE-SEC-004** — Customer UUID used as Bearer token (trivially forgeable)
-5. **SECURITY-004** — supabaseAdmin silently falls back to anon key in misconfigured env
-6. **AUTH-001** — Customer token never persisted (auth bypass on all customer routes)
-7. **PAY-001** — Webhook HMAC always fails (payment status never auto-confirmed)
-8. **PAY-002** — updateOrderStatus returns 501 (no order status management)
-9. **NOTIF-001** — All notification methods empty (zero customer communication)
-10. **ADMIN-009** — Push notifications sent directly from browser to Expo (no backend oversight)
-11. **CROSS-001** — No payout system exists (platform cannot operate commercially)
-12. **DELIVERY-001** — Simulation endpoint unauthenticated in production
-13. **MOBILE-AUTH-001** — Session restore fails without service-role key
-14. **WEB-001** — Checkout email required blocks OTP-only users
-15. **SECURITY-003** — CORS wildcard accepts all origins
-16. **ORDER-009** — `order_store_allocations` missing for 63% of orders (shopkeepers never see them)
-17. **MOBILE-ORDER-014** — Shopkeeper `useOrders.ts` uses `/api/shopkeeper/` prefix — all accept/reject calls 404
+### Launch Blockers (must fix before any production traffic) — original 17, with current status:
+1. **SECURITY-007** — Invoice endpoint has zero auth (any caller gets customer PII) — ❌ STILL BROKEN
+2. **SECURITY-005** — storeOwner.getStores reads userId from query param (impersonation) — ❌ STILL BROKEN
+3. **MOBILE-SEC-001** — Service-role key in APK (full DB breach via decompiler) — ❌ STILL BROKEN, worse
+4. **MOBILE-SEC-004** — Customer UUID used as Bearer token (trivially forgeable) — ✅ FIXED (2026-06-16)
+5. **SECURITY-004** — supabaseAdmin silently falls back to anon key in misconfigured env — 🟡 PARTIALLY FIXED
+6. **AUTH-001** — Customer token never persisted (auth bypass on all customer routes) — ✅ FIXED (2026-06-16)
+7. **PAY-001** — Webhook HMAC always fails (payment status never auto-confirmed) — 🟡 PARTIALLY FIXED (root cause unchanged)
+8. **PAY-002** — updateOrderStatus returns 501 (no order status management) — ❌ STILL BROKEN
+9. **NOTIF-001** — All notification methods empty (zero customer communication) — ❌ STILL BROKEN
+10. **ADMIN-009** — Push notifications sent directly from browser to Expo (no backend oversight) — 🟡 PARTIALLY FIXED (direct call removed; feature is now a no-op)
+11. **CROSS-001** — No payout system exists (platform cannot operate commercially) — ❌ STILL BROKEN
+12. **DELIVERY-001** — Simulation endpoint unauthenticated in production — ❌ STILL BROKEN
+13. **MOBILE-AUTH-001** — Session restore fails without service-role key — 🟡 PARTIALLY FIXED (symptom masked, dependency confirmed worse — see MOBILE-SEC-001)
+14. **WEB-001** — Checkout email required blocks OTP-only users — ❌ STILL BROKEN
+15. **SECURITY-003** — CORS wildcard accepts all origins — ❌ STILL BROKEN
+16. **ORDER-009** — `order_store_allocations` missing for 63% of orders (shopkeepers never see them) — 🟡 LIKELY STILL TRUE (mechanism confirmed, live count unverified)
+17. **MOBILE-ORDER-014** — Shopkeeper `useOrders.ts` uses `/api/shopkeeper/` prefix — all accept/reject calls 404 — ✅ FIXED
+
+**Score: 3 of 17 original launch blockers fully resolved** — #17 (MOBILE-ORDER-014) was already fixed before this re-audit; #4 (MOBILE-SEC-004) and #6 (AUTH-001) were fixed in the 2026-06-16 in-session auth-chain work. 3 more new launch-blocker-grade issues were found this round (SECURITY-010/011/012/014/015 — several backend routers had no auth at all; SECURITY-010/011 are now fixed alongside AUTH-001, SECURITY-012/014/015 remain open; ADMIN-012 — admin logout doesn't invalidate sessions; SECURITY-016 — admin invoice endpoint has zero auth). **Net launch-blocker count is still higher than the original audit's 17, even after this fix.**
 
 ### Recommended Sprint Plan:
 - **Sprint 1 (Critical Security + Auth):** SECURITY-004, SECURITY-005, SECURITY-007, MOBILE-SEC-001, MOBILE-SEC-004, AUTH-001, AUTH-002, ADMIN-009
@@ -1265,3 +1778,4 @@ These tickets capture the third-party notification provider integrations that ar
 ---
 
 *Audit generated by Claude Code — Near & Now QA Report v2.0 — 2026-05-26*
+*Re-audited and Part 9 appended by Claude Code — v3.0 — 2026-06-16. See `QA_AUDIT.md` for the condensed, currently-maintained punch list.*

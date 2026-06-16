@@ -12,6 +12,7 @@ import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { SIMULATION_STORAGE_KEY } from '../services/deliverySimulation';
 import { geocodeAddress } from '../services/placesService';
 import { fetchOrderTrackingFull } from '../services/trackingApi';
+import { getAuthHeaders } from '../utils/authHeader';
 
 // DB statuses
 const STATUS_DESCRIPTIONS: Record<string, string> = {
@@ -714,7 +715,7 @@ const OrderTrackingPage = () => {
                 type="button"
                 onClick={() => {
                   const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
-                  fetch(`${apiBase}/api/orders/${orderId}/cancel`, { method: 'POST' })
+                  fetch(`${apiBase}/api/orders/${orderId}/cancel`, { method: 'POST', headers: getAuthHeaders() })
                     .then((r) => r.json())
                     .then((d) => { if (d.success) navigate('/orders'); })
                     .catch(console.error);

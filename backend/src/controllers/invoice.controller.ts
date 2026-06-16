@@ -17,63 +17,14 @@ declare module 'express' {
 // ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
-
-/**
- * Validates a customer by looking up their user_id via app_users.
- * Customers pass their user_id via Authorization: Bearer <user_id> or
- * ?user_id= query param (consistent with existing getSavedMethods pattern).
- */
-export async function requireCustomer(req: Request, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization;
-  const userId = auth?.startsWith('Bearer ')
-    ? auth.slice(7)
-    : String(req.query.user_id || '');
-
-  if (!userId) {
-    return res.status(401).json({ error: 'Missing user_id or Bearer token' });
-  }
-
-  const { data: user, error } = await supabaseAdmin
-    .from('app_users')
-    .select('id, role')
-    .eq('id', userId)
-    .eq('role', 'customer')
-    .maybeSingle();
-
-  if (error || !user) {
-    return res.status(401).json({ error: 'Invalid or unauthorized user' });
-  }
-
-  req.customerId = (user as any).id;
-  next();
-}
-
-/**
- * Validates a shopkeeper via their session token stored in app_users.
- * Uses the same Bearer token pattern as delivery partners.
- */
-export async function requireShopkeeper(req: Request, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing auth token' });
-  }
-  const token = auth.slice(7);
-
-  // Shopkeepers authenticate with their user_id as token (per existing pattern)
-  const { data: user, error } = await supabaseAdmin
-    .from('app_users')
-    .select('id, role')
-    .eq('id', token)
-    .eq('role', 'shopkeeper')
-    .maybeSingle();
-
-  if (error || !user) {
-    return res.status(401).json({ error: 'Invalid or unauthorized shopkeeper token' });
-  }
-
-  req.shopkeeperId = (user as any).id;
-  next();
-}
+//
+// requireCustomer now lives in ../middleware/customerAuth.middleware.ts (it
+// validates a real session token instead of treating the customer's raw
+// UUID as the Bearer token). requireShopkeeper lives in
+// ../controllers/shopkeeper.controller.ts (it validates session_token, not
+// id — the local copy that used to live here checked the wrong column and
+// rejected every legitimate shopkeeper invoice request). Both are
+// re-exported from invoice.routes.ts now; only requireAdmin remains here.
 
 /**
  * Admin auth: accepts either an admin user_id or a superadmin bypass header.

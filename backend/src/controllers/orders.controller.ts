@@ -122,6 +122,9 @@ export class OrdersController {
   async getCustomerOrders(req: Request, res: Response) {
     try {
       const { customerId } = req.params;
+      if (customerId !== req.customerId) {
+        return res.status(403).json({ error: 'Not authorized to view these orders' });
+      }
       const orders = await databaseService.getCustomerOrders(customerId);
       res.json(orders);
     } catch (error) {
@@ -134,6 +137,12 @@ export class OrdersController {
     try {
       const { orderId } = req.params;
       const order = await databaseService.getOrderById(orderId);
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (order.customer_id !== req.customerId) {
+        return res.status(403).json({ error: 'Not authorized to view this order' });
+      }
       res.json(order);
     } catch (error) {
       console.error('Error fetching order:', error);
@@ -155,6 +164,13 @@ export class OrdersController {
   async cancelOrder(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
+      const existing = await databaseService.getOrderById(orderId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (existing.customer_id !== req.customerId) {
+        return res.status(403).json({ error: 'Not authorized to cancel this order' });
+      }
       const order = await databaseService.cancelOrder(orderId);
       res.json({
         success: true,

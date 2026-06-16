@@ -318,7 +318,23 @@ export class AuthController {
       }
 
       const token = crypto.randomUUID();
-      const { password_hash: _, ...userWithoutPassword } = appUser;
+
+      // Persist the session token so customer-authenticated routes can validate it,
+      // matching the shopkeeper/delivery_partner flows above. Without this write the
+      // token returned to the client is never checkable against anything.
+      const { error: tokenError } = await supabaseAdmin
+        .from('app_users')
+        .update({ session_token: token })
+        .eq('id', appUser.id);
+
+      if (tokenError) {
+        console.error('❌ Failed to persist customer session token:', tokenError);
+        return res.status(500).json({
+          error: 'Failed to complete login',
+          message: extractErrorMessage(tokenError, 'Could not persist session token')
+        });
+      }
+      const { password_hash: _, session_token: __, ...userWithoutPassword } = appUser;
 
       res.json({
         success: true,

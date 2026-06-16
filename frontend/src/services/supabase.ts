@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { geocodeAddress } from './placesService';
 import { parseGstRatePercent, priceWithGst } from '../utils/priceGst';
 import { apiUrl, shouldUseBackendApi } from '../utils/apiBase';
+import { getAuthHeaders } from '../utils/authHeader';
 
 async function readApiErrorMessage(res: Response): Promise<string> {
   const text = await res.text();
@@ -1056,7 +1057,9 @@ export async function getUserAddresses(
       params.set('userId', userId);
       if (userPhone?.trim()) params.set('phone', userPhone.trim());
       if (customerPhone?.trim()) params.set('customerPhone', customerPhone.trim());
-      const res = await fetch(apiUrl(`/api/customers/addresses/resolved?${params.toString()}`));
+      const res = await fetch(apiUrl(`/api/customers/addresses/resolved?${params.toString()}`), {
+        headers: getAuthHeaders()
+      });
       if (!res.ok) {
         throw new Error(await readApiErrorMessage(res));
       }
@@ -1146,7 +1149,7 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
         apiUrl(`/api/customers/${encodeURIComponent(addressData.user_id)}/addresses`),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify(payload)
         }
       );

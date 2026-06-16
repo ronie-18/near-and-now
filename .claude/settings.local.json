@@ -31,7 +31,12 @@
       "Bash(curl *)",
       "Bash(python3 -m json.tool)",
       "Bash(python3 -c ' *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(cat app.json)",
+      "Bash(cat app.config.js)",
+      "Bash(find . -maxdepth 1 -name \".env*\")",
+      "Bash(ls -la .env*)",
+      "Bash(grep -n \"^16. \\\\*\\\\*\\\\`storeOwner\" QA_AUDIT.md)"
     ]
   }
 }

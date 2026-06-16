@@ -1,6 +1,8 @@
 import { Router } from 'express';
-import { InvoiceController, requireCustomer, requireShopkeeper, requireAdmin } from '../controllers/invoice.controller.js';
+import { InvoiceController, requireAdmin } from '../controllers/invoice.controller.js';
 import { requireRider } from '../controllers/deliveryPartner.controller.js';
+import { requireShopkeeper } from '../controllers/shopkeeper.controller.js';
+import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 
 const router = Router();
 const ctrl = new InvoiceController();

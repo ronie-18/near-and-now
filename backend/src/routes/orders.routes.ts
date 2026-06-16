@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { OrdersController } from '../controllers/orders.controller.js';
 import { validate } from '../middleware/validate.js';
+import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 
 const router = Router();
 const ordersController = new OrdersController();
@@ -58,11 +59,16 @@ const createOrderSchema = z.object({
   coupon_id: z.string().optional()
 });
 
+// NOTE: /place and /create are not yet gated by requireCustomer — they trust
+// user_id/customer_id in the request body. Locking those down requires the
+// checkout flow itself to send the session token, which is a larger, separate
+// change (see SECURITY-010 follow-up in QA_AUDIT.md). The three routes below
+// are the ones explicitly flagged as having zero auth (SECURITY-010).
 router.post('/place', validate(placeCheckoutSchema), ordersController.placeCheckout.bind(ordersController));
 router.post('/create', validate(createOrderSchema), ordersController.createOrder.bind(ordersController));
-router.get('/customer/:customerId', ordersController.getCustomerOrders.bind(ordersController));
-router.get('/:orderId', ordersController.getOrderById.bind(ordersController));
+router.get('/customer/:customerId', requireCustomer, ordersController.getCustomerOrders.bind(ordersController));
+router.get('/:orderId', requireCustomer, ordersController.getOrderById.bind(ordersController));
 router.patch('/:orderId/status', ordersController.updateOrderStatus.bind(ordersController));
-router.post('/:orderId/cancel', ordersController.cancelOrder.bind(ordersController));
+router.post('/:orderId/cancel', requireCustomer, ordersController.cancelOrder.bind(ordersController));
 
 export default router;

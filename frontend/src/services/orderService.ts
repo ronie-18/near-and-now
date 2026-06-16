@@ -1,4 +1,5 @@
 import { Order } from './supabase';
+import { getAuthHeaders } from '../utils/authHeader';
 
 const getApiBase = () => {
   let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
@@ -49,6 +50,7 @@ export async function fetchCustomerOrders(customerId: string): Promise<Order[]> 
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
       },
     });
 
@@ -119,6 +121,7 @@ export async function fetchOrderById(orderId: string): Promise<CustomerOrderResp
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
       },
     });
 
@@ -144,6 +147,7 @@ export async function cancelOrder(orderId: string): Promise<{ success: boolean; 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
       },
     });
 
