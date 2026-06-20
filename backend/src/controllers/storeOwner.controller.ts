@@ -2,42 +2,34 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 
+async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    res.status(401).json({ success: false, error: 'Unauthorized - missing token' });
+    return null;
+  }
+  const token = authHeader.slice(7).trim();
+  const { data: user } = await supabaseAdmin
+    .from('app_users')
+    .select('id')
+    .eq('session_token', token)
+    .eq('role', 'shopkeeper')
+    .maybeSingle();
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    return null;
+  }
+  return user.id;
+}
+
 /**
- * Get stores for the authenticated user
+ * Get stores for the authenticated shopkeeper.
  */
 export async function getStores(req: Request, res: Response) {
   try {
-    // Extract user ID from token (assuming you have auth middleware)
-    // For now, we'll get it from the Authorization header token
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized - missing token'
-      });
-    }
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
 
-    void authHeader.substring(7); // Bearer token — validate JWT when auth is implemented
-    
-    // In a real implementation, you'd validate the token and extract user ID
-    // For now, we'll extract from request query or body as a workaround
-    // The app should send the user ID or we need proper JWT validation
-    
-    // TEMPORARY: Get user info from query params or find by token pattern
-    // This is NOT secure - just for development
-    const userId = req.query.userId as string;
-    
-    if (!userId) {
-      // Try to find user by looking up recent logins
-      // This is a development workaround
-      return res.status(400).json({
-        success: false,
-        error: 'userId required in query params (temporary auth)'
-      });
-    }
-
-    // Fetch ALL stores for this owner, regardless of is_active status
-    // The owner needs to see their store even when it's offline
     const { data: stores, error } = await supabaseAdmin
       .from('stores')
       .select('*')
@@ -45,51 +37,40 @@ export async function getStores(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error fetching stores:', error);
-      return res.status(500).json({
-        success: false,
-        error: error.message || 'Failed to fetch stores'
-      });
+      return res.status(500).json({ success: false, error: error.message || 'Failed to fetch stores' });
     }
 
-    console.log(`✅ Found ${stores?.length || 0} stores for user ${userId}`);
-
-    res.json({
-      success: true,
-      stores: stores || []
-    });
+    res.json({ success: true, stores: stores || [] });
   } catch (error: any) {
     console.error('❌ getStores error:', error);
-    res.status(500).json({
-      success: false,
-      error: error?.message || 'Failed to fetch stores'
-    });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch stores' });
   }
 }
 
 /**
- * Update store online/offline status
+ * Update store online/offline status — caller must own the store.
  */
 export async function updateStoreStatus(req: Request, res: Response) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized - missing token'
-      });
-    }
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
 
     const storeId = req.params.id;
     const { is_active } = req.body;
 
     if (typeof is_active !== 'boolean') {
-      return res.status(400).json({
-        success: false,
-        error: 'is_active (boolean) required'
-      });
+      return res.status(400).json({ success: false, error: 'is_active (boolean) required' });
     }
 
-    console.log(`🔄 Updating store ${storeId} to ${is_active ? 'ONLINE' : 'OFFLINE'}`);
+    // Ownership check: the store must belong to this shopkeeper
+    const { data: owned } = await supabaseAdmin
+      .from('stores')
+      .select('id')
+      .eq('id', storeId)
+      .eq('owner_id', userId)
+      .maybeSingle();
+
+    if (!owned) return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
 
     const { data, error } = await supabaseAdmin
       .from('stores')
@@ -100,24 +81,13 @@ export async function updateStoreStatus(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error updating store status:', error);
-      return res.status(500).json({
-        success: false,
-        error: error.message || 'Failed to update store status'
-      });
+      return res.status(500).json({ success: false, error: error.message || 'Failed to update store status' });
     }
 
-    console.log(`✅ Store ${storeId} is now ${is_active ? 'ONLINE' : 'OFFLINE'}`);
-
-    res.json({
-      success: true,
-      store: data
-    });
+    res.json({ success: true, store: data });
   } catch (error: any) {
     console.error('❌ updateStoreStatus error:', error);
-    res.status(500).json({
-      success: false,
-      error: error?.message || 'Failed to update store status'
-    });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to update store status' });
   }
 }
 
@@ -177,68 +147,59 @@ export async function deleteStoreProduct(req: Request, res: Response) {
 }
 
 /**
- * Update product quantity
+ * Update product quantity — caller must own the store the product belongs to.
  */
 export async function updateProductQuantity(req: Request, res: Response) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized - missing token'
-      });
-    }
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
 
     const productId = req.params.productId;
     const { quantity } = req.body;
 
     if (typeof quantity !== 'number' || quantity < 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'quantity (non-negative number) required'
-      });
+      return res.status(400).json({ success: false, error: 'quantity (non-negative number) required' });
     }
 
-    console.log(`🔄 Updating product ${productId} to quantity ${quantity}`);
+    // Ownership check via store lookup
+    const { data: stores } = await supabaseAdmin
+      .from('stores')
+      .select('id')
+      .eq('owner_id', userId);
+
+    const storeIds = (stores || []).map((s: any) => s.id);
+    if (!storeIds.length) {
+      return res.status(403).json({ success: false, error: 'No store found for this account' });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('id', productId)
+      .in('store_id', storeIds)
+      .maybeSingle();
+
+    if (!existing) return res.status(403).json({ success: false, error: 'Product not found or not owned by you' });
 
     const { data, error } = await supabaseAdmin
       .from('products')
-      .update({ 
-        quantity, 
-        in_stock: quantity > 0,
-        updated_at: new Date().toISOString() 
-      })
+      .update({ quantity, in_stock: quantity > 0, updated_at: new Date().toISOString() })
       .eq('id', productId)
       .select();
 
     if (error) {
       console.error('❌ Error updating product quantity:', error);
-      return res.status(500).json({
-        success: false,
-        error: error.message || 'Failed to update product quantity'
-      });
+      return res.status(500).json({ success: false, error: error.message || 'Failed to update product quantity' });
     }
 
     if (!data || data.length === 0) {
-      console.error('❌ Product not found:', productId);
-      return res.status(404).json({
-        success: false,
-        error: 'Product not found'
-      });
+      return res.status(404).json({ success: false, error: 'Product not found' });
     }
 
-    console.log(`✅ Product ${productId} updated to quantity ${quantity}`);
-
-    res.json({
-      success: true,
-      product: data[0]
-    });
+    res.json({ success: true, product: data[0] });
   } catch (error: any) {
     console.error('❌ updateProductQuantity error:', error);
-    res.status(500).json({
-      success: false,
-      error: error?.message || 'Failed to update product quantity'
-    });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to update product quantity' });
   }
 }
 
@@ -347,17 +308,26 @@ export async function signupComplete(req: Request, res: Response) {
 }
 
 /**
- * Update store profile fields (name, address, phone, image_url, owner_image_url, description).
- * Only whitelisted fields are applied — unknown keys are ignored.
+ * Update store profile fields — caller must own the target store.
+ * Only whitelisted fields are applied; unknown keys are ignored.
  */
 export async function updateStore(req: Request, res: Response) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized' });
-    }
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
 
     const storeId = req.params.id;
+
+    // Ownership check
+    const { data: owned } = await supabaseAdmin
+      .from('stores')
+      .select('id')
+      .eq('id', storeId)
+      .eq('owner_id', userId)
+      .maybeSingle();
+
+    if (!owned) return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+
     const allowed = ['name', 'address', 'phone', 'image_url', 'owner_image_url', 'verification_document', 'verification_number'] as const;
     type AllowedKey = typeof allowed[number];
 

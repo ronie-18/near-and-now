@@ -171,21 +171,28 @@ export class PaymentController {
     }
   }
 
-  // Webhook handler for payment gateway
+  // Webhook handler for payment gateway.
+  // express.raw() is registered for this route in server.ts so req.body is a Buffer.
   async handleWebhook(req: Request, res: Response) {
     try {
-      const event = req.body;
-      console.log('WEBHOOK HIT', event?.event);
-      console.log('[WEBHOOK] Incoming webhook', { event: event?.event, id: event?.id });
-      
-      // Verify webhook signature
-      const isValid = await paymentService.verifyWebhook(req.headers, event);
-      
+      const rawBody: Buffer = req.body as Buffer;
+
+      // Verify before parsing — signature is over the exact raw bytes
+      const isValid = await paymentService.verifyWebhook(req.headers as Record<string, any>, rawBody);
       if (!isValid) {
+        console.warn('[WEBHOOK] Signature verification failed');
         return res.status(400).json({ error: 'Invalid webhook signature' });
       }
 
-      // Process webhook event
+      let event: any;
+      try {
+        event = JSON.parse(rawBody.toString('utf8'));
+      } catch {
+        return res.status(400).json({ error: 'Invalid JSON in webhook body' });
+      }
+
+      console.log('[WEBHOOK] Incoming webhook', { event: event?.event, id: event?.id });
+
       await paymentService.processWebhookEvent(event);
       console.log('[WEBHOOK] Processed webhook', { event: event?.event, id: event?.id });
       res.json({ success: true });

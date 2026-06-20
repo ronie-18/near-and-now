@@ -45,11 +45,11 @@ describe('PaymentService', () => {
   it('verifyWebhook validates x-razorpay-signature', async () => {
     setRazorpayEnv('rzp_test_xxx');
     const { paymentService } = await loadPaymentService();
-    const body = { event: 'payment.captured', payload: {} };
-    const bodyStr = JSON.stringify(body);
-    const sig = crypto.createHmac('sha256', TEST_SECRET).update(bodyStr).digest('hex');
+    const bodyStr = JSON.stringify({ event: 'payment.captured', payload: {} });
+    const rawBody = Buffer.from(bodyStr);
+    const sig = crypto.createHmac('sha256', TEST_SECRET).update(rawBody).digest('hex');
     await expect(
-      paymentService.verifyWebhook({ 'x-razorpay-signature': sig }, body)
+      paymentService.verifyWebhook({ 'x-razorpay-signature': sig }, rawBody)
     ).resolves.toBe(true);
   });
 

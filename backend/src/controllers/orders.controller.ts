@@ -61,17 +61,21 @@ export class OrdersController {
 
       const storeOrders = [];
       let seqNum = 1;
+      let totalSubtotal = 0;
+      // Flat ₹20 delivery fee per store — kept here until distance-based pricing is wired
+      const PER_STORE_DELIVERY_FEE = 20;
 
       for (const [storeId, items] of storeOrdersMap) {
         const subtotal = items.reduce((sum: number, item: any) =>
           sum + (item.unit_price * item.quantity), 0
         );
+        totalSubtotal += subtotal;
 
         const storeOrder = await databaseService.createStoreOrder({
           customer_order_id: customerOrder.id,
           store_id: storeId,
           subtotal_amount: subtotal,
-          delivery_fee: 20
+          delivery_fee: PER_STORE_DELIVERY_FEE
         });
 
         // Include customer_order_id and assigned_store_id so getPickupSequence
@@ -103,14 +107,28 @@ export class OrdersController {
             status: 'pending_acceptance',
           });
         if (allocErr) {
-          console.error('[createOrder] allocation insert failed (non-fatal):', allocErr.message);
+          // Allocation failure means the shopkeeper will never see this order.
+          // Propagate the error so the caller knows the order is incomplete.
+          throw new Error(`[createOrder] allocation insert failed: ${allocErr.message}`);
         }
 
         storeOrders.push({ ...storeOrder, items: orderItems });
       }
 
+      // Back-fill the computed totals that createCustomerOrder wrote as zeros.
+      const totalDeliveryFee = storeOrdersMap.size * PER_STORE_DELIVERY_FEE;
+      const totalAmount = totalSubtotal + totalDeliveryFee;
+      await supabaseAdmin
+        .from('customer_orders')
+        .update({
+          subtotal_amount: totalSubtotal,
+          delivery_fee: totalDeliveryFee,
+          total_amount: totalAmount,
+        })
+        .eq('id', customerOrder.id);
+
       res.status(201).json({
-        customer_order: customerOrder,
+        customer_order: { ...customerOrder, subtotal_amount: totalSubtotal, delivery_fee: totalDeliveryFee, total_amount: totalAmount },
         store_orders: storeOrders
       });
     } catch (error) {

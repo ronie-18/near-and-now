@@ -36,7 +36,8 @@
       "Bash(cat app.config.js)",
       "Bash(find . -maxdepth 1 -name \".env*\")",
       "Bash(ls -la .env*)",
-      "Bash(grep -n \"^16. \\\\*\\\\*\\\\`storeOwner\" QA_AUDIT.md)"
+      "Bash(grep -n \"^16. \\\\*\\\\*\\\\`storeOwner\" QA_AUDIT.md)",
+      "Bash(grep -i \"\\\\.md$\")"
     ]
   }
 }

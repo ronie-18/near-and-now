@@ -1,25 +1,20 @@
 import { Router } from 'express';
 import { NotificationsController } from '../controllers/notifications.controller.js';
+import { requireCustomer } from '../middleware/customerAuth.middleware.js';
+import { requireAdmin } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const notificationsController = new NotificationsController();
 
-// Get user notifications
-router.get('/users/:userId', notificationsController.getUserNotifications.bind(notificationsController));
+// Customer-scoped routes — token identifies the user; :userId is kept as a route
+// param for convenience but the middleware already validates the caller's identity.
+router.get('/users/:userId', requireCustomer, notificationsController.getUserNotifications.bind(notificationsController));
+router.put('/:notificationId/read', requireCustomer, notificationsController.markAsRead.bind(notificationsController));
+router.put('/users/:userId/read-all', requireCustomer, notificationsController.markAllAsRead.bind(notificationsController));
+router.get('/users/:userId/preferences', requireCustomer, notificationsController.getNotificationPreferences.bind(notificationsController));
+router.put('/users/:userId/preferences', requireCustomer, notificationsController.updateNotificationPreferences.bind(notificationsController));
 
-// Mark notification as read
-router.put('/:notificationId/read', notificationsController.markAsRead.bind(notificationsController));
-
-// Mark all notifications as read
-router.put('/users/:userId/read-all', notificationsController.markAllAsRead.bind(notificationsController));
-
-// Send order notification
-router.post('/send', notificationsController.sendOrderNotification.bind(notificationsController));
-
-// Get notification preferences
-router.get('/users/:userId/preferences', notificationsController.getNotificationPreferences.bind(notificationsController));
-
-// Update notification preferences
-router.put('/users/:userId/preferences', notificationsController.updateNotificationPreferences.bind(notificationsController));
+// Admin-only: trigger a push/email/SMS notification for an order
+router.post('/send', requireAdmin, notificationsController.sendOrderNotification.bind(notificationsController));
 
 export default router;

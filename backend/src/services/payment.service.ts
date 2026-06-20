@@ -384,16 +384,22 @@ export class PaymentService {
     return { id: refund.id, status: refund.status, amount: refund.amount / 100 };
   }
 
-  // Verify Razorpay webhook signature
-  async verifyWebhook(headers: Record<string, any>, body: any): Promise<boolean> {
-    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || RAZORPAY_WEBHOOK_SECRET || RAZORPAY_KEY_SECRET;
-    if (!secret) return false;
+  // Verify Razorpay webhook signature.
+  // body must be the raw Buffer captured before express.json() parses it
+  // (registered via express.raw() on /api/payment/webhook in server.ts).
+  async verifyWebhook(headers: Record<string, any>, body: Buffer | string): Promise<boolean> {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || RAZORPAY_WEBHOOK_SECRET;
+    if (!secret) {
+      console.error('[WEBHOOK] RAZORPAY_WEBHOOK_SECRET is not set — rejecting all webhooks');
+      return false;
+    }
     const signature = headers['x-razorpay-signature'];
     if (!signature) return false;
-    const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+    // body is either a Buffer (express.raw) or a string; never re-serialize a parsed object
+    const rawBytes = Buffer.isBuffer(body) ? body : Buffer.from(body as string);
     const expected = crypto
       .createHmac('sha256', secret)
-      .update(bodyStr)
+      .update(rawBytes)
       .digest('hex');
     try {
       return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));

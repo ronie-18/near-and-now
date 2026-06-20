@@ -53,6 +53,12 @@ app.use(
   })
 );
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+
+// Capture raw body for the Razorpay webhook route BEFORE express.json() parses it.
+// verifyWebhook() needs the exact bytes that Razorpay signed; JSON.stringify of an
+// already-parsed object produces different bytes and always fails HMAC verification.
+app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);
