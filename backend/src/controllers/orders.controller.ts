@@ -170,9 +170,53 @@ export class OrdersController {
 
   async updateOrderStatus(req: Request, res: Response) {
     try {
-      void req.params.orderId;
-      void req.body.status;
-      res.status(501).json({ error: 'Not implemented yet' });
+      const { orderId } = req.params;
+      const { status, notes } = req.body;
+
+      const validStatuses = [
+        'pending_at_store',
+        'store_accepted',
+        'preparing_order',
+        'ready_for_pickup',
+        'delivery_partner_assigned',
+        'order_picked_up',
+        'in_transit',
+        'order_delivered',
+        'order_cancelled',
+      ] as const;
+
+      if (!status || !validStatuses.includes(status)) {
+        return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+      }
+
+      const { data: existing, error: fetchErr } = await supabaseAdmin
+        .from('customer_orders')
+        .select('id, status')
+        .eq('id', orderId)
+        .maybeSingle();
+
+      if (fetchErr || !existing) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('customer_orders')
+        .update({ status, updated_at: new Date().toISOString() })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      await supabaseAdmin.from('store_orders').update({ status }).eq('customer_order_id', orderId);
+
+      await supabaseAdmin.from('order_status_history').insert({
+        customer_order_id: orderId,
+        status,
+        notes: notes ?? `Status manually set to ${status} by admin`,
+      });
+
+      res.json({ success: true, order: data });
     } catch (error) {
       console.error('Error updating order status:', error);
       res.status(500).json({ error: 'Failed to update order status' });

@@ -418,6 +418,12 @@ export class DatabaseService {
       .eq('id', orderId)
       .single();
 
+    // Cancel all store allocations so shopkeepers and riders stop seeing this order.
+    await supabaseAdmin
+      .from('order_store_allocations')
+      .update({ status: 'cancelled' })
+      .eq('order_id', orderId);
+
     console.log('Updating store orders status...');
     const { error: updateStoreOrdersError } = await supabaseAdmin
       .from('store_orders')
@@ -615,6 +621,41 @@ export class DatabaseService {
 
     if (error) throw error;
     return data as CustomerSavedAddress;
+  }
+
+  async updateCustomerSavedAddress(
+    addressId: string,
+    customerId: string,
+    updates: Partial<Omit<CustomerSavedAddress, 'id' | 'customer_id' | 'created_at'>>
+  ) {
+    if (updates.is_default) {
+      await supabaseAdmin
+        .from('customer_saved_addresses')
+        .update({ is_default: false })
+        .eq('customer_id', customerId);
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('customer_saved_addresses')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', addressId)
+      .eq('customer_id', customerId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) throw new Error('Address not found or not owned by this customer');
+    return data as CustomerSavedAddress;
+  }
+
+  async deleteCustomerSavedAddress(addressId: string, customerId: string) {
+    const { error } = await supabaseAdmin
+      .from('customer_saved_addresses')
+      .update({ is_active: false })
+      .eq('id', addressId)
+      .eq('customer_id', customerId);
+
+    if (error) throw error;
   }
 
   /** Store coverage radii (km), same as storefront. */
@@ -1369,11 +1410,16 @@ export class DatabaseService {
     return { success: true };
   }
 
-  async getDeliveryAgents(_partnerId: string) {
-    const { data, error } = await supabaseAdmin
-      .from('app_users')
-      .select('*')
-      .eq('role', 'delivery_partner');
+  async getDeliveryAgents(partnerId: string) {
+    let query = supabaseAdmin
+      .from('delivery_partners')
+      .select('id, user_id, name, phone, vehicle_number, status, expo_push_token, created_at');
+
+    if (partnerId) {
+      query = query.eq('id', partnerId);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return data ?? [];
   }

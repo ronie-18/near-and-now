@@ -334,22 +334,23 @@ export class DeliveryPartnerController {
   async acceptOrder(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
+      const riderId = req.riderId!;
 
       const { error } = await supabaseAdmin
         .from('customer_orders')
-        .update({ status: 'in_transit', updated_at: new Date().toISOString() })
+        .update({ status: 'delivery_partner_assigned', updated_at: new Date().toISOString() })
         .eq('id', orderId);
 
       if (error) throw error;
 
       await supabaseAdmin
         .from('store_orders')
-        .update({ status: 'in_transit' })
+        .update({ status: 'delivery_partner_assigned', delivery_partner_id: riderId })
         .eq('customer_order_id', orderId);
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
-        status: 'in_transit',
+        status: 'delivery_partner_assigned',
         notes: 'Rider accepted order',
       });
 

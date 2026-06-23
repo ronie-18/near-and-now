@@ -433,6 +433,17 @@ async function reallocateMissingItems(orderId: string, itemIds: string[]) {
       remaining.splice(0, remaining.length, ...remaining.filter((i: any) => !assignedIds.has(i.id)));
     }
   }
+
+  if (remaining.length > 0) {
+    const unresolvableIds = remaining.map((i: any) => i.id);
+    console.error(
+      `[reallocateMissingItems] Order ${orderId}: ${remaining.length} item(s) could not be reallocated within 4 km — IDs: ${unresolvableIds.join(', ')}`
+    );
+    await supabaseAdmin
+      .from('order_items')
+      .update({ item_status: 'unavailable' })
+      .in('id', unresolvableIds);
+  }
 }
 
 // Called when a driver comes online — catches any ready_for_pickup orders they missed

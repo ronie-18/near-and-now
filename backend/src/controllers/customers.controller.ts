@@ -62,18 +62,40 @@ export class CustomersController {
 
   async updateAddress(req: Request, res: Response) {
     try {
-      void req.params.addressId;
-      res.status(501).json({ error: 'Not implemented yet' });
-    } catch (error) {
+      const { addressId } = req.params;
+      const customerId = req.customerId!;
+
+      const allowed = [
+        'label', 'address', 'city', 'state', 'pincode', 'country',
+        'latitude', 'longitude', 'google_place_id', 'google_formatted_address',
+        'google_place_data', 'contact_name', 'contact_phone', 'landmark',
+        'delivery_instructions', 'is_default',
+      ] as const;
+
+      const updates: Record<string, unknown> = {};
+      for (const key of allowed) {
+        if (key in req.body) updates[key] = req.body[key];
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+
+      const address = await databaseService.updateCustomerSavedAddress(addressId, customerId, updates);
+      res.json(address);
+    } catch (error: any) {
       console.error('Error updating address:', error);
+      if (error.message?.includes('not found')) return res.status(404).json({ error: error.message });
       res.status(500).json({ error: 'Failed to update address' });
     }
   }
 
   async deleteAddress(req: Request, res: Response) {
     try {
-      void req.params.addressId;
-      res.status(501).json({ error: 'Not implemented yet' });
+      const { addressId } = req.params;
+      const customerId = req.customerId!;
+      await databaseService.deleteCustomerSavedAddress(addressId, customerId);
+      res.json({ success: true });
     } catch (error) {
       console.error('Error deleting address:', error);
       res.status(500).json({ error: 'Failed to delete address' });
