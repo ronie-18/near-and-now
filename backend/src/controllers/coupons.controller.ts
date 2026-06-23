@@ -62,13 +62,17 @@ export class CouponsController {
 
   async validateCoupon(req: Request, res: Response) {
     try {
-      const { code, customerId } = req.body;
-      
+      const { code, customerId, orderTotal } = req.body;
+
       if (!code || !customerId) {
         return res.status(400).json({ error: 'Code and customerId are required' });
       }
-      
-      const coupon = await databaseService.validateCoupon(code, customerId);
+
+      const coupon = await databaseService.validateCoupon(
+        code,
+        customerId,
+        orderTotal != null ? Number(orderTotal) : undefined
+      );
       res.json(coupon);
     } catch (error: any) {
       console.error('Error validating coupon:', error);

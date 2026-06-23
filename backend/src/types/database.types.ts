@@ -1,17 +1,18 @@
 export type UserRole = 'customer' | 'shopkeeper' | 'delivery_partner';
 
-export type OrderStatus = 
+export type OrderStatus =
   | 'pending_at_store'
   | 'store_accepted'
   | 'preparing_order'
   | 'ready_for_pickup'
   | 'delivery_partner_assigned'
+  | 'picking_up'
   | 'order_picked_up'
   | 'in_transit'
   | 'order_delivered'
   | 'order_cancelled';
 
-export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'refunded';
+export type PaymentStatus = 'pending' | 'authorized' | 'paid' | 'failed' | 'cancelled' | 'refunded' | 'partially_refunded';
 
 export type AdminRole = 'super_admin' | 'admin';
 

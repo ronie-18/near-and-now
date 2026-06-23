@@ -503,7 +503,9 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
           payment_status: orderData.payment_status,
           payment_method: orderData.payment_method,
           items: orderData.items ?? [],
-          shipping_address: orderData.shipping_address
+          shipping_address: orderData.shipping_address,
+          ...(orderData.split_upi_amount != null && { split_upi_amount: orderData.split_upi_amount }),
+          ...(orderData.split_cash_amount != null && { split_cash_amount: orderData.split_cash_amount })
         })
       });
       if (!res.ok) {

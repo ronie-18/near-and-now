@@ -14,14 +14,18 @@ export class RazorpayApiError extends Error {
   }
 }
 
-function razorpayRequest(method: string, path: string, body?: object) {
+function razorpayRequest(method: string, path: string, body?: object, idempotencyKey?: string) {
   const credentials = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+  const headers: Record<string, string> = {
+    Authorization: `Basic ${credentials}`,
+    'Content-Type': 'application/json'
+  };
+  if (idempotencyKey) {
+    headers['X-Razorpay-Idempotency-Key'] = idempotencyKey;
+  }
   return fetch(`${RAZORPAY_BASE_URL}${path}`, {
     method,
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      'Content-Type': 'application/json'
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined
   }).then(async (res) => {
     const json = await res.json();
@@ -119,16 +123,26 @@ export class PaymentService {
     if (!orderCtx) {
       throw new Error('Order not found');
     }
-    const trustedAmountPaise = Math.round(Number(orderCtx.total_amount || 0) * 100);
+
+    // For split payments, charge only the UPI portion stored in order notes.
+    // For full payments, use the trusted DB total_amount.
+    const isSplit = orderCtx.split_upi_amount != null && orderCtx.split_upi_amount > 0;
+    const trustedAmountPaise = isSplit
+      ? Math.round(orderCtx.split_upi_amount! * 100)
+      : Math.round(Number(orderCtx.total_amount || 0) * 100);
+
     if (!Number.isFinite(trustedAmountPaise) || trustedAmountPaise <= 0) {
-      throw new Error('Invalid order amount in database');
+      const err = new Error('Invalid order amount in database');
+      (err as any).statusCode = 400;
+      throw err;
     }
     const clientAmountPaise = Math.round(Number(data.amount || 0) * 100);
     if (clientAmountPaise !== trustedAmountPaise) {
       console.warn('[PAYMENT] Client amount mismatch. Using DB amount.', {
         orderId: data.orderId,
         clientAmountPaise,
-        trustedAmountPaise
+        trustedAmountPaise,
+        isSplit
       });
     }
 
@@ -137,10 +151,10 @@ export class PaymentService {
     const razorpayCustomerId = await this.ensureRazorpayCustomerForOrder(data.orderId);
 
     const orderBody: Record<string, unknown> = {
-      amount: trustedAmountPaise, // trusted DB amount in paise
+      amount: trustedAmountPaise,
       currency: data.currency || 'INR',
       receipt: `rcpt_${data.orderId.slice(0, 20)}`,
-      notes: { internal_order_id: data.orderId }
+      notes: { internal_order_id: data.orderId, is_split_upi: isSplit }
     };
     if (razorpayCustomerId) {
       orderBody.customer_id = razorpayCustomerId;
@@ -149,7 +163,9 @@ export class PaymentService {
       console.warn('[PAYMENT] Creating Razorpay order WITHOUT customer_id (saved tokens will not populate)', { internalOrderId: data.orderId });
     }
 
-    const order = await razorpayRequest('POST', '/orders', orderBody) as any;
+    // Idempotency key: same order always creates the same Razorpay order on retry
+    const idempotencyKey = `ord_${data.orderId}${isSplit ? '_split' : ''}`;
+    const order = await razorpayRequest('POST', '/orders', orderBody, idempotencyKey) as any;
     console.log('[PAYMENT] Razorpay order created', {
       internalOrderId: data.orderId,
       razorpayOrderId: order.id,

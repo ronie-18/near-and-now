@@ -107,6 +107,7 @@ export async function openRazorpayCheckout(params: {
   customerName?: string;
   customerEmail?: string;
   customerPhone?: string;
+  description?: string;
   onSuccess: (response: RazorpaySuccessResponse) => Promise<void>;
   onDismiss?: () => void;
 }): Promise<void> {
@@ -123,9 +124,9 @@ export async function openRazorpayCheckout(params: {
       currency: paymentOrder.currency,
       order_id: paymentOrder.razorpay_order_id,
       name: 'Near and Now',
-      description: isTestMode
+      description: params.description ?? (isTestMode
         ? 'Test payment (Razorpay sandbox)'
-        : 'Order payment',
+        : 'Order payment'),
       prefill: {
         name: params.customerName,
         email: params.customerEmail,

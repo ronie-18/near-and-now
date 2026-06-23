@@ -23,7 +23,9 @@ export class PaymentController {
       res.json(paymentOrder);
     } catch (error) {
       console.error('Error creating payment order:', error);
-      res.status(500).json({ error: 'Failed to create payment order' });
+      const statusCode = (error as any)?.statusCode === 400 ? 400 : 500;
+      const msg = statusCode === 400 && error instanceof Error ? error.message : 'Failed to create payment order';
+      res.status(statusCode).json({ error: msg });
     }
   }
 
@@ -70,8 +72,13 @@ export class PaymentController {
 
       const payment = await paymentService.getPaymentDetails(paymentId) as any;
       const paymentStatus = String(payment?.status || '').toLowerCase();
-      const trustedAmountPaise = Math.round(Number(orderCtx.total_amount || 0) * 100);
       const razorpayAmountPaise = Number(payment?.amount || 0);
+
+      // For split payments the Razorpay order covers only the UPI portion, not the full order total.
+      const isSplit = orderCtx.split_upi_amount != null && orderCtx.split_upi_amount > 0;
+      const trustedAmountPaise = isSplit
+        ? Math.round(orderCtx.split_upi_amount! * 100)
+        : Math.round(Number(orderCtx.total_amount || 0) * 100);
 
       const strictChecksPassed =
         paymentStatus === 'captured' &&
@@ -86,7 +93,8 @@ export class PaymentController {
           razorpayOrderId,
           paymentOrderId: payment?.order_id,
           razorpayAmountPaise,
-          trustedAmountPaise
+          trustedAmountPaise,
+          isSplit
         });
         return res.status(400).json({
           success: false,

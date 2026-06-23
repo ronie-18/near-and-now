@@ -5,7 +5,6 @@ import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
-import { getDeliveryFeeForSubtotal } from '../context/CartContext';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
@@ -43,7 +42,7 @@ const textareaCls = `${inputCls} resize-none`;
 ───────────────────────────────────────────── */
 
 const CheckoutPage = () => {
-  const { cartItems, cartTotal, clearCart, updateCartQuantity, removeFromCart } = useCart();
+  const { cartItems, cartTotal, clearCart, updateCartQuantity, removeFromCart, getFeeBreakdown } = useCart();
   const { showNotification } = useNotification();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
@@ -423,7 +422,7 @@ const CheckoutPage = () => {
         image: item.image
       }));
 
-      const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+      const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
       const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
       const finalOrderTotal = Math.round(totals.grandTotal + tipAmount);
 
@@ -476,15 +475,22 @@ const CheckoutPage = () => {
 
       const createdOrder = await createOrder(orderData);
       const isOnlineRazorpay = formData.paymentMethod === 'online' && !splitEnabled;
+      const splitUpiAmountNum = splitEnabled ? (parseFloat(splitUpiAmount) || 0) : 0;
+      const isSplitWithUpi = splitEnabled && splitUpiAmountNum > 0;
 
-      if (isOnlineRazorpay) {
+      if (isOnlineRazorpay || isSplitWithUpi) {
+        const razorpayAmount = isSplitWithUpi ? splitUpiAmountNum : finalOrderTotal;
+        const description = isSplitWithUpi
+          ? `UPI portion (₹${Math.round(splitUpiAmountNum)} of ₹${finalOrderTotal} order)`
+          : undefined;
         try {
           await openRazorpayCheckout({
             orderId: createdOrder.id,
-            amount: finalOrderTotal,
+            amount: razorpayAmount,
             customerName: formData.name,
             customerEmail: formData.email,
             customerPhone: formData.phone,
+            description,
             onSuccess: async (response) => {
               await verifyPayment({
                 paymentId: response.razorpay_payment_id,
@@ -535,7 +541,7 @@ const CheckoutPage = () => {
 
   const handleSplitToggle = () => {
     if (!splitEnabled) {
-      const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+      const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
       const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
       const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
       const half = Math.round(currentFinalTotal / 2);
@@ -550,7 +556,7 @@ const CheckoutPage = () => {
 
   const handleSplitCashChange = (value: string) => {
     setSplitCashAmount(value);
-    const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+    const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
     const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
     const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
     const cash = parseFloat(value) || 0;
@@ -560,7 +566,7 @@ const CheckoutPage = () => {
 
   const handleSplitUpiChange = (value: string) => {
     setSplitUpiAmount(value);
-    const deliveryFeeAmount = getDeliveryFeeForSubtotal(cartTotal);
+    const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
     const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
     const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
     const upi = parseFloat(value) || 0;
@@ -589,7 +595,7 @@ const CheckoutPage = () => {
     );
   }
 
-  const deliveryFee = getDeliveryFeeForSubtotal(cartTotal);
+  const deliveryFee = getFeeBreakdown().deliveryFee;
   const checkoutTotals = calculateCheckoutTotals(cartTotal, deliveryFee, 0);
   const finalTotal = Math.round(checkoutTotals.grandTotal + tipAmount);
 

@@ -127,6 +127,12 @@ export class OrdersController {
         })
         .eq('id', customerOrder.id);
 
+      if (coupon_id && customer_id) {
+        databaseService.recordCouponUsage(coupon_id, customer_id, customerOrder.id).catch((err) => {
+          console.error('[COUPON] recordCouponUsage failed (non-fatal)', { coupon_id, orderId: customerOrder.id, err });
+        });
+      }
+
       res.status(201).json({
         customer_order: { ...customerOrder, subtotal_amount: totalSubtotal, delivery_fee: totalDeliveryFee, total_amount: totalAmount },
         store_orders: storeOrders

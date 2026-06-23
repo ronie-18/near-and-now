@@ -54,10 +54,10 @@
 - ✅ FIXED — No rate limiting on OTP send/verify. `auth.routes.ts:22-42` now registers `express-rate-limit` (`sendOtpLimiter` 5/10min, `verifyOtpLimiter` 10/15min) keyed by phone.
 - 🟡 PARTIALLY FIXED — Webhook HMAC verification always fails. Body is now pre-parsed by global `express.json()` and `payment.service.ts:393` still does `JSON.stringify(body)` against it — no raw-body capture exists anywhere (no `express.raw`/`verify:` option). Same root cause, still broken in practice.
 - ❌ STILL BROKEN — `updateOrderStatus` returns 501. `orders.controller.ts:144-153` still voids params and returns 501.
-- ❌ STILL BROKEN — Payment order creation has no idempotency key. `payment.service.ts:17-31,109-167` sends no `X-Razorpay-Idempotency-Key`.
+- ✅ FIXED (2026-06-23) — Payment order creation has no idempotency key. `payment.service.ts:razorpayRequest` now accepts an optional `idempotencyKey` header. `createPaymentOrder` passes `ord_<orderId>` (or `ord_<orderId>_split` for split payments) as `X-Razorpay-Idempotency-Key`.
 - ❌ STILL BROKEN — Webhook verification falls back to the API key. `payment.service.ts:389` unchanged: `RAZORPAY_WEBHOOK_SECRET || RAZORPAY_KEY_SECRET`.
-- ❌ STILL BROKEN — Coupon validation ignores `min_order_value`. `database.service.ts:validateCoupon` (1065-1118) never reads it.
-- ❌ STILL BROKEN (worse than described) — Coupon usage-count race condition. No code anywhere increments `usage_count` after creation at all — the limit can never be enforced regardless of concurrency.
+- ✅ FIXED (2026-06-23) — Coupon validation ignores `min_order_value`. `database.service.ts:validateCoupon` now accepts an optional `orderTotal` parameter and throws if `orderTotal < coupon.min_order_value`. `coupons.controller.ts` extracts and passes `orderTotal` from the request body.
+- ✅ FIXED (2026-06-23) — Coupon usage-count race condition. New `databaseService.recordCouponUsage(couponId, customerId, orderId)` inserts into `coupon_redemptions` and increments `usage_count`. Called from `orders.controller.ts:createOrder` after successful order creation. `placeCheckoutOrder` path does not yet support coupon_id (omitted from the frontend payload — separate follow-up).
 - ❌ STILL BROKEN (backend root cause confirmed) — Expired coupons appear in the list. `GET /api/coupons/` → `getCoupons()` has no active/expiry filter; the filtered version only exists at the separate `/active` endpoint.
 - ❌ STILL BROKEN — Legacy `createOrder` hardcodes ₹20 delivery fee, zeroes all totals. `orders.controller.ts:74`, `database.service.ts:303-306`.
 - ❌ STILL BROKEN — `cancelOrder` doesn't update `order_store_allocations`. `database.service.ts:393-474` only touches `store_orders`/`customer_orders`.
@@ -92,8 +92,8 @@
 - ❌ STILL BROKEN — `getNearbyStores` full-scan + JS distance filter. `database.service.ts:261-279`.
 - ❌ STILL BROKEN — `getProductsWithDetails` full-scan + JS radius filter. `database.service.ts:223-259`.
 - ❌ STILL BROKEN — CORS allows all origins when `ALLOWED_ORIGINS` unset. `server.ts:42-45`.
-- ❌ STILL BROKEN (worse than described) — `PaymentStatus` type has `'completed'` but not `'paid'` at all, despite all writes using `'paid'`. `database.types.ts:14` vs the real Postgres enum (`pending|authorized|paid|failed|cancelled|refunded|partially_refunded`).
-- ❌ STILL BROKEN — `OrderStatus` type missing `'picking_up'`. `database.types.ts:3-12`.
+- ✅ FIXED (2026-06-23) — `PaymentStatus` type has `'completed'` but not `'paid'`. `database.types.ts:14` now `'pending' | 'authorized' | 'paid' | 'failed' | 'cancelled' | 'refunded' | 'partially_refunded'`, matching the real Postgres enum.
+- ✅ FIXED (2026-06-23) — `OrderStatus` type missing `'picking_up'`. Added to `database.types.ts:3-12`.
 - ✅ FIXED (code-level) — `invoice_documents` duplicate-PDF generation. `invoice.service.ts:1084` now upserts on `(invoice_id, document_type)` and checks-before-generate (1113-1120). Cannot re-verify the historical live row counts, but the bug causing them is closed.
 - ❌ STILL BROKEN — `tracking_events` table dead code. Zero inserts anywhere in `backend/src`; only `order_status_history` is written.
 - ❌ STILL BROKEN — Resend/email provider never configured. `notification.service.ts:53-57`, no email SDK in `package.json`, no key in `.env.example`.
@@ -106,7 +106,7 @@
 - **[Backend][Security] `storeOwner.controller.ts updateStore` has no ownership verification** — `updateStore` (353-393) lets any non-empty Bearer header PATCH any store's name/address/phone/images/verification document.
 - **[Backend][Database] `RAZORPAY_WEBHOOK_SECRET` / `RESEND_API_KEY` referenced in code but absent from `.env.example`** — no template prompts operators to set the webhook secret, making the API-key-fallback bug more likely in real deployments.
 - **[Backend][Notification] `notifications.routes.ts` has no authentication on any route** — currently low-impact (backing functions are stubs) but `POST /send` already calls real `notificationService.sendOrderNotification`; becomes a spam/exposure vector once stubs are implemented.
-- **[Backend][Code Quality] Payment flow throws when hitting a legacy zero-total order** — `payment.service.ts:118-125` throws "Invalid order amount in database" for any order created via the legacy `createCustomerOrder` path (which always writes `total_amount: 0`), compounding the ₹0-order bug with a hard runtime failure instead of a silent ₹0 charge.
+- ✅ FIXED (2026-06-23) — **[Backend][Code Quality] Payment flow throws when hitting a legacy zero-total order** — `payment.service.ts` now attaches `statusCode: 400` to the error when `total_amount` is zero/invalid; `payment.controller.ts:createPaymentOrder` returns HTTP 400 (not 500) with the error message, so the caller knows it's a bad order rather than a server crash.
 
 ### Backend — Top priorities
 1. Webhook HMAC verification — capture raw body, fix `JSON.stringify` mismatch, remove API-key fallback.
@@ -123,8 +123,8 @@
 - ✅ FIXED — `DriverApp.tsx`/`ShopkeeperApp.tsx` wrong auth paths. Both now call `/api/auth/send-otp` and `/api/auth/verify-otp` correctly (`DriverApp.tsx:105,121`, `ShopkeeperApp.tsx:72,88`), matching `auth.routes.ts:40-41`.
 - ❌ STILL BROKEN — Checkout email field has `required`. `CheckoutPage.tsx:803`.
 - ❌ STILL BROKEN — GSTIN/business name collected but excluded from order payload. State exists (82-83, UI 1094-1118) but `orderData` (452-475) never includes them.
-- ❌ STILL BROKEN — Hardcoded ₹30 delivery fee. `CartContext.tsx:32`, called at `CheckoutPage.tsx:426,538,553,563,592`; `utils/deliveryFees.ts` calculator remains unwired.
-- ❌ STILL BROKEN — Split payment UPI portion never charged via Razorpay. `CheckoutPage.tsx:478` unchanged.
+- ✅ FIXED (2026-06-23) — Hardcoded ₹30 delivery fee. `getDeliveryFeeForSubtotal` import removed from `CheckoutPage.tsx`; all 5 call sites replaced with `getFeeBreakdown().deliveryFee` from `useCart()`, which uses the real distance-tier calculator in `utils/deliveryFees.ts`.
+- ✅ FIXED (2026-06-23) — Split payment UPI portion never charged via Razorpay. `CheckoutPage.tsx` now detects `splitEnabled && splitUpiAmount > 0` and opens Razorpay for the UPI portion only. `supabase.ts:createOrder` forwards `split_upi_amount`/`split_cash_amount` to the backend. `database.service.ts:placeCheckoutOrder` stores them in `notes` as JSON. `payment.service.ts:createPaymentOrder` reads `split_upi_amount` from order notes and uses it as the Razorpay charge amount. `payment.controller.ts:verifyPayment` compares against `split_upi_amount` (not `total_amount`) for split orders.
 - ❌ STILL BROKEN — No empty-cart redirect at checkout. Only a submit-time guard exists, no mount-time redirect.
 - 🟡 PARTIALLY FIXED — `getCurrentUserFromSession` uses anon client, blocked by RLS. Still broken at `authService.ts:179`, but `AuthContext.tsx:44` now restores sessions from `localStorage` directly on mount, so the user-facing "logged out on every refresh" symptom is masked/contained even though the underlying function is still broken.
 - ✅ FIXED — Order tracking hook leaking service-role key. `services/supabase.ts:34` now builds `supabaseAdmin` from the anon key — no service-role key anywhere in `frontend/src` (confirmed via grep). Variable name is now misleading but the vulnerability is gone.

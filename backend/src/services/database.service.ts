@@ -78,20 +78,31 @@ export class DatabaseService {
     payment_status: string;
     razorpay_order_id: string | null;
     razorpay_payment_id: string | null;
+    split_upi_amount: number | null;
   } | null> {
     const primary = await supabaseAdmin
       .from('customer_orders')
-      .select('id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id')
+      .select('id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id, notes')
       .eq('id', orderId)
       .maybeSingle();
     if (!primary.error) {
-      return (primary.data as {
+      const row = primary.data as {
         id: string;
         total_amount: number;
         payment_status: string;
         razorpay_order_id: string | null;
         razorpay_payment_id: string | null;
-      } | null) ?? null;
+        notes: string | null;
+      } | null;
+      if (!row) return null;
+      let split_upi_amount: number | null = null;
+      if (row.notes) {
+        try {
+          const parsed = JSON.parse(row.notes);
+          if (typeof parsed?.split_upi_amount === 'number') split_upi_amount = parsed.split_upi_amount;
+        } catch { /* notes is plain text, not JSON */ }
+      }
+      return { ...row, split_upi_amount };
     }
     // Backward compatibility if razorpay_order_id column is not yet migrated.
     if (this.isMissingColumnError(primary.error, 'razorpay_order_id')) {
@@ -107,7 +118,8 @@ export class DatabaseService {
         total_amount: Number((fallback.data as any).total_amount || 0),
         payment_status: String((fallback.data as any).payment_status || 'pending'),
         razorpay_order_id: null,
-        razorpay_payment_id: (fallback.data as any).razorpay_payment_id ?? null
+        razorpay_payment_id: (fallback.data as any).razorpay_payment_id ?? null,
+        split_upi_amount: null
       };
     }
     throw primary.error;
@@ -703,6 +715,8 @@ export class DatabaseService {
     delivery_fee: number;
     payment_status: string;
     payment_method: string;
+    split_upi_amount?: number;
+    split_cash_amount?: number;
     items: Array<{
       product_id?: string;
       id?: string;
@@ -860,7 +874,9 @@ export class DatabaseService {
         delivery_address: fullAddress,
         delivery_latitude: geocoded.lat,
         delivery_longitude: geocoded.lng,
-        notes: null,
+        notes: orderData.split_upi_amount != null
+          ? JSON.stringify({ split_upi_amount: orderData.split_upi_amount, split_cash_amount: orderData.split_cash_amount ?? 0 })
+          : null,
         delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
       })
       .select()
@@ -1103,7 +1119,7 @@ export class DatabaseService {
     return data ?? [];
   }
 
-  async validateCoupon(code: string, customerId: string) {
+  async validateCoupon(code: string, customerId: string, orderTotal?: number) {
     const { data: coupon, error } = await supabaseAdmin
       .from('coupons')
       .select('*')
@@ -1123,6 +1139,10 @@ export class DatabaseService {
 
     if (now < validFrom || (validUntil && now > validUntil)) {
       throw new Error('Coupon has expired or is not yet valid');
+    }
+
+    if (coupon.min_order_value && orderTotal !== undefined && orderTotal < coupon.min_order_value) {
+      throw new Error(`Minimum order value of ₹${coupon.min_order_value} required for this coupon`);
     }
 
     if (coupon.usage_limit && coupon.usage_count >= coupon.usage_limit) {
@@ -1156,6 +1176,24 @@ export class DatabaseService {
     }
 
     return coupon as Coupon;
+  }
+
+  async recordCouponUsage(couponId: string, customerId: string, orderId: string) {
+    const { error: redemptionErr } = await supabaseAdmin
+      .from('coupon_redemptions')
+      .insert({ coupon_id: couponId, customer_id: customerId, order_id: orderId });
+    if (redemptionErr) {
+      console.error('[COUPON] Failed to record redemption', { couponId, orderId, error: redemptionErr });
+    }
+    // Read-then-write increment (per-user limit check in validateCoupon makes double-redeem unlikely)
+    const { data } = await supabaseAdmin.from('coupons').select('usage_count').eq('id', couponId).maybeSingle();
+    const { error: incrErr } = await supabaseAdmin
+      .from('coupons')
+      .update({ usage_count: ((data as any)?.usage_count ?? 0) + 1 })
+      .eq('id', couponId);
+    if (incrErr) {
+      console.error('[COUPON] Failed to increment usage_count', { couponId, error: incrErr });
+    }
   }
 
   async getAdminByEmail(email: string) {
