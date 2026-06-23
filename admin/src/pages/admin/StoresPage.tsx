@@ -10,7 +10,6 @@ import {
   CheckCircle,
   XCircle,
   Wifi,
-  WifiOff,
   Users
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -22,6 +21,7 @@ interface StoreData {
   phone?: string;
   address?: string;
   is_active: boolean;
+  is_approved: boolean;
   owner_id?: string;
   created_at?: string;
   updated_at?: string;
@@ -32,6 +32,7 @@ const StoresPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const fetchStores = async () => {
     try {
@@ -65,10 +66,26 @@ const StoresPage = () => {
     );
   });
 
+  const toggleApproval = async (store: StoreData) => {
+    setApprovingId(store.id);
+    try {
+      const { error: sbError } = await supabase
+        .from('stores')
+        .update({ is_approved: !store.is_approved })
+        .eq('id', store.id);
+      if (sbError) throw sbError;
+      setStores(prev => prev.map(s => s.id === store.id ? { ...s, is_approved: !store.is_approved } : s));
+    } catch (err: any) {
+      setError(`Failed to update approval: ${err.message}`);
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
   const stats = {
     total: stores.length,
     active: stores.filter(s => s.is_active).length,
-    offline: stores.filter(s => !s.is_active).length,
+    pending: stores.filter(s => !s.is_approved).length,
   };
 
   return (
@@ -122,14 +139,14 @@ const StoresPage = () => {
               <p className="text-3xl font-bold mt-1">{stats.active}</p>
             </div>
           </div>
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-500 to-slate-600 p-5 text-white shadow-lg hover:shadow-xl transition-all hover:-translate-y-1">
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 p-5 text-white shadow-lg hover:shadow-xl transition-all hover:-translate-y-1">
             <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
             <div className="relative z-10">
               <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mb-3">
-                <WifiOff className="w-6 h-6" />
+                <AlertCircle className="w-6 h-6" />
               </div>
-              <p className="text-white/80 text-sm font-medium">Offline / Inactive</p>
-              <p className="text-3xl font-bold mt-1">{stats.offline}</p>
+              <p className="text-white/80 text-sm font-medium">Pending Approval</p>
+              <p className="text-3xl font-bold mt-1">{stats.pending}</p>
             </div>
           </div>
         </div>
@@ -185,6 +202,7 @@ const StoresPage = () => {
                     <th className="px-6 py-4">Contact</th>
                     <th className="px-6 py-4">Address</th>
                     <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Approval</th>
                     <th className="px-6 py-4">Joined</th>
                   </tr>
                 </thead>
@@ -236,6 +254,32 @@ const StoresPage = () => {
                             Offline
                           </span>
                         )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          {store.is_approved ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                              <CheckCircle size={11} />
+                              Approved
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
+                              <AlertCircle size={11} />
+                              Pending
+                            </span>
+                          )}
+                          <button
+                            onClick={() => toggleApproval(store)}
+                            disabled={approvingId === store.id}
+                            className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+                              store.is_approved
+                                ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200'
+                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                            } disabled:opacity-50`}
+                          >
+                            {approvingId === store.id ? '...' : store.is_approved ? 'Revoke' : 'Approve'}
+                          </button>
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-sm text-gray-600">

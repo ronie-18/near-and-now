@@ -65,12 +65,16 @@ export async function updateStoreStatus(req: Request, res: Response) {
     // Ownership check: the store must belong to this shopkeeper
     const { data: owned } = await supabaseAdmin
       .from('stores')
-      .select('id')
+      .select('id, is_approved')
       .eq('id', storeId)
       .eq('owner_id', userId)
       .maybeSingle();
 
     if (!owned) return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+
+    if (is_active === true && !owned.is_approved) {
+      return res.status(403).json({ success: false, error: 'Store pending admin approval' });
+    }
 
     const { data, error } = await supabaseAdmin
       .from('stores')
