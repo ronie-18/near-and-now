@@ -36,17 +36,32 @@ const allowlist = (process.env.ALLOWED_ORIGINS || '')
   .filter(Boolean);
 
 // Apply CORS before Helmet so preflight (OPTIONS) always gets Access-Control-* headers.
+const isProd = process.env.NODE_ENV === 'production';
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (allowlist.length === 0) {
+      // Non-browser requests (server-to-server, curl) have no Origin header — always allow.
+      if (!origin) {
         callback(null, true);
         return;
       }
-      if (!origin || allowlist.includes(origin)) {
-        callback(null, true);
+      if (allowlist.length > 0) {
+        if (allowlist.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error(`CORS: origin ${origin} not allowed`));
+        }
+        return;
+      }
+      // No allowlist configured.
+      if (isProd) {
+        // Fail closed in production: operators MUST set ALLOWED_ORIGINS.
+        console.error(`[CORS] Rejected origin "${origin}" — set ALLOWED_ORIGINS env var in production`);
+        callback(new Error(`CORS: ALLOWED_ORIGINS not configured for production`));
       } else {
-        callback(new Error(`CORS: origin ${origin} not allowed`));
+        // Development: allow all origins for convenience.
+        callback(null, true);
       }
     },
     credentials: true

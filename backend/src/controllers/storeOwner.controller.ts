@@ -287,7 +287,7 @@ export async function signupComplete(req: Request, res: Response) {
     // Persist the token so the shopkeeper middleware can authenticate subsequent requests
     await supabaseAdmin
       .from('app_users')
-      .update({ session_token: token })
+      .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
       .eq('id', newUser.id);
 
     console.log('✅ Store owner registered:', newUser.id, storeNameTrim);

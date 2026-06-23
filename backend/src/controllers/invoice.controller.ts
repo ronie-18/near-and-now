@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { invoiceService } from '../services/invoice.service.js';
 import { supabaseAdmin } from '../config/database.js';
 
@@ -25,33 +25,6 @@ declare module 'express' {
 // id — the local copy that used to live here checked the wrong column and
 // rejected every legitimate shopkeeper invoice request). Both are
 // re-exported from invoice.routes.ts now; only requireAdmin remains here.
-
-/**
- * Admin auth: accepts either an admin user_id or a superadmin bypass header.
- * For simplicity this mirrors the existing admin pattern (password-based
- * in Edge Function). Here we validate against the admins table.
- */
-export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing admin token' });
-  }
-  const token = auth.slice(7);
-
-  const { data: admin, error } = await supabaseAdmin
-    .from('admins')
-    .select('id, status')
-    .eq('id', token)
-    .eq('status', 'active')
-    .maybeSingle();
-
-  if (error || !admin) {
-    return res.status(401).json({ error: 'Invalid or unauthorized admin token' });
-  }
-
-  req.adminId = (admin as any).id;
-  next();
-}
 
 // ---------------------------------------------------------------------------
 // Helpers

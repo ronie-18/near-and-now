@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { InvoiceController, requireAdmin } from '../controllers/invoice.controller.js';
+import { InvoiceController } from '../controllers/invoice.controller.js';
+import { requireAdmin } from '../middleware/adminAuth.middleware.js';
 import { requireRider } from '../controllers/deliveryPartner.controller.js';
 import { requireShopkeeper } from '../controllers/shopkeeper.controller.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
@@ -42,9 +43,10 @@ router.post(
   ctrl.regenerateInvoice.bind(ctrl)
 );
 
-// ── Internal / webhook: generate on demand ───────────────────────────────────
+// ── Internal / webhook: generate on demand (admin-only) ─────────────────────
 router.post(
   '/generate/:orderId',
+  requireAdmin,
   ctrl.generateInvoice.bind(ctrl)
 );
 

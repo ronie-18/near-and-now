@@ -116,7 +116,7 @@ export async function authenticateAdmin(email: string, password: string): Promis
     await getAdminClient().from('admin_sessions').insert({
       admin_id: admin.id,
       session_token: token,
-      user_agent: navigator.userAgent,
+      user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : 'server-side',
       expires_at: expiresAt
     });
 

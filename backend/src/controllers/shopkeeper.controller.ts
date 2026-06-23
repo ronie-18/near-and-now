@@ -25,6 +25,8 @@ export function haversineKm(lat1: number, lng1: number, lat2: number, lng2: numb
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 export async function requireShopkeeper(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
@@ -32,12 +34,23 @@ export async function requireShopkeeper(req: Request, res: Response, next: NextF
   const token = auth.slice(7);
   const { data: user, error } = await supabaseAdmin
     .from('app_users')
-    .select('id, role')
+    .select('id, role, session_token_issued_at')
     .eq('session_token', token)
     .eq('role', 'shopkeeper')
     .maybeSingle();
 
   if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
+
+  if (user.session_token_issued_at) {
+    const issuedAt = new Date(user.session_token_issued_at).getTime();
+    if (Date.now() - issuedAt > SESSION_TTL_MS) {
+      await supabaseAdmin
+        .from('app_users')
+        .update({ session_token: null, session_token_issued_at: null })
+        .eq('session_token', token);
+      return res.status(401).json({ error: 'Session expired — please log in again' });
+    }
+  }
 
   const { data: stores } = await supabaseAdmin
     .from('stores')

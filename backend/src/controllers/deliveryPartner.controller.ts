@@ -21,6 +21,8 @@ declare module 'express' {
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 export async function requireRider(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
@@ -30,12 +32,23 @@ export async function requireRider(req: Request, res: Response, next: NextFuncti
 
   const { data: partner, error } = await supabaseAdmin
     .from('delivery_partners')
-    .select('user_id')
+    .select('user_id, session_token_issued_at')
     .eq('session_token', token)
     .maybeSingle();
 
   if (error || !partner) {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  if (partner.session_token_issued_at) {
+    const issuedAt = new Date(partner.session_token_issued_at).getTime();
+    if (Date.now() - issuedAt > SESSION_TTL_MS) {
+      await supabaseAdmin
+        .from('delivery_partners')
+        .update({ session_token: null, session_token_issued_at: null })
+        .eq('session_token', token);
+      return res.status(401).json({ error: 'Session expired — please log in again' });
+    }
   }
 
   req.riderId = partner.user_id;

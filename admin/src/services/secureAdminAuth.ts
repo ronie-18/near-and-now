@@ -6,6 +6,7 @@
 import { checkRateLimit } from '../utils/rateLimit';
 import { logFailedLogin, logSecurityEvent, isAccountLocked } from './auditLog';
 import { AdminLoginSchema } from '../schemas/admin.schema';
+import { getAdminClient } from './supabase';
 import { z } from 'zod';
 
 const EDGE_FUNCTION_URL = import.meta.env.VITE_SUPABASE_URL + '/functions/v1/admin-auth';
@@ -168,40 +169,42 @@ export async function getAccessToken(): Promise<string | null> {
 }
 
 /**
- * Secure admin logout
+ * Secure admin logout — invalidates the server-side session row and clears local storage.
  */
 export async function secureAdminLogout(): Promise<void> {
   try {
+    // Invalidate the direct-DB session token written by authenticateAdmin.
+    // The token is stored under 'adminToken'; 'adminRefreshToken' is only used
+    // by the (unused) Edge Function path and is never set by the real login flow.
+    const directToken = sessionStorage.getItem('adminToken');
+    if (directToken) {
+      await getAdminClient()
+        .from('admin_sessions')
+        .delete()
+        .eq('session_token', directToken);
+    }
+
+    // Also attempt to invalidate the Edge Function refresh token if it exists.
     const refreshToken = sessionStorage.getItem('adminRefreshToken');
-    
-    // Call Edge Function to invalidate refresh token
-    await fetch(EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({
-        action: 'logout',
-        refreshToken
-      })
-    });
-    
-    // Clear session storage
-    sessionStorage.removeItem('adminAccessToken');
-    sessionStorage.removeItem('adminRefreshToken');
-    sessionStorage.removeItem('adminData');
-    sessionStorage.removeItem('adminTokenExpiry');
-    
-    await logSecurityEvent(
-      'ADMIN_LOGOUT',
-      'low',
-      'Admin logged out'
-    );
+    if (refreshToken) {
+      await fetch(EDGE_FUNCTION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'logout', refreshToken })
+      }).catch(() => { /* non-critical — session row is already deleted above */ });
+    }
+
+    await logSecurityEvent('ADMIN_LOGOUT', 'low', 'Admin logged out');
   } catch (error) {
     console.error('Error during logout:', error);
-    // Clear session storage anyway
-    sessionStorage.clear();
+  } finally {
+    // Always clear local storage regardless of server-side success.
+    sessionStorage.removeItem('adminAccessToken');
+    sessionStorage.removeItem('adminRefreshToken');
+    sessionStorage.removeItem('adminToken');
+    sessionStorage.removeItem('adminData');
+    sessionStorage.removeItem('adminTokenExpiry');
   }
 }
 

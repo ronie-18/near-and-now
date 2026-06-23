@@ -198,13 +198,13 @@ export class AuthController {
           if (requestedRole === 'delivery_partner') {
             await supabaseAdmin
               .from('delivery_partners')
-              .update({ session_token: token })
+              .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
               .eq('user_id', existingUser.id);
           }
           if (requestedRole === 'shopkeeper') {
             await supabaseAdmin
               .from('app_users')
-              .update({ session_token: token })
+              .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
               .eq('id', existingUser.id);
           }
 
@@ -324,7 +324,7 @@ export class AuthController {
       // token returned to the client is never checkable against anything.
       const { error: tokenError } = await supabaseAdmin
         .from('app_users')
-        .update({ session_token: token })
+        .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
         .eq('id', appUser.id);
 
       if (tokenError) {
