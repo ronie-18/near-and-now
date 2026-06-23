@@ -24,7 +24,7 @@ const CustomerDetailPage = () => {
       
       // Fetch customer orders
       const allOrders = await getOrders();
-      const customerOrders = allOrders.filter((o: any) => o.customer_id === id);
+      const customerOrders = allOrders.filter((o: any) => o.user_id === id);
       setOrders(customerOrders);
     } catch (error) {
       console.error('Error fetching customer data:', error);

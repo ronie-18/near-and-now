@@ -1190,13 +1190,9 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
 }
 
 // Update an address (customer_saved_addresses)
-export async function updateAddress(addressId: string, userId: string, updateData: UpdateAddressData): Promise<Address> {
+export async function updateAddress(addressId: string, _userId: string, updateData: UpdateAddressData): Promise<Address> {
   try {
-    console.log('📍 Updating address:', addressId);
-
-    const payload: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
-    };
+    const payload: Record<string, unknown> = {};
     if (updateData.name != null) payload.contact_name = updateData.name;
     if (updateData.address_line_1 != null || updateData.address_line_2 != null) {
       const parts = [updateData.address_line_1, updateData.address_line_2].filter(Boolean);
@@ -1212,35 +1208,14 @@ export async function updateAddress(addressId: string, userId: string, updateDat
     if (updateData.label != null) payload.label = updateData.label;
     if (updateData.landmark != null) payload.landmark = updateData.landmark;
     if (updateData.delivery_instructions != null) payload.delivery_instructions = updateData.delivery_instructions;
-    if (updateData.delivery_for != null) payload.delivery_for = updateData.delivery_for;
-    if (updateData.receiver_name != null) payload.receiver_name = updateData.receiver_name;
-    if (updateData.receiver_address != null) payload.receiver_address = updateData.receiver_address;
-    if (updateData.receiver_phone != null) payload.receiver_phone = updateData.receiver_phone;
 
-    // If setting this as default, unset all other default addresses for this user
-    if (updateData.is_default === true) {
-      await supabaseAdmin
-        .from('customer_saved_addresses')
-        .update({ is_default: false })
-        .eq('customer_id', userId)
-        .neq('id', addressId);
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('customer_saved_addresses')
-      .update(payload)
-      .eq('id', addressId)
-      .eq('customer_id', userId)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('❌ Error updating address:', error);
-      throw new Error(`Failed to update address: ${error.message}`);
-    }
-
-    console.log('✅ Address updated successfully');
-    return mapRowToAddress(data);
+    const res = await fetch(apiUrl(`/api/customers/addresses/${encodeURIComponent(addressId)}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await readApiErrorMessage(res));
+    return mapRowToAddress((await res.json()) as Record<string, unknown>);
   } catch (error: any) {
     console.error('❌ Error in updateAddress:', error);
     throw error;
@@ -1248,22 +1223,13 @@ export async function updateAddress(addressId: string, userId: string, updateDat
 }
 
 // Delete an address (soft delete by setting is_active = false)
-export async function deleteAddress(addressId: string, userId: string): Promise<void> {
+export async function deleteAddress(addressId: string, _userId: string): Promise<void> {
   try {
-    console.log('📍 Deleting address:', addressId);
-
-    const { error } = await supabaseAdmin
-      .from('customer_saved_addresses')
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq('id', addressId)
-      .eq('customer_id', userId);
-
-    if (error) {
-      console.error('❌ Error deleting address:', error);
-      throw new Error(`Failed to delete address: ${error.message}`);
-    }
-
-    console.log('✅ Address deleted successfully');
+    const res = await fetch(apiUrl(`/api/customers/addresses/${encodeURIComponent(addressId)}`), {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error(await readApiErrorMessage(res));
   } catch (error: any) {
     console.error('❌ Error in deleteAddress:', error);
     throw error;
@@ -1271,35 +1237,15 @@ export async function deleteAddress(addressId: string, userId: string): Promise<
 }
 
 // Set an address as default
-export async function setDefaultAddress(addressId: string, userId: string): Promise<Address> {
+export async function setDefaultAddress(addressId: string, _userId: string): Promise<Address> {
   try {
-    console.log('📍 Setting default address:', addressId);
-
-    // Unset all other default addresses for this user
-    await supabaseAdmin
-      .from('customer_saved_addresses')
-      .update({ is_default: false })
-      .eq('customer_id', userId);
-
-    // Set this address as default
-    const { data, error } = await supabaseAdmin
-      .from('customer_saved_addresses')
-      .update({
-        is_default: true,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', addressId)
-      .eq('customer_id', userId)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('❌ Error setting default address:', error);
-      throw new Error(`Failed to set default address: ${error.message}`);
-    }
-
-    console.log('✅ Default address updated successfully');
-    return mapRowToAddress(data);
+    const res = await fetch(apiUrl(`/api/customers/addresses/${encodeURIComponent(addressId)}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ is_default: true }),
+    });
+    if (!res.ok) throw new Error(await readApiErrorMessage(res));
+    return mapRowToAddress((await res.json()) as Record<string, unknown>);
   } catch (error: any) {
     console.error('❌ Error in setDefaultAddress:', error);
     throw error;

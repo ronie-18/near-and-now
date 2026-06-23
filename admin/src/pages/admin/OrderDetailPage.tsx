@@ -117,11 +117,11 @@ const OrderDetailPage = () => {
 
   const handleAdminInvoiceDownload = async (docType: 'customer' | 'store' | 'delivery') => {
     if (!order) return;
-    const adminId = localStorage.getItem('admin_id') || '';
+    const adminToken = sessionStorage.getItem('adminToken') || '';
     setInvoiceLoading(docType);
     try {
       const res = await fetch(apiUrl(`/api/invoices/order/${order.id}/admin/${docType}`), {
-        headers: { Authorization: `Bearer ${adminId}` },
+        headers: { Authorization: `Bearer ${adminToken}` },
       });
       if (!res.ok) throw new Error('Failed to fetch invoice');
       const data = await res.json();
