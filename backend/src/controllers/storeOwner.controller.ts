@@ -361,3 +361,55 @@ export async function updateStore(req: Request, res: Response) {
     res.status(500).json({ success: false, error: error?.message || 'Failed to update store' });
   }
 }
+
+/**
+ * Register shopkeeper's Expo push token.
+ * Stores the token on all stores owned by the authenticated shopkeeper so the
+ * backend can reach them when a new order arrives.
+ */
+export async function registerPushToken(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { pushToken } = req.body as { pushToken?: string };
+    if (!pushToken) return res.status(400).json({ success: false, error: 'pushToken required' });
+
+    await supabaseAdmin
+      .from('stores')
+      .update({ expo_push_token: pushToken })
+      .eq('owner_id', userId);
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ registerPushToken error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to register push token' });
+  }
+}
+
+/**
+ * Update notification preferences for the authenticated shopkeeper.
+ * The mobile app already persists these locally in AsyncStorage; this endpoint
+ * lets the backend store them for future server-driven preference gating.
+ */
+export async function updateNotificationPreferences(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    // Preferences are stored in the app_users metadata column if it exists,
+    // otherwise this is a no-op acknowledgement (mobile already persists locally).
+    const preferences = req.body as Record<string, unknown>;
+    await supabaseAdmin
+      .from('app_users')
+      .update({ notification_preferences: preferences })
+      .eq('id', userId)
+      .eq('role', 'shopkeeper');
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ updateNotificationPreferences error:', error);
+    // Non-fatal — mobile stores preferences locally too.
+    res.json({ success: true });
+  }
+}

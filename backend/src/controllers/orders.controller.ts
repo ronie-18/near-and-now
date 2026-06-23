@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { supabaseAdmin } from '../config/database.js';
+import { notificationService } from '../services/notification.service.js';
 
 export class OrdersController {
   /** Checkout flow from web app — uses service role on server (RLS-safe). */
@@ -111,6 +112,11 @@ export class OrdersController {
           // Propagate the error so the caller knows the order is incomplete.
           throw new Error(`[createOrder] allocation insert failed: ${allocErr.message}`);
         }
+
+        // Notify the shopkeeper that a new order is waiting for acceptance.
+        notificationService.notifyShopkeeperNewOrder(storeId, customerOrder.id, customerOrder.order_code ?? customerOrder.id).catch((err) => {
+          console.error('[createOrder] shopkeeper push notification failed (non-fatal)', err);
+        });
 
         storeOrders.push({ ...storeOrder, items: orderItems });
       }

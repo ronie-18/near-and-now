@@ -21,6 +21,23 @@ export class NotificationService {
     }
   }
 
+  async notifyShopkeeperNewOrder(storeId: string, orderId: string, orderCode: string) {
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('expo_push_token')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (store?.expo_push_token) {
+      await this.sendExpoPush(
+        store.expo_push_token,
+        'New Order!',
+        `Order #${orderCode} has arrived. Tap to review and accept.`,
+        { orderId, storeId, type: 'new_order' }
+      );
+    }
+  }
+
   async notifyRiderNewOrder(riderId: string, orderId: string, orderCode: string, storeName: string) {
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')
