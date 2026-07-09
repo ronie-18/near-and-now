@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { databaseService } from '../services/database.service.js';
 import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
 
 // Throttle: check for missed orders at most once per 5 minutes per driver
@@ -80,6 +82,57 @@ function mapDbStatusToRider(dbStatus: string): string {
 // ── Controller ─────────────────────────────────────────────────────────────────
 
 export class DeliveryPartnerController {
+
+  // POST /delivery-partner/signup/complete
+  // Public self-service registration. Creates (or repairs) the app_users +
+  // delivery_partners rows scoped to (phone, role='delivery_partner') and issues
+  // a session token immediately; the account starts pending_verification until
+  // an admin approves it (mirrors storeOwner.controller.ts's signupComplete).
+  async signupComplete(req: Request, res: Response) {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const phone = body.phone;
+      const name = body.name;
+
+      if (!phone || !String(phone).trim() || !name || !String(name).trim()) {
+        return res.status(400).json({ success: false, error: 'Phone and name are required' });
+      }
+
+      const str = (v: unknown) => (v != null && String(v).trim() !== '' ? String(v).trim() : undefined);
+      const vehicleNumber = str(body.vehicleNumber ?? body.vehicle_number);
+      const verificationDocument = str(body.verificationDocument ?? body.verification_document);
+      const verificationNumber = str(body.verificationNumber ?? body.verification_number);
+
+      const partner = await databaseService.createDeliveryPartner({
+        name: String(name).trim(),
+        phone: String(phone).trim(),
+        email: str(body.email),
+        address: str(body.address),
+        vehicle_number: vehicleNumber,
+        verification_document: verificationDocument,
+        verification_number: verificationNumber,
+        status: 'pending_verification',
+      });
+
+      const token = crypto.randomUUID();
+      await supabaseAdmin
+        .from('delivery_partners')
+        .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
+        .eq('user_id', partner.id);
+
+      const { password_hash: _, ...userWithoutPassword } = partner as any;
+
+      res.json({
+        success: true,
+        message: 'Registration complete — pending admin verification',
+        token,
+        user: userWithoutPassword,
+      });
+    } catch (err: any) {
+      console.error('deliveryPartner signupComplete error:', err);
+      res.status(500).json({ success: false, error: err?.message || 'Registration failed' });
+    }
+  }
 
   async getProfile(req: Request, res: Response) {
     try {

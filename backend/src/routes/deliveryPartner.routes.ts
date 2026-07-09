@@ -4,7 +4,10 @@ import { DeliveryPartnerController, requireRider } from '../controllers/delivery
 const router = Router();
 const ctrl = new DeliveryPartnerController();
 
-// All routes require a valid rider session token
+// Public self-service registration (must be registered before requireRider below)
+router.post('/signup/complete', ctrl.signupComplete.bind(ctrl));
+
+// All routes below require a valid rider session token
 router.use(requireRider);
 
 // Profile & status

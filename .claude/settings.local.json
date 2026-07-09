@@ -38,7 +38,11 @@
       "Bash(ls -la .env*)",
       "Bash(grep -n \"^16. \\\\*\\\\*\\\\`storeOwner\" QA_AUDIT.md)",
       "Bash(grep -i \"\\\\.md$\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(xargs grep -l \"app_users\")",
+      "Bash(awk 'NR==16{print; exit}' QA_AUDIT.md)",
+      "Bash(awk 'NR==22 || NR==53 || NR==308{print NR\": \"$0; print \"---\"}' QA_AUDIT.md)",
+      "Bash(xargs grep -l \"otp\\\\|Otp\\\\|OTP\")"
     ]
   }
 }
