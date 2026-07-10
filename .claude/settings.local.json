@@ -42,7 +42,11 @@
       "Bash(xargs grep -l \"app_users\")",
       "Bash(awk 'NR==16{print; exit}' QA_AUDIT.md)",
       "Bash(awk 'NR==22 || NR==53 || NR==308{print NR\": \"$0; print \"---\"}' QA_AUDIT.md)",
-      "Bash(xargs grep -l \"otp\\\\|Otp\\\\|OTP\")"
+      "Bash(xargs grep -l \"otp\\\\|Otp\\\\|OTP\")",
+      "Bash(npm install *)",
+      "Bash(node *)",
+      "Bash(supabase status *)",
+      "Bash(supabase migration *)"
     ]
   }
 }

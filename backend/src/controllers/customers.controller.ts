@@ -101,4 +101,26 @@ export class CustomersController {
       res.status(500).json({ error: 'Failed to delete address' });
     }
   }
+
+  /**
+   * Registers the authenticated customer's Expo push token so order-status
+   * notifications (order confirmed / shipped / delivered / cancelled) can
+   * reach their device. The token is taken from the body, but the customer
+   * identity always comes from the authenticated session (req.customerId),
+   * never from a client-supplied id.
+   */
+  async registerPushToken(req: Request, res: Response) {
+    try {
+      const customerId = req.customerId!;
+      const { token } = req.body as { token?: string };
+      if (!token) {
+        return res.status(400).json({ error: 'token required' });
+      }
+      await databaseService.updateCustomerPushToken(customerId, token);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error registering push token:', error);
+      res.status(500).json({ error: 'Failed to register push token' });
+    }
+  }
 }

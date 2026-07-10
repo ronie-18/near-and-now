@@ -3,6 +3,25 @@ import { databaseService } from '../services/database.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 
+/** Maps an order status to the customer-facing push notification type, if any. */
+function mapOrderStatusToNotificationType(status: string): string | null {
+  switch (status) {
+    case 'store_accepted':
+    case 'preparing_order':
+      return 'order_confirmed';
+    case 'delivery_partner_assigned':
+    case 'order_picked_up':
+    case 'in_transit':
+      return 'order_shipped';
+    case 'order_delivered':
+      return 'order_delivered';
+    case 'order_cancelled':
+      return 'order_cancelled';
+    default:
+      return null;
+  }
+}
+
 export class OrdersController {
   /** Checkout flow from web app — uses service role on server (RLS-safe). */
   async placeCheckout(req: Request, res: Response) {
@@ -227,6 +246,13 @@ export class OrdersController {
         status,
         notes: notes ?? `Status manually set to ${status} by admin`,
       });
+
+      const notificationType = mapOrderStatusToNotificationType(status);
+      if (notificationType) {
+        notificationService.sendOrderNotification(orderId, notificationType).catch((err) => {
+          console.error('[updateOrderStatus] customer push notification failed (non-fatal)', err);
+        });
+      }
 
       res.json({ success: true, order: data });
     } catch (error) {

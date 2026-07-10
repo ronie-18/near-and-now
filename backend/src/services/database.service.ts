@@ -1519,6 +1519,15 @@ export class DatabaseService {
     return { success: true };
   }
 
+  async updateCustomerPushToken(customerId: string, expoPushToken: string) {
+    const { error } = await supabaseAdmin
+      .from('app_users')
+      .update({ expo_push_token: expoPushToken })
+      .eq('id', customerId);
+    if (error) throw error;
+    return { success: true };
+  }
+
   // Notifications (stubs - implement when notifications table exists)
   async getUserNotifications(_userId: string, _unreadOnly?: boolean) {
     return [];

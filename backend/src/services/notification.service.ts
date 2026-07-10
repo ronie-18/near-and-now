@@ -91,11 +91,44 @@ export class NotificationService {
     return { success: true };
   }
 
-  private async sendOrderPlacedNotification(_orderId: string) {}
-  private async sendOrderConfirmedNotification(_orderId: string) {}
-  private async sendOrderShippedNotification(_orderId: string) {}
-  private async sendOrderDeliveredNotification(_orderId: string) {}
-  private async sendOrderCancelledNotification(_orderId: string) {}
+  private async notifyCustomerByOrderId(orderId: string, title: string, body: string) {
+    const { data: order } = await supabaseAdmin
+      .from('customer_orders')
+      .select('customer_id')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (!order?.customer_id) return;
+
+    const { data: customer } = await supabaseAdmin
+      .from('app_users')
+      .select('expo_push_token')
+      .eq('id', order.customer_id)
+      .maybeSingle();
+
+    if (customer?.expo_push_token) {
+      await this.sendExpoPush(customer.expo_push_token, title, body, { orderId, type: 'order_status' });
+    }
+  }
+
+  private async sendOrderPlacedNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Order Placed', "We've received your order and notified the store.");
+  }
+
+  private async sendOrderConfirmedNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Order Confirmed', 'Your order has been confirmed and is being prepared.');
+  }
+
+  private async sendOrderShippedNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Out for Delivery', 'Your order is on its way!');
+  }
+
+  private async sendOrderDeliveredNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Order Delivered', 'Your order has been delivered. Enjoy!');
+  }
+
+  private async sendOrderCancelledNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Order Cancelled', 'Your order has been cancelled.');
+  }
 }
 
 export const notificationService = new NotificationService();
