@@ -36,7 +36,8 @@ export class OrdersController {
         msg.includes('No store') ||
         msg.includes('verify delivery') ||
         msg.includes('No valid products') ||
-        msg.includes('No items')
+        msg.includes('No items') ||
+        msg.includes('verify your email')
           ? 400
           : 500;
       res.status(status).json({ error: msg });
@@ -162,9 +163,11 @@ export class OrdersController {
         customer_order: { ...customerOrder, subtotal_amount: totalSubtotal, delivery_fee: totalDeliveryFee, total_amount: totalAmount },
         store_orders: storeOrders
       });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error creating order:', error);
-      res.status(500).json({ error: 'Failed to create order' });
+      const msg = error instanceof Error ? error.message : 'Failed to create order';
+      const status = msg.includes('verify your email') ? 400 : 500;
+      res.status(status).json({ error: msg });
     }
   }
 

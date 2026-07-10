@@ -4,6 +4,9 @@ import {
   verifyOTP,
   getCurrentUserFromSession,
   updateCustomerProfile,
+  changeCustomerEmail,
+  verifyCustomerEmailCode,
+  resendEmailVerificationCode,
   type AppUser,
   type Customer
 } from '../services/authService';
@@ -20,9 +23,12 @@ interface AuthContextType {
     email?: string;
     landmark: string;
     delivery_instructions: string;
-  }) => Promise<void>;
+  }) => Promise<{ isNewUser: boolean }>;
   logoutUser: () => Promise<void>;
   updateUserProfile: (data: any) => Promise<void>;
+  changeEmail: (email: string) => Promise<void>;
+  verifyEmailCode: (code: string) => Promise<void>;
+  resendEmailCode: () => Promise<void>;
 }
 
 // Create context
@@ -146,6 +152,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       localStorage.setItem('customerData', response.customer ? JSON.stringify(response.customer) : '');
       // OTP login always knows this number; user.phone is often missing from API/session JSON
       localStorage.setItem('authLoginPhone', String(phone).trim());
+
+      return { isNewUser: response.isNewUser };
     } catch (error) {
       console.error('Error verifying OTP:', error);
       throw error;
@@ -212,6 +220,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
+  // Sets (or stages a change of) the user's email and sends a 4-digit code.
+  const changeEmail = async (email: string) => {
+    await changeCustomerEmail(email);
+  };
+
+  // Confirms the code and refreshes the locally cached user so email_verified_at updates.
+  const verifyEmailCode = async (code: string) => {
+    const { email } = await verifyCustomerEmailCode(code);
+    if (user) {
+      const updatedUser = { ...user, email, email_verified_at: new Date().toISOString() };
+      setUser(updatedUser);
+      localStorage.setItem('userData', JSON.stringify(updatedUser));
+    }
+  };
+
+  const resendEmailCode = async () => {
+    await resendEmailVerificationCode();
+  };
+
   // Context value
   const value = {
     user,
@@ -221,7 +248,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     sendOTPCode,
     verifyOTPCode,
     logoutUser,
-    updateUserProfile
+    updateUserProfile,
+    changeEmail,
+    verifyEmailCode,
+    resendEmailCode
   };
 
   return (

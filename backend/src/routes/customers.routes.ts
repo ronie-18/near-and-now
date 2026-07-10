@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { CustomersController } from '../controllers/customers.controller.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 
@@ -10,5 +11,19 @@ router.get('/:customerId/addresses', requireCustomer, customersController.getAdd
 router.post('/:customerId/addresses', requireCustomer, customersController.createAddress);
 router.patch('/addresses/:addressId', requireCustomer, customersController.updateAddress);
 router.delete('/addresses/:addressId', requireCustomer, customersController.deleteAddress);
+
+// Max 5 verification-code sends per customer per 10 minutes (mirrors send-otp limiter).
+const emailCodeLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => req.customerId || req.ip || 'unknown',
+  message: { error: 'Too many requests. Please wait 10 minutes before trying again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/email/change', requireCustomer, emailCodeLimiter, (req, res) => customersController.changeEmail(req, res));
+router.post('/email/resend', requireCustomer, emailCodeLimiter, (req, res) => customersController.resendEmailVerification(req, res));
+router.post('/email/verify', requireCustomer, (req, res) => customersController.verifyEmail(req, res));
 
 export default router;

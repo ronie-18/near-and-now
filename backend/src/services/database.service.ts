@@ -300,6 +300,10 @@ export class DatabaseService {
     notes?: string;
     coupon_id?: string;
   }) {
+    if (!(await this.isCustomerEmailVerified(orderData.customer_id))) {
+      throw new Error('Please verify your email before placing an order');
+    }
+
     const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .insert({
@@ -743,6 +747,10 @@ export class DatabaseService {
 
     const items = orderData.items;
     if (!items?.length) throw new Error('No items in order');
+
+    if (!(await this.isCustomerEmailVerified(orderData.user_id))) {
+      throw new Error('Please verify your email before placing an order');
+    }
 
     const fullAddress = [
       orderData.shipping_address.address,
@@ -1526,6 +1534,118 @@ export class DatabaseService {
       .eq('id', customerId);
     if (error) throw error;
     return { success: true };
+  }
+
+  private static readonly EMAIL_CODE_TTL_MS = 5 * 60 * 1000;
+
+  private generateEmailVerificationCode(): string {
+    return String(Math.floor(1000 + Math.random() * 9000));
+  }
+
+  /**
+   * Sets (first time) or changes (subsequent times) a customer's email and
+   * issues a fresh 4-digit verification code for it.
+   *
+   * If the customer doesn't have a verified email yet, `email` is updated
+   * directly (nothing to protect). If they already have a verified email,
+   * the new address is staged in `pending_email` — `email` stays untouched
+   * and usable until the new address is confirmed via `verifyCustomerEmailCode`.
+   */
+  async setOrChangeCustomerEmail(customerId: string, email: string): Promise<{ code: string }> {
+    const { data: user, error: fetchErr } = await supabaseAdmin
+      .from('app_users')
+      .select('email, email_verified_at')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (fetchErr || !user) throw new Error('Customer not found');
+
+    const code = this.generateEmailVerificationCode();
+    const expiresAt = new Date(Date.now() + DatabaseService.EMAIL_CODE_TTL_MS).toISOString();
+
+    const updates: Record<string, unknown> = {
+      email_verification_code: code,
+      email_verification_expires_at: expiresAt,
+    };
+    if ((user as any).email_verified_at) {
+      updates.pending_email = email;
+    } else {
+      updates.email = email;
+      updates.pending_email = null;
+    }
+
+    const { error: updateErr } = await supabaseAdmin
+      .from('app_users')
+      .update(updates)
+      .eq('id', customerId);
+    if (updateErr) throw updateErr;
+
+    return { code };
+  }
+
+  /** Regenerates and returns a fresh code for whichever email is currently unverified. */
+  async resendCustomerEmailVerification(customerId: string): Promise<{ code: string; email: string }> {
+    const { data: user, error } = await supabaseAdmin
+      .from('app_users')
+      .select('email, pending_email, email_verified_at')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (error || !user) throw new Error('Customer not found');
+
+    const target = (user as any).pending_email || (!(user as any).email_verified_at ? (user as any).email : null);
+    if (!target) throw new Error('Email already verified');
+
+    const code = this.generateEmailVerificationCode();
+    const expiresAt = new Date(Date.now() + DatabaseService.EMAIL_CODE_TTL_MS).toISOString();
+
+    const { error: updateErr } = await supabaseAdmin
+      .from('app_users')
+      .update({ email_verification_code: code, email_verification_expires_at: expiresAt })
+      .eq('id', customerId);
+    if (updateErr) throw updateErr;
+
+    return { code, email: target };
+  }
+
+  /** Confirms a verification code, promoting pending_email if one is staged. */
+  async verifyCustomerEmailCode(customerId: string, code: string): Promise<{ email: string }> {
+    const { data: user, error } = await supabaseAdmin
+      .from('app_users')
+      .select('email, pending_email, email_verification_code, email_verification_expires_at')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (error || !user) throw new Error('Customer not found');
+
+    const u = user as any;
+    if (!u.email_verification_code || u.email_verification_code !== code) {
+      throw new Error('Invalid verification code');
+    }
+    if (!u.email_verification_expires_at || new Date(u.email_verification_expires_at).getTime() < Date.now()) {
+      throw new Error('Verification code expired — please request a new one');
+    }
+
+    const finalEmail = u.pending_email || u.email;
+    const { error: updateErr } = await supabaseAdmin
+      .from('app_users')
+      .update({
+        email: finalEmail,
+        pending_email: null,
+        email_verified_at: new Date().toISOString(),
+        email_verification_code: null,
+        email_verification_expires_at: null,
+      })
+      .eq('id', customerId);
+    if (updateErr) throw updateErr;
+
+    return { email: finalEmail };
+  }
+
+  async isCustomerEmailVerified(customerId: string): Promise<boolean> {
+    const { data: user } = await supabaseAdmin
+      .from('app_users')
+      .select('email_verified_at')
+      .eq('id', customerId)
+      .maybeSingle();
+    return !!(user as any)?.email_verified_at;
   }
 
   // Notifications (stubs - implement when notifications table exists)

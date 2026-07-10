@@ -7,15 +7,19 @@ interface AuthModalProps {
   onClose: () => void;
 }
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
   const [step, setStep] = useState(1);
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
+  const [emailCode, setEmailCode] = useState('');
   const [resendTimer, setResendTimer] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  const { sendOTPCode, verifyOTPCode } = useAuth();
+
+  const { sendOTPCode, verifyOTPCode, verifyEmailCode, resendEmailCode } = useAuth();
   const { showNotification } = useNotification();
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -25,7 +29,9 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
       setStep(1);
       setPhone('');
       setName('');
+      setEmail('');
       setOtp('');
+      setEmailCode('');
       setResendTimer(0);
       setIsSubmitting(false);
     }
@@ -96,7 +102,12 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
       showNotification('Please enter a valid 10-digit phone number', 'error');
       return;
     }
-    
+
+    if (!email || !EMAIL_REGEX.test(email.trim())) {
+      showNotification('Please enter a valid email address', 'error');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       await sendOTPCode('+91' + phone);
@@ -131,16 +142,54 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
     
     try {
       setIsSubmitting(true);
-      await verifyOTPCode('+91' + phone, otp.trim(), {
+      const { isNewUser } = await verifyOTPCode('+91' + phone, otp.trim(), {
         name: name || 'Customer',
+        email: email.trim(),
         landmark: 'To be updated',
         delivery_instructions: 'To be updated'
       });
       showNotification('Login successful!', 'success');
-      onClose();
+      if (isNewUser) {
+        // New signups already have a code emailed to them (sent by the backend
+        // as part of account creation) — just collect it. Skippable; checkout
+        // is what actually enforces verification.
+        setStep(3);
+      } else {
+        onClose();
+      }
     } catch (error) {
       console.error('Error verifying OTP:', error);
       showNotification('Invalid OTP. Please try again.', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleVerifyEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (emailCode.length !== 4) {
+      showNotification('Enter the 4-digit code', 'error');
+      return;
+    }
+    try {
+      setIsSubmitting(true);
+      await verifyEmailCode(emailCode.trim());
+      showNotification('Email verified!', 'success');
+      onClose();
+    } catch (error: any) {
+      showNotification(error?.message || 'Invalid or expired code', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResendEmailCode = async () => {
+    try {
+      setIsSubmitting(true);
+      await resendEmailCode();
+      showNotification('Verification code resent', 'success');
+    } catch (error: any) {
+      showNotification(error?.message || 'Failed to resend code', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -178,7 +227,7 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
         {/* Header */}
         <div className="bg-primary text-white p-4 flex items-center justify-between">
           <h2 className="text-xl font-bold">
-            {step === 1 ? 'Login / Register' : 'Verify OTP'}
+            {step === 1 ? 'Login / Register' : step === 2 ? 'Verify OTP' : 'Verify Your Email'}
           </h2>
           <button 
             onClick={onClose}
@@ -232,7 +281,25 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
                   className="block w-full border border-gray-300 rounded-md focus:ring-primary focus:border-primary px-3 py-2"
                 />
               </div>
-              
+
+              <div className="mb-6">
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="block w-full border border-gray-300 rounded-md focus:ring-primary focus:border-primary px-3 py-2"
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Used for order receipts. You'll verify it after logging in — no rush.
+                </p>
+              </div>
+
               <button
                 type="submit"
                 disabled={isSubmitting}
@@ -249,7 +316,7 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
                 <a href="/privacy" className="text-primary hover:underline">Privacy Policy</a>
               </p>
             </form>
-          ) : (
+          ) : step === 2 ? (
             /* Step 2: OTP Verification */
             <form onSubmit={handleOtpSubmit}>
               <div className="text-center mb-6">
@@ -309,6 +376,63 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
                     : 'Resend OTP'}
                 </button>
               </div>
+            </form>
+          ) : (
+            /* Step 3: Email verification (new signups only — skippable) */
+            <form onSubmit={handleVerifyEmailSubmit}>
+              <div className="text-center mb-6">
+                <p className="text-gray-600">Enter the 4-digit code sent to</p>
+                <p className="font-medium text-gray-800">{email}</p>
+              </div>
+
+              <div className="mb-6">
+                <label htmlFor="emailCode" className="block text-sm font-medium text-gray-700 mb-1">
+                  Verification Code
+                </label>
+                <input
+                  type="text"
+                  id="emailCode"
+                  value={emailCode}
+                  onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, ''))}
+                  placeholder="Enter 4-digit code"
+                  className="block w-full border border-gray-300 rounded-md focus:ring-primary focus:border-primary px-3 py-2 text-center text-lg tracking-widest"
+                  maxLength={4}
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className={`w-full bg-primary hover:bg-secondary text-white py-3 rounded-md transition-colors ${
+                  isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
+                }`}
+              >
+                {isSubmitting ? 'Verifying...' : 'Verify Email'}
+              </button>
+
+              <div className="flex items-center justify-between mt-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="text-sm text-gray-600 hover:text-gray-800"
+                >
+                  Skip for now
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResendEmailCode}
+                  disabled={isSubmitting}
+                  className="text-sm text-primary hover:text-secondary disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
+                  Resend code
+                </button>
+              </div>
+
+              <p className="text-center text-xs text-gray-500 mt-4">
+                You can browse without verifying, but you'll need to verify your email before placing an order.
+              </p>
             </form>
           )}
         </div>

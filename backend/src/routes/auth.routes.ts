@@ -12,7 +12,10 @@ const verifyOtpSchema = z.object({
   phone: z.string().min(10).max(15),
   otp: z.string().length(6, 'OTP must be 6 digits').regex(/^\d+$/, 'OTP must be numeric'),
   role: z.enum(['customer', 'shopkeeper', 'delivery_partner']).optional(),
-  name: z.string().optional()
+  name: z.string().optional(),
+  // Required for brand-new customer signups (enforced in the controller, not
+  // here, since it's only mandatory when no existing account is found).
+  email: z.string().email().optional()
 });
 
 const router = Router();

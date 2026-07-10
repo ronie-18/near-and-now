@@ -143,12 +143,20 @@ const globalStyles = `
    Component
 ───────────────────────────────────────────── */
 const ProfilePage = () => {
-  const { user, isAuthenticated, isLoading, updateUserProfile, logoutUser } = useAuth();
+  const { user, isAuthenticated, isLoading, updateUserProfile, logoutUser, changeEmail, verifyEmailCode, resendEmailCode } = useAuth();
   const { showNotification } = useNotification();
   const navigate = useNavigate();
 
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' });
+  const [formData, setFormData] = useState({ name: '', phone: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Email is verified separately from name/phone — changing it requires
+  // confirming a 4-digit code before it takes effect.
+  const [emailInput, setEmailInput] = useState('');
+  const [isEmailVerified, setIsEmailVerified] = useState(false);
+  const [showEmailCodeStep, setShowEmailCodeStep] = useState(false);
+  const [emailCode, setEmailCode] = useState('');
+  const [isEmailSubmitting, setIsEmailSubmitting] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate('/login');
@@ -158,9 +166,11 @@ const ProfilePage = () => {
     if (user) {
       setFormData({
         name: user.name || '',
-        email: user.email || '',
         phone: user.phone || ''
       });
+      setEmailInput(user.email || '');
+      setIsEmailVerified(!!user.email_verified_at);
+      setShowEmailCodeStep(false);
     }
   }, [user]);
 
@@ -173,13 +183,63 @@ const ProfilePage = () => {
     e.preventDefault();
     try {
       setIsSubmitting(true);
-      await updateUserProfile({ name: formData.name, email: formData.email });
+      await updateUserProfile({ name: formData.name });
       showNotification('Profile updated successfully', 'success');
     } catch (error) {
       console.error('Error updating profile:', error);
       showNotification('Failed to update profile. Please try again.', 'error');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const handleSendEmailCode = async () => {
+    if (!EMAIL_REGEX.test(emailInput.trim())) {
+      showNotification('Please enter a valid email address', 'error');
+      return;
+    }
+    try {
+      setIsEmailSubmitting(true);
+      await changeEmail(emailInput.trim());
+      setShowEmailCodeStep(true);
+      showNotification('Verification code sent to your email', 'success');
+    } catch (error: any) {
+      showNotification(error?.message || 'Failed to send verification code', 'error');
+    } finally {
+      setIsEmailSubmitting(false);
+    }
+  };
+
+  const handleVerifyEmail = async () => {
+    if (emailCode.length !== 4) {
+      showNotification('Enter the 4-digit code', 'error');
+      return;
+    }
+    try {
+      setIsEmailSubmitting(true);
+      await verifyEmailCode(emailCode.trim());
+      setIsEmailVerified(true);
+      setShowEmailCodeStep(false);
+      setEmailCode('');
+      showNotification('Email verified!', 'success');
+    } catch (error: any) {
+      showNotification(error?.message || 'Invalid or expired code', 'error');
+    } finally {
+      setIsEmailSubmitting(false);
+    }
+  };
+
+  const handleResendEmailCode = async () => {
+    try {
+      setIsEmailSubmitting(true);
+      await resendEmailCode();
+      showNotification('Verification code resent', 'success');
+    } catch (error: any) {
+      showNotification(error?.message || 'Failed to resend code', 'error');
+    } finally {
+      setIsEmailSubmitting(false);
     }
   };
 
@@ -289,21 +349,6 @@ const ProfilePage = () => {
                 <span className="pp-hint">Phone number cannot be changed</span>
               </div>
 
-              {/* Email */}
-              <div className="pp-field">
-                <label className="pp-label" htmlFor="email">
-                  Email Address <span style={{ color: '#c4c9d4', fontWeight: 400 }}>(Optional)</span>
-                </label>
-                <input
-                  className="pp-input"
-                  type="email"
-                  id="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  placeholder="you@example.com"
-                />
-              </div>
             </div>
 
             {/* Actions */}
@@ -332,6 +377,74 @@ const ProfilePage = () => {
               </button>
             </div>
           </form>
+
+          <div className="pp-divider" />
+
+          {/* Email — verified separately; changing it requires confirming a new code */}
+          <div style={{ padding: '24px 32px' }}>
+            <div className="pp-field" style={{ marginBottom: showEmailCodeStep ? 16 : 0 }}>
+              <label className="pp-label" htmlFor="email">
+                Email Address
+                {isEmailVerified && !showEmailCodeStep && (
+                  <span style={{ color: '#16a34a', fontWeight: 600, marginLeft: 8 }}>✓ Verified</span>
+                )}
+                {!isEmailVerified && !showEmailCodeStep && (
+                  <span style={{ color: '#d97706', fontWeight: 600, marginLeft: 8 }}>Unverified</span>
+                )}
+              </label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="pp-input"
+                  type="email"
+                  id="email"
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  placeholder="you@example.com"
+                  disabled={showEmailCodeStep}
+                />
+                <button
+                  type="button"
+                  className="pp-btn-save"
+                  disabled={isEmailSubmitting || showEmailCodeStep || emailInput.trim() === (user?.email || '')}
+                  onClick={handleSendEmailCode}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  {emailInput.trim() === (user?.email || '') && isEmailVerified ? 'Verified' : 'Send Code'}
+                </button>
+              </div>
+              {!isEmailVerified && !showEmailCodeStep && (
+                <span className="pp-hint">Verify your email before you can place an order.</span>
+              )}
+            </div>
+
+            {showEmailCodeStep && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div className="pp-field" style={{ flex: 1 }}>
+                  <label className="pp-label" htmlFor="emailCode">4-Digit Code</label>
+                  <input
+                    className="pp-input"
+                    type="text"
+                    id="emailCode"
+                    value={emailCode}
+                    onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, ''))}
+                    maxLength={4}
+                    placeholder="Enter code"
+                  />
+                </div>
+                <button type="button" className="pp-btn-save" disabled={isEmailSubmitting} onClick={handleVerifyEmail}>
+                  Verify
+                </button>
+                <button
+                  type="button"
+                  className="pp-btn-logout"
+                  disabled={isEmailSubmitting}
+                  onClick={handleResendEmailCode}
+                >
+                  Resend
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="pp-divider" />
 

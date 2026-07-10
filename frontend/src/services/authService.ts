@@ -1,9 +1,12 @@
 import { supabase, supabaseAdmin } from './supabase';
+import { apiUrl } from '../utils/apiBase';
+import { getAuthHeaders } from '../utils/authHeader';
 
 export interface AppUser {
   id: string;
   name: string;
   email: string | null;
+  email_verified_at?: string | null;
   phone: string | null;
   role: 'customer' | 'shopkeeper' | 'delivery_partner';
   is_activated: boolean;
@@ -31,6 +34,7 @@ export interface AuthResponse {
   user: AppUser;
   customer?: Customer;
   token: string;
+  isNewUser: boolean;
 }
 
 // Base URL for backend API.
@@ -135,7 +139,8 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
       body: JSON.stringify({
         phone,
         otp: String(otp).trim(),
-        name: userData?.name || 'Customer'
+        name: userData?.name || 'Customer',
+        email: userData?.email
       })
     });
 
@@ -165,7 +170,8 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
     return {
       user: data.user as AppUser,
       customer: data.customer,
-      token: data.token
+      token: data.token,
+      isNewUser: Boolean(data.isNewUser)
     };
   } catch (error: any) {
     console.error('Error in verifyOTP:', error);
@@ -256,5 +262,40 @@ export async function updateCustomerProfile(userId: string, updates: {
     console.error('❌ Error updating profile:', error);
     throw error;
   }
+}
+
+async function postJson(path: string, body?: Record<string, unknown>): Promise<any> {
+  const response = await fetch(apiUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(body || {})
+  });
+  const text = await response.text();
+  let data: any;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+  if (!response.ok) {
+    throw new Error(data?.error || data?.message || 'Request failed');
+  }
+  return data;
+}
+
+/** Sets (first time) or stages a change of (subsequent times) the customer's email. Sends a 4-digit code. */
+export async function changeCustomerEmail(email: string): Promise<void> {
+  await postJson('/api/customers/email/change', { email });
+}
+
+/** Confirms the 4-digit code emailed by changeCustomerEmail/resendEmailVerificationCode. */
+export async function verifyCustomerEmailCode(code: string): Promise<{ email: string }> {
+  const data = await postJson('/api/customers/email/verify', { code });
+  return { email: data.email };
+}
+
+/** Regenerates and resends the verification code for whichever email is currently unverified. */
+export async function resendEmailVerificationCode(): Promise<void> {
+  await postJson('/api/customers/email/resend');
 }
 

@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import twilio from 'twilio';
 import { supabaseAdmin } from '../config/database.js';
+import { databaseService } from '../services/database.service.js';
+import { notificationService } from '../services/notification.service.js';
 
 function extractErrorMessage(err: any, fallback: string): string {
   if (!err) return fallback;
@@ -111,7 +113,7 @@ export class AuthController {
   // Verify OTP and login/register by role (customer, shopkeeper, delivery_partner)
   async verifyOTP(req: Request, res: Response) {
     try {
-      const { phone, otp, name, role: requestRole } = req.body;
+      const { phone, otp, name, email, role: requestRole } = req.body;
 
       if (!phone || !otp) {
         return res.status(400).json({ error: 'Phone number and OTP are required' });
@@ -261,6 +263,14 @@ export class AuthController {
         customer = customerData;
       } else {
         // New customer - register (website users are always customers)
+        const trimmedEmail = typeof email === 'string' ? email.trim() : '';
+        if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+          return res.status(400).json({
+            error: 'Email required',
+            message: 'A valid email address is required to complete signup.'
+          });
+        }
+
         const userName = name || 'Customer';
         const landmark = 'To be updated';
         const deliveryInstructions = 'To be updated';
@@ -272,7 +282,7 @@ export class AuthController {
           .insert({
             name: userName,
             phone,
-            email: null,
+            email: trimmedEmail,
             password_hash: null,
             role: 'customer', // Website users are always customers, never admin
             is_activated: true
@@ -315,8 +325,15 @@ export class AuthController {
         }
 
         customer = newCustomer;
+
+        // Fire off the initial verification code (non-fatal — the customer can
+        // still complete signup and browse; verification is only enforced at checkout).
+        databaseService.setOrChangeCustomerEmail(appUser.id, trimmedEmail)
+          .then(({ code }) => notificationService.sendEmailVerificationCode(trimmedEmail, code))
+          .catch((err) => console.error('[verifyOTP] initial email verification send failed (non-fatal)', err));
       }
 
+      const isNewUser = !existingUser;
       const token = crypto.randomUUID();
 
       // Persist the session token so customer-authenticated routes can validate it,
@@ -341,7 +358,8 @@ export class AuthController {
         message: 'OTP verified successfully',
         user: userWithoutPassword,
         customer: customer || undefined,
-        token
+        token,
+        isNewUser
       });
     } catch (error: any) {
       console.error('❌ Error verifying OTP:', error);

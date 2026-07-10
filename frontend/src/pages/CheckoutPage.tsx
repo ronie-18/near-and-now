@@ -520,7 +520,11 @@ const CheckoutPage = () => {
       navigate('/thank-you', { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
     } catch (error: any) {
       console.error('Error placing order:', error);
-      showNotification(error?.message || 'Failed to place order. Please try again.', 'error');
+      const message = error?.message || 'Failed to place order. Please try again.';
+      showNotification(message, 'error');
+      if (String(message).toLowerCase().includes('verify your email')) {
+        navigate('/profile');
+      }
     } finally {
       setLoading(false);
     }
