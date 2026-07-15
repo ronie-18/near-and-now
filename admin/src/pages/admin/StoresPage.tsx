@@ -13,7 +13,7 @@ import {
   Users
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { supabase } from '../../services/supabase';
+import { getAdminClient } from '../../services/supabase';
 
 interface StoreData {
   id: string;
@@ -38,7 +38,7 @@ const StoresPage = () => {
     try {
       setLoading(true);
       setError(null);
-      const { data, error: sbError } = await supabase
+      const { data, error: sbError } = await getAdminClient()
         .from('stores')
         .select('*')
         .order('created_at', { ascending: false });
@@ -69,11 +69,15 @@ const StoresPage = () => {
   const toggleApproval = async (store: StoreData) => {
     setApprovingId(store.id);
     try {
-      const { error: sbError } = await supabase
+      const { data, error: sbError } = await getAdminClient()
         .from('stores')
         .update({ is_approved: !store.is_approved })
-        .eq('id', store.id);
+        .eq('id', store.id)
+        .select('id, is_approved');
       if (sbError) throw sbError;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
       setStores(prev => prev.map(s => s.id === store.id ? { ...s, is_approved: !store.is_approved } : s));
     } catch (err: any) {
       setError(`Failed to update approval: ${err.message}`);

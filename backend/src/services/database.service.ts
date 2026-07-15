@@ -63,6 +63,16 @@ function lastTenIndianMobileDigits(phone: string): string | null {
   return null;
 }
 
+/**
+ * delivery_partners.is_approved is the single source of truth for the admin approval
+ * gate (mirrors stores.is_approved). It's derived from status rather than set directly
+ * by callers, so admin only ever has to manage `status` — active/inactive count as
+ * approved, pending_verification/suspended/offboarded do not.
+ */
+function isApprovedStatus(status: 'pending_verification' | 'active' | 'inactive' | 'suspended' | 'offboarded'): boolean {
+  return status === 'active' || status === 'inactive';
+}
+
 export class DatabaseService {
   private isMissingColumnError(error: unknown, columnName: string): boolean {
     const code = (error as { code?: string })?.code;
@@ -1343,6 +1353,7 @@ export class DatabaseService {
             verification_document: data.verification_document || null,
             verification_number: data.verification_number || null,
             is_online: false,
+            is_approved: data.status ? isApprovedStatus(data.status) : false,
             ...(data.status ? { status: data.status } : {})
           },
           { onConflict: 'user_id' }
@@ -1432,7 +1443,13 @@ export class DatabaseService {
     // is_online is enforced by DB from status (active => true, else false); omit client override
     if (data.verification_document !== undefined) profileUpdate.verification_document = data.verification_document;
     if (data.verification_number !== undefined) profileUpdate.verification_number = data.verification_number;
-    if (data.status !== undefined) profileUpdate.status = data.status;
+    if (data.status !== undefined) {
+      profileUpdate.status = data.status;
+      // is_approved is the real gate for going online / accepting orders (mirrors
+      // stores.is_approved); keep it in sync whenever admin changes status so the
+      // admin UI only ever has to set `status`, same as before this column existed.
+      profileUpdate.is_approved = isApprovedStatus(data.status);
+    }
 
     if (Object.keys(profileUpdate).length > 0) {
       const { error: profileError } = await supabaseAdmin

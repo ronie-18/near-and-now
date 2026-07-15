@@ -41,6 +41,8 @@ interface DeliveryPartner {
     verification_document?: string;
     verification_number?: string;
     status?: string;
+    /** Derived from status by the backend (active/inactive => true) — the real approval gate. */
+    is_approved?: boolean;
     is_online?: boolean;
     address?: string;
     vehicle_number?: string;
@@ -51,6 +53,11 @@ interface DeliveryPartner {
 type PartnerStatus = 'all' | 'active' | 'inactive' | 'pending_verification' | 'suspended' | 'offboarded';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+
+function adminAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem('adminToken') || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 const StatCard = ({
@@ -377,7 +384,7 @@ const DeliveryPage = () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch(`${API_BASE}/api/delivery/partners`);
+      const res = await fetch(`${API_BASE}/api/delivery/partners`, { headers: adminAuthHeaders() });
       if (!res.ok) throw new Error('Failed to fetch partners');
       const data = await res.json();
       setPartners(data);
@@ -396,7 +403,11 @@ const DeliveryPage = () => {
       ? `${API_BASE}/api/delivery/partners/${editingPartner.id}`
       : `${API_BASE}/api/delivery/partners`;
     const method = editingPartner ? 'PUT' : 'POST';
-    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+      body: JSON.stringify(data),
+    });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || 'Failed to save partner');
@@ -412,7 +423,10 @@ const DeliveryPage = () => {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
     try {
       setDeleteLoading(id);
-      const res = await fetch(`${API_BASE}/api/delivery/partners/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/delivery/partners/${id}`, {
+        method: 'DELETE',
+        headers: adminAuthHeaders(),
+      });
       if (!res.ok) throw new Error('Failed to delete');
       setPartners(prev => prev.filter(p => p.id !== id));
       setSuccess(`"${name}" has been removed.`);
@@ -427,7 +441,7 @@ const DeliveryPage = () => {
   const handleToggleStatus = async (partner: DeliveryPartner) => {
     const current = partner.profile?.status;
     if (current !== 'active' && current !== 'inactive') {
-      setError('Only verified partners (Active/Inactive) can be toggled. Set status via Edit first.');
+      setError('Only verified partners (Active/Inactive) can be toggled. Use Approve/Reject or Edit first.');
       setTimeout(() => setError(null), 4000);
       return;
     }
@@ -435,13 +449,34 @@ const DeliveryPage = () => {
     try {
       const res = await fetch(`${API_BASE}/api/delivery/partners/${partner.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
         body: JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) throw new Error('Failed');
       fetchPartners();
     } catch {
       setError('Failed to update partner status.');
+    }
+  };
+
+  // Reject keeps the partner at pending_verification — there is no distinct "rejected" status.
+  // A rejected applicant stays stuck on the app's "awaiting admin approval" screen indefinitely,
+  // same as one admin simply hasn't reviewed yet. `offboarded` is reserved for partners who were
+  // previously active and are being removed, not for denying a pending application.
+  const handleSetVerificationStatus = async (partner: DeliveryPartner, newStatus: 'active' | 'pending_verification') => {
+    try {
+      const res = await fetch(`${API_BASE}/api/delivery/partners/${partner.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (!res.ok) throw new Error('Failed');
+      setSuccess(newStatus === 'active' ? `${partner.name} approved.` : `${partner.name} not approved — remains pending.`);
+      setTimeout(() => setSuccess(null), 3000);
+      fetchPartners();
+    } catch {
+      setError(newStatus === 'active' ? 'Failed to approve partner.' : 'Failed to update partner.');
+      setTimeout(() => setError(null), 4000);
     }
   };
 
@@ -710,6 +745,24 @@ const DeliveryPage = () => {
                         {/* Actions */}
                         <td className="px-6 py-4">
                           <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {(!status || status === 'pending_verification') && (
+                              <>
+                                <button
+                                  onClick={() => handleSetVerificationStatus(partner, 'active')}
+                                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                                  title="Approve partner"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => handleSetVerificationStatus(partner, 'pending_verification')}
+                                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors"
+                                  title="Reject partner"
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            )}
                             <button
                               onClick={() => setViewingPartner(partner)}
                               className="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-all"

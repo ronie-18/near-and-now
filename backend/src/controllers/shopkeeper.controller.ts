@@ -54,10 +54,15 @@ export async function requireShopkeeper(req: Request, res: Response, next: NextF
 
   const { data: stores } = await supabaseAdmin
     .from('stores')
-    .select('id')
+    .select('id, is_approved')
     .eq('owner_id', user.id);
 
   if (!stores?.length) return res.status(403).json({ error: 'No store found for this account' });
+
+  // Order management is gated behind admin approval — same single gate as going online.
+  if (!stores.some((s: any) => s.is_approved)) {
+    return res.status(403).json({ error: 'Your store is pending admin approval' });
+  }
 
   req.shopkeeperId = user.id;
   req.shopkeeperStoreIds = stores.map((s: any) => s.id);

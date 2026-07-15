@@ -144,7 +144,7 @@ export class DeliveryPartnerController {
 
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, verification_document, verification_number, is_online, status, expo_push_token, profile_image_url')
+        .select('address, vehicle_number, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url')
         .eq('user_id', req.riderId!)
         .maybeSingle();
 
@@ -184,6 +184,17 @@ export class DeliveryPartnerController {
       const { is_online } = req.body;
       if (typeof is_online !== 'boolean') {
         return res.status(400).json({ error: 'is_online must be a boolean' });
+      }
+
+      if (is_online) {
+        const { data: partner } = await supabaseAdmin
+          .from('delivery_partners')
+          .select('is_approved')
+          .eq('user_id', req.riderId!)
+          .maybeSingle();
+        if (!(partner as any)?.is_approved) {
+          return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+        }
       }
 
       const { error } = await supabaseAdmin
@@ -389,6 +400,15 @@ export class DeliveryPartnerController {
       const { orderId } = req.params;
       const riderId = req.riderId!;
 
+      const { data: partner } = await supabaseAdmin
+        .from('delivery_partners')
+        .select('is_approved')
+        .eq('user_id', riderId)
+        .maybeSingle();
+      if (!(partner as any)?.is_approved) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
+
       const { error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'delivery_partner_assigned', updated_at: new Date().toISOString() })
@@ -567,7 +587,7 @@ export class DeliveryPartnerController {
         .from('app_users').select('id, name, email, phone, created_at').eq('id', req.riderId!).single();
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, verification_document, verification_number, is_online, status, expo_push_token, profile_image_url')
+        .select('address, vehicle_number, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url')
         .eq('user_id', req.riderId!).maybeSingle();
 
       res.json({ success: true, profile: { ...user, ...profile } });
@@ -706,6 +726,15 @@ export class DeliveryPartnerController {
   async acceptOffer(req: Request, res: Response) {
     try {
       const { offerId } = req.params;
+
+      const { data: partner } = await supabaseAdmin
+        .from('delivery_partners')
+        .select('is_approved')
+        .eq('user_id', req.riderId!)
+        .maybeSingle();
+      if (!(partner as any)?.is_approved) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
 
       const { data: result, error } = await supabaseAdmin
         .rpc('accept_driver_offer', { p_offer_id: offerId, p_driver_id: req.riderId! });
