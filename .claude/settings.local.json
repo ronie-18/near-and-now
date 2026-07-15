@@ -47,7 +47,10 @@
       "Bash(node *)",
       "Bash(supabase status *)",
       "Bash(supabase migration *)",
-      "Bash(chmod +x /Users/tiasmondal166/projects/near-now-store_owner/android/gradlew)"
+      "Bash(chmod +x /Users/tiasmondal166/projects/near-now-store_owner/android/gradlew)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
