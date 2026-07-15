@@ -22,7 +22,6 @@ import {
   WifiOff,
   FileText,
   Car,
-  Filter,
   ChevronDown
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -50,7 +49,7 @@ interface DeliveryPartner {
   };
 }
 
-type PartnerStatus = 'all' | 'active' | 'inactive' | 'pending_verification' | 'suspended' | 'offboarded';
+type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -59,16 +58,23 @@ function adminAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-// ─── Stat Card ────────────────────────────────────────────────────────────────
+// ─── Stat Card (clickable — doubles as a filter button) ────────────────────
 const StatCard = ({
-  icon: Icon, gradient, label, value
+  icon: Icon, gradient, label, value, active, onClick,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   gradient: string;
   label: string;
   value: number;
+  active: boolean;
+  onClick: () => void;
 }) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
+  <button
+    onClick={onClick}
+    className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 text-left ${
+      active ? 'ring-4 ring-white ring-offset-2 ring-offset-orange-100' : ''
+    }`}
+  >
     <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
     <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-20 h-20 bg-white/10 rounded-full blur-xl" />
     <div className="relative z-10">
@@ -78,7 +84,7 @@ const StatCard = ({
       <p className="text-white/80 text-sm font-medium">{label}</p>
       <p className="text-3xl font-bold mt-1">{value}</p>
     </div>
-  </div>
+  </button>
 );
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -374,7 +380,7 @@ const DeliveryPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<PartnerStatus>('all');
+  const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [showForm, setShowForm] = useState(false);
   const [editingPartner, setEditingPartner] = useState<DeliveryPartner | null>(null);
   const [viewingPartner, setViewingPartner] = useState<DeliveryPartner | null>(null);
@@ -489,24 +495,30 @@ const DeliveryPage = () => {
   const filteredPartners = useMemo(() => {
     return partners.filter(p => {
       const q = searchTerm.toLowerCase();
-      const matchesSearch = (
+      const matchesSearch = !q || (
         p.name.toLowerCase().includes(q) ||
         p.phone?.includes(q) ||
         p.email?.toLowerCase().includes(q) ||
         (p.vehicle_number || p.profile?.vehicle_number || '').toLowerCase().includes(q)
       );
+      const isOnline = p.profile?.is_online ?? p.is_online ?? false;
       const partnerStatus = p.profile?.status || 'pending_verification';
-      const matchesStatus = statusFilter === 'all' || partnerStatus === statusFilter;
-      return matchesSearch && matchesStatus;
+      const matchesStat =
+        statFilter === 'all' ? true :
+        statFilter === 'online' ? isOnline :
+        statFilter === 'offline' ? !isOnline :
+        statFilter === 'pending' ? partnerStatus === 'pending_verification' :
+        !!p.profile?.is_approved;
+      return matchesSearch && matchesStat;
     });
-  }, [partners, searchTerm, statusFilter]);
+  }, [partners, searchTerm, statFilter]);
 
   const stats = useMemo(() => ({
     total: partners.length,
     online: partners.filter(p => p.profile?.is_online || p.is_online).length,
-    active: partners.filter(p => p.profile?.status === 'active').length,
-    pending: partners.filter(p => !p.profile?.status || p.profile.status === 'pending_verification').length,
-    suspended: partners.filter(p => p.profile?.status === 'suspended').length,
+    offline: partners.filter(p => !(p.profile?.is_online || p.is_online)).length,
+    pending: partners.filter(p => (p.profile?.status || 'pending_verification') === 'pending_verification').length,
+    approved: partners.filter(p => p.profile?.is_approved).length,
   }), [partners]);
 
   return (
@@ -552,55 +564,31 @@ const DeliveryPage = () => {
           </div>
         )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard icon={Truck} gradient="bg-gradient-to-br from-orange-500 to-rose-600" label="Total Partners" value={stats.total} />
-          <StatCard icon={Wifi} gradient="bg-gradient-to-br from-emerald-500 to-teal-600" label="Currently Online" value={stats.online} />
-          <StatCard icon={Clock} gradient="bg-gradient-to-br from-amber-500 to-orange-600" label="Pending Verification" value={stats.pending} />
-          <StatCard icon={Ban} gradient="bg-gradient-to-br from-red-500 to-rose-600" label="Suspended" value={stats.suspended} />
+        {/* Stats — clickable filters */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard icon={Truck} gradient="bg-gradient-to-br from-orange-500 to-rose-600" label="Total Partners" value={stats.total} active={statFilter === 'all'} onClick={() => setStatFilter('all')} />
+          <StatCard icon={Wifi} gradient="bg-gradient-to-br from-emerald-500 to-teal-600" label="Online" value={stats.online} active={statFilter === 'online'} onClick={() => setStatFilter('online')} />
+          <StatCard icon={WifiOff} gradient="bg-gradient-to-br from-gray-500 to-gray-600" label="Offline" value={stats.offline} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
+          <StatCard icon={Clock} gradient="bg-gradient-to-br from-amber-500 to-orange-600" label="Pending Verification" value={stats.pending} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
+          <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-sky-500 to-blue-600" label="Approved" value={stats.approved} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
         </div>
 
-        {/* Filters */}
+        {/* Search */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-          <div className="flex flex-col lg:flex-row gap-4">
-            {/* Search */}
-            <div className="relative flex-1">
-              <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by name, phone, email, or vehicle..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="w-full pl-11 pr-10 py-3 rounded-xl border-2 border-gray-200 focus:border-orange-400 focus:ring-0 transition-colors text-gray-800 text-sm"
-              />
-              {searchTerm && (
-                <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  <X size={16} />
-                </button>
-              )}
-            </div>
-            {/* Status Filter */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <Filter size={16} className="text-gray-400 flex-shrink-0" />
-              {(['all', 'active', 'inactive', 'pending_verification', 'suspended'] as PartnerStatus[]).map(s => (
-                <button
-                  key={s}
-                  onClick={() => setStatusFilter(s)}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                    statusFilter === s
-                      ? 'bg-orange-500 text-white shadow-md'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {s === 'all' ? 'All' : s === 'pending_verification' ? 'Pending' : s.charAt(0).toUpperCase() + s.slice(1)}
-                  {s !== 'all' && (
-                    <span className="ml-1.5 opacity-70">
-                      {s === 'active' ? stats.active : s === 'pending_verification' ? stats.pending : s === 'suspended' ? stats.suspended : partners.filter(p => (p.profile?.status || 'pending_verification') === s).length}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
+          <div className="relative">
+            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search by name, phone, email, or vehicle..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-orange-400 focus:ring-0 transition-colors text-gray-800"
+            />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -621,9 +609,9 @@ const DeliveryPage = () => {
               </div>
               <h3 className="text-xl font-bold text-gray-800 mb-2">No partners found</h3>
               <p className="text-gray-500 mb-6">
-                {searchTerm || statusFilter !== 'all' ? 'Try a different search or filter.' : 'Add your first delivery partner to get started.'}
+                {searchTerm || statFilter !== 'all' ? 'Try a different search or filter.' : 'Add your first delivery partner to get started.'}
               </p>
-              {!searchTerm && statusFilter === 'all' && (
+              {!searchTerm && statFilter === 'all' && (
                 <button
                   onClick={() => { setEditingPartner(null); setShowForm(true); }}
                   className="inline-flex items-center px-5 py-3 bg-gradient-to-r from-orange-500 to-rose-500 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all"

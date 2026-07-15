@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Store,
   Search,
@@ -8,9 +8,8 @@ import {
   AlertCircle,
   X,
   CheckCircle,
-  XCircle,
   Wifi,
-  Users
+  WifiOff
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
@@ -27,11 +26,42 @@ interface StoreData {
   updated_at?: string;
 }
 
+type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved';
+
+// ─── Stat Card (clickable — doubles as a filter button) ────────────────────
+const StatCard = ({
+  icon: Icon, gradient, label, value, active, onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  gradient: string;
+  label: string;
+  value: number;
+  active: boolean;
+  onClick: () => void;
+}) => (
+  <button
+    onClick={onClick}
+    className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 text-left ${
+      active ? 'ring-4 ring-white ring-offset-2 ring-offset-violet-100' : ''
+    }`}
+  >
+    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
+    <div className="relative z-10">
+      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
+        <Icon className="w-6 h-6" />
+      </div>
+      <p className="text-white/80 text-sm font-medium">{label}</p>
+      <p className="text-3xl font-bold mt-1">{value}</p>
+    </div>
+  </button>
+);
+
 const StoresPage = () => {
   const [stores, setStores] = useState<StoreData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const fetchStores = async () => {
@@ -57,14 +87,31 @@ const StoresPage = () => {
     fetchStores();
   }, []);
 
-  const filteredStores = stores.filter(store => {
-    const q = searchTerm.toLowerCase();
-    return (
-      store.name?.toLowerCase().includes(q) ||
-      store.address?.toLowerCase().includes(q) ||
-      store.phone?.includes(q)
-    );
-  });
+  const stats = useMemo(() => ({
+    total: stores.length,
+    online: stores.filter(s => s.is_active).length,
+    offline: stores.filter(s => !s.is_active).length,
+    pending: stores.filter(s => !s.is_approved).length,
+    approved: stores.filter(s => s.is_approved).length,
+  }), [stores]);
+
+  const filteredStores = useMemo(() => {
+    return stores.filter(store => {
+      const q = searchTerm.toLowerCase();
+      const matchesSearch = !q || (
+        store.name?.toLowerCase().includes(q) ||
+        store.address?.toLowerCase().includes(q) ||
+        store.phone?.includes(q)
+      );
+      const matchesStat =
+        statFilter === 'all' ? true :
+        statFilter === 'online' ? store.is_active :
+        statFilter === 'offline' ? !store.is_active :
+        statFilter === 'pending' ? !store.is_approved :
+        store.is_approved;
+      return matchesSearch && matchesStat;
+    });
+  }, [stores, searchTerm, statFilter]);
 
   const toggleApproval = async (store: StoreData) => {
     setApprovingId(store.id);
@@ -86,12 +133,6 @@ const StoresPage = () => {
     }
   };
 
-  const stats = {
-    total: stores.length,
-    active: stores.filter(s => s.is_active).length,
-    pending: stores.filter(s => !s.is_approved).length,
-  };
-
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -99,14 +140,14 @@ const StoresPage = () => {
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Stores</h1>
-            <p className="text-gray-500 mt-1">Manage registered store partners and their status</p>
+            <p className="text-gray-500 mt-1">Manage, approve and track all store partners</p>
           </div>
           <button
             onClick={fetchStores}
-            className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
+            className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
+            title="Refresh"
           >
-            <RefreshCw size={18} className="mr-2" />
-            Refresh
+            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
 
@@ -121,38 +162,13 @@ const StoresPage = () => {
           </div>
         )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 p-5 text-white shadow-lg hover:shadow-xl transition-all hover:-translate-y-1">
-            <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-            <div className="relative z-10">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mb-3">
-                <Store className="w-6 h-6" />
-              </div>
-              <p className="text-white/80 text-sm font-medium">Total Stores</p>
-              <p className="text-3xl font-bold mt-1">{stats.total}</p>
-            </div>
-          </div>
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 p-5 text-white shadow-lg hover:shadow-xl transition-all hover:-translate-y-1">
-            <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-            <div className="relative z-10">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mb-3">
-                <Wifi className="w-6 h-6" />
-              </div>
-              <p className="text-white/80 text-sm font-medium">Online / Active</p>
-              <p className="text-3xl font-bold mt-1">{stats.active}</p>
-            </div>
-          </div>
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 p-5 text-white shadow-lg hover:shadow-xl transition-all hover:-translate-y-1">
-            <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-            <div className="relative z-10">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mb-3">
-                <AlertCircle className="w-6 h-6" />
-              </div>
-              <p className="text-white/80 text-sm font-medium">Pending Approval</p>
-              <p className="text-3xl font-bold mt-1">{stats.pending}</p>
-            </div>
-          </div>
+        {/* Stats — clickable filters */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard icon={Store} gradient="bg-gradient-to-br from-violet-500 to-purple-600" label="Total Stores" value={stats.total} active={statFilter === 'all'} onClick={() => setStatFilter('all')} />
+          <StatCard icon={Wifi} gradient="bg-gradient-to-br from-emerald-500 to-teal-600" label="Online" value={stats.online} active={statFilter === 'online'} onClick={() => setStatFilter('online')} />
+          <StatCard icon={WifiOff} gradient="bg-gradient-to-br from-gray-500 to-gray-600" label="Offline" value={stats.offline} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
+          <StatCard icon={AlertCircle} gradient="bg-gradient-to-br from-amber-500 to-orange-500" label="Pending Approval" value={stats.pending} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
+          <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-sky-500 to-blue-600" label="Approved" value={stats.approved} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
         </div>
 
         {/* Search */}
@@ -194,7 +210,7 @@ const StoresPage = () => {
               </div>
               <h3 className="text-xl font-bold text-gray-800 mb-2">No stores found</h3>
               <p className="text-gray-500">
-                {searchTerm ? 'Try a different search term.' : 'No stores have registered yet.'}
+                {searchTerm || statFilter !== 'all' ? 'Try a different search or filter.' : 'No stores have registered yet.'}
               </p>
             </div>
           ) : (
@@ -249,12 +265,12 @@ const StoresPage = () => {
                       <td className="px-6 py-4">
                         {store.is_active ? (
                           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                            <CheckCircle size={12} />
+                            <Wifi size={12} />
                             Online
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
-                            <XCircle size={12} />
+                            <WifiOff size={12} />
                             Offline
                           </span>
                         )}
@@ -298,15 +314,27 @@ const StoresPage = () => {
               </table>
             </div>
           )}
-        </div>
 
-        {/* Summary footer */}
-        {!loading && filteredStores.length > 0 && (
-          <div className="flex items-center gap-2 text-sm text-gray-500 px-1">
-            <Users size={14} />
-            Showing {filteredStores.length} of {stores.length} stores
-          </div>
-        )}
+          {/* Footer summary */}
+          {!loading && filteredStores.length > 0 && (
+            <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+              <p className="text-sm text-gray-500">
+                Showing <span className="font-semibold text-gray-700">{filteredStores.length}</span> of{' '}
+                <span className="font-semibold text-gray-700">{stores.length}</span> stores
+              </p>
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  {stats.online} online now
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  {stats.pending} pending
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </AdminLayout>
   );
