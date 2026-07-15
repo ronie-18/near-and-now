@@ -409,17 +409,26 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
 
+      // Atomically claim only if no rider is already assigned — prevents a rider
+      // from grabbing an order another rider (or acceptOffer) already accepted.
+      const { data: claimed, error: claimError } = await supabaseAdmin
+        .from('store_orders')
+        .update({ status: 'delivery_partner_assigned', delivery_partner_id: riderId })
+        .eq('customer_order_id', orderId)
+        .is('delivery_partner_id', null)
+        .select('id');
+
+      if (claimError) throw claimError;
+      if (!claimed || claimed.length === 0) {
+        return res.status(409).json({ error: 'Order not found or already assigned to another rider.' });
+      }
+
       const { error } = await supabaseAdmin
         .from('customer_orders')
-        .update({ status: 'delivery_partner_assigned', updated_at: new Date().toISOString() })
+        .update({ status: 'delivery_partner_assigned', assigned_driver_id: riderId, updated_at: new Date().toISOString() })
         .eq('id', orderId);
 
       if (error) throw error;
-
-      await supabaseAdmin
-        .from('store_orders')
-        .update({ status: 'delivery_partner_assigned', delivery_partner_id: riderId })
-        .eq('customer_order_id', orderId);
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
@@ -437,20 +446,27 @@ export class DeliveryPartnerController {
   async rejectOrder(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
+      const riderId = req.riderId!;
 
-      // Clear delivery partner assignment and reset to ready_for_pickup so it can be reassigned
-      const { error } = await supabaseAdmin
+      // Clear delivery partner assignment and reset to ready_for_pickup so it can be reassigned.
+      // Ownership-filtered: only the rider actually assigned to this order can reject it.
+      const { data: released, error } = await supabaseAdmin
         .from('store_orders')
         .update({ delivery_partner_id: null, status: 'ready_for_pickup' })
         .eq('customer_order_id', orderId)
-        .eq('delivery_partner_id', req.riderId!);
+        .eq('delivery_partner_id', riderId)
+        .select('id');
 
       if (error) throw error;
+      if (!released || released.length === 0) {
+        return res.status(403).json({ error: 'This order is not assigned to you.' });
+      }
 
       await supabaseAdmin
         .from('customer_orders')
-        .update({ status: 'ready_for_pickup', updated_at: new Date().toISOString() })
-        .eq('id', orderId);
+        .update({ status: 'ready_for_pickup', assigned_driver_id: null, updated_at: new Date().toISOString() })
+        .eq('id', orderId)
+        .eq('assigned_driver_id', riderId);
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
@@ -468,16 +484,26 @@ export class DeliveryPartnerController {
   async markPickedUp(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
+      const riderId = req.riderId!;
 
-      await supabaseAdmin
+      // Ownership-filtered: only the rider assigned to this order can mark it picked up.
+      const { data: updated, error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'order_picked_up', updated_at: new Date().toISOString() })
-        .eq('id', orderId);
+        .eq('id', orderId)
+        .eq('assigned_driver_id', riderId)
+        .select('id');
+
+      if (error) throw error;
+      if (!updated || updated.length === 0) {
+        return res.status(403).json({ error: 'This order is not assigned to you.' });
+      }
 
       await supabaseAdmin
         .from('store_orders')
         .update({ status: 'order_picked_up' })
-        .eq('customer_order_id', orderId);
+        .eq('customer_order_id', orderId)
+        .eq('delivery_partner_id', riderId);
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
@@ -495,16 +521,26 @@ export class DeliveryPartnerController {
   async markDelivered(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
+      const riderId = req.riderId!;
 
-      await supabaseAdmin
+      // Ownership-filtered: only the rider assigned to this order can mark it delivered.
+      const { data: updated, error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'order_delivered', updated_at: new Date().toISOString() })
-        .eq('id', orderId);
+        .eq('id', orderId)
+        .eq('assigned_driver_id', riderId)
+        .select('id');
+
+      if (error) throw error;
+      if (!updated || updated.length === 0) {
+        return res.status(403).json({ error: 'This order is not assigned to you.' });
+      }
 
       await supabaseAdmin
         .from('store_orders')
         .update({ status: 'order_delivered' })
-        .eq('customer_order_id', orderId);
+        .eq('customer_order_id', orderId)
+        .eq('delivery_partner_id', riderId);
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
