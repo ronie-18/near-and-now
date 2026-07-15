@@ -17,6 +17,9 @@ router.patch('/profile-image',                                    ctrl.updatePro
 router.patch('/status',                                           ctrl.updateStatus.bind(ctrl));
 router.post('/location',                                          ctrl.updateLocation.bind(ctrl));
 router.patch('/push-token',                                       ctrl.updatePushToken.bind(ctrl));
+router.get('/notifications',                                      ctrl.getNotifications.bind(ctrl));
+router.put('/notifications/read-all',                             ctrl.markAllNotificationsRead.bind(ctrl));
+router.put('/notifications/:notificationId/read',                 ctrl.markNotificationRead.bind(ctrl));
 
 // Offer broadcast (new order requests)
 router.get('/available-orders',                                   ctrl.getAvailableOrders.bind(ctrl));

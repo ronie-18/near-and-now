@@ -417,3 +417,78 @@ export async function updateNotificationPreferences(req: Request, res: Response)
     res.json({ success: true });
   }
 }
+
+/**
+ * List in-app notifications for all stores owned by the authenticated shopkeeper.
+ */
+export async function getStoreNotifications(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { data: stores } = await supabaseAdmin.from('stores').select('id').eq('owner_id', userId);
+    const storeIds = (stores || []).map((s: any) => s.id);
+    if (storeIds.length === 0) return res.json([]);
+
+    const { unreadOnly } = req.query;
+    let query = supabaseAdmin
+      .from('notifications')
+      .select('*')
+      .eq('recipient_type', 'store')
+      .in('recipient_id', storeIds)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (unreadOnly === 'true') query = query.eq('is_read', false);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error: any) {
+    console.error('❌ getStoreNotifications error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch notifications' });
+  }
+}
+
+/**
+ * Mark a single store notification as read.
+ */
+export async function markStoreNotificationRead(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { notificationId } = req.params;
+    const { error } = await supabaseAdmin.from('notifications').update({ is_read: true }).eq('id', notificationId);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ markStoreNotificationRead error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to mark notification as read' });
+  }
+}
+
+/**
+ * Mark all notifications read for every store owned by the authenticated shopkeeper.
+ */
+export async function markAllStoreNotificationsRead(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { data: stores } = await supabaseAdmin.from('stores').select('id').eq('owner_id', userId);
+    const storeIds = (stores || []).map((s: any) => s.id);
+    if (storeIds.length === 0) return res.json({ success: true });
+
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('recipient_type', 'store')
+      .in('recipient_id', storeIds)
+      .eq('is_read', false);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ markAllStoreNotificationsRead error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to mark all notifications as read' });
+  }
+}
