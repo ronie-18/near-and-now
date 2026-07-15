@@ -254,9 +254,9 @@ const StoresPage = () => {
                       </td>
                       <td className="px-6 py-4">
                         {store.address ? (
-                          <div className="flex items-start gap-2 text-sm text-gray-600 max-w-[200px]">
+                          <div className="flex items-start gap-2 text-sm text-gray-600 max-w-xs">
                             <MapPin size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
-                            <span className="truncate">{store.address}</span>
+                            <span>{store.address}</span>
                           </div>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>
