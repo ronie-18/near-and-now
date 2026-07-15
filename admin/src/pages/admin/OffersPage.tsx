@@ -23,6 +23,11 @@ interface Coupon {
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+function adminAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem('adminToken') || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 const OffersPage = () => {
   const { showNotification } = useNotification();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
@@ -52,7 +57,7 @@ const OffersPage = () => {
   const fetchCoupons = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/api/coupons`);
+      const res = await fetch(`${API_BASE}/api/coupons`, { headers: adminAuthHeaders() });
       if (!res.ok) throw new Error('Failed to fetch coupons');
       const data = await res.json();
       setCoupons(data);
@@ -79,7 +84,7 @@ const OffersPage = () => {
       };
       const res = await fetch(`${API_BASE}/api/coupons`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -112,7 +117,7 @@ const OffersPage = () => {
       };
       const res = await fetch(`${API_BASE}/api/coupons/${editingCoupon.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -135,6 +140,7 @@ const OffersPage = () => {
     try {
       const res = await fetch(`${API_BASE}/api/coupons/${id}`, {
         method: 'DELETE',
+        headers: adminAuthHeaders(),
       });
       if (!res.ok) throw new Error('Failed to delete coupon');
       showNotification('Coupon deleted successfully', 'success');
@@ -149,7 +155,7 @@ const OffersPage = () => {
     try {
       const res = await fetch(`${API_BASE}/api/coupons/${coupon.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
         body: JSON.stringify({ is_active: !coupon.is_active }),
       });
       if (!res.ok) throw new Error('Failed to update status');

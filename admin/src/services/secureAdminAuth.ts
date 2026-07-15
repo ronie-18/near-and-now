@@ -235,30 +235,62 @@ export async function isAdminAuthenticated(): Promise<boolean> {
   if (secureToken) {
     return true;
   }
-  
+
   // Check for authenticateAdmin token (adminToken) - fallback for direct DB auth
   const adminToken = sessionStorage.getItem('adminToken');
   const adminData = sessionStorage.getItem('adminData');
   const adminTokenExpiry = sessionStorage.getItem('adminTokenExpiry');
-  
+
   if (adminToken && adminData) {
-    // Check if token is expired
+    // Check if the client-side clock thinks the token is still fresh.
     if (adminTokenExpiry) {
       const expiry = parseInt(adminTokenExpiry);
-      if (Date.now() < expiry) {
-        return true;
-      } else {
-        // Token expired, clear it
-        sessionStorage.removeItem('adminToken');
-        sessionStorage.removeItem('adminData');
-        sessionStorage.removeItem('adminTokenExpiry');
+      if (Date.now() >= expiry) {
+        clearAdminAuthStorage();
         return false;
       }
     }
+
+    // The client clock alone isn't enough: the server-side admin_sessions row
+    // (which every RLS-gated Supabase query actually checks via
+    // is_admin_authenticated()) can be expired or logged-out independently —
+    // e.g. logged out from another tab, or a shorter server-side expiry.
+    // Without this check, the guard would render the page while every real
+    // data fetch on it silently 401s/empty-results against a dead session.
+    try {
+      const { data, error } = await getAdminClient()
+        .from('admin_sessions')
+        .select('expires_at, logged_out_at')
+        .eq('session_token', adminToken)
+        .maybeSingle();
+
+      if (error) {
+        // Network/transient failure — don't force a logout on a blip.
+        return true;
+      }
+
+      const stillValid =
+        !!data && data.logged_out_at == null && new Date(data.expires_at).getTime() > Date.now();
+
+      if (!stillValid) {
+        clearAdminAuthStorage();
+        return false;
+      }
+    } catch {
+      // Transient failure (offline, etc.) — fail open rather than logging out.
+      return true;
+    }
+
     return true;
   }
-  
+
   return false;
+}
+
+function clearAdminAuthStorage(): void {
+  sessionStorage.removeItem('adminToken');
+  sessionStorage.removeItem('adminData');
+  sessionStorage.removeItem('adminTokenExpiry');
 }
 
 /**
