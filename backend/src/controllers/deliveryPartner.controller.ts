@@ -698,7 +698,7 @@ export class DeliveryPartnerController {
   async markNotificationRead(req: Request, res: Response) {
     try {
       const { notificationId } = req.params;
-      const result = await databaseService.markNotificationAsRead(notificationId);
+      const result = await databaseService.markNotificationAsRead(notificationId, 'rider', req.riderId!);
       res.json(result);
     } catch (err) {
       console.error('markNotificationRead error:', err);

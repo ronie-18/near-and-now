@@ -6,12 +6,14 @@ export class NotificationsController {
   // Get user notifications
   async getUserNotifications(req: Request, res: Response) {
     try {
-      const { userId } = req.params;
+      // :userId in the URL is not trusted — requireCustomer already resolved
+      // the caller's own id, so a customer can't read another customer's
+      // notifications by swapping the path param.
       const { unreadOnly } = req.query;
 
       const notifications = await databaseService.getUserNotifications(
         'customer',
-        userId,
+        req.customerId!,
         unreadOnly === 'true'
       );
 
@@ -26,7 +28,7 @@ export class NotificationsController {
   async markAsRead(req: Request, res: Response) {
     try {
       const { notificationId } = req.params;
-      const result = await databaseService.markNotificationAsRead(notificationId);
+      const result = await databaseService.markNotificationAsRead(notificationId, 'customer', req.customerId!);
       res.json(result);
     } catch (error) {
       console.error('Error marking notification as read:', error);
@@ -37,8 +39,9 @@ export class NotificationsController {
   // Mark all notifications as read
   async markAllAsRead(req: Request, res: Response) {
     try {
-      const { userId } = req.params;
-      const result = await databaseService.markAllNotificationsAsRead('customer', userId);
+      // Same rationale as getUserNotifications: ignore the untrusted :userId
+      // path param and scope to the authenticated caller.
+      const result = await databaseService.markAllNotificationsAsRead('customer', req.customerId!);
       res.json(result);
     } catch (error) {
       console.error('Error marking all notifications as read:', error);

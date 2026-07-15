@@ -1681,11 +1681,15 @@ export class DatabaseService {
     return data || [];
   }
 
-  async markNotificationAsRead(notificationId: string) {
+  async markNotificationAsRead(notificationId: string, recipientType: 'customer' | 'rider', recipientId: string) {
+    // Scoped to the caller's own recipient_type/recipient_id so one customer/rider
+    // can't flip is_read on another user's notification by guessing an id.
     const { error } = await supabaseAdmin
       .from('notifications')
       .update({ is_read: true })
-      .eq('id', notificationId);
+      .eq('id', notificationId)
+      .eq('recipient_type', recipientType)
+      .eq('recipient_id', recipientId);
     if (error) throw error;
     return { success: true };
   }

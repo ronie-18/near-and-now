@@ -25,3 +25,11 @@ CREATE INDEX IF NOT EXISTS idx_notifications_recipient
   ON public.notifications (recipient_type, recipient_id, created_at DESC);
 
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+-- This project has repeatedly hit tables created with zero base Postgres
+-- GRANTs, even for service_role (see 20260718000000_fix_admin_sessions_grants.sql
+-- and 20260718000002_fix_missing_table_grants.sql — admin_sessions,
+-- admin_notifications, coupons, product_images all needed this same fix).
+-- service_role only: this table is written/read exclusively via supabaseAdmin
+-- from the Express backend, never directly from a client.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.notifications TO service_role;

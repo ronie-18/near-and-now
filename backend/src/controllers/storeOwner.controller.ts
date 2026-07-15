@@ -457,8 +457,19 @@ export async function markStoreNotificationRead(req: Request, res: Response) {
     const userId = await resolveShopkeeperFromToken(req, res);
     if (!userId) return;
 
+    const { data: stores } = await supabaseAdmin.from('stores').select('id').eq('owner_id', userId);
+    const storeIds = (stores || []).map((s: any) => s.id);
+    if (storeIds.length === 0) return res.status(404).json({ success: false, error: 'Notification not found' });
+
     const { notificationId } = req.params;
-    const { error } = await supabaseAdmin.from('notifications').update({ is_read: true }).eq('id', notificationId);
+    // Scoped to this shopkeeper's own stores so one shopkeeper can't flip
+    // is_read on another store's notification by guessing an id.
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('id', notificationId)
+      .eq('recipient_type', 'store')
+      .in('recipient_id', storeIds);
     if (error) throw error;
     res.json({ success: true });
   } catch (error: any) {
