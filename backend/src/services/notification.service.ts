@@ -16,7 +16,7 @@ if (!resend) {
 
 export class NotificationService {
 
-  async sendExpoPush(expoPushToken: string, title: string, body: string, data: object = {}) {
+  async sendExpoPush(expoPushToken: string, title: string, body: string, data: object = {}, sound: string = 'default') {
     if (!expoPushToken?.startsWith('ExponentPushToken')) return;
     try {
       await fetch(EXPO_PUSH_URL, {
@@ -26,14 +26,43 @@ export class NotificationService {
           'Accept-encoding': 'gzip, deflate',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ to: expoPushToken, sound: 'default', title, body, data }),
+        body: JSON.stringify({ to: expoPushToken, sound, title, body, data }),
       });
     } catch (err) {
       console.error('Expo push send failed:', err);
     }
   }
 
+  // Persists a notification row so the recipient's in-app notifications panel
+  // has something to show, independent of whether the push itself succeeds.
+  private async persistNotification(
+    recipientType: 'customer' | 'store' | 'rider',
+    recipientId: string,
+    type: string,
+    title: string,
+    message: string,
+    data: object = {}
+  ) {
+    try {
+      await supabaseAdmin.from('notifications').insert({
+        recipient_type: recipientType,
+        recipient_id: recipientId,
+        type,
+        title,
+        message,
+        data,
+      });
+    } catch (err) {
+      console.error('Failed to persist notification:', err);
+    }
+  }
+
   async notifyShopkeeperNewOrder(storeId: string, orderId: string, orderCode: string) {
+    const title = 'New Order!';
+    const body = `Order #${orderCode} has arrived. Tap to review and accept.`;
+
+    await this.persistNotification('store', storeId, 'new_order', title, body, { orderId, storeId });
+
     const { data: store } = await supabaseAdmin
       .from('stores')
       .select('expo_push_token')
@@ -41,16 +70,16 @@ export class NotificationService {
       .maybeSingle();
 
     if (store?.expo_push_token) {
-      await this.sendExpoPush(
-        store.expo_push_token,
-        'New Order!',
-        `Order #${orderCode} has arrived. Tap to review and accept.`,
-        { orderId, storeId, type: 'new_order' }
-      );
+      await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'new_order' }, 'order_chime.wav');
     }
   }
 
   async notifyRiderNewOrder(riderId: string, orderId: string, orderCode: string, storeName: string) {
+    const title = 'New Order!';
+    const body = `Order #${orderCode} from ${storeName} is waiting for you.`;
+
+    await this.persistNotification('rider', riderId, 'new_order', title, body, { orderId });
+
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')
       .select('expo_push_token')
@@ -58,12 +87,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (partner?.expo_push_token) {
-      await this.sendExpoPush(
-        partner.expo_push_token,
-        'New Order!',
-        `Order #${orderCode} from ${storeName} is waiting for you.`,
-        { orderId, type: 'new_order' }
-      );
+      await this.sendExpoPush(partner.expo_push_token, title, body, { orderId, type: 'new_order' }, 'order_chime.wav');
     }
   }
 
@@ -128,7 +152,7 @@ export class NotificationService {
     return { success: true };
   }
 
-  private async notifyCustomerByOrderId(orderId: string, title: string, body: string) {
+  private async notifyCustomerByOrderId(orderId: string, title: string, body: string, type: string) {
     const { data: order } = await supabaseAdmin
       .from('customer_orders')
       .select('customer_id, order_code')
@@ -145,8 +169,10 @@ export class NotificationService {
 
     const orderRef = order.order_code ? `#${order.order_code}` : '';
 
+    await this.persistNotification('customer', order.customer_id, type, title, body, { orderId });
+
     if (customer.expo_push_token) {
-      await this.sendExpoPush(customer.expo_push_token, title, body, { orderId, type: 'order_status' });
+      await this.sendExpoPush(customer.expo_push_token, title, body, { orderId, type: 'order_status' }, 'order_chime.wav');
     }
 
     // Most customers won't have an email on file yet (signup is phone-only) —
@@ -161,23 +187,23 @@ export class NotificationService {
   }
 
   private async sendOrderPlacedNotification(orderId: string) {
-    await this.notifyCustomerByOrderId(orderId, 'Order Placed', "We've received your order and notified the store.");
+    await this.notifyCustomerByOrderId(orderId, 'Order Placed', "We've received your order and notified the store.", 'order_placed');
   }
 
   private async sendOrderConfirmedNotification(orderId: string) {
-    await this.notifyCustomerByOrderId(orderId, 'Order Confirmed', 'Your order has been confirmed and is being prepared.');
+    await this.notifyCustomerByOrderId(orderId, 'Order Confirmed', 'Your order has been confirmed and is being prepared.', 'order_confirmed');
   }
 
   private async sendOrderShippedNotification(orderId: string) {
-    await this.notifyCustomerByOrderId(orderId, 'Out for Delivery', 'Your order is on its way!');
+    await this.notifyCustomerByOrderId(orderId, 'Out for Delivery', 'Your order is on its way!', 'order_shipped');
   }
 
   private async sendOrderDeliveredNotification(orderId: string) {
-    await this.notifyCustomerByOrderId(orderId, 'Order Delivered', 'Your order has been delivered. Enjoy!');
+    await this.notifyCustomerByOrderId(orderId, 'Order Delivered', 'Your order has been delivered. Enjoy!', 'order_delivered');
   }
 
   private async sendOrderCancelledNotification(orderId: string) {
-    await this.notifyCustomerByOrderId(orderId, 'Order Cancelled', 'Your order has been cancelled.');
+    await this.notifyCustomerByOrderId(orderId, 'Order Cancelled', 'Your order has been cancelled.', 'order_cancelled');
   }
 }
 

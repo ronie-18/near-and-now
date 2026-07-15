@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead } from '../controllers/storeOwner.controller.js';
 
 const router = Router();
 
@@ -11,5 +11,8 @@ router.patch('/products/:productId/quantity', updateProductQuantity);
 router.delete('/products/:productId', deleteStoreProduct);
 router.post('/notifications/register', registerPushToken);
 router.post('/notifications/preferences', updateNotificationPreferences);
+router.get('/notifications', getStoreNotifications);
+router.put('/notifications/read-all', markAllStoreNotificationsRead);
+router.put('/notifications/:notificationId/read', markStoreNotificationRead);
 
 export default router;

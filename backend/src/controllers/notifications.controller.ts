@@ -10,6 +10,7 @@ export class NotificationsController {
       const { unreadOnly } = req.query;
 
       const notifications = await databaseService.getUserNotifications(
+        'customer',
         userId,
         unreadOnly === 'true'
       );
@@ -37,7 +38,7 @@ export class NotificationsController {
   async markAllAsRead(req: Request, res: Response) {
     try {
       const { userId } = req.params;
-      const result = await databaseService.markAllNotificationsAsRead(userId);
+      const result = await databaseService.markAllNotificationsAsRead('customer', userId);
       res.json(result);
     } catch (error) {
       console.error('Error marking all notifications as read:', error);

@@ -1665,16 +1665,39 @@ export class DatabaseService {
     return !!(user as any)?.email_verified_at;
   }
 
-  // Notifications (stubs - implement when notifications table exists)
-  async getUserNotifications(_userId: string, _unreadOnly?: boolean) {
-    return [];
+  // Notifications
+  async getUserNotifications(recipientType: 'customer' | 'store' | 'rider', recipientId: string, unreadOnly?: boolean) {
+    let query = supabaseAdmin
+      .from('notifications')
+      .select('*')
+      .eq('recipient_type', recipientType)
+      .eq('recipient_id', recipientId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (unreadOnly) query = query.eq('is_read', false);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
   }
 
-  async markNotificationAsRead(_notificationId: string) {
+  async markNotificationAsRead(notificationId: string) {
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('id', notificationId);
+    if (error) throw error;
     return { success: true };
   }
 
-  async markAllNotificationsAsRead(_userId: string) {
+  async markAllNotificationsAsRead(recipientType: 'customer' | 'store' | 'rider', recipientId: string) {
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('recipient_type', recipientType)
+      .eq('recipient_id', recipientId)
+      .eq('is_read', false);
+    if (error) throw error;
     return { success: true };
   }
 

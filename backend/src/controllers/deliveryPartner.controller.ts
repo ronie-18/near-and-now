@@ -684,6 +684,38 @@ export class DeliveryPartnerController {
     }
   }
 
+  async getNotifications(req: Request, res: Response) {
+    try {
+      const { unreadOnly } = req.query;
+      const notifications = await databaseService.getUserNotifications('rider', req.riderId!, unreadOnly === 'true');
+      res.json(notifications);
+    } catch (err) {
+      console.error('getNotifications error:', err);
+      res.status(500).json({ error: 'Failed to fetch notifications' });
+    }
+  }
+
+  async markNotificationRead(req: Request, res: Response) {
+    try {
+      const { notificationId } = req.params;
+      const result = await databaseService.markNotificationAsRead(notificationId);
+      res.json(result);
+    } catch (err) {
+      console.error('markNotificationRead error:', err);
+      res.status(500).json({ error: 'Failed to mark notification as read' });
+    }
+  }
+
+  async markAllNotificationsRead(req: Request, res: Response) {
+    try {
+      const result = await databaseService.markAllNotificationsAsRead('rider', req.riderId!);
+      res.json(result);
+    } catch (err) {
+      console.error('markAllNotificationsRead error:', err);
+      res.status(500).json({ error: 'Failed to mark all notifications as read' });
+    }
+  }
+
   // ── New dispatch endpoints ────────────────────────────────────────────────────
 
   // GET /delivery-partner/available-orders
