@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { PaymentController } from '../controllers/payment.controller.js';
+import { requireAdmin } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const paymentController = new PaymentController();
@@ -17,8 +18,9 @@ router.get('/methods', paymentController.getSavedMethods.bind(paymentController)
 // Get payment details
 router.get('/:paymentId', paymentController.getPaymentDetails.bind(paymentController));
 
-// Process refund
-router.post('/refund', paymentController.processRefund.bind(paymentController));
+// Process refund — admin-only: refunds move real money and must not be
+// triggerable by anyone who merely knows a Razorpay payment ID.
+router.post('/refund', requireAdmin, paymentController.processRefund.bind(paymentController));
 
 // Webhook handler for payment gateway
 router.post('/webhook', paymentController.handleWebhook.bind(paymentController));
