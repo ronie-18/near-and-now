@@ -402,11 +402,14 @@ export class DeliveryPartnerController {
 
       const { data: partner } = await supabaseAdmin
         .from('delivery_partners')
-        .select('is_approved')
+        .select('is_approved, is_online, status')
         .eq('user_id', riderId)
         .maybeSingle();
       if (!(partner as any)?.is_approved) {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
+      if (!(partner as any)?.is_online || (partner as any)?.status !== 'active') {
+        return res.status(403).json({ error: 'Go online to accept orders.' });
       }
 
       // Atomically claim only if no rider is already assigned — prevents a rider
@@ -765,13 +768,18 @@ export class DeliveryPartnerController {
 
       const { data: partner } = await supabaseAdmin
         .from('delivery_partners')
-        .select('is_approved')
+        .select('is_approved, is_online, status')
         .eq('user_id', req.riderId!)
         .maybeSingle();
       if (!(partner as any)?.is_approved) {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
+      if (!(partner as any)?.is_online || (partner as any)?.status !== 'active') {
+        return res.status(403).json({ error: 'Go online to accept orders.' });
+      }
 
+      // Final authority is the DB function (SELECT ... FOR UPDATE, re-checks eligibility
+      // atomically at accept time) — the check above is just a fast, friendly failure.
       const { data: result, error } = await supabaseAdmin
         .rpc('accept_driver_offer', { p_offer_id: offerId, p_driver_id: req.riderId! });
 
@@ -804,6 +812,9 @@ export class DeliveryPartnerController {
       }
       if (result === 'already_taken') {
         return res.status(409).json({ success: false, result: 'already_taken', error: 'Another driver accepted first' });
+      }
+      if (result === 'driver_not_eligible') {
+        return res.status(403).json({ success: false, result, error: 'Go online to accept orders.' });
       }
       return res.status(400).json({ success: false, result, error: result });
     } catch (err) {

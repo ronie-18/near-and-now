@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Bell, Check, Search, RefreshCw, ShoppingBag, Users, Package,
-  AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter
+  AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter, IndianRupee
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
@@ -10,12 +10,19 @@ import { getAdminClient } from '../../services/supabase';
 
 interface AdminNotification {
   id: string;
-  type: 'new_order' | 'new_user' | 'low_stock' | 'system';
+  type: 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required';
   title: string;
   message: string;
   data: Record<string, any>;
   is_read: boolean;
   created_at: string;
+}
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
+function adminAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem('adminToken') || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -35,6 +42,7 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
   new_user: { icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-100' },
   low_stock: { icon: Package, color: 'text-amber-600', bg: 'bg-amber-100' },
   system: { icon: AlertCircle, color: 'text-violet-600', bg: 'bg-violet-100' },
+  refund_required: { icon: IndianRupee, color: 'text-red-600', bg: 'bg-red-100' },
 };
 
 // ─── Push Notification Panel ──────────────────────────────────────────────────
@@ -175,9 +183,10 @@ const PushNotificationPanel = () => {
 const NotificationsPage = () => {
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'low_stock' | 'system'>('all');
+  const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required'>('all');
   const [search, setSearch] = useState('');
   const [showSendPanel, setShowSendPanel] = useState(false);
+  const [refunding, setRefunding] = useState<string | null>(null);
 
   const fetchNotifications = useCallback(async () => {
     setLoading(true);
@@ -237,6 +246,25 @@ const NotificationsPage = () => {
     const db = getAdminClient();
     await db.from('admin_notifications').delete().eq('id', id);
     setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  const resolveRefund = async (id: string) => {
+    setRefunding(id);
+    try {
+      const res = await fetch(`${API_BASE}/api/payment/resolve-item-refund/${id}`, {
+        method: 'POST',
+        headers: adminAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Refund failed');
+      setNotifications(prev => prev.map(n => n.id === id
+        ? { ...n, data: { ...n.data, resolved: true, resolved_at: new Date().toISOString() } }
+        : n));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to process refund');
+    } finally {
+      setRefunding(null);
+    }
   };
 
   const filtered = notifications.filter(n => {
@@ -326,7 +354,7 @@ const NotificationsPage = () => {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Filter size={16} className="text-gray-400 flex-shrink-0" />
-              {(['all', 'unread', 'new_order', 'new_user', 'low_stock', 'system'] as const).map(f => (
+              {(['all', 'unread', 'new_order', 'new_user', 'low_stock', 'refund_required', 'system'] as const).map(f => (
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
@@ -336,7 +364,7 @@ const NotificationsPage = () => {
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
-                  {f === 'new_order' ? 'Orders' : f === 'new_user' ? 'Customers' : f === 'low_stock' ? 'Stock' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  {f === 'new_order' ? 'Orders' : f === 'new_user' ? 'Customers' : f === 'low_stock' ? 'Stock' : f === 'refund_required' ? 'Refunds' : f.charAt(0).toUpperCase() + f.slice(1)}
                 </button>
               ))}
             </div>
@@ -388,6 +416,30 @@ const NotificationsPage = () => {
                             )}
                           </p>
                           <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{notif.message}</p>
+                          {notif.type === 'refund_required' && (
+                            notif.data?.resolved ? (
+                              <span className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
+                                <CheckCircle size={12} /> Refunded
+                              </span>
+                            ) : notif.data?.refund_eligible ? (
+                              <button
+                                onClick={() => resolveRefund(notif.id)}
+                                disabled={refunding === notif.id}
+                                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 px-3 py-1.5 rounded-lg transition-colors"
+                              >
+                                {refunding === notif.id ? (
+                                  <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                ) : (
+                                  <IndianRupee size={12} />
+                                )}
+                                Refund ₹{Number(notif.data?.refund_amount || 0).toFixed(2)}
+                              </button>
+                            ) : (
+                              <span className="inline-block mt-2 text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-lg">
+                                Not eligible for online refund (COD/unpaid)
+                              </span>
+                            )
+                          )}
                         </div>
                         <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">{timeAgo(notif.created_at)}</span>
                       </div>

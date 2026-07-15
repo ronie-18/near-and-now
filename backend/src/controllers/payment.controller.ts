@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { RazorpayApiError, paymentService } from '../services/payment.service.js';
 import { databaseService } from '../services/database.service.js';
 import { invoiceService } from '../services/invoice.service.js';
+import { supabaseAdmin } from '../config/database.js';
 
 export class PaymentController {
   // Create payment order (for online payment)
@@ -175,6 +176,71 @@ export class PaymentController {
       res.json(refund);
     } catch (error) {
       console.error('Error processing refund:', error);
+      res.status(500).json({ error: 'Failed to process refund' });
+    }
+  }
+
+  // Admin-only: approve and issue the refund for items an order couldn't fulfil
+  // (flagged by reallocateMissingItems in shopkeeper.controller.ts via an
+  // admin_notifications row of type 'refund_required'). Nothing auto-refunds —
+  // an admin must call this explicitly after reviewing the notification.
+  async resolveItemRefund(req: Request, res: Response) {
+    try {
+      const { notificationId } = req.params;
+
+      const { data: notif } = await supabaseAdmin
+        .from('admin_notifications')
+        .select('id, type, data')
+        .eq('id', notificationId)
+        .maybeSingle();
+
+      if (!notif) return res.status(404).json({ error: 'Notification not found' });
+      if (notif.type !== 'refund_required') {
+        return res.status(400).json({ error: 'Notification is not a refund request' });
+      }
+      const data = (notif.data || {}) as any;
+      if (data.resolved) return res.status(409).json({ error: 'Already refunded' });
+      if (!data.refund_eligible || !data.payment_id) {
+        return res.status(400).json({ error: 'This order has no online payment to refund (COD or unpaid)' });
+      }
+
+      const { data: order } = await supabaseAdmin
+        .from('customer_orders')
+        .select('id, total_amount, refunded_amount, razorpay_payment_id')
+        .eq('id', data.order_id)
+        .maybeSingle();
+
+      if (!order || order.razorpay_payment_id !== data.payment_id) {
+        return res.status(409).json({ error: 'Order payment record has changed — refund aborted' });
+      }
+
+      const amount = Number(data.refund_amount || 0);
+      const alreadyRefunded = Number(order.refunded_amount || 0);
+      if (amount <= 0) return res.status(400).json({ error: 'Nothing to refund' });
+      if (alreadyRefunded + amount > Number(order.total_amount || 0) + 0.01) {
+        return res.status(409).json({ error: 'Refund would exceed the amount paid for this order' });
+      }
+
+      const refund = await paymentService.processRefund({
+        paymentId: data.payment_id,
+        amount,
+        reason: 'Item unavailable at any nearby store — admin approved',
+      });
+
+      const newRefundedTotal = alreadyRefunded + amount;
+      await Promise.all([
+        supabaseAdmin.from('customer_orders').update({
+          refunded_amount: newRefundedTotal,
+          payment_status: newRefundedTotal >= Number(order.total_amount || 0) - 0.01 ? 'refunded' : 'partially_refunded',
+        }).eq('id', order.id),
+        supabaseAdmin.from('admin_notifications').update({
+          data: { ...data, resolved: true, resolved_at: new Date().toISOString(), razorpay_refund_id: refund.id },
+        }).eq('id', notificationId),
+      ]);
+
+      res.json({ success: true, refund });
+    } catch (error) {
+      console.error('Error resolving item refund:', error);
       res.status(500).json({ error: 'Failed to process refund' });
     }
   }

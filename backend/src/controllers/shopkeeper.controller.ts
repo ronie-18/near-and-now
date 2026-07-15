@@ -231,36 +231,18 @@ export class ShopkeeperController {
         await supabaseAdmin.from('order_items').update({ item_status: 'unavailable', assigned_store_id: null }).in('id', unavailableIds);
       }
 
-      // Check if any other allocations are still pending for this order
-      const { data: pendingAllocs } = await supabaseAdmin
-        .from('order_store_allocations')
-        .select('id')
-        .eq('order_id', alloc.order_id)
-        .eq('status', 'pending_acceptance');
-
       // Reallocate unavailable items to next nearest store (async, non-blocking)
       if (unavailableIds.length) {
         reallocateMissingItems(alloc.order_id, unavailableIds).catch(console.error);
-      } else if (!pendingAllocs?.length) {
-        // All stores accepted, no missing items → ready for drivers
-        await Promise.all([
-          supabaseAdmin.from('customer_orders')
-            .update({ status: 'ready_for_pickup' })
-            .eq('id', alloc.order_id)
-            .in('status', ['pending_at_store', 'store_accepted', 'preparing_order']),
-          supabaseAdmin.from('order_status_history').insert({
-            customer_order_id: alloc.order_id,
-            status: 'ready_for_pickup',
-            notes: 'All stores confirmed — broadcasting to drivers',
-          }),
-        ]);
-        broadcastToNearbyDrivers(alloc.order_id).catch(console.error);
       } else {
-        // Partial acceptance — update parent order status
-        await supabaseAdmin.from('customer_orders')
-          .update({ status: 'store_accepted' })
-          .eq('id', alloc.order_id)
-          .eq('status', 'pending_at_store');
+        const resolved = await finalizeIfAllResolved(alloc.order_id);
+        if (!resolved) {
+          // Partial acceptance — update parent order status
+          await supabaseAdmin.from('customer_orders')
+            .update({ status: 'store_accepted' })
+            .eq('id', alloc.order_id)
+            .eq('status', 'pending_at_store');
+        }
       }
 
       res.json({ success: true, pickup_code: code, accepted: accepted_item_ids.length, unavailable: unavailableIds.length });
@@ -361,7 +343,175 @@ export class ShopkeeperController {
   }
 }
 
+const STALE_ALLOCATION_MS = 5 * 60 * 1000; // 5 minutes
+
+// Called opportunistically from the order-tracking endpoint (which the customer app
+// polls while an order is active). Any store allocation that's been sitting in
+// pending_acceptance for too long is treated as an automatic reject — unassigned and
+// re-offered to the next nearest store via the same reallocateMissingItems() path,
+// so a store that never responds can't stall the order indefinitely.
+export async function expireStaleAllocations(orderId: string) {
+  const cutoff = new Date(Date.now() - STALE_ALLOCATION_MS).toISOString();
+
+  const { data: staleAllocs } = await supabaseAdmin
+    .from('order_store_allocations')
+    .select('id, store_id')
+    .eq('order_id', orderId)
+    .eq('status', 'pending_acceptance')
+    .lt('created_at', cutoff);
+
+  if (!staleAllocs?.length) return;
+
+  for (const alloc of staleAllocs) {
+    // Only proceed if this row is still pending_acceptance right now — guards against
+    // a race with the shopkeeper accepting/rejecting between the select above and here.
+    const { data: updated } = await supabaseAdmin
+      .from('order_store_allocations')
+      .update({ status: 'rejected' })
+      .eq('id', alloc.id)
+      .eq('status', 'pending_acceptance')
+      .select('id');
+    if (!updated?.length) continue;
+
+    const { data: items } = await supabaseAdmin
+      .from('order_items')
+      .select('id')
+      .eq('customer_order_id', orderId)
+      .eq('assigned_store_id', alloc.store_id);
+
+    const itemIds = (items || []).map((i: any) => i.id);
+    if (itemIds.length) {
+      await supabaseAdmin.from('order_items')
+        .update({ item_status: 'pending', assigned_store_id: null })
+        .in('id', itemIds);
+      await reallocateMissingItems(orderId, itemIds).catch(console.error);
+    }
+  }
+}
+
 // ── Internal async helpers ─────────────────────────────────────────────────────
+
+// If nothing on the order is still pending_acceptance, flips it to ready_for_pickup
+// and broadcasts to nearby drivers. Returns whether it actually resolved the order,
+// so callers know whether to fall back to a "still partial" status update instead.
+//
+// The check-then-write is done atomically in Postgres (finalize_order_if_ready, row
+// locks customer_orders FOR UPDATE) rather than here in Node, so that two stores on
+// the same order accepting near-simultaneously can't both conclude "I'm last" and
+// both broadcast to drivers — the loser correctly sees it already resolved.
+async function finalizeIfAllResolved(orderId: string): Promise<boolean> {
+  const { data: didFinalize, error } = await supabaseAdmin.rpc('finalize_order_if_ready', { p_order_id: orderId });
+  if (error) {
+    console.error('finalize_order_if_ready RPC failed:', error);
+    return false;
+  }
+  if (didFinalize) broadcastToNearbyDrivers(orderId).catch(console.error);
+  return !!didFinalize;
+}
+
+// Tries to place `remaining` items with active stores within (minKm, maxKm] of the
+// customer, nearest first, excluding stores already used on this order. Mutates and
+// returns the still-unplaced subset of `remaining`.
+async function assignCandidatesInRadius(
+  orderId: string,
+  remaining: { id: string; product_id: string }[],
+  lat: number, lng: number,
+  minKm: number, maxKm: number,
+  usedStoreIds: Set<string>,
+  seqRef: { value: number }
+): Promise<{ id: string; product_id: string }[]> {
+  if (!remaining.length) return remaining;
+
+  const { data: rawStores } = await supabaseAdmin
+    .from('stores')
+    .select('id, latitude, longitude')
+    .eq('is_active', true);
+
+  const candidates = (rawStores || [])
+    .map((s: any) => ({ ...s, dist: haversineKm(lat, lng, s.latitude, s.longitude) }))
+    .filter((s: any) => s.dist > minKm && s.dist <= maxKm && !usedStoreIds.has(s.id))
+    .sort((a: any, b: any) => a.dist - b.dist);
+
+  let left = remaining;
+
+  for (const store of candidates) {
+    if (!left.length) break;
+
+    const productIds = left.map((i) => i.product_id);
+    const { data: storeProducts } = await supabaseAdmin
+      .from('products')
+      .select('master_product_id')
+      .eq('store_id', store.id)
+      .eq('is_active', true)
+      .in('master_product_id', productIds);
+
+    const available = new Set((storeProducts || []).map((p: any) => p.master_product_id));
+    const assignable = left.filter((i) => available.has(i.product_id));
+    if (!assignable.length) continue;
+
+    seqRef.value += 1;
+
+    const { data: newAlloc } = await supabaseAdmin
+      .from('order_store_allocations')
+      .insert({ order_id: orderId, store_id: store.id, sequence_number: seqRef.value, pickup_code: randomFourDigit(), status: 'pending_acceptance' })
+      .select('id').single();
+
+    if (newAlloc) {
+      await Promise.all([
+        supabaseAdmin.from('order_items').update({ assigned_store_id: store.id, item_status: 'pending' }).in('id', assignable.map((i) => i.id)),
+        supabaseAdmin.from('store_orders').upsert(
+          { customer_order_id: orderId, store_id: store.id, status: 'pending_at_store', subtotal_amount: 0, delivery_fee: 0 },
+          { onConflict: 'customer_order_id,store_id' }
+        ),
+      ]);
+      usedStoreIds.add(store.id);
+      const assignedIds = new Set(assignable.map((i) => i.id));
+      left = left.filter((i) => !assignedIds.has(i.id));
+    }
+  }
+
+  return left;
+}
+
+// Flags items that could not be placed at any nearby store for an admin-approved
+// refund: writes an admin_notifications row with the computed line-item amount and
+// the order's Razorpay payment id, but does NOT touch money itself — an admin must
+// review it and trigger the actual refund via POST /api/payment/resolve-item-refund.
+async function flagUnresolvableItemsForRefund(orderId: string, items: { id: string; product_id: string }[]) {
+  const ids = items.map((i) => i.id);
+  console.error(
+    `[reallocateMissingItems] Order ${orderId}: ${ids.length} item(s) could not be reallocated within 8 km — IDs: ${ids.join(', ')}`
+  );
+
+  await supabaseAdmin.from('order_items').update({ item_status: 'unavailable' }).in('id', ids);
+
+  const [{ data: lineItems }, { data: order }] = await Promise.all([
+    supabaseAdmin.from('order_items').select('id, product_name, unit_price, quantity').in('id', ids),
+    supabaseAdmin.from('customer_orders')
+      .select('order_code, razorpay_payment_id, payment_method, payment_status, total_amount, refunded_amount')
+      .eq('id', orderId).single(),
+  ]);
+
+  const refundAmount = (lineItems || []).reduce((sum: number, li: any) => sum + Number(li.unit_price) * Number(li.quantity), 0);
+  const isOnlinePaid = order?.payment_method !== 'cod' && !!order?.razorpay_payment_id && order?.payment_status === 'paid';
+
+  await supabaseAdmin.from('admin_notifications').insert({
+    type: 'refund_required',
+    title: 'Item unavailable — refund needed',
+    message: isOnlinePaid
+      ? `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. ₹${refundAmount.toFixed(2)} needs a refund.`
+      : `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. Order was paid by ${order?.payment_method || 'unknown method'} — no online refund to process.`,
+    data: {
+      order_id: orderId,
+      item_ids: ids,
+      items: (lineItems || []).map((li: any) => ({ id: li.id, name: li.product_name, unit_price: li.unit_price, quantity: li.quantity })),
+      refund_amount: refundAmount,
+      payment_id: order?.razorpay_payment_id || null,
+      refund_eligible: isOnlinePaid,
+      resolved: false,
+    },
+  });
+}
 
 async function reallocateMissingItems(orderId: string, itemIds: string[]) {
   if (!itemIds.length) return;
@@ -388,79 +538,50 @@ async function reallocateMissingItems(orderId: string, itemIds: string[]) {
     .eq('order_id', orderId);
 
   const usedStoreIds = new Set((existingAllocs || []).map((a: any) => a.store_id));
-  let maxSeq = Math.max(0, ...(existingAllocs || []).map((a: any) => a.sequence_number));
+  const seqRef = { value: Math.max(0, ...(existingAllocs || []).map((a: any) => a.sequence_number)) };
 
-  // Get all active stores within 4 km, ordered by distance
-  const { data: rawStores } = await supabaseAdmin
-    .from('stores')
-    .select('id, latitude, longitude')
-    .eq('is_active', true);
-
-  const candidates = (rawStores || [])
-    .map((s: any) => ({ ...s, dist: haversineKm(order.delivery_latitude, order.delivery_longitude, s.latitude, s.longitude) }))
-    .filter((s: any) => s.dist <= 4 && !usedStoreIds.has(s.id))
-    .sort((a: any, b: any) => a.dist - b.dist);
-
-  const remaining = [...items];
-
-  for (const store of candidates) {
-    if (!remaining.length) break;
-
-    const productIds = remaining.map((i: any) => i.product_id);
-    const { data: storeProducts } = await supabaseAdmin
-      .from('products')
-      .select('master_product_id')
-      .eq('store_id', store.id)
-      .eq('is_active', true)
-      .in('master_product_id', productIds);
-
-    const available = new Set((storeProducts || []).map((p: any) => p.master_product_id));
-    const assignable = remaining.filter((i: any) => available.has(i.product_id));
-    if (!assignable.length) continue;
-
-    maxSeq += 1;
-
-    const { data: newAlloc } = await supabaseAdmin
-      .from('order_store_allocations')
-      .insert({ order_id: orderId, store_id: store.id, sequence_number: maxSeq, pickup_code: randomFourDigit(), status: 'pending_acceptance' })
-      .select('id').single();
-
-    if (newAlloc) {
-      await Promise.all([
-        supabaseAdmin.from('order_items').update({ assigned_store_id: store.id, item_status: 'pending' }).in('id', assignable.map((i: any) => i.id)),
-        supabaseAdmin.from('store_orders').upsert(
-          { customer_order_id: orderId, store_id: store.id, status: 'pending_at_store', subtotal_amount: 0, delivery_fee: 0 },
-          { onConflict: 'customer_order_id,store_id' }
-        ),
-      ]);
-      usedStoreIds.add(store.id);
-      const assignedIds = new Set(assignable.map((i: any) => i.id));
-      remaining.splice(0, remaining.length, ...remaining.filter((i: any) => !assignedIds.has(i.id)));
-    }
-  }
-
-  if (remaining.length > 0) {
-    const unresolvableIds = remaining.map((i: any) => i.id);
-    console.error(
-      `[reallocateMissingItems] Order ${orderId}: ${remaining.length} item(s) could not be reallocated within 4 km — IDs: ${unresolvableIds.join(', ')}`
+  // Try the nearest ring first (0-4km), then widen to 4-8km for whatever's left.
+  // Never wider than 8km.
+  let remaining = await assignCandidatesInRadius(
+    orderId, items, order.delivery_latitude, order.delivery_longitude, 0, 4, usedStoreIds, seqRef
+  );
+  if (remaining.length) {
+    remaining = await assignCandidatesInRadius(
+      orderId, remaining, order.delivery_latitude, order.delivery_longitude, 4, 8, usedStoreIds, seqRef
     );
-    await supabaseAdmin
-      .from('order_items')
-      .update({ item_status: 'unavailable' })
-      .in('id', unresolvableIds);
   }
+
+  if (remaining.length) {
+    await flagUnresolvableItemsForRefund(orderId, remaining);
+  }
+
+  // Whatever we couldn't place is now flagged/unavailable rather than pending — the
+  // order should proceed to dispatch for everything that *was* resolved instead of
+  // staying stuck waiting on an item that will never be reallocated.
+  await finalizeIfAllResolved(orderId);
 }
 
 // Called when a driver comes online — catches any ready_for_pickup orders they missed
+// A driver whose app hasn't pinged a location in this long is treated as effectively
+// offline for dispatch purposes, regardless of what is_online says — otherwise a
+// crashed/killed app that never flipped is_online back to false keeps getting offered
+// orders based on wherever it happened to be last, possibly hours or days ago.
+const DRIVER_LOCATION_STALE_MS = 5 * 60 * 1000; // 5 minutes
+
+// Cap on how many drivers get offered a single order at once — bounds the push
+// notification burst and offer-row count in areas with a lot of online drivers.
+const MAX_DRIVERS_PER_BROADCAST = 20;
+
 export async function dispatchReadyOrdersToDriver(driverId: string) {
   try {
     const { data: locRow } = await supabaseAdmin
       .from('driver_locations')
       .select('latitude, longitude')
       .eq('delivery_partner_id', driverId)
+      .gte('updated_at', new Date(Date.now() - DRIVER_LOCATION_STALE_MS).toISOString())
       .maybeSingle();
 
-    if (!locRow) return; // No location on record, can't determine distance
+    if (!locRow) return; // No location on record (or it's stale), can't determine distance
 
     const { data: readyOrders } = await supabaseAdmin
       .from('customer_orders')
@@ -525,29 +646,39 @@ async function broadcastToNearbyDrivers(orderId: string) {
 
   const { data: locations } = await supabaseAdmin
     .from('driver_locations')
-    .select('delivery_partner_id, latitude, longitude');
+    .select('delivery_partner_id, latitude, longitude')
+    .gte('updated_at', new Date(Date.now() - DRIVER_LOCATION_STALE_MS).toISOString());
 
-  const nearbyIds = (locations || [])
-    .filter((l: any) => haversineKm(order.delivery_latitude, order.delivery_longitude, l.latitude, l.longitude) <= 10)
-    .map((l: any) => l.delivery_partner_id);
+  const distanceByDriverId = new Map<string, number>();
+  for (const l of (locations || []) as any[]) {
+    const dist = haversineKm(order.delivery_latitude, order.delivery_longitude, l.latitude, l.longitude);
+    if (dist <= 10) distanceByDriverId.set(l.delivery_partner_id, dist);
+  }
 
-  if (!nearbyIds.length) return;
+  if (!distanceByDriverId.size) return;
 
-  const { data: partners } = await supabaseAdmin
+  const { data: rawPartners } = await supabaseAdmin
     .from('delivery_partners')
     .select('user_id, expo_push_token')
-    .in('user_id', nearbyIds)
+    .in('user_id', [...distanceByDriverId.keys()])
     .eq('is_online', true)
     .eq('status', 'active');
 
-  if (!partners?.length) return;
+  if (!rawPartners?.length) return;
+
+  // Cap the broadcast to the nearest MAX_DRIVERS_PER_BROADCAST drivers instead of
+  // pinging every online driver in the radius — bounds the push-notification burst
+  // and offer-row count for busy areas.
+  const partners = (rawPartners as any[])
+    .sort((a, b) => (distanceByDriverId.get(a.user_id) ?? Infinity) - (distanceByDriverId.get(b.user_id) ?? Infinity))
+    .slice(0, MAX_DRIVERS_PER_BROADCAST);
 
   await supabaseAdmin.from('driver_order_offers').upsert(
-    (partners as any[]).map((p) => ({ order_id: orderId, driver_id: p.user_id, status: 'pending' })),
+    partners.map((p) => ({ order_id: orderId, driver_id: p.user_id, status: 'pending' })),
     { onConflict: 'order_id,driver_id', ignoreDuplicates: true }
   );
 
-  const tokens = (partners as any[]).map((p) => p.expo_push_token).filter(Boolean);
+  const tokens = partners.map((p) => p.expo_push_token).filter(Boolean);
   if (tokens.length) {
     fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',

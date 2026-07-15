@@ -22,6 +22,10 @@ router.get('/:paymentId', paymentController.getPaymentDetails.bind(paymentContro
 // triggerable by anyone who merely knows a Razorpay payment ID.
 router.post('/refund', requireAdmin, paymentController.processRefund.bind(paymentController));
 
+// Admin approves a refund for items flagged as unavailable-everywhere by the
+// multi-store reallocation flow (see admin_notifications type 'refund_required').
+router.post('/resolve-item-refund/:notificationId', requireAdmin, paymentController.resolveItemRefund.bind(paymentController));
+
 // Webhook handler for payment gateway
 router.post('/webhook', paymentController.handleWebhook.bind(paymentController));
 

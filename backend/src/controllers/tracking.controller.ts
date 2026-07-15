@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
+import { expireStaleAllocations } from './shopkeeper.controller.js';
 
 export class TrackingController {
   // Get order tracking information
@@ -23,6 +24,10 @@ export class TrackingController {
   async getOrderTrackingFull(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
+      // Opportunistically expire any store allocation this order has been waiting
+      // on for too long, before reading tracking data, so a silent store doesn't
+      // leave the order stuck — see expireStaleAllocations for details.
+      await expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err));
       const data = await databaseService.getOrderTrackingFull(orderId);
       
       if (!data) {
