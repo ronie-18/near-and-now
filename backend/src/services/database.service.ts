@@ -755,7 +755,7 @@ export class DatabaseService {
       );
     }
 
-    const items = orderData.items;
+    let items = orderData.items;
     if (!items?.length) throw new Error('No items in order');
 
     if (!(await this.isCustomerEmailVerified(orderData.user_id))) {
@@ -807,6 +807,48 @@ export class DatabaseService {
       .in('store_id', storeIds)
       .in('master_product_id', masterProductIds)
       .eq('is_active', true);
+
+    // SECURITY-010: never trust item.price from the request body — a client can set
+    // an arbitrary/near-zero price per line item. Overwrite with the real catalog
+    // price (admin-controlled, on master_products) looked up by master_product_id.
+    // Pricing model (mirrors frontend/src/utils/priceGst.ts + services/supabase.ts):
+    // sellable price = discounted_price + (discounted_price * gst_rate / 100), except
+    // loose products (is_loose = true), which are sold at discounted_price with no
+    // per-item GST (gst_rate treated as 0). This per-item price is separate from — and
+    // stacks with — the flat 5% GST added on the whole bill at checkout
+    // (checkoutCalculations.ts / the trustedFloor multiplier below), which is a
+    // GoI-mandated business-level tax, not a per-product one.
+    const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
+      .from('master_products')
+      .select('id, discounted_price, gst_rate, is_loose')
+      .in('id', masterProductIds);
+
+    if (masterPriceError) {
+      throw new Error('Failed to verify product prices');
+    }
+
+    const trustedPriceByMaster = new Map<string, number>();
+    for (const row of masterPriceRows || []) {
+      const preTax = Number((row as any).discounted_price) || 0;
+      const isLoose = Boolean((row as any).is_loose);
+      const rawGstRate = (row as any).gst_rate;
+      const gstRate = isLoose
+        ? 0
+        : Number.isFinite(Number(rawGstRate)) && Number(rawGstRate) >= 0
+          ? Number(rawGstRate)
+          : 0;
+      const priceWithGst = preTax + (preTax * gstRate) / 100;
+      trustedPriceByMaster.set(row.id, priceWithGst);
+    }
+
+    items = items.map((it) => {
+      const masterId = it.product_id || it.id;
+      const trustedPrice = masterId ? trustedPriceByMaster.get(masterId) : undefined;
+      if (trustedPrice == null) {
+        throw new Error(`Product "${it.name}" is not available.`);
+      }
+      return { ...it, price: trustedPrice };
+    });
 
     const byMaster = new Map<string, Array<{ store_id: string; product_id: string }>>();
     for (const row of productRows || []) {
@@ -877,15 +919,37 @@ export class DatabaseService {
     const paymentMethodEnum =
       pm.includes('split') || pm.includes('online') || pm.includes('upi') ? 'razorpay' : 'cod';
 
+    // Trusted subtotal from catalog prices — replaces client-supplied orderData.subtotal.
+    const trustedSubtotal = items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+
+    // Floor check on order_total: the frontend's own total = subtotal * 1.05 (its
+    // fixed checkout GST-equivalent markup) + PLATFORM_FEE + HANDLING_FEE + a
+    // distance-based delivery fee + an optional customer tip. Delivery fee and tip
+    // aren't independently verifiable server-side yet (tip isn't sent as its own
+    // field — see checkout follow-up), so this only enforces the portion that's
+    // fully determined by trusted item prices: it can't be bypassed by lowballing
+    // order_total (e.g. the demonstrated `order_total: 1` exploit), while never
+    // rejecting a legitimate order (whose real total is always >= this floor).
+    const CHECKOUT_GST_MULTIPLIER = 1.05;
+    const PLATFORM_FEE = 9.5;
+    const HANDLING_FEE = 5.5;
+    const trustedFloor = trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE;
+    if (orderData.order_total < trustedFloor - 1) {
+      throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
+    }
+
     const { data: customerOrder, error: coError } = await supabaseAdmin
       .from('customer_orders')
       .insert({
         customer_id: orderData.user_id,
         order_code: orderCode,
         status: 'pending_at_store',
-        payment_status: orderData.payment_status,
+        // Never trust client-supplied payment_status (e.g. a COD order claiming
+        // "paid" with no payment ever collected). Only /api/payment/verify (Razorpay
+        // signature-checked) is allowed to flip this to 'paid'.
+        payment_status: 'pending',
         payment_method: paymentMethodEnum,
-        subtotal_amount: orderData.subtotal,
+        subtotal_amount: trustedSubtotal,
         delivery_fee: orderData.delivery_fee,
         discount_amount: 0,
         total_amount: orderData.order_total,
@@ -1004,7 +1068,7 @@ export class DatabaseService {
     try {
       await this.upsertCustomerPaymentSnapshot({
         customer_order_id: customerOrder.id,
-        status: orderData.payment_status || 'pending'
+        status: 'pending'
       });
     } catch (e) {
       console.error('Failed to upsert initial customer_payments snapshot:', e);
@@ -1017,13 +1081,13 @@ export class DatabaseService {
       customer_email: orderData.customer_email,
       customer_phone: orderData.customer_phone,
       order_status: 'placed',
-      payment_status: orderData.payment_status,
+      payment_status: 'pending',
       payment_method: orderData.payment_method,
       order_total: orderData.order_total,
-      subtotal: orderData.subtotal,
+      subtotal: trustedSubtotal,
       delivery_fee: orderData.delivery_fee,
-      items: orderData.items,
-      items_count: orderData.items.length,
+      items,
+      items_count: items.length,
       shipping_address: orderData.shipping_address,
       created_at:
         (customerOrder as { placed_at?: string; created_at?: string }).placed_at ||

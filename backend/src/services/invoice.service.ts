@@ -72,9 +72,12 @@ type DocumentType = 'customer' | 'store' | 'delivery';
 // GST helpers
 // ---------------------------------------------------------------------------
 
-// Near & Now is a grocery/quick-commerce app. Default GST rate for food items is 5%.
-// HSN 0402 (milk), 1101 (flour), 1006 (rice), 2106 (misc food): 0–12%.
-// Using 5% as a safe default. Override per-product if HSN mapping is available.
+// The flat, GoI-mandated checkout-level GST applied to the whole item subtotal
+// (layer 2 — see "Pricing model / GST reference" in bug_fixes_2026-07-16.md),
+// separate from each product's own gst_rate (layer 1, applied per line item
+// below via master_products.gst_rate — 0 for loose products). This used to be
+// applied per-line instead of once on the subtotal, which silently discarded
+// every product's real GST rate; fixed 2026-07-16.
 const DEFAULT_GST_RATE = 5;
 
 function calcGstSplit(
@@ -185,6 +188,39 @@ async function fetchOrderData(orderId: string) {
       .select('id, store_order_id, product_id, product_name, unit, unit_price, quantity')
       .in('store_order_id', storeOrderIds);
     items = oi || [];
+
+    // Real per-product GST rate for accurate line-item tax reporting (see
+    // "Pricing model / GST reference" in bug_fixes_2026-07-16.md). order_items
+    // only stores unit_price (already GST-inclusive at the product's own rate),
+    // not the rate itself, so it's looked up via products -> master_products.
+    const productIds = [...new Set(items.map((it) => it.product_id).filter(Boolean))];
+    if (productIds.length) {
+      const { data: productRows } = await supabaseAdmin
+        .from('products')
+        .select('id, master_product_id')
+        .in('id', productIds);
+      const masterIdByProduct = new Map<string, string>();
+      for (const p of productRows || []) masterIdByProduct.set(p.id, p.master_product_id);
+
+      const masterIds = [...new Set(Array.from(masterIdByProduct.values()))];
+      const gstByMaster = new Map<string, { gst_rate: number; is_loose: boolean }>();
+      if (masterIds.length) {
+        const { data: masterRows } = await supabaseAdmin
+          .from('master_products')
+          .select('id, gst_rate, is_loose')
+          .in('id', masterIds);
+        for (const m of masterRows || []) {
+          gstByMaster.set(m.id, { gst_rate: Number((m as any).gst_rate) || 0, is_loose: Boolean((m as any).is_loose) });
+        }
+      }
+
+      for (const it of items) {
+        const masterId = masterIdByProduct.get(it.product_id);
+        const info = masterId ? gstByMaster.get(masterId) : undefined;
+        // Loose products carry no per-item GST (matches checkout pricing rule).
+        it.gst_rate = info?.is_loose ? 0 : (info?.gst_rate ?? 0);
+      }
+    }
   }
 
   // Store details
@@ -252,15 +288,20 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
   const lineItems: InvoiceLineItem[] = items.map((item: any, idx: number) => {
     const qty = Number(item.quantity || 1);
     const unitPrice = Number(item.unit_price || 0);
+    // What was actually charged for this line — already GST-inclusive at the
+    // product's own rate (unitPrice = discounted_price + discounted_price*gst_rate/100,
+    // 0 for loose products). See "Pricing model / GST reference" in bug_fixes_2026-07-16.md.
+    const sellingTotal = round2(unitPrice * qty);
 
-    // Taxable value = Base price (without GST)
-    const taxableValue = round2(unitPrice * qty);
-
-    // GST calculation on taxable value
-    const gstPercent = DEFAULT_GST_RATE;
+    // Reverse out the product's real GST rate to get the true pre-tax taxable
+    // value, instead of treating the already-tax-inclusive unitPrice as if it
+    // were untaxed (the bug this replaces: it used to add a second, hardcoded
+    // 5% on top of a price that already had real per-product GST baked in).
+    const gstPercent = Number(item.gst_rate) || 0;
+    const taxableValue = round2(sellingTotal / (1 + gstPercent / 100));
     const gst = calcGstSplit(taxableValue, gstPercent, isInterState);
 
-    // MRP = Taxable value + GST
+    // MRP reconstructs back to sellingTotal (taxableValue + its own GST).
     const mrp = round2(taxableValue + gst.cgst_amount + gst.sgst_amount + gst.igst_amount);
 
     // Discount (if any)
@@ -288,12 +329,24 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
     };
   });
 
-  // Sum up all line items
+  // Sum up all line items (each already reconstructs to what was actually
+  // charged per line, i.e. layer-1/per-product GST only — see per-line calc above).
   const itemsSubtotal = round2(lineItems.reduce((s, i) => s + i.line_total, 0));
   const itemsTaxableAmount = round2(lineItems.reduce((s, i) => s + i.taxable_value, 0));
   const itemsCgstTotal = round2(lineItems.reduce((s, i) => s + i.cgst_amount, 0));
   const itemsSgstTotal = round2(lineItems.reduce((s, i) => s + i.sgst_amount, 0));
   const itemsIgstTotal = round2(lineItems.reduce((s, i) => s + i.igst_amount, 0));
+
+  // Layer 2: the separate, flat GoI-mandated 5% GST on the whole item subtotal
+  // (on top of each item's own layer-1 GST above) — see "Pricing model / GST
+  // reference" in bug_fixes_2026-07-16.md. This is what the old flat
+  // DEFAULT_GST_RATE=5 per-line calculation was actually representing, just
+  // incorrectly applied per-line instead of once on the subtotal. Folded into
+  // the overall taxable/cgst/sgst totals below rather than given its own
+  // invoice line, matching how platform/handling fee GST is already handled —
+  // grand_total is unaffected by this change (still reconciles to what the
+  // customer actually paid), only the per-line and CGST/SGST breakdown does.
+  const checkoutGst = calcGstSplit(itemsSubtotal, DEFAULT_GST_RATE, isInterState);
 
   // Platform fee and handling fee (fixed amounts with embedded GST at 5%)
   // Platform fee: ₹9.50 (includes GST), Handling fee: ₹5.50 (includes GST)
@@ -314,19 +367,21 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
   // Discount amount
   const discountAmount = round2(Number(o.discount_amount || 0));
 
-  // Subtotal with fees (items + platform fee + handling fee + delivery - discount)
-  const subtotal = round2(itemsSubtotal + platformFeeWithGst + handlingFeeWithGst + deliveryFee - discountAmount);
+  const checkoutGstTotal = round2(checkoutGst.cgst_amount + checkoutGst.sgst_amount + checkoutGst.igst_amount);
 
-  // Total taxable amount (items + platform fee base + handling fee base)
-  const taxableAmount = round2(itemsTaxableAmount + platformFeeBase + handlingFeeBase);
+  // Subtotal with fees (items as charged + layer-2 checkout GST + platform fee + handling fee + delivery - discount)
+  const subtotal = round2(itemsSubtotal + checkoutGstTotal + platformFeeWithGst + handlingFeeWithGst + deliveryFee - discountAmount);
+
+  // Total taxable amount (items' true pre-tax value + layer-2 base + platform fee base + handling fee base)
+  const taxableAmount = round2(itemsTaxableAmount + itemsSubtotal + platformFeeBase + handlingFeeBase);
 
   // Split fee GST into CGST/SGST for intra-state
   const feeCgst = round2((platformFeeGst + handlingFeeGst) / 2);
   const feeSgst = round2((platformFeeGst + handlingFeeGst) / 2);
 
-  const cgstTotal = round2(itemsCgstTotal + feeCgst);
-  const sgstTotal = round2(itemsSgstTotal + feeSgst);
-  const igstTotal = itemsIgstTotal; // No IGST for intra-state
+  const cgstTotal = round2(itemsCgstTotal + checkoutGst.cgst_amount + feeCgst);
+  const sgstTotal = round2(itemsSgstTotal + checkoutGst.sgst_amount + feeSgst);
+  const igstTotal = round2(itemsIgstTotal + checkoutGst.igst_amount); // No IGST for intra-state
   const cessTotal = 0;
 
   // Grand total = subtotal (already includes items with GST + fees with GST + delivery - discount)
