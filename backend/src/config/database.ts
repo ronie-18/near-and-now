@@ -8,9 +8,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // its second dotenv (repo root). Without both files, SUPABASE_SERVICE_ROLE_KEY may be missing and
 // supabaseAdmin falls back to anon → RLS "permission denied" on customer_orders inserts.
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../../../.env'), override: true });
-// `npm run dev --workspace=backend` often has cwd = repo root; prefer that .env last.
-dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
+// Skip the override:true loads under the test runner — otherwise real .env secrets silently
+// clobber whatever a test deliberately set on process.env before importing this module.
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: path.resolve(__dirname, '../../../.env'), override: true });
+  // `npm run dev --workspace=backend` often has cwd = repo root; prefer that .env last.
+  dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
+}
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;

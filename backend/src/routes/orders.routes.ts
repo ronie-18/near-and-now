@@ -61,11 +61,10 @@ const createOrderSchema = z.object({
   coupon_id: z.string().optional()
 });
 
-// NOTE: /place and /create are not yet gated by requireCustomer — they trust
-// user_id/customer_id in the request body. Locking those down requires the
-// checkout flow itself to send the session token, which is a larger, separate
-// change (see SECURITY-010 follow-up in QA_AUDIT.md). The three routes below
-// are the ones explicitly flagged as having zero auth (SECURITY-010).
+// NOTE: /create is not yet gated by requireCustomer — it trusts customer_id
+// in the request body (see SECURITY-010 follow-up in QA_AUDIT.md). /place was
+// locked down on 2026-07-16: it now requires requireCustomer and the
+// controller overwrites req.body.user_id with req.customerId.
 router.post(
   '/place',
   requireCustomer,

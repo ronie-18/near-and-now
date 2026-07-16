@@ -6,6 +6,7 @@ const TEST_SECRET = 'test_razorpay_key_secret';
 function setRazorpayEnv(keyId: string) {
   process.env.RAZORPAY_KEY_ID = keyId;
   process.env.RAZORPAY_KEY_SECRET = TEST_SECRET;
+  process.env.RAZORPAY_WEBHOOK_SECRET = TEST_SECRET;
 }
 
 async function loadPaymentService() {
