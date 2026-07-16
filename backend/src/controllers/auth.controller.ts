@@ -3,6 +3,7 @@ import twilio from 'twilio';
 import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { createSignupTicket } from '../utils/signupTicket.js';
 
 function extractErrorMessage(err: any, fallback: string): string {
   if (!err) return fallback;
@@ -224,7 +225,9 @@ export class AuthController {
         return res.json({
           success: true,
           message: 'OTP verified; complete signup',
-          mode: 'signup'
+          mode: 'signup',
+          // Proof this phone actually passed OTP verification for this role — signup/complete requires it.
+          signupTicket: createSignupTicket(String(phone), requestedRole)
         });
       }
 

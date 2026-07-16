@@ -26,7 +26,9 @@ export class OrdersController {
   /** Checkout flow from web app — uses service role on server (RLS-safe). */
   async placeCheckout(req: Request, res: Response) {
     try {
-      const order = await databaseService.placeCheckoutOrder(req.body);
+      // Never trust the client-sent user_id — the order must belong to whoever
+      // actually authenticated (requireCustomer), not whoever the body claims.
+      const order = await databaseService.placeCheckoutOrder({ ...req.body, user_id: req.customerId });
       res.status(201).json(order);
     } catch (error: unknown) {
       console.error('Error placing checkout order:', error);

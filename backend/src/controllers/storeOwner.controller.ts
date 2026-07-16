@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
+import { verifySignupTicket } from '../utils/signupTicket.js';
 
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
   const authHeader = req.headers.authorization;
@@ -223,13 +224,21 @@ export async function signupComplete(req: Request, res: Response) {
       ownerEmail,
       owner_email,
       latitude,
-      longitude
+      longitude,
+      signupTicket
     } = req.body;
 
     if (!phone || !ownerName || !storeName) {
       return res.status(400).json({
         success: false,
         error: 'Phone, owner name and store name are required'
+      });
+    }
+
+    if (!verifySignupTicket(signupTicket, String(phone), 'shopkeeper')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Phone number was not verified via OTP, or verification expired. Please verify OTP again.'
       });
     }
 

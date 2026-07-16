@@ -18,6 +18,7 @@ const placeCheckoutSchema = z.object({
   delivery_fee: z.number(),
   payment_status: z.string().min(1),
   payment_method: z.string().min(1),
+  notes: z.string().optional(),
   items: z
     .array(
       z.object({
@@ -65,7 +66,12 @@ const createOrderSchema = z.object({
 // checkout flow itself to send the session token, which is a larger, separate
 // change (see SECURITY-010 follow-up in QA_AUDIT.md). The three routes below
 // are the ones explicitly flagged as having zero auth (SECURITY-010).
-router.post('/place', validate(placeCheckoutSchema), ordersController.placeCheckout.bind(ordersController));
+router.post(
+  '/place',
+  requireCustomer,
+  validate(placeCheckoutSchema),
+  ordersController.placeCheckout.bind(ordersController)
+);
 router.post('/create', validate(createOrderSchema), ordersController.createOrder.bind(ordersController));
 router.get('/customer/:customerId', requireCustomer, ordersController.getCustomerOrders.bind(ordersController));
 router.get('/:orderId', requireCustomer, ordersController.getOrderById.bind(ordersController));

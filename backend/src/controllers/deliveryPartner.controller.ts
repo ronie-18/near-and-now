@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
 import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
+import { verifySignupTicket } from '../utils/signupTicket.js';
 
 // Throttle: check for missed orders at most once per 5 minutes per driver
 const lastDispatchCheck = new Map<string, number>();
@@ -96,6 +97,13 @@ export class DeliveryPartnerController {
 
       if (!phone || !String(phone).trim() || !name || !String(name).trim()) {
         return res.status(400).json({ success: false, error: 'Phone and name are required' });
+      }
+
+      if (!verifySignupTicket(body.signupTicket, String(phone), 'delivery_partner')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Phone number was not verified via OTP, or verification expired. Please verify OTP again.'
+        });
       }
 
       const str = (v: unknown) => (v != null && String(v).trim() !== '' ? String(v).trim() : undefined);

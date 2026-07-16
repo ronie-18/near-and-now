@@ -731,6 +731,8 @@ export class DatabaseService {
     payment_method: string;
     split_upi_amount?: number;
     split_cash_amount?: number;
+    /** Free-text delivery note from the customer (e.g. "leave at door"). */
+    notes?: string;
     items: Array<{
       product_id?: string;
       id?: string;
@@ -958,7 +960,7 @@ export class DatabaseService {
         delivery_longitude: geocoded.lng,
         notes: orderData.split_upi_amount != null
           ? JSON.stringify({ split_upi_amount: orderData.split_upi_amount, split_cash_amount: orderData.split_cash_amount ?? 0 })
-          : null,
+          : orderData.notes || null,
         delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
       })
       .select()
