@@ -1836,7 +1836,14 @@ export class DatabaseService {
   }
 
   // Tracking
-  async getOrderTracking(orderId: string) {
+  /**
+   * `customerId` scopes every tracking read to the order's actual owner — order
+   * UUIDs are not secrets (they appear in URLs, deep links, API responses), so
+   * without this a valid session on ANY customer account could read ANY order's
+   * delivery address/GPS, financials, and assigned rider's name/phone/location
+   * just by knowing/observing its id.
+   */
+  async getOrderTracking(orderId: string, customerId: string) {
     const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .select(`
@@ -1847,6 +1854,7 @@ export class DatabaseService {
         )
       `)
       .eq('id', orderId)
+      .eq('customer_id', customerId)
       .maybeSingle();
     if (error) {
       console.error('Error fetching order tracking:', error);
@@ -1855,7 +1863,18 @@ export class DatabaseService {
     return data;
   }
 
-  async getTrackingHistory(orderId: string) {
+  /** True only if `orderId` belongs to `customerId` — used by tracking reads that don't otherwise touch `customer_orders`. */
+  private async isOrderOwnedByCustomer(orderId: string, customerId: string): Promise<boolean> {
+    const { data } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id')
+      .eq('id', orderId)
+      .eq('customer_id', customerId)
+      .maybeSingle();
+    return !!data;
+  }
+
+  private async getTrackingHistoryRaw(orderId: string) {
     const { data, error } = await supabaseAdmin
       .from('order_status_history')
       .select('status, notes, created_at')
@@ -1865,11 +1884,19 @@ export class DatabaseService {
     return data ?? [];
   }
 
+  /** Returns null (not this customer's order) rather than throwing, so the controller can 404/403 consistently. */
+  async getTrackingHistory(orderId: string, customerId: string) {
+    if (!(await this.isOrderOwnedByCustomer(orderId, customerId))) return null;
+    return this.getTrackingHistoryRaw(orderId);
+  }
+
   /** Full tracking data for tracking page: order + status history + store locations + delivery partner */
-  async getOrderTrackingFull(orderId: string) {
-    const order = await this.getOrderTracking(orderId);
+  async getOrderTrackingFull(orderId: string, customerId: string) {
+    const order = await this.getOrderTracking(orderId, customerId);
     if (!order) return null;
-    const statusHistory = await this.getTrackingHistory(orderId);
+    // Ownership already verified by getOrderTracking above — use the raw query
+    // directly instead of re-checking via the public getTrackingHistory.
+    const statusHistory = await this.getTrackingHistoryRaw(orderId);
     const storeIds = [...new Set((order.store_orders || []).map((so: { store_id: string }) => so.store_id).filter(Boolean))];
     let storeLocations: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[] = [];
     if (storeIds.length > 0) {
@@ -1994,7 +2021,9 @@ export class DatabaseService {
     return data;
   }
 
-  async getDriverLocationsForOrder(orderId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }>> {
+  /** Returns null if `orderId` doesn't belong to `customerId` — distinct from `{}`, which means "owned, but no driver assigned yet". */
+  async getDriverLocationsForOrder(orderId: string, customerId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }> | null> {
+    if (!(await this.isOrderOwnedByCustomer(orderId, customerId))) return null;
     const { data: storeOrders } = await supabaseAdmin
       .from('store_orders')
       .select('delivery_partner_id')

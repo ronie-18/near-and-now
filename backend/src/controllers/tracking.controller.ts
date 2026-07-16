@@ -7,8 +7,8 @@ export class TrackingController {
   async getOrderTracking(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
-      const tracking = await databaseService.getOrderTracking(orderId);
-      
+      const tracking = await databaseService.getOrderTracking(orderId, req.customerId!);
+
       if (!tracking) {
         return res.status(404).json({ error: 'Order not found' });
       }
@@ -28,8 +28,8 @@ export class TrackingController {
       // on for too long, before reading tracking data, so a silent store doesn't
       // leave the order stuck — see expireStaleAllocations for details.
       await expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err));
-      const data = await databaseService.getOrderTrackingFull(orderId);
-      
+      const data = await databaseService.getOrderTrackingFull(orderId, req.customerId!);
+
       if (!data) {
         return res.status(404).json({ error: 'Order not found' });
       }
@@ -45,7 +45,10 @@ export class TrackingController {
   async getDriverLocations(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
-      const locations = await databaseService.getDriverLocationsForOrder(orderId);
+      const locations = await databaseService.getDriverLocationsForOrder(orderId, req.customerId!);
+      if (locations === null) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
       res.json(locations);
     } catch (error) {
       console.error('Error fetching driver locations:', error);
@@ -57,7 +60,10 @@ export class TrackingController {
   async getTrackingHistory(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
-      const history = await databaseService.getTrackingHistory(orderId);
+      const history = await databaseService.getTrackingHistory(orderId, req.customerId!);
+      if (history === null) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
       res.json(history);
     } catch (error) {
       console.error('Error fetching tracking history:', error);

@@ -1,4 +1,5 @@
 import { getAdminClient } from './supabase';
+import { apiUrl } from '../utils/apiBase';
 import bcrypt from 'bcryptjs';
 import { logAdminAction, logSecurityEvent, logFailedLogin } from './auditLog';
 
@@ -81,50 +82,28 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return await bcrypt.compare(password, hash);
 }
 
-// Authenticate admin
+// Authenticate admin — verification + session issuance happen server-side
+// (POST /api/admin/login) so password_hash never reaches the browser and the
+// session token isn't self-issued client-side. See backend/src/controllers/admin.controller.ts.
 export async function authenticateAdmin(email: string, password: string): Promise<AuthenticatedAdmin | null> {
   const normalizedEmail = email.toLowerCase().trim();
   try {
     console.log('🔐 Authenticating admin:', normalizedEmail);
 
-    const { data: admin, error } = await getAdminClient()
-      .from('admins')
-      .select('*')
-      .eq('email', normalizedEmail)
-      .eq('status', 'active')
-      .single();
-
-    if (error || !admin) {
-      console.error('❌ Admin not found or error:', error);
-      await logFailedLogin(normalizedEmail);
-      await logSecurityEvent('FAILED_LOGIN', 'medium', `Admin login failed — account not found: ${normalizedEmail}`);
-      return null;
-    }
-
-    const isValidPassword = await verifyPassword(password, admin.password_hash);
-    if (!isValidPassword) {
-      console.error('❌ Invalid password for:', normalizedEmail);
-      await logFailedLogin(normalizedEmail);
-      await logSecurityEvent('FAILED_LOGIN', 'medium', `Admin login failed — wrong password: ${normalizedEmail}`);
-      return null;
-    }
-
-    const token = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-
-    // Record session
-    await getAdminClient().from('admin_sessions').insert({
-      admin_id: admin.id,
-      session_token: token,
-      user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : 'server-side',
-      expires_at: expiresAt
+    const response = await fetch(apiUrl('/api/admin/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: normalizedEmail, password }),
     });
 
-    // Update last login timestamp
-    await getAdminClient()
-      .from('admins')
-      .update({ last_login_at: new Date().toISOString() })
-      .eq('id', admin.id);
+    if (!response.ok) {
+      console.error('❌ Admin login failed:', response.status);
+      await logFailedLogin(normalizedEmail);
+      await logSecurityEvent('FAILED_LOGIN', 'medium', `Admin login failed for ${normalizedEmail}`);
+      return null;
+    }
+
+    const { admin, token } = (await response.json()) as { admin: Admin; token: string };
 
     await logAdminAction({
       admin_id: admin.id,
@@ -136,8 +115,7 @@ export async function authenticateAdmin(email: string, password: string): Promis
 
     console.log('✅ Admin authenticated:', normalizedEmail, '| role:', admin.role);
 
-    const { password_hash, ...adminData } = admin;
-    return { admin: adminData as Admin, token };
+    return { admin, token };
   } catch (error) {
     console.error('❌ Error authenticating admin:', error);
     await logSecurityEvent('AUTH_ERROR', 'high', `Unexpected error during admin login for ${normalizedEmail}`);
