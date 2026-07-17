@@ -350,7 +350,7 @@ export async function updateStore(req: Request, res: Response) {
 
     if (!owned) return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
 
-    const allowed = ['name', 'address', 'phone', 'image_url', 'owner_image_url', 'verification_document', 'verification_number'] as const;
+    const allowed = ['name', 'address', 'phone', 'image_url', 'owner_image_url'] as const;
     type AllowedKey = typeof allowed[number];
 
     const patch: Partial<Record<AllowedKey, string>> = {};
