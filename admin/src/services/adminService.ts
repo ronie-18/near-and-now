@@ -848,20 +848,24 @@ export async function getDashboardStats() {
     const totalCategories = uniqueCategories.size;
 
     // Store + delivery partner counts (head:true — count only, no rows fetched)
-    const { count: totalStores } = await getAdminClient()
+    const { count: totalStores, error: totalStoresError } = await getAdminClient()
       .from('stores')
       .select('id', { count: 'exact', head: true });
-    const { count: approvedStores } = await getAdminClient()
+    if (totalStoresError) throw totalStoresError;
+    const { count: approvedStores, error: approvedStoresError } = await getAdminClient()
       .from('stores')
       .select('id', { count: 'exact', head: true })
       .eq('is_approved', true);
-    const { count: totalDeliveryPartners } = await getAdminClient()
+    if (approvedStoresError) throw approvedStoresError;
+    const { count: totalDeliveryPartners, error: totalDeliveryPartnersError } = await getAdminClient()
       .from('delivery_partners')
       .select('user_id', { count: 'exact', head: true });
-    const { count: activeDeliveryPartners } = await getAdminClient()
+    if (totalDeliveryPartnersError) throw totalDeliveryPartnersError;
+    const { count: activeDeliveryPartners, error: activeDeliveryPartnersError } = await getAdminClient()
       .from('delivery_partners')
       .select('user_id', { count: 'exact', head: true })
       .eq('status', 'active');
+    if (activeDeliveryPartnersError) throw activeDeliveryPartnersError;
 
     // Get total orders from customer_orders
     const { data: orders, error: ordersError } = await getAdminClient()
