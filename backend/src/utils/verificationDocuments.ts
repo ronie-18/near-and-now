@@ -29,12 +29,21 @@ export const DOC_NUMBER_PATTERNS: Partial<Record<DocType, RegExp>> = {
   fssai: /^[0-9]{14}$/,
 };
 
-export const DOC_NUMBER_FORMAT_HINTS: Partial<Record<DocType, string>> = {
-  aadhaar: '12-digit Aadhaar number',
-  pan: '10-character PAN (e.g. ABCDE1234F)',
-  gst: '15-character GSTIN (e.g. 22AAAAA0000A1Z5)',
-  fssai: '14-digit FSSAI number',
+export const DOC_NUMBER_FORMATS: Partial<Record<DocType, { description: string; example: string }>> = {
+  aadhaar: { description: '12 digits', example: '234567890123' },
+  pan: { description: '5 letters + 4 digits + 1 letter (10 characters)', example: 'ABCDE1234F' },
+  gst: {
+    description: '15 characters: 2-digit state code + 10-character PAN + 1 digit + 1 letter + 1 checksum',
+    example: '22AAAAA0000A1Z5',
+  },
+  fssai: { description: '14 digits', example: '12345678901234' },
 };
+
+export function docNumberErrorMessage(docType: DocType): string {
+  const format = DOC_NUMBER_FORMATS[docType];
+  if (!format) return 'Invalid document number format';
+  return `Invalid ${docType.toUpperCase()} number.\nFormat: ${format.description}\nExample: ${format.example}`;
+}
 
 export function validateDocNumber(docType: DocType, number: string): boolean {
   const pattern = DOC_NUMBER_PATTERNS[docType];

@@ -4,11 +4,11 @@ import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
-  DOC_NUMBER_FORMAT_HINTS,
   DOC_TYPES,
   MAX_DOC_SIZE_BYTES,
   SIGNED_URL_TTL_SECONDS,
   VERIFICATION_DOCS_BUCKET,
+  docNumberErrorMessage,
   formatFileSize,
   isDocType,
   validateDocNumber,
@@ -484,11 +484,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
     }
 
     if (number && !validateDocNumber(docType, number)) {
-      const hint = DOC_NUMBER_FORMAT_HINTS[docType];
-      return res.status(400).json({
-        success: false,
-        error: hint ? `Enter a valid ${hint}` : 'Invalid document number format',
-      });
+      return res.status(400).json({ success: false, error: docNumberErrorMessage(docType) });
     }
 
     const { data: existing } = await supabaseAdmin
