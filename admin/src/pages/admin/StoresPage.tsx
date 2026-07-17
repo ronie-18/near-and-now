@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
 
 interface StoreData {
   id: string;
@@ -27,6 +28,8 @@ interface StoreData {
   owner_id?: string;
   created_at?: string;
   updated_at?: string;
+  approved_at?: string | null;
+  approved_by?: string | null;
 }
 
 type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved';
@@ -350,6 +353,7 @@ const StoresPage = () => {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [reviewingStore, setReviewingStore] = useState<StoreData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
+  const [approverNames, setApproverNames] = useState<Record<string, string>>({});
 
   // Most recent submit/edit/approve/reject across each store's 5 verification
   // documents — one bulk query instead of a per-store request. Non-fatal: a
@@ -372,18 +376,43 @@ const StoresPage = () => {
     }
   };
 
+  // Resolves stores.approved_by (an admins.id) to a display name. Non-fatal —
+  // a failure here just leaves the "Approved On" column without a name.
+  const refreshApproverNames = async (storeList: StoreData[]) => {
+    const ids = Array.from(
+      new Set(storeList.map((s) => s.approved_by).filter((id): id is string => !!id))
+    );
+    if (ids.length === 0) return;
+    try {
+      const { data, error: namesError } = await getAdminClient()
+        .from('admins')
+        .select('id, full_name')
+        .in('id', ids);
+      if (namesError) throw namesError;
+      const names: Record<string, string> = {};
+      for (const row of data || []) names[row.id] = row.full_name;
+      setApproverNames((prev) => ({ ...prev, ...names }));
+    } catch (namesErr) {
+      console.error('Error fetching approver names:', namesErr);
+    }
+  };
+
+  const refreshAll = async () => {
+    const { data, error: sbError } = await getAdminClient()
+      .from('stores')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (sbError) throw sbError;
+    setStores(data || []);
+    await refreshDocsUpdatedAt();
+    await refreshApproverNames(data || []);
+  };
+
   const fetchStores = async () => {
     try {
       setLoading(true);
       setError(null);
-      const { data, error: sbError } = await getAdminClient()
-        .from('stores')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (sbError) throw sbError;
-      setStores(data || []);
-      await refreshDocsUpdatedAt();
+      await refreshAll();
     } catch (err: any) {
       console.error('Error fetching stores:', err);
       setError('Failed to load stores. Please try again.');
@@ -396,14 +425,15 @@ const StoresPage = () => {
     fetchStores();
 
     // Best-effort live updates: subscribe to changes on
-    // store_verification_documents so "Updated On" reflects a shopkeeper's
-    // upload or another admin's review without a manual refresh. Realtime's
-    // RLS check for this table depends on the same x-admin-token-based
-    // is_admin_authenticated() policy used for the REST query above — that
+    // store_verification_documents and stores (approval status/approved_at/
+    // approved_by) so this page reflects a shopkeeper's upload or another
+    // admin's review/approval without a manual refresh. Realtime's RLS check
+    // for these tables depends on the same x-admin-token-based
+    // is_admin_authenticated() policy used for the REST queries above — that
     // header mechanism is proven to work for PostgREST requests, but it's
     // unconfirmed whether it's honored the same way over the Realtime
     // websocket handshake for a non-Supabase-Auth client like this one. The
-    // 20s poll below is a safety net in case the subscription never fires.
+    // 20s poll below is a safety net in case the subscriptions never fire.
     const client = getAdminClient();
     const channel = client
       .channel('admin-stores-verification-docs')
@@ -414,10 +444,19 @@ const StoresPage = () => {
           void refreshDocsUpdatedAt();
         }
       )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'stores' },
+        (payload) => {
+          const updated = payload.new as StoreData;
+          setStores((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)));
+          if (updated.approved_by) void refreshApproverNames([updated]);
+        }
+      )
       .subscribe();
 
     const pollId = setInterval(() => {
-      void refreshDocsUpdatedAt();
+      refreshAll().catch((err) => console.error('Background refresh failed:', err));
     }, 20_000);
 
     return () => {
@@ -467,16 +506,30 @@ const StoresPage = () => {
   const toggleApproval = async (store: StoreData) => {
     setApprovingId(store.id);
     try {
+      const nextApproved = !store.is_approved;
+      const currentAdmin = getCurrentAdmin();
+      // Revoking clears these — they should reflect the current approval,
+      // not stale history from one that's since been revoked.
+      const patch = {
+        is_approved: nextApproved,
+        approved_at: nextApproved ? new Date().toISOString() : null,
+        approved_by: nextApproved ? currentAdmin?.id ?? null : null,
+      };
       const { data, error: sbError } = await getAdminClient()
         .from('stores')
-        .update({ is_approved: !store.is_approved })
+        .update(patch)
         .eq('id', store.id)
-        .select('id, is_approved');
+        .select('id, is_approved, approved_at, approved_by');
       if (sbError) throw sbError;
       if (!data || data.length === 0) {
         throw new Error('Update was blocked (no admin session or insufficient permissions).');
       }
-      setStores(prev => prev.map(s => s.id === store.id ? { ...s, is_approved: !store.is_approved } : s));
+      setStores(prev => prev.map(s => (s.id === store.id ? { ...s, ...patch } : s)));
+      if (patch.approved_by) {
+        setApproverNames(prev =>
+          currentAdmin?.full_name ? { ...prev, [patch.approved_by as string]: currentAdmin.full_name } : prev
+        );
+      }
     } catch (err: any) {
       setError(`Failed to update approval: ${err.message}`);
     } finally {
@@ -574,6 +627,7 @@ const StoresPage = () => {
                     <th className="px-6 py-4">Address</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Approval</th>
+                    <th className="px-6 py-4">Approved On</th>
                     <th className="px-6 py-4">Updated On</th>
                     <th className="px-6 py-4">Joined</th>
                   </tr>
@@ -649,6 +703,26 @@ const StoresPage = () => {
                             Review Documents
                           </button>
                         </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        {store.approved_at ? (
+                          <>
+                            <span className="text-sm text-gray-600">
+                              {new Date(store.approved_at).toLocaleString('en-IN', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {(store.approved_by && approverNames[store.approved_by]) || 'admin'}
+                            </p>
+                          </>
+                        ) : (
+                          <span className="text-gray-400 text-sm">—</span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-sm text-gray-600">
