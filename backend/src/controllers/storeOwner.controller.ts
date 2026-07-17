@@ -399,6 +399,30 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
 }
 
 /**
+ * Editing or removing a verification document after the store has already
+ * been approved sends it back for full re-verification — same as a manual
+ * admin revoke (is_approved false, approved_at/approved_by cleared) — since
+ * the documents admin signed off on are no longer what's on file. Returns
+ * true if the store was suspended by this call (was approved, now isn't).
+ */
+async function suspendStoreIfApproved(storeId: string): Promise<boolean> {
+  const { data: store } = await supabaseAdmin
+    .from('stores')
+    .select('is_approved')
+    .eq('id', storeId)
+    .maybeSingle();
+
+  if (!store?.is_approved) return false;
+
+  await supabaseAdmin
+    .from('stores')
+    .update({ is_approved: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
+    .eq('id', storeId);
+
+  return true;
+}
+
+/**
  * List the 5 required verification documents for the caller's store, each
  * with a freshly signed URL (never a stored permanent one — the bucket is
  * private).
@@ -559,7 +583,9 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    res.json({ success: true, document: data });
+    const storeSuspended = await suspendStoreIfApproved(storeId);
+
+    res.json({ success: true, document: data, storeSuspended });
   } catch (error: any) {
     console.error('❌ saveVerificationDocument error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to save document' });
@@ -616,7 +642,9 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    res.json({ success: true });
+    const storeSuspended = await suspendStoreIfApproved(storeId);
+
+    res.json({ success: true, storeSuspended });
   } catch (error: any) {
     console.error('❌ deleteVerificationDocument error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to delete document' });
