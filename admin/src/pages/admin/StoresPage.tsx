@@ -360,22 +360,34 @@ const StoresPage = () => {
   }), [stores]);
 
   const filteredStores = useMemo(() => {
-    return stores.filter(store => {
-      const q = searchTerm.toLowerCase();
-      const matchesSearch = !q || (
-        store.name?.toLowerCase().includes(q) ||
-        store.address?.toLowerCase().includes(q) ||
-        store.phone?.includes(q)
-      );
-      const matchesStat =
-        statFilter === 'all' ? true :
-        statFilter === 'online' ? store.is_active :
-        statFilter === 'offline' ? !store.is_active :
-        statFilter === 'pending' ? !store.is_approved :
-        store.is_approved;
-      return matchesSearch && matchesStat;
-    });
-  }, [stores, searchTerm, statFilter]);
+    return stores
+      .filter(store => {
+        const q = searchTerm.toLowerCase();
+        const matchesSearch = !q || (
+          store.name?.toLowerCase().includes(q) ||
+          store.address?.toLowerCase().includes(q) ||
+          store.phone?.includes(q)
+        );
+        const matchesStat =
+          statFilter === 'all' ? true :
+          statFilter === 'online' ? store.is_active :
+          statFilter === 'offline' ? !store.is_active :
+          statFilter === 'pending' ? !store.is_approved :
+          store.is_approved;
+        return matchesSearch && matchesStat;
+      })
+      // Most recent document activity (upload/edit/approve/reject) first, so
+      // whatever needs review next always surfaces at the top. Stores with no
+      // document activity yet sort to the bottom.
+      .sort((a, b) => {
+        const at = docsUpdatedAt[a.id];
+        const bt = docsUpdatedAt[b.id];
+        if (!at && !bt) return 0;
+        if (!at) return 1;
+        if (!bt) return -1;
+        return bt.localeCompare(at);
+      });
+  }, [stores, searchTerm, statFilter, docsUpdatedAt]);
 
   const toggleApproval = async (store: StoreData) => {
     setApprovingId(store.id);
