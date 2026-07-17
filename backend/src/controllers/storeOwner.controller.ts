@@ -543,6 +543,63 @@ export async function saveVerificationDocument(req: Request, res: Response) {
 }
 
 /**
+ * Delete one verification document — removes both the storage object and the
+ * DB row so the shopkeeper can start that document over from scratch. The
+ * storage removal is best-effort: if it fails, the DB row is still deleted
+ * so the shopkeeper isn't stuck unable to re-upload over a stale error.
+ */
+export async function deleteVerificationDocument(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { id: storeId, docType } = req.params;
+    if (!isDocType(docType)) {
+      return res.status(400).json({ success: false, error: 'Invalid document type' });
+    }
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('store_verification_documents')
+      .select('storage_path')
+      .eq('store_id', storeId)
+      .eq('doc_type', docType)
+      .maybeSingle();
+
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'No document uploaded for this type' });
+    }
+
+    if (existing.storage_path) {
+      const { error: removeError } = await supabaseAdmin.storage
+        .from(VERIFICATION_DOCS_BUCKET)
+        .remove([existing.storage_path]);
+      if (removeError) {
+        console.error('❌ deleteVerificationDocument storage remove error:', removeError);
+      }
+    }
+
+    const { error } = await supabaseAdmin
+      .from('store_verification_documents')
+      .delete()
+      .eq('store_id', storeId)
+      .eq('doc_type', docType);
+
+    if (error) {
+      console.error('❌ deleteVerificationDocument error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ deleteVerificationDocument error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to delete document' });
+  }
+}
+
+/**
  * Register shopkeeper's Expo push token.
  * Stores the token on all stores owned by the authenticated shopkeeper so the
  * backend can reach them when a new order arrives.
