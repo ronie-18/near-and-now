@@ -53,7 +53,10 @@
       "Bash(git push *)",
       "Bash(claude mcp *)",
       "mcp__jira__createJiraIssue",
-      "mcp__jira__addCommentToJiraIssue"
+      "mcp__jira__addCommentToJiraIssue",
+      "mcp__jira__getTransitionsForJiraIssue",
+      "mcp__jira__transitionJiraIssue",
+      "Bash(git commit *)"
     ]
   }
 }
