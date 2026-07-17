@@ -222,7 +222,11 @@ const DocumentReviewModal = ({
                     )}
                     <div className="min-w-0">
                       <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
-                      <p className="text-sm text-gray-500 truncate">{doc.number || 'No number provided'}</p>
+                      <p className="text-sm text-gray-500 truncate">
+                        {(doc.doc_type.endsWith('_back')
+                          ? documents.find((d) => d.doc_type === doc.doc_type.replace('_back', '_front'))?.number
+                          : doc.number) || 'No number provided'}
+                      </p>
                       {doc.file_size && (
                         <p className="text-xs text-gray-400 mt-0.5">{doc.file_size}</p>
                       )}
