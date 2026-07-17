@@ -847,6 +847,22 @@ export async function getDashboardStats() {
     });
     const totalCategories = uniqueCategories.size;
 
+    // Store + delivery partner counts (head:true — count only, no rows fetched)
+    const { count: totalStores } = await getAdminClient()
+      .from('stores')
+      .select('id', { count: 'exact', head: true });
+    const { count: approvedStores } = await getAdminClient()
+      .from('stores')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_approved', true);
+    const { count: totalDeliveryPartners } = await getAdminClient()
+      .from('delivery_partners')
+      .select('user_id', { count: 'exact', head: true });
+    const { count: activeDeliveryPartners } = await getAdminClient()
+      .from('delivery_partners')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('status', 'active');
+
     // Get total orders from customer_orders
     const { data: orders, error: ordersError } = await getAdminClient()
       .from('customer_orders')
@@ -881,6 +897,10 @@ export async function getDashboardStats() {
       totalCustomers,
       totalSales,
       totalCategories,
+      totalStores: totalStores || 0,
+      approvedStores: approvedStores || 0,
+      totalDeliveryPartners: totalDeliveryPartners || 0,
+      activeDeliveryPartners: activeDeliveryPartners || 0,
       processingOrders: placedOrders + confirmedOrders, // Combine placed and confirmed for "processing" display
       shippedOrders,
       deliveredOrders,

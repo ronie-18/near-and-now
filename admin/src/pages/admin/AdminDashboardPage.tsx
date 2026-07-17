@@ -11,6 +11,7 @@ import {
   XCircle,
   AlertCircle,
   Truck,
+  Store,
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
@@ -21,45 +22,28 @@ import {
 import { Link } from 'react-router-dom';
 import { getDashboardStats, getAdminProducts, getOrders, Order } from '../../services/adminService';
 
-// Modern Stat Card (with optional link)
+// Stat tile — label, value, and an optional sub-line (e.g. "42 approved").
+// No decorative gradients/blobs and no fabricated trend percentages — a flat
+// card with a small icon chip lets the number itself be the loud part.
 interface StatCardProps {
   icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
+  iconBg: string;
+  iconColor: string;
   label: string;
   value: string | number;
-  change?: string;
-  changeType?: 'positive' | 'negative';
+  sub?: string;
   href?: string;
 }
 
-const StatCard: React.FC<StatCardProps> = ({
-  icon: Icon,
-  gradient,
-  label,
-  value,
-  change,
-  changeType = 'positive',
-  href
-}) => {
+const StatCard: React.FC<StatCardProps> = ({ icon: Icon, iconBg, iconColor, label, value, sub, href }) => {
   const content = (
-    <div className={`relative overflow-hidden rounded-2xl ${gradient} p-6 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 ${href ? 'cursor-pointer' : ''}`}>
-      <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-      <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-20 h-20 bg-white/10 rounded-full blur-xl" />
-      <div className="relative z-10">
-        <div className="flex items-center justify-between mb-4">
-          <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-            <Icon className="w-6 h-6" />
-          </div>
-          {change && (
-            <div className={`flex items-center gap-1 text-sm font-medium px-2 py-1 rounded-full backdrop-blur-sm ${changeType === 'positive' ? 'bg-white/20' : 'bg-red-400/30'}`}>
-              {changeType === 'positive' ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-              {change}
-            </div>
-          )}
-        </div>
-        <p className="text-white/80 text-sm font-medium">{label}</p>
-        <p className="text-3xl font-bold mt-1">{value}</p>
+    <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-5 transition-all duration-200 ${href ? 'hover:shadow-md hover:border-gray-200 cursor-pointer' : ''}`}>
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${iconBg} mb-3`}>
+        <Icon className={`w-5 h-5 ${iconColor}`} />
       </div>
+      <p className="text-sm font-medium text-gray-500">{label}</p>
+      <p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p>
+      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
     </div>
   );
 
@@ -284,6 +268,10 @@ const AdminDashboardPage = () => {
     totalCustomers: 0,
     totalSales: 0,
     totalCategories: 0,
+    totalStores: 0,
+    approvedStores: 0,
+    totalDeliveryPartners: 0,
+    activeDeliveryPartners: 0,
     processingOrders: 0,
     shippedOrders: 0,
     deliveredOrders: 0,
@@ -472,50 +460,63 @@ const AdminDashboardPage = () => {
         ) : (
           <>
             {/* Main Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard
                 icon={DollarSign}
-                gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
+                iconBg="bg-emerald-50"
+                iconColor="text-emerald-600"
                 label="Total Sales"
                 value={`₹${dashboardStats.totalSales.toLocaleString()}`}
-                change="+12.5%"
-                changeType="positive"
-              />
-              <StatCard
-                icon={Package}
-                gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-                label="Total Products"
-                value={dashboardStats.totalProducts}
-                change="+5.7%"
-                changeType="positive"
-                href="/products"
-              />
-              <StatCard
-                icon={Layers}
-                gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-                label="Total Categories"
-                value={dashboardStats.totalCategories || 0}
-                change="+2.1%"
-                changeType="positive"
-                href="/categories"
               />
               <StatCard
                 icon={ShoppingBag}
-                gradient="bg-gradient-to-br from-amber-500 to-orange-600"
+                iconBg="bg-amber-50"
+                iconColor="text-amber-600"
                 label="Total Orders"
                 value={dashboardStats.totalOrders}
-                change="+8.2%"
-                changeType="positive"
                 href="/orders"
               />
               <StatCard
                 icon={Users}
-                gradient="bg-gradient-to-br from-rose-500 to-pink-600"
+                iconBg="bg-rose-50"
+                iconColor="text-rose-600"
                 label="Total Customers"
                 value={dashboardStats.totalCustomers}
-                change="+15.3%"
-                changeType="positive"
                 href="/customers"
+              />
+              <StatCard
+                icon={Package}
+                iconBg="bg-blue-50"
+                iconColor="text-blue-600"
+                label="Total Products"
+                value={dashboardStats.totalProducts}
+                href="/products"
+              />
+              <StatCard
+                icon={Layers}
+                iconBg="bg-violet-50"
+                iconColor="text-violet-600"
+                label="Total Categories"
+                value={dashboardStats.totalCategories || 0}
+                href="/categories"
+              />
+              <StatCard
+                icon={Store}
+                iconBg="bg-teal-50"
+                iconColor="text-teal-600"
+                label="Total Stores"
+                value={dashboardStats.totalStores}
+                sub={`${dashboardStats.approvedStores} approved`}
+                href="/stores"
+              />
+              <StatCard
+                icon={Truck}
+                iconBg="bg-orange-50"
+                iconColor="text-orange-600"
+                label="Delivery Partners"
+                value={dashboardStats.totalDeliveryPartners}
+                sub={`${dashboardStats.activeDeliveryPartners} active`}
+                href="/delivery"
               />
             </div>
 
