@@ -404,33 +404,48 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
  * been approved sends it back for full re-verification — same as a manual
  * admin revoke (is_approved false, approved_at/approved_by cleared) — since
  * the documents admin signed off on are no longer what's on file. Returns
- * true if the store was suspended by this call (was approved, now isn't).
+ * whether the store was suspended by this call (was approved, now isn't),
+ * plus its name — fetched in the same round-trip since every caller needs
+ * both (the name for the admin-notification message).
  */
-async function suspendStoreIfApproved(storeId: string): Promise<boolean> {
+async function suspendStoreIfApprovedAndGetName(storeId: string): Promise<{ suspended: boolean; name: string }> {
   const { data: store } = await supabaseAdmin
     .from('stores')
-    .select('is_approved')
+    .select('name, is_approved')
     .eq('id', storeId)
     .maybeSingle();
 
-  if (!store?.is_approved) return false;
+  const name = store?.name || 'A store';
+  if (!store?.is_approved) return { suspended: false, name };
 
   await supabaseAdmin
     .from('stores')
     .update({ is_approved: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
     .eq('id', storeId);
 
-  return true;
+  return { suspended: true, name };
 }
 
-/** True once every required doc type has an uploaded file for this store. */
-async function allRequiredDocsUploaded(storeId: string): Promise<boolean> {
-  const { data: rows } = await supabaseAdmin
-    .from('store_verification_documents')
-    .select('doc_type, storage_path')
-    .eq('store_id', storeId);
-  const uploaded = new Set((rows ?? []).filter((r) => r.storage_path).map((r) => r.doc_type));
-  return DOC_TYPES.every((t) => uploaded.has(t));
+/**
+ * Atomically flips stores.verification_submitted_at from NULL to now() the
+ * first time all 7 required documents are uploaded, returning true only for
+ * whichever call actually performed that flip. Backed by a Postgres function
+ * (mark_verification_submitted_if_ready, migration 20260803000000) that locks
+ * the store row FOR UPDATE before deciding — this is what makes it safe to
+ * call on every save without a "was this the first upload for this slot"
+ * check in Node: two concurrent requests completing the last 2 empty slots
+ * both call this, but only one can win the row lock first and see
+ * `verification_submitted_at IS NULL`, so only one ever gets `true` back.
+ */
+async function markVerificationSubmittedIfReady(storeId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.rpc('mark_verification_submitted_if_ready', {
+    p_store_id: storeId,
+  });
+  if (error) {
+    console.error('❌ markVerificationSubmittedIfReady error:', error);
+    return false;
+  }
+  return !!data;
 }
 
 /** Best-effort — a notification failure should never block the shopkeeper's request. */
@@ -440,11 +455,6 @@ async function notifyAdmins(type: string, title: string, message: string, data: 
   } catch (error) {
     console.error(`❌ notifyAdmins (${type}) error:`, error);
   }
-}
-
-async function getStoreName(storeId: string): Promise<string> {
-  const { data } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
-  return data?.name || 'A store';
 }
 
 /**
@@ -608,9 +618,8 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    const storeSuspended = await suspendStoreIfApproved(storeId);
+    const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId);
 
-    const storeName = await getStoreName(storeId);
     const isFirstUploadForThisSlot = !!file && !existing?.storage_path;
     await notifyAdmins(
       'document_uploaded',
@@ -619,12 +628,10 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       { store_id: storeId, doc_type: docType }
     );
 
-    // Only worth checking "is the whole submission now complete" when this
-    // call is what just filled a previously-empty slot — an edit/re-upload of
-    // an already-uploaded document can't newly complete the set (it was
-    // already counted complete, or the set was already incomplete for some
-    // other document either way).
-    if (isFirstUploadForThisSlot && (await allRequiredDocsUploaded(storeId))) {
+    // Safe to call unconditionally on every save — the DB-side row lock
+    // guarantees this only ever returns true once per submission cycle, even
+    // if two requests complete the last 2 empty slots concurrently.
+    if (await markVerificationSubmittedIfReady(storeId)) {
       await notifyAdmins(
         'verification_submitted',
         'Store ready for verification review',
@@ -690,9 +697,16 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    const storeSuspended = await suspendStoreIfApproved(storeId);
+    // Removing any document ends the current "all 7 complete" submission
+    // cycle — clear the flag so a later re-completion fires a fresh
+    // "ready for review" notification instead of staying silently suppressed.
+    await supabaseAdmin
+      .from('stores')
+      .update({ verification_submitted_at: null })
+      .eq('id', storeId);
 
-    const storeName = await getStoreName(storeId);
+    const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId);
+
     await notifyAdmins(
       'document_removed',
       'Verification document removed',

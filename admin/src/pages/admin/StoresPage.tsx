@@ -224,7 +224,7 @@ const DocumentReviewModal = ({
                       <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
                       <p className="text-sm text-gray-500 truncate">
                         {(doc.doc_type.endsWith('_back')
-                          ? documents.find((d) => d.doc_type === doc.doc_type.replace('_back', '_front'))?.number
+                          ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
                           : doc.number) || 'No number provided'}
                       </p>
                       {doc.file_size && (
@@ -385,7 +385,7 @@ const StoresPage = () => {
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
 
-  // Most recent submit/edit/approve/reject across each store's 5 verification
+  // Most recent submit/edit/approve/reject across each store's verification
   // documents — one bulk query instead of a per-store request. Non-fatal: a
   // failure here shouldn't block the main store list from showing.
   const refreshDocsUpdatedAt = async () => {

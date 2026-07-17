@@ -8,7 +8,7 @@ import {
 } from '../utils/verificationDocuments.js';
 
 /**
- * List a store's 5 verification documents for admin review, each with a
+ * List a store's verification documents for admin review, each with a
  * freshly signed URL (the bucket is private; nothing permanent is stored).
  */
 export async function getStoreVerificationDocuments(req: Request, res: Response) {
