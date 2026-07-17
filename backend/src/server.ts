@@ -1,9 +1,10 @@
-import express from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { MulterError } from 'multer';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import productsRoutes from './routes/products.routes.js';
@@ -22,6 +23,7 @@ import invoiceRoutes from './routes/invoice.routes.js';
 import shopkeeperRoutes from './routes/shopkeeper.routes.js';
 import pushTokenRoutes from './routes/pushToken.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import adminStoresRoutes from './routes/adminStores.routes.js';
 
 // Load .env from backend and project root
 dotenv.config();
@@ -94,9 +96,26 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/shopkeeper', shopkeeperRoutes);
 app.use('/api/push-token', pushTokenRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin', adminStoresRoutes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Multer (e.g. the verification-document upload route) reports violations like
+// an oversized file by calling next(err) directly, before any route handler's
+// own try/catch runs — without this, Express's default handler would return a
+// non-JSON error body that client-side error parsing can't surface a useful
+// message from.
+app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (res.headersSent) return next(err);
+  if (err instanceof MulterError) {
+    const message =
+      err.code === 'LIMIT_FILE_SIZE' ? 'File exceeds the maximum allowed size' : err.message;
+    return res.status(400).json({ success: false, error: message });
+  }
+  console.error('❌ Unhandled error:', err);
+  res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
 // For local dev: listen so phone/device can reach API (Vercel uses api/index.ts, no listen)

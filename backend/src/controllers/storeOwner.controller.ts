@@ -2,6 +2,14 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
+import {
+  ALLOWED_DOC_MIME_TYPES,
+  DOC_TYPES,
+  MAX_DOC_SIZE_BYTES,
+  SIGNED_URL_TTL_SECONDS,
+  VERIFICATION_DOCS_BUCKET,
+  isDocType,
+} from '../utils/verificationDocuments.js';
 
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
   const authHeader = req.headers.authorization;
@@ -372,6 +380,159 @@ export async function updateStore(req: Request, res: Response) {
   } catch (error: any) {
     console.error('❌ updateStore error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to update store' });
+  }
+}
+
+type UploadedFile = { buffer: Buffer; mimetype: string; size: number };
+
+async function assertOwnsStore(storeId: string, userId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from('stores')
+    .select('id')
+    .eq('id', storeId)
+    .eq('owner_id', userId)
+    .maybeSingle();
+  return !!data;
+}
+
+/**
+ * List the 5 required verification documents for the caller's store, each
+ * with a freshly signed URL (never a stored permanent one — the bucket is
+ * private).
+ */
+export async function getVerificationDocuments(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const { data: rows, error } = await supabaseAdmin
+      .from('store_verification_documents')
+      .select('*')
+      .eq('store_id', storeId);
+
+    if (error) {
+      console.error('❌ getVerificationDocuments error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    const byType = new Map((rows ?? []).map((r) => [r.doc_type, r]));
+
+    const documents = await Promise.all(
+      DOC_TYPES.map(async (docType) => {
+        const row = byType.get(docType);
+        let url: string | null = null;
+        if (row?.storage_path) {
+          const { data: signed } = await supabaseAdmin.storage
+            .from(VERIFICATION_DOCS_BUCKET)
+            .createSignedUrl(row.storage_path, SIGNED_URL_TTL_SECONDS);
+          url = signed?.signedUrl ?? null;
+        }
+        return {
+          doc_type: docType,
+          number: row?.number ?? null,
+          url,
+          status: row?.status ?? null,
+          rejection_reason: row?.rejection_reason ?? null,
+          uploaded_at: row?.uploaded_at ?? null,
+          reviewed_at: row?.reviewed_at ?? null,
+        };
+      })
+    );
+
+    res.json({ success: true, documents });
+  } catch (error: any) {
+    console.error('❌ getVerificationDocuments error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch verification documents' });
+  }
+}
+
+/**
+ * Save one verification document — proxies the file upload through this
+ * server (service-role Storage write) instead of letting the app write to
+ * Storage directly, since the app has no real Supabase Auth session to scope
+ * a client-side storage policy to. Always resets status to 'pending' so a
+ * re-upload after a rejection goes back into review.
+ */
+export async function saveVerificationDocument(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { id: storeId, docType } = req.params;
+    if (!isDocType(docType)) {
+      return res.status(400).json({ success: false, error: 'Invalid document type' });
+    }
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const number = typeof req.body?.number === 'string' ? req.body.number.trim() : '';
+    const file = (req as Request & { file?: UploadedFile }).file;
+
+    if (!number && !file) {
+      return res.status(400).json({ success: false, error: 'Provide a document number and/or file' });
+    }
+
+    let storagePath: string | undefined;
+    if (file) {
+      const ext = ALLOWED_DOC_MIME_TYPES[file.mimetype];
+      if (!ext) {
+        return res.status(400).json({ success: false, error: 'Unsupported file type' });
+      }
+      if (file.size > MAX_DOC_SIZE_BYTES) {
+        return res.status(400).json({ success: false, error: 'File exceeds 2MB limit' });
+      }
+      storagePath = `${storeId}/${docType}.${ext}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from(VERIFICATION_DOCS_BUCKET)
+        .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
+      if (uploadError) {
+        console.error('❌ saveVerificationDocument upload error:', uploadError);
+        return res.status(500).json({ success: false, error: uploadError.message });
+      }
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('store_verification_documents')
+      .select('number, storage_path')
+      .eq('store_id', storeId)
+      .eq('doc_type', docType)
+      .maybeSingle();
+
+    const { data, error } = await supabaseAdmin
+      .from('store_verification_documents')
+      .upsert(
+        {
+          store_id: storeId,
+          doc_type: docType,
+          number: number || existing?.number || null,
+          storage_path: storagePath || existing?.storage_path || null,
+          status: 'pending',
+          rejection_reason: null,
+          reviewed_by: null,
+          reviewed_at: null,
+          uploaded_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'store_id,doc_type' }
+      )
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ saveVerificationDocument upsert error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true, document: data });
+  } catch (error: any) {
+    console.error('❌ saveVerificationDocument error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to save document' });
   }
 }
 
