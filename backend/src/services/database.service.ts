@@ -511,7 +511,8 @@ export class DatabaseService {
       .select('*')
       .eq('customer_id', customerId)
       .eq('is_active', true)
-      .order('is_default', { ascending: false });
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false });
 
     if (error) throw error;
     return data as CustomerSavedAddress[];
@@ -629,6 +630,70 @@ export class DatabaseService {
 
     if (error) throw error;
     return (data || []) as CustomerSavedAddress[];
+  }
+
+  /**
+   * The caller's own profile (app_users + customers, joined). Used by
+   * GET /api/customers/me — replaces the customer mobile app's old direct
+   * privileged-Supabase-client read (lib/authService.ts's
+   * getCurrentUserFromSession), which took a bare userId with no session
+   * verification.
+   */
+  async getCustomerProfile(userId: string) {
+    const { data: appUser, error } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone, role, is_activated, created_at, updated_at, customers(*)')
+      .eq('id', userId)
+      .single();
+
+    if (error || !appUser) return null;
+
+    const { customers: rawCustomer, ...user } = appUser as any;
+    const customer = Array.isArray(rawCustomer) ? rawCustomer[0] : rawCustomer || undefined;
+    return { user, customer };
+  }
+
+  /**
+   * Updates the caller's own name (app_users) and/or address fields
+   * (customers) — replaces lib/authService.ts's updateCustomerProfile, same
+   * reasoning as getCustomerProfile above. Email is deliberately not
+   * accepted here — it goes through the separate verified-email flow
+   * (setOrChangeCustomerEmail).
+   */
+  async updateCustomerProfile(
+    userId: string,
+    updates: {
+      name?: string;
+      surname?: string;
+      address?: string;
+      city?: string;
+      state?: string;
+      pincode?: string;
+      landmark?: string;
+      delivery_instructions?: string;
+    }
+  ) {
+    if (updates.name) {
+      await supabaseAdmin.from('app_users').update({ name: updates.name }).eq('id', userId);
+    }
+
+    const customerUpdates: Record<string, string> = {};
+    if (updates.name) customerUpdates.name = updates.name;
+    if (updates.surname !== undefined) customerUpdates.surname = updates.surname;
+    if (updates.address !== undefined) customerUpdates.address = updates.address;
+    if (updates.city !== undefined) customerUpdates.city = updates.city;
+    if (updates.state !== undefined) customerUpdates.state = updates.state;
+    if (updates.pincode !== undefined) customerUpdates.pincode = updates.pincode;
+    if (updates.landmark !== undefined) customerUpdates.landmark = updates.landmark;
+    if (updates.delivery_instructions !== undefined) {
+      customerUpdates.delivery_instructions = updates.delivery_instructions;
+    }
+
+    if (Object.keys(customerUpdates).length > 0) {
+      await supabaseAdmin.from('customers').update(customerUpdates).eq('user_id', userId);
+    }
+
+    return this.getCustomerProfile(userId);
   }
 
   async createCustomerSavedAddress(addressData: Partial<CustomerSavedAddress>) {

@@ -13,6 +13,9 @@ const customersController = new CustomersController();
 // actions, which are the only other routes that happen to renew the session.
 router.get('/session/ping', requireCustomer, (_req, res) => res.json({ success: true }));
 
+router.get('/me', requireCustomer, (req, res) => customersController.getMe(req, res));
+router.patch('/me', requireCustomer, (req, res) => customersController.updateMe(req, res));
+
 router.get('/addresses/resolved', requireCustomer, (req, res) => customersController.getResolvedAddresses(req, res));
 router.get('/:customerId/addresses', requireCustomer, customersController.getAddresses);
 router.post('/:customerId/addresses', requireCustomer, customersController.createAddress);

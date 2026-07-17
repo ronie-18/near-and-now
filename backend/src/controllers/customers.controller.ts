@@ -30,6 +30,47 @@ export class CustomersController {
     }
   }
 
+  /**
+   * The caller's own profile — replaces the customer mobile app's old
+   * direct-Supabase-privileged-client read (lib/authService.ts's
+   * getCurrentUserFromSession, which took a bare userId with no session
+   * check). Identity always comes from req.customerId, never a param.
+   */
+  async getMe(req: Request, res: Response) {
+    try {
+      const profile = await databaseService.getCustomerProfile(req.customerId!);
+      if (!profile) return res.status(404).json({ error: 'User not found' });
+      res.json({ success: true, user: profile.user, customer: profile.customer });
+    } catch (error) {
+      console.error('Error fetching current user profile:', error);
+      res.status(500).json({ error: 'Failed to fetch profile' });
+    }
+  }
+
+  async updateMe(req: Request, res: Response) {
+    try {
+      const allowed = [
+        'name', 'surname', 'address', 'city', 'state',
+        'pincode', 'landmark', 'delivery_instructions',
+      ] as const;
+
+      const updates: Record<string, string> = {};
+      for (const key of allowed) {
+        if (key in req.body) updates[key] = req.body[key];
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+
+      const profile = await databaseService.updateCustomerProfile(req.customerId!, updates);
+      res.json({ success: true, user: profile?.user, customer: profile?.customer });
+    } catch (error) {
+      console.error('Error updating current user profile:', error);
+      res.status(500).json({ error: 'Failed to update profile' });
+    }
+  }
+
   async getAddresses(req: Request, res: Response) {
     try {
       const { customerId } = req.params;
@@ -72,7 +113,8 @@ export class CustomersController {
         'label', 'address', 'city', 'state', 'pincode', 'country',
         'latitude', 'longitude', 'google_place_id', 'google_formatted_address',
         'google_place_data', 'contact_name', 'contact_phone', 'landmark',
-        'delivery_instructions', 'is_default',
+        'delivery_instructions', 'is_default', 'is_active',
+        'delivery_for', 'receiver_name', 'receiver_address', 'receiver_phone',
       ] as const;
 
       const updates: Record<string, unknown> = {};
