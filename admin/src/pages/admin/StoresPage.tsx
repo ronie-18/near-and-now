@@ -52,6 +52,16 @@ interface VerificationDoc {
   url: string | null;
   status: 'pending' | 'approved' | 'rejected' | null;
   rejection_reason: string | null;
+  uploaded_at: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  file_size_bytes: number | null;
+}
+
+function formatFileSize(bytes: number | null): string | null {
+  if (!bytes || bytes <= 0) return null;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ─── Document Review Modal ─────────────────────────────────────────────────
@@ -70,6 +80,7 @@ const DocumentReviewModal = ({
   const [actingType, setActingType] = useState<string | null>(null);
   const [rejectingType, setRejectingType] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  const [reviewerNames, setReviewerNames] = useState<Record<string, string>>({});
 
   const load = async () => {
     setLoading(true);
@@ -92,6 +103,22 @@ const DocumentReviewModal = ({
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.id]);
+
+  // Resolve reviewed_by (an admins.id) to a display name for "Reviewed by X".
+  useEffect(() => {
+    const ids = Array.from(
+      new Set(documents.map((d) => d.reviewed_by).filter((id): id is string => !!id))
+    );
+    if (ids.length === 0) return;
+    (async () => {
+      const { data } = await getAdminClient().from('admins').select('id, full_name').in('id', ids);
+      if (data) {
+        const map: Record<string, string> = {};
+        for (const row of data) map[row.id] = row.full_name;
+        setReviewerNames(map);
+      }
+    })();
+  }, [documents]);
 
   const review = async (docType: string, status: 'approved' | 'rejected', rejectionReason?: string) => {
     setActingType(docType);
@@ -180,6 +207,9 @@ const DocumentReviewModal = ({
                     <div className="min-w-0">
                       <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
                       <p className="text-sm text-gray-500 truncate">{doc.number || 'No number provided'}</p>
+                      {formatFileSize(doc.file_size_bytes) && (
+                        <p className="text-xs text-gray-400 mt-0.5">{formatFileSize(doc.file_size_bytes)}</p>
+                      )}
                       {doc.status === 'approved' && (
                         <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
                           <CheckCircle size={11} /> Approved
@@ -197,6 +227,18 @@ const DocumentReviewModal = ({
                       )}
                       {doc.status === 'rejected' && doc.rejection_reason && (
                         <p className="text-xs text-red-600 mt-1">Reason: {doc.rejection_reason}</p>
+                      )}
+                      {doc.reviewed_at && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          Reviewed by {reviewerNames[doc.reviewed_by || ''] || 'admin'} on{' '}
+                          {new Date(doc.reviewed_at).toLocaleString('en-IN', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -309,6 +351,27 @@ const StoresPage = () => {
   const [reviewingStore, setReviewingStore] = useState<StoreData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
 
+  // Most recent submit/edit/approve/reject across each store's 5 verification
+  // documents — one bulk query instead of a per-store request. Non-fatal: a
+  // failure here shouldn't block the main store list from showing.
+  const refreshDocsUpdatedAt = async () => {
+    try {
+      const { data: docRows, error: docsError } = await getAdminClient()
+        .from('store_verification_documents')
+        .select('store_id, updated_at');
+      if (docsError) throw docsError;
+      const latest: Record<string, string> = {};
+      for (const row of docRows || []) {
+        if (!latest[row.store_id] || row.updated_at > latest[row.store_id]) {
+          latest[row.store_id] = row.updated_at;
+        }
+      }
+      setDocsUpdatedAt(latest);
+    } catch (docsErr) {
+      console.error('Error fetching verification-document timestamps:', docsErr);
+    }
+  };
+
   const fetchStores = async () => {
     try {
       setLoading(true);
@@ -320,25 +383,7 @@ const StoresPage = () => {
 
       if (sbError) throw sbError;
       setStores(data || []);
-
-      // Most recent submit/edit/approve/reject across each store's 5 verification
-      // documents — one bulk query instead of a per-store request. Non-fatal: a
-      // failure here shouldn't block the main store list from showing.
-      try {
-        const { data: docRows, error: docsError } = await getAdminClient()
-          .from('store_verification_documents')
-          .select('store_id, updated_at');
-        if (docsError) throw docsError;
-        const latest: Record<string, string> = {};
-        for (const row of docRows || []) {
-          if (!latest[row.store_id] || row.updated_at > latest[row.store_id]) {
-            latest[row.store_id] = row.updated_at;
-          }
-        }
-        setDocsUpdatedAt(latest);
-      } catch (docsErr) {
-        console.error('Error fetching verification-document timestamps:', docsErr);
-      }
+      await refreshDocsUpdatedAt();
     } catch (err: any) {
       console.error('Error fetching stores:', err);
       setError('Failed to load stores. Please try again.');
@@ -349,6 +394,36 @@ const StoresPage = () => {
 
   useEffect(() => {
     fetchStores();
+
+    // Best-effort live updates: subscribe to changes on
+    // store_verification_documents so "Updated On" reflects a shopkeeper's
+    // upload or another admin's review without a manual refresh. Realtime's
+    // RLS check for this table depends on the same x-admin-token-based
+    // is_admin_authenticated() policy used for the REST query above — that
+    // header mechanism is proven to work for PostgREST requests, but it's
+    // unconfirmed whether it's honored the same way over the Realtime
+    // websocket handshake for a non-Supabase-Auth client like this one. The
+    // 20s poll below is a safety net in case the subscription never fires.
+    const client = getAdminClient();
+    const channel = client
+      .channel('admin-stores-verification-docs')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'store_verification_documents' },
+        () => {
+          void refreshDocsUpdatedAt();
+        }
+      )
+      .subscribe();
+
+    const pollId = setInterval(() => {
+      void refreshDocsUpdatedAt();
+    }, 20_000);
+
+    return () => {
+      client.removeChannel(channel);
+      clearInterval(pollId);
+    };
   }, []);
 
   const stats = useMemo(() => ({
