@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { signupTicketSigningSecret } from '../config/database.js';
 
 /**
  * Proof that a phone number completed OTP verification for a specific signup
@@ -6,19 +7,22 @@ import crypto from 'crypto';
  * to create the account. Closes the gap where signup/complete previously
  * trusted the phone number in the request body with no proof OTP ran.
  *
- * Self-contained/signed (HMAC), not stored in the DB — it only needs to
- * survive the few minutes between OTP verification and the signup form
- * being submitted, so a per-process secret is sufficient (single backend
- * instance; falls back to env var if ever run behind multiple instances).
+ * Self-contained/signed (HMAC), not stored in the DB. Signed with a secret
+ * derived from SUPABASE_SERVICE_ROLE_KEY (see config/database.ts) rather than
+ * a per-process random value or a dedicated env var — the backend runs on
+ * Vercel's serverless platform, so the OTP-verify request that creates a
+ * ticket and the signup/complete request that verifies it routinely land on
+ * different cold-started instances. Deriving from the service role key (which
+ * every instance already has, identically, or the backend can't function at
+ * all) makes the secret stable across instances with no new config to set.
  */
 
-const SECRET = process.env.SIGNUP_TICKET_SECRET || crypto.randomBytes(32).toString('hex');
 const TICKET_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export type SignupTicketRole = 'shopkeeper' | 'delivery_partner';
 
 function sign(payload: string): string {
-  return crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
+  return crypto.createHmac('sha256', signupTicketSigningSecret).update(payload).digest('hex');
 }
 
 export function createSignupTicket(phone: string, role: SignupTicketRole): string {

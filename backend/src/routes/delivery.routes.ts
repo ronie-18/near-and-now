@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { DeliveryController } from '../controllers/delivery.controller.js';
 import { requireAdmin } from '../middleware/adminAuth.middleware.js';
+import {
+  getDeliveryPartnerVerificationDocuments,
+  reviewDeliveryPartnerVerificationDocument,
+} from '../controllers/adminDeliveryDocuments.controller.js';
 
 const router = Router();
 const deliveryController = new DeliveryController();
@@ -8,6 +12,8 @@ const deliveryController = new DeliveryController();
 // All delivery admin routes require a valid admin session
 router.get('/partners', requireAdmin, deliveryController.getDeliveryPartners.bind(deliveryController));
 router.get('/partners/:partnerId', requireAdmin, deliveryController.getDeliveryPartnerById.bind(deliveryController));
+router.get('/partners/:partnerId/verification-documents', requireAdmin, getDeliveryPartnerVerificationDocuments);
+router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmin, reviewDeliveryPartnerVerificationDocument);
 router.post('/partners', requireAdmin, deliveryController.createDeliveryPartner.bind(deliveryController));
 router.put('/partners/:partnerId', requireAdmin, deliveryController.updateDeliveryPartner.bind(deliveryController));
 router.delete('/partners/:partnerId', requireAdmin, deliveryController.deleteDeliveryPartner.bind(deliveryController));

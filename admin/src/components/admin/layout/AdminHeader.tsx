@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, AlertTriangle, CheckCheck, FileText, ShieldCheck } from 'lucide-react';
+import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, AlertTriangle, CheckCheck, FileText, ShieldCheck, Truck } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
 import { getAdminClient } from '../../../services/supabase';
@@ -67,6 +67,9 @@ function notifStyle(type: string): { iconBg: string; Icon: React.ElementType } {
     case 'document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: FileText };
     case 'document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: FileText };
     case 'verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: ShieldCheck };
+    case 'rider_document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: Truck };
+    case 'rider_document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: Truck };
+    case 'rider_verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: Truck };
     default: return { iconBg: 'bg-violet-100 text-violet-600', Icon: Package };
   }
 }

@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
+import multer from 'multer';
 import { DeliveryPartnerController, requireRider } from '../controllers/deliveryPartner.controller.js';
+import { MAX_DOC_SIZE_BYTES } from '../utils/deliveryPartnerVerificationDocuments.js';
 
 const router = Router();
 const ctrl = new DeliveryPartnerController();
+const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_DOC_SIZE_BYTES } });
 
 // Both codes are 4 digits (10,000 possibilities) and gate proof of physical
 // handoff, so a rider (already authorized for the order) must not be able to
@@ -39,6 +42,11 @@ router.use(requireRider);
 router.get('/profile',                                            ctrl.getProfile.bind(ctrl));
 router.patch('/profile',                                          ctrl.updateProfile.bind(ctrl));
 router.patch('/profile-image',                                    ctrl.updateProfileImage.bind(ctrl));
+router.patch('/vehicle-type',                                     ctrl.updateVehicleType.bind(ctrl));
+router.patch('/photo-urls',                                       ctrl.updatePhotoUrls.bind(ctrl));
+router.get('/verification-documents',                             ctrl.getVerificationDocuments.bind(ctrl));
+router.post('/verification-documents/:docType', docUpload.single('file'), ctrl.saveVerificationDocument.bind(ctrl));
+router.delete('/verification-documents/:docType',                 ctrl.deleteVerificationDocument.bind(ctrl));
 router.patch('/status',                                           ctrl.updateStatus.bind(ctrl));
 router.post('/location',                                          ctrl.updateLocation.bind(ctrl));
 router.patch('/push-token',                                       ctrl.updatePushToken.bind(ctrl));

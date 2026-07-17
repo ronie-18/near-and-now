@@ -57,7 +57,8 @@
       "mcp__jira__getTransitionsForJiraIssue",
       "mcp__jira__transitionJiraIssue",
       "Bash(git commit *)",
-      "Skill(dataviz)"
+      "Skill(dataviz)",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

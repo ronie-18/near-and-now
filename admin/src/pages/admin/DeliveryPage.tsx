@@ -25,6 +25,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { DeliveryDocumentReviewModal } from './DeliveryDocumentReviewModal';
 
 interface DeliveryPartner {
   id: string;
@@ -384,6 +385,7 @@ const DeliveryPage = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingPartner, setEditingPartner] = useState<DeliveryPartner | null>(null);
   const [viewingPartner, setViewingPartner] = useState<DeliveryPartner | null>(null);
+  const [reviewingPartner, setReviewingPartner] = useState<DeliveryPartner | null>(null);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
   const fetchPartners = async () => {
@@ -641,7 +643,6 @@ const DeliveryPage = () => {
                     const isOnline = partner.profile?.is_online ?? partner.is_online;
                     const statusInfo = getStatusInfo(status, isOnline);
                     const vehicleNo = partner.vehicle_number || partner.profile?.vehicle_number;
-                    const verDoc = partner.profile?.verification_document;
 
                     return (
                       <tr key={partner.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-orange-50/30 transition-all duration-200">
@@ -696,17 +697,13 @@ const DeliveryPage = () => {
 
                         {/* Verification */}
                         <td className="px-6 py-4">
-                          {verDoc ? (
-                            <div className="flex items-center gap-1.5">
-                              <FileText size={14} className="text-gray-400" />
-                              <span className="text-sm text-gray-700 font-medium">{verDoc}</span>
-                            </div>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-700 font-medium">
-                              <Clock size={10} />
-                              Not submitted
-                            </span>
-                          )}
+                          <button
+                            onClick={() => setReviewingPartner(partner)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200 transition-colors"
+                          >
+                            <FileText size={13} />
+                            Review Documents
+                          </button>
                         </td>
 
                         {/* Status */}
@@ -822,6 +819,14 @@ const DeliveryPage = () => {
           partner={editingPartner}
           onClose={() => { setShowForm(false); setEditingPartner(null); }}
           onSave={handleSave}
+        />
+      )}
+
+      {reviewingPartner && (
+        <DeliveryDocumentReviewModal
+          partner={reviewingPartner}
+          onClose={() => setReviewingPartner(null)}
+          onDocumentUpdated={() => {}}
         />
       )}
     </AdminLayout>

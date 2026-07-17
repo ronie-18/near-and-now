@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -66,5 +67,16 @@ export const supabaseAdmin: SupabaseClient = supabaseServiceKey
 
 /** Saved-address merge uses service role to read app_users / customer_saved_addresses under RLS. */
 export const isSupabaseServiceRoleConfigured = Boolean(supabaseServiceKey);
+
+/**
+ * Stable secret for signing ephemeral signup tickets (utils/signupTicket.ts) — derived
+ * from the service role key rather than its own env var, so it's guaranteed identical
+ * across every serverless instance (the key is already mandatory config; no new secret
+ * to provision). Never expose this value directly — only the HMAC digest below.
+ */
+export const signupTicketSigningSecret = crypto
+  .createHmac('sha256', supabaseServiceKey || supabaseAnonKey)
+  .update('signup-ticket-v1')
+  .digest('hex');
 
 export default supabase;

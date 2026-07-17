@@ -12,7 +12,8 @@ import { getAdminClient } from '../../services/supabase';
 interface AdminNotification {
   id: string;
   type: 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required'
-    | 'document_uploaded' | 'document_removed' | 'verification_submitted';
+    | 'document_uploaded' | 'document_removed' | 'verification_submitted'
+    | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted';
   title: string;
   message: string;
   data: Record<string, any>;
@@ -48,6 +49,9 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
   document_uploaded: { icon: FileText, color: 'text-indigo-600', bg: 'bg-indigo-100' },
   document_removed: { icon: FileText, color: 'text-gray-600', bg: 'bg-gray-100' },
   verification_submitted: { icon: ShieldCheck, color: 'text-teal-600', bg: 'bg-teal-100' },
+  rider_document_uploaded: { icon: Truck, color: 'text-indigo-600', bg: 'bg-indigo-100' },
+  rider_document_removed: { icon: Truck, color: 'text-gray-600', bg: 'bg-gray-100' },
+  rider_verification_submitted: { icon: Truck, color: 'text-teal-600', bg: 'bg-teal-100' },
 };
 
 // ─── Push Notification Panel ──────────────────────────────────────────────────
@@ -189,7 +193,8 @@ const NotificationsPage = () => {
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required'
-    | 'document_uploaded' | 'document_removed' | 'verification_submitted'>('all');
+    | 'document_uploaded' | 'document_removed' | 'verification_submitted'
+    | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'>('all');
   const [search, setSearch] = useState('');
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [refunding, setRefunding] = useState<string | null>(null);
@@ -360,7 +365,7 @@ const NotificationsPage = () => {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Filter size={16} className="text-gray-400 flex-shrink-0" />
-              {(['all', 'unread', 'new_order', 'new_user', 'low_stock', 'refund_required', 'verification_submitted', 'document_uploaded', 'document_removed', 'system'] as const).map(f => (
+              {(['all', 'unread', 'new_order', 'new_user', 'low_stock', 'refund_required', 'verification_submitted', 'document_uploaded', 'document_removed', 'rider_verification_submitted', 'rider_document_uploaded', 'rider_document_removed', 'system'] as const).map(f => (
                 <button
                   key={f}
                   onClick={() => setFilter(f)}

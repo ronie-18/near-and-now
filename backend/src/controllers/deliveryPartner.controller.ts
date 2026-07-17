@@ -5,6 +5,78 @@ import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
 import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
+import {
+  ALLOWED_DOC_MIME_TYPES,
+  DOC_LABELS,
+  DOC_TYPES,
+  MAX_DOC_SIZE_BYTES,
+  SIGNED_URL_TTL_SECONDS,
+  VERIFICATION_DOCS_BUCKET,
+  docNumberErrorMessage,
+  formatFileSize,
+  isDocType,
+  validateDocNumber,
+} from '../utils/deliveryPartnerVerificationDocuments.js';
+
+type UploadedFile = { buffer: Buffer; mimetype: string; size: number };
+
+/**
+ * Editing or removing a verification document after the rider has already
+ * been approved sends them back for full re-verification — same as a manual
+ * admin revoke (is_approved false, approved_at/approved_by cleared) — since
+ * the documents admin signed off on are no longer what's on file. Returns
+ * whether the rider was suspended by this call (was approved, now isn't),
+ * plus their name — fetched in the same round-trip since every caller needs
+ * both (the name for the admin-notification message). Mirrors
+ * storeOwner.controller.ts's suspendStoreIfApprovedAndGetName.
+ */
+async function suspendRiderIfApprovedAndGetName(riderId: string): Promise<{ suspended: boolean; name: string }> {
+  const { data: partner } = await supabaseAdmin
+    .from('delivery_partners')
+    .select('name, is_approved')
+    .eq('user_id', riderId)
+    .maybeSingle();
+
+  const name = partner?.name || 'A delivery partner';
+  if (!partner?.is_approved) return { suspended: false, name };
+
+  await supabaseAdmin
+    .from('delivery_partners')
+    .update({ is_approved: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
+    .eq('user_id', riderId);
+
+  return { suspended: true, name };
+}
+
+/**
+ * Atomically flips delivery_partners.verification_submitted_at from NULL to
+ * now() the first time all required documents (6 or 7, depending on
+ * vehicle_type) are uploaded. Backed by a Postgres function
+ * (mark_rider_verification_submitted_if_ready, migration 20260805000000) that
+ * locks the rider row FOR UPDATE before deciding — safe to call on every save
+ * with no "was this the first upload" check in Node, since only one
+ * concurrent caller can ever win the row lock and see the not-yet-submitted
+ * state. Mirrors storeOwner.controller.ts's markVerificationSubmittedIfReady.
+ */
+async function markRiderVerificationSubmittedIfReady(riderId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.rpc('mark_rider_verification_submitted_if_ready', {
+    p_partner_id: riderId,
+  });
+  if (error) {
+    console.error('❌ markRiderVerificationSubmittedIfReady error:', error);
+    return false;
+  }
+  return !!data;
+}
+
+/** Best-effort — a notification failure should never block the rider's request. */
+async function notifyAdminsOfRiderDocs(type: string, title: string, message: string, data: Record<string, unknown>) {
+  try {
+    await supabaseAdmin.from('admin_notifications').insert({ type, title, message, data });
+  } catch (error) {
+    console.error(`❌ notifyAdminsOfRiderDocs (${type}) error:`, error);
+  }
+}
 
 // Throttle: check for missed orders at most once per 5 minutes per driver
 const lastDispatchCheck = new Map<string, number>();
@@ -152,7 +224,7 @@ export class DeliveryPartnerController {
 
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url')
+        .select('address, vehicle_number, vehicle_type, vehicle_image_url, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
         .eq('user_id', req.riderId!)
         .maybeSingle();
 
@@ -634,7 +706,7 @@ export class DeliveryPartnerController {
         .from('app_users').select('id, name, email, phone, created_at').eq('id', req.riderId!).single();
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url')
+        .select('address, vehicle_number, vehicle_type, vehicle_image_url, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
         .eq('user_id', req.riderId!).maybeSingle();
 
       res.json({ success: true, profile: { ...user, ...profile } });
@@ -675,6 +747,297 @@ export class DeliveryPartnerController {
     } catch (err) {
       console.error('updateProfileImage error:', err);
       res.status(500).json({ error: 'Failed to upload profile image' });
+    }
+  }
+
+  /**
+   * Sets the rider's vehicle_type, which drives whether vehicle_registration
+   * is a required verification document (not required for cycle/e-bike).
+   */
+  async updateVehicleType(req: Request, res: Response) {
+    try {
+      const { vehicle_type } = req.body as { vehicle_type?: string };
+      if (!['cycle', 'e-bike', 'bike', 'scooty'].includes(String(vehicle_type))) {
+        return res.status(400).json({ success: false, error: 'vehicle_type must be one of cycle, e-bike, bike, scooty' });
+      }
+      await supabaseAdmin
+        .from('delivery_partners')
+        .update({ vehicle_type, updated_at: new Date().toISOString() })
+        .eq('user_id', req.riderId!);
+      res.json({ success: true, vehicle_type });
+    } catch (err) {
+      console.error('updateVehicleType error:', err);
+      res.status(500).json({ success: false, error: 'Failed to update vehicle type' });
+    }
+  }
+
+  /**
+   * Persists the public URL of a photo already uploaded directly to Storage
+   * by the app (anon-direct upload to delivery_partner_image/
+   * delivery_partner_vehicle — see lib/storage.ts in the rider app), mirroring
+   * how the shopkeeper app's patchStore({ image_url, owner_image_url }) works.
+   */
+  async updatePhotoUrls(req: Request, res: Response) {
+    try {
+      const { profile_image_url, vehicle_image_url } = req.body as {
+        profile_image_url?: string;
+        vehicle_image_url?: string;
+      };
+      const updates: Record<string, unknown> = {};
+      if (profile_image_url !== undefined) updates.profile_image_url = profile_image_url;
+      if (vehicle_image_url !== undefined) updates.vehicle_image_url = vehicle_image_url;
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ success: false, error: 'No valid fields to update' });
+      }
+
+      updates.updated_at = new Date().toISOString();
+      await supabaseAdmin.from('delivery_partners').update(updates).eq('user_id', req.riderId!);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('updatePhotoUrls error:', err);
+      res.status(500).json({ success: false, error: 'Failed to update photo URLs' });
+    }
+  }
+
+  /**
+   * List the required verification documents for the caller (rider), each
+   * with a freshly signed URL (never a stored permanent one — the bucket is
+   * private). vehicle_registration is included in the list regardless of
+   * vehicle_type (the app greys it out / marks it not-required client-side
+   * for cycle/e-bike), matching how the completeness check treats it as
+   * simply not counted toward the required total for those riders.
+   */
+  async getVerificationDocuments(req: Request, res: Response) {
+    try {
+      const riderId = req.riderId!;
+
+      const { data: rows, error } = await supabaseAdmin
+        .from('delivery_partner_verification_documents')
+        .select('*')
+        .eq('partner_id', riderId);
+
+      if (error) {
+        console.error('❌ getVerificationDocuments (rider) error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const byType = new Map((rows ?? []).map((r) => [r.doc_type, r]));
+
+      const documents = await Promise.all(
+        DOC_TYPES.map(async (docType) => {
+          const row = byType.get(docType);
+          let url: string | null = null;
+          if (row?.storage_path) {
+            const { data: signed } = await supabaseAdmin.storage
+              .from(VERIFICATION_DOCS_BUCKET)
+              .createSignedUrl(row.storage_path, SIGNED_URL_TTL_SECONDS);
+            url = signed?.signedUrl ?? null;
+          }
+          return {
+            doc_type: docType,
+            number: row?.number ?? null,
+            url,
+            status: row?.status ?? null,
+            rejection_reason: row?.rejection_reason ?? null,
+            uploaded_at: row?.uploaded_at ?? null,
+            reviewed_at: row?.reviewed_at ?? null,
+            approved_at: row?.approved_at ?? null,
+            file_size: row?.file_size ?? null,
+          };
+        })
+      );
+
+      res.json({ success: true, documents });
+    } catch (error: any) {
+      console.error('❌ getVerificationDocuments (rider) error:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Failed to fetch verification documents' });
+    }
+  }
+
+  /**
+   * Save one verification document — proxies the file upload through this
+   * server (service-role Storage write) instead of letting the app write to
+   * Storage directly, same reasoning as the shopkeeper version. Always resets
+   * status to 'pending' so a re-upload after a rejection goes back into review.
+   */
+  async saveVerificationDocument(req: Request, res: Response) {
+    try {
+      const riderId = req.riderId!;
+      const { docType } = req.params;
+      if (!isDocType(docType)) {
+        return res.status(400).json({ success: false, error: 'Invalid document type' });
+      }
+
+      const number = typeof req.body?.number === 'string' ? req.body.number.trim().toUpperCase() : '';
+      const file = (req as Request & { file?: UploadedFile }).file;
+
+      if (!number && !file) {
+        return res.status(400).json({ success: false, error: 'Provide a document number and/or file' });
+      }
+
+      if (number && !validateDocNumber(docType, number)) {
+        return res.status(400).json({ success: false, error: docNumberErrorMessage(docType) });
+      }
+
+      const { data: existing } = await supabaseAdmin
+        .from('delivery_partner_verification_documents')
+        .select('number, storage_path, file_size, approved_at, approved_by')
+        .eq('partner_id', riderId)
+        .eq('doc_type', docType)
+        .maybeSingle();
+
+      let storagePath: string | undefined;
+      if (file) {
+        const ext = ALLOWED_DOC_MIME_TYPES[file.mimetype];
+        if (!ext) {
+          return res.status(400).json({ success: false, error: 'Unsupported file type' });
+        }
+        if (file.size > MAX_DOC_SIZE_BYTES) {
+          return res.status(400).json({
+            success: false,
+            error: `File exceeds ${MAX_DOC_SIZE_BYTES / (1024 * 1024)}MB limit`,
+          });
+        }
+        storagePath = `${riderId}/${docType}.${ext}`;
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from(VERIFICATION_DOCS_BUCKET)
+          .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
+        if (uploadError) {
+          console.error('❌ saveVerificationDocument (rider) upload error:', uploadError);
+          return res.status(500).json({ success: false, error: uploadError.message });
+        }
+
+        if (existing?.storage_path && existing.storage_path !== storagePath) {
+          const { error: removeError } = await supabaseAdmin.storage
+            .from(VERIFICATION_DOCS_BUCKET)
+            .remove([existing.storage_path]);
+          if (removeError) {
+            console.error('❌ saveVerificationDocument (rider) old-file cleanup error:', removeError);
+          }
+        }
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('delivery_partner_verification_documents')
+        .upsert(
+          {
+            partner_id: riderId,
+            doc_type: docType,
+            number: number || existing?.number || null,
+            storage_path: storagePath || existing?.storage_path || null,
+            file_size: file ? formatFileSize(file.size) : existing?.file_size ?? null,
+            status: 'pending',
+            rejection_reason: null,
+            reviewed_by: null,
+            reviewed_at: null,
+            approved_at: existing?.approved_at ?? null,
+            approved_by: existing?.approved_by ?? null,
+            uploaded_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'partner_id,doc_type' }
+        )
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ saveVerificationDocument (rider) upsert error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId);
+
+      const isFirstUploadForThisSlot = !!file && !existing?.storage_path;
+      await notifyAdminsOfRiderDocs(
+        'rider_document_uploaded',
+        isFirstUploadForThisSlot ? 'Rider verification document uploaded' : 'Rider verification document updated',
+        `${riderName} ${isFirstUploadForThisSlot ? 'uploaded' : 'updated'} ${DOC_LABELS[docType]}.`,
+        { partner_id: riderId, doc_type: docType }
+      );
+
+      if (await markRiderVerificationSubmittedIfReady(riderId)) {
+        await notifyAdminsOfRiderDocs(
+          'rider_verification_submitted',
+          'Rider ready for verification review',
+          `${riderName} has uploaded all required documents and is ready for review.`,
+          { partner_id: riderId }
+        );
+      }
+
+      res.json({ success: true, document: data, riderSuspended });
+    } catch (error: any) {
+      console.error('❌ saveVerificationDocument (rider) error:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Failed to save document' });
+    }
+  }
+
+  /**
+   * Delete one verification document — removes both the storage object and
+   * the DB row so the rider can start that document over from scratch. The
+   * storage removal is best-effort: if it fails, the DB row is still deleted
+   * so the rider isn't stuck unable to re-upload over a stale error.
+   */
+  async deleteVerificationDocument(req: Request, res: Response) {
+    try {
+      const riderId = req.riderId!;
+      const { docType } = req.params;
+      if (!isDocType(docType)) {
+        return res.status(400).json({ success: false, error: 'Invalid document type' });
+      }
+
+      const { data: existing } = await supabaseAdmin
+        .from('delivery_partner_verification_documents')
+        .select('storage_path')
+        .eq('partner_id', riderId)
+        .eq('doc_type', docType)
+        .maybeSingle();
+
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'No document uploaded for this type' });
+      }
+
+      if (existing.storage_path) {
+        const { error: removeError } = await supabaseAdmin.storage
+          .from(VERIFICATION_DOCS_BUCKET)
+          .remove([existing.storage_path]);
+        if (removeError) {
+          console.error('❌ deleteVerificationDocument (rider) storage remove error:', removeError);
+        }
+      }
+
+      const { error } = await supabaseAdmin
+        .from('delivery_partner_verification_documents')
+        .delete()
+        .eq('partner_id', riderId)
+        .eq('doc_type', docType);
+
+      if (error) {
+        console.error('❌ deleteVerificationDocument (rider) error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      // Removing any document ends the current "submission complete" cycle —
+      // clear the flag so a later re-completion fires a fresh "ready for
+      // review" notification instead of staying silently suppressed.
+      await supabaseAdmin
+        .from('delivery_partners')
+        .update({ verification_submitted_at: null })
+        .eq('user_id', riderId);
+
+      const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId);
+
+      await notifyAdminsOfRiderDocs(
+        'rider_document_removed',
+        'Rider verification document removed',
+        `${riderName} removed ${DOC_LABELS[docType]}.`,
+        { partner_id: riderId, doc_type: docType }
+      );
+
+      res.json({ success: true, riderSuspended });
+    } catch (error: any) {
+      console.error('❌ deleteVerificationDocument (rider) error:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Failed to delete document' });
     }
   }
 
