@@ -58,6 +58,11 @@ interface VerificationDoc {
   uploaded_at: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
+  /** Unlike reviewed_at/reviewed_by (updated on every review, approve or
+   * reject, and reset by a re-upload), these only move on an actual approval
+   * and survive later re-uploads/rejections. */
+  approved_at: string | null;
+  approved_by: string | null;
   /** Human-readable (e.g. "340 KB", "1.2 MB") — computed once server-side at upload time. */
   file_size: string | null;
 }
@@ -102,10 +107,14 @@ const DocumentReviewModal = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.id]);
 
-  // Resolve reviewed_by (an admins.id) to a display name for "Reviewed by X".
+  // Resolve reviewed_by/approved_by (both admins.id) to display names.
   useEffect(() => {
     const ids = Array.from(
-      new Set(documents.map((d) => d.reviewed_by).filter((id): id is string => !!id))
+      new Set(
+        documents
+          .flatMap((d) => [d.reviewed_by, d.approved_by])
+          .filter((id): id is string => !!id)
+      )
     );
     if (ids.length === 0) return;
     (async () => {
@@ -226,7 +235,7 @@ const DocumentReviewModal = ({
                       {doc.status === 'rejected' && doc.rejection_reason && (
                         <p className="text-xs text-red-600 mt-1">Reason: {doc.rejection_reason}</p>
                       )}
-                      {doc.reviewed_at && (
+                      {doc.status === 'rejected' && doc.reviewed_at && (
                         <p className="text-xs text-gray-400 mt-1">
                           Reviewed by {reviewerNames[doc.reviewed_by || ''] || 'admin'} on{' '}
                           {new Date(doc.reviewed_at).toLocaleString('en-IN', {
@@ -236,6 +245,19 @@ const DocumentReviewModal = ({
                             hour: '2-digit',
                             minute: '2-digit',
                           })}
+                        </p>
+                      )}
+                      {doc.approved_at && (
+                        <p className="text-xs text-emerald-600 mt-1">
+                          Approved by {reviewerNames[doc.approved_by || ''] || 'admin'} on{' '}
+                          {new Date(doc.approved_at).toLocaleString('en-IN', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                          {doc.status !== 'approved' && ' (since re-uploaded)'}
                         </p>
                       )}
                     </div>

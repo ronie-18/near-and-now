@@ -441,6 +441,7 @@ export async function getVerificationDocuments(req: Request, res: Response) {
           rejection_reason: row?.rejection_reason ?? null,
           uploaded_at: row?.uploaded_at ?? null,
           reviewed_at: row?.reviewed_at ?? null,
+          approved_at: row?.approved_at ?? null,
           file_size: row?.file_size ?? null,
         };
       })
@@ -482,7 +483,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
 
     const { data: existing } = await supabaseAdmin
       .from('store_verification_documents')
-      .select('number, storage_path, file_size')
+      .select('number, storage_path, file_size, approved_at, approved_by')
       .eq('store_id', storeId)
       .eq('doc_type', docType)
       .maybeSingle();
@@ -534,6 +535,11 @@ export async function saveVerificationDocument(req: Request, res: Response) {
           rejection_reason: null,
           reviewed_by: null,
           reviewed_at: null,
+          // Deliberately NOT reset here — approved_at/approved_by should
+          // survive a re-upload so a prior approval's record isn't lost just
+          // because the document is back in review.
+          approved_at: existing?.approved_at ?? null,
+          approved_by: existing?.approved_by ?? null,
           uploaded_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         },

@@ -46,6 +46,8 @@ export async function getStoreVerificationDocuments(req: Request, res: Response)
           uploaded_at: row?.uploaded_at ?? null,
           reviewed_at: row?.reviewed_at ?? null,
           reviewed_by: row?.reviewed_by ?? null,
+          approved_at: row?.approved_at ?? null,
+          approved_by: row?.approved_by ?? null,
           file_size: row?.file_size ?? null,
         };
       })
@@ -90,15 +92,25 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
       return res.status(404).json({ success: false, error: 'No document uploaded for this type yet' });
     }
 
+    const now = new Date().toISOString();
+    const update: Record<string, unknown> = {
+      status,
+      rejection_reason: status === 'rejected' ? reason : null,
+      reviewed_by: req.adminId,
+      reviewed_at: now,
+      updated_at: now,
+    };
+    // Unlike reviewed_at/reviewed_by (updated on every review action),
+    // approved_at/approved_by only move forward on an actual approval —
+    // left untouched on a reject, so a prior approval's record survives it.
+    if (status === 'approved') {
+      update.approved_at = now;
+      update.approved_by = req.adminId;
+    }
+
     const { data, error } = await supabaseAdmin
       .from('store_verification_documents')
-      .update({
-        status,
-        rejection_reason: status === 'rejected' ? reason : null,
-        reviewed_by: req.adminId,
-        reviewed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .update(update)
       .eq('store_id', storeId)
       .eq('doc_type', docType)
       .select()
