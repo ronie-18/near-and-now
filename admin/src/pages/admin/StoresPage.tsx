@@ -141,7 +141,14 @@ const DocumentReviewModal = ({
       );
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to update document');
-      setDocuments((prev) => prev.map((d) => (d.doc_type === docType ? json.document : d)));
+      // json.document is the raw updated DB row — it has storage_path but no
+      // signed `url` (that's only computed by the GET endpoint). Merge
+      // instead of replacing, so the existing preview/thumbnail (and the
+      // Approve/Reject buttons, which are gated on doc.url) don't vanish
+      // after a review action.
+      setDocuments((prev) =>
+        prev.map((d) => (d.doc_type === docType ? { ...d, ...json.document } : d))
+      );
       if (json.document?.updated_at) {
         onDocumentUpdated(store.id, json.document.updated_at);
       }
