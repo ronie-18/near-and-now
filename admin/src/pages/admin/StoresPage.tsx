@@ -55,7 +55,15 @@ interface VerificationDoc {
 }
 
 // ─── Document Review Modal ─────────────────────────────────────────────────
-const DocumentReviewModal = ({ store, onClose }: { store: StoreData; onClose: () => void }) => {
+const DocumentReviewModal = ({
+  store,
+  onClose,
+  onDocumentUpdated,
+}: {
+  store: StoreData;
+  onClose: () => void;
+  onDocumentUpdated: (storeId: string, updatedAt: string) => void;
+}) => {
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +108,9 @@ const DocumentReviewModal = ({ store, onClose }: { store: StoreData; onClose: ()
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to update document');
       setDocuments((prev) => prev.map((d) => (d.doc_type === docType ? json.document : d)));
+      if (json.document?.updated_at) {
+        onDocumentUpdated(store.id, json.document.updated_at);
+      }
       setRejectingType(null);
       setReason('');
     } catch (err: any) {
@@ -296,6 +307,7 @@ const StoresPage = () => {
   const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [reviewingStore, setReviewingStore] = useState<StoreData | null>(null);
+  const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
 
   const fetchStores = async () => {
     try {
@@ -308,6 +320,25 @@ const StoresPage = () => {
 
       if (sbError) throw sbError;
       setStores(data || []);
+
+      // Most recent submit/edit/approve/reject across each store's 5 verification
+      // documents — one bulk query instead of a per-store request. Non-fatal: a
+      // failure here shouldn't block the main store list from showing.
+      try {
+        const { data: docRows, error: docsError } = await getAdminClient()
+          .from('store_verification_documents')
+          .select('store_id, updated_at');
+        if (docsError) throw docsError;
+        const latest: Record<string, string> = {};
+        for (const row of docRows || []) {
+          if (!latest[row.store_id] || row.updated_at > latest[row.store_id]) {
+            latest[row.store_id] = row.updated_at;
+          }
+        }
+        setDocsUpdatedAt(latest);
+      } catch (docsErr) {
+        console.error('Error fetching verification-document timestamps:', docsErr);
+      }
     } catch (err: any) {
       console.error('Error fetching stores:', err);
       setError('Failed to load stores. Please try again.');
@@ -456,6 +487,7 @@ const StoresPage = () => {
                     <th className="px-6 py-4">Address</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Approval</th>
+                    <th className="px-6 py-4">Updated On</th>
                     <th className="px-6 py-4">Joined</th>
                   </tr>
                 </thead>
@@ -542,6 +574,19 @@ const StoresPage = () => {
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-sm text-gray-600">
+                          {docsUpdatedAt[store.id]
+                            ? new Date(docsUpdatedAt[store.id]).toLocaleString('en-IN', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
+                            : '—'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-sm text-gray-600">
                           {store.created_at
                             ? new Date(store.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
                             : '—'}
@@ -577,7 +622,13 @@ const StoresPage = () => {
       </div>
 
       {reviewingStore && (
-        <DocumentReviewModal store={reviewingStore} onClose={() => setReviewingStore(null)} />
+        <DocumentReviewModal
+          store={reviewingStore}
+          onClose={() => setReviewingStore(null)}
+          onDocumentUpdated={(storeId, updatedAt) =>
+            setDocsUpdatedAt((prev) => ({ ...prev, [storeId]: updatedAt }))
+          }
+        />
       )}
     </AdminLayout>
   );
