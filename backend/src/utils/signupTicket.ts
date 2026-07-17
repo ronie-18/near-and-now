@@ -21,12 +21,21 @@ const TICKET_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export type SignupTicketRole = 'shopkeeper' | 'delivery_partner';
 
+// Same normalization as auth.controller.ts's normalizePhone — the OTP-verify
+// request and the later signup/complete request go through different app
+// screens/local state, so the phone string can pick up formatting drift
+// (+91 prefix present/absent, stray spaces, etc.) between the two. Comparing
+// digits-only avoids failing a legitimate signup over pure formatting.
+function digitsOnly(phone: string): string {
+  return String(phone).replace(/\D/g, '');
+}
+
 function sign(payload: string): string {
   return crypto.createHmac('sha256', signupTicketSigningSecret).update(payload).digest('hex');
 }
 
 export function createSignupTicket(phone: string, role: SignupTicketRole): string {
-  const payload = JSON.stringify({ phone: String(phone).trim(), role, exp: Date.now() + TICKET_TTL_MS });
+  const payload = JSON.stringify({ phone: digitsOnly(phone), role, exp: Date.now() + TICKET_TTL_MS });
   const encodedPayload = Buffer.from(payload, 'utf8').toString('base64url');
   return `${encodedPayload}.${sign(encodedPayload)}`;
 }
@@ -52,7 +61,7 @@ export function verifySignupTicket(ticket: unknown, phone: string, role: SignupT
 
   if (Date.now() > parsed.exp) return false;
   if (parsed.role !== role) return false;
-  if (parsed.phone !== String(phone).trim()) return false;
+  if (parsed.phone !== digitsOnly(phone)) return false;
 
   return true;
 }
