@@ -8,6 +8,7 @@ import {
   MAX_DOC_SIZE_BYTES,
   SIGNED_URL_TTL_SECONDS,
   VERIFICATION_DOCS_BUCKET,
+  formatFileSize,
   isDocType,
 } from '../utils/verificationDocuments.js';
 
@@ -440,7 +441,7 @@ export async function getVerificationDocuments(req: Request, res: Response) {
           rejection_reason: row?.rejection_reason ?? null,
           uploaded_at: row?.uploaded_at ?? null,
           reviewed_at: row?.reviewed_at ?? null,
-          file_size_bytes: row?.file_size_bytes ?? null,
+          file_size: row?.file_size ?? null,
         };
       })
     );
@@ -503,7 +504,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
 
     const { data: existing } = await supabaseAdmin
       .from('store_verification_documents')
-      .select('number, storage_path, file_size_bytes')
+      .select('number, storage_path, file_size')
       .eq('store_id', storeId)
       .eq('doc_type', docType)
       .maybeSingle();
@@ -516,7 +517,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
           doc_type: docType,
           number: number || existing?.number || null,
           storage_path: storagePath || existing?.storage_path || null,
-          file_size_bytes: file ? file.size : existing?.file_size_bytes ?? null,
+          file_size: file ? formatFileSize(file.size) : existing?.file_size ?? null,
           status: 'pending',
           rejection_reason: null,
           reviewed_by: null,

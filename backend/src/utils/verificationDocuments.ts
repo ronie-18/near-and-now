@@ -18,3 +18,9 @@ export function isDocType(value: unknown): value is DocType {
 
 /** Signed URLs are short-lived — regenerated on every GET, never persisted. */
 export const SIGNED_URL_TTL_SECONDS = 600;
+
+/** Human-readable size (e.g. "340 KB", "1.2 MB") — stored as-is, not recomputed later. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

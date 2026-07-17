@@ -46,7 +46,7 @@ export async function getStoreVerificationDocuments(req: Request, res: Response)
           uploaded_at: row?.uploaded_at ?? null,
           reviewed_at: row?.reviewed_at ?? null,
           reviewed_by: row?.reviewed_by ?? null,
-          file_size_bytes: row?.file_size_bytes ?? null,
+          file_size: row?.file_size ?? null,
         };
       })
     );

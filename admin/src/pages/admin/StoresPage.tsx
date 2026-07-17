@@ -58,13 +58,8 @@ interface VerificationDoc {
   uploaded_at: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
-  file_size_bytes: number | null;
-}
-
-function formatFileSize(bytes: number | null): string | null {
-  if (!bytes || bytes <= 0) return null;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  /** Human-readable (e.g. "340 KB", "1.2 MB") — computed once server-side at upload time. */
+  file_size: string | null;
 }
 
 // ─── Document Review Modal ─────────────────────────────────────────────────
@@ -210,8 +205,8 @@ const DocumentReviewModal = ({
                     <div className="min-w-0">
                       <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
                       <p className="text-sm text-gray-500 truncate">{doc.number || 'No number provided'}</p>
-                      {formatFileSize(doc.file_size_bytes) && (
-                        <p className="text-xs text-gray-400 mt-0.5">{formatFileSize(doc.file_size_bytes)}</p>
+                      {doc.file_size && (
+                        <p className="text-xs text-gray-400 mt-0.5">{doc.file_size}</p>
                       )}
                       {doc.status === 'approved' && (
                         <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
