@@ -507,17 +507,8 @@ const StoresPage = () => {
                   {filteredStores.map((store) => (
                     <tr key={store.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
                       <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center flex-shrink-0">
-                            <span className="text-white font-bold text-sm">
-                              {store.name?.substring(0, 2).toUpperCase() || 'ST'}
-                            </span>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-gray-800">{store.name}</p>
-                            <p className="text-xs font-mono text-gray-400 mt-0.5">{store.id.substring(0, 12)}...</p>
-                          </div>
-                        </div>
+                        <p className="font-semibold text-gray-800">{store.name}</p>
+                        <p className="text-xs font-mono text-gray-400 mt-0.5">{store.id}</p>
                       </td>
                       <td className="px-6 py-4">
                         {store.phone ? (
