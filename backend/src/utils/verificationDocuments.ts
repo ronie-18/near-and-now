@@ -3,7 +3,7 @@ export type DocType = (typeof DOC_TYPES)[number];
 
 export const VERIFICATION_DOCS_BUCKET = 'store-documents';
 
-export const MAX_DOC_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
+export const MAX_DOC_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 export const ALLOWED_DOC_MIME_TYPES: Record<string, string> = {
   'image/jpeg': 'jpg',
