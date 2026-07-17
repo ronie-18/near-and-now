@@ -480,6 +480,13 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'Provide a document number and/or file' });
     }
 
+    const { data: existing } = await supabaseAdmin
+      .from('store_verification_documents')
+      .select('number, storage_path, file_size')
+      .eq('store_id', storeId)
+      .eq('doc_type', docType)
+      .maybeSingle();
+
     let storagePath: string | undefined;
     if (file) {
       const ext = ALLOWED_DOC_MIME_TYPES[file.mimetype];
@@ -500,14 +507,19 @@ export async function saveVerificationDocument(req: Request, res: Response) {
         console.error('❌ saveVerificationDocument upload error:', uploadError);
         return res.status(500).json({ success: false, error: uploadError.message });
       }
-    }
 
-    const { data: existing } = await supabaseAdmin
-      .from('store_verification_documents')
-      .select('number, storage_path, file_size')
-      .eq('store_id', storeId)
-      .eq('doc_type', docType)
-      .maybeSingle();
+      // upsert only overwrites an existing object at the exact same path —
+      // re-uploading as a different format (e.g. JPG -> PDF) lands at a
+      // different path, orphaning the old file unless removed explicitly.
+      if (existing?.storage_path && existing.storage_path !== storagePath) {
+        const { error: removeError } = await supabaseAdmin.storage
+          .from(VERIFICATION_DOCS_BUCKET)
+          .remove([existing.storage_path]);
+        if (removeError) {
+          console.error('❌ saveVerificationDocument old-file cleanup error:', removeError);
+        }
+      }
+    }
 
     const { data, error } = await supabaseAdmin
       .from('store_verification_documents')
