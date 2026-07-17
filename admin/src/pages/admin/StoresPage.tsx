@@ -42,8 +42,10 @@ function adminAuthHeaders(): Record<string, string> {
 }
 
 const DOC_LABELS: Record<string, string> = {
-  aadhaar: 'Aadhaar Card',
-  pan: 'PAN Card',
+  aadhaar_front: 'Aadhaar Card (Front)',
+  aadhaar_back: 'Aadhaar Card (Back)',
+  pan_front: 'PAN Card (Front)',
+  pan_back: 'PAN Card (Back)',
   trade: 'Trade License',
   gst: 'GST Certificate',
   fssai: 'FSSAI License',

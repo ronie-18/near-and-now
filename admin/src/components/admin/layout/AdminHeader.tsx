@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, AlertTriangle, CheckCheck } from 'lucide-react';
+import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, AlertTriangle, CheckCheck, FileText, ShieldCheck } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
 import { getAdminClient } from '../../../services/supabase';
@@ -64,6 +64,9 @@ function notifStyle(type: string): { iconBg: string; Icon: React.ElementType } {
     case 'new_order': return { iconBg: 'bg-blue-100 text-blue-600', Icon: ShoppingBag };
     case 'new_user': return { iconBg: 'bg-emerald-100 text-emerald-600', Icon: User };
     case 'low_stock': return { iconBg: 'bg-amber-100 text-amber-600', Icon: AlertTriangle };
+    case 'document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: FileText };
+    case 'document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: FileText };
+    case 'verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: ShieldCheck };
     default: return { iconBg: 'bg-violet-100 text-violet-600', Icon: Package };
   }
 }

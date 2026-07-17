@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
+  DOC_LABELS,
   DOC_TYPES,
   MAX_DOC_SIZE_BYTES,
   SIGNED_URL_TTL_SECONDS,
@@ -422,8 +423,32 @@ async function suspendStoreIfApproved(storeId: string): Promise<boolean> {
   return true;
 }
 
+/** True once every required doc type has an uploaded file for this store. */
+async function allRequiredDocsUploaded(storeId: string): Promise<boolean> {
+  const { data: rows } = await supabaseAdmin
+    .from('store_verification_documents')
+    .select('doc_type, storage_path')
+    .eq('store_id', storeId);
+  const uploaded = new Set((rows ?? []).filter((r) => r.storage_path).map((r) => r.doc_type));
+  return DOC_TYPES.every((t) => uploaded.has(t));
+}
+
+/** Best-effort — a notification failure should never block the shopkeeper's request. */
+async function notifyAdmins(type: string, title: string, message: string, data: Record<string, unknown>) {
+  try {
+    await supabaseAdmin.from('admin_notifications').insert({ type, title, message, data });
+  } catch (error) {
+    console.error(`❌ notifyAdmins (${type}) error:`, error);
+  }
+}
+
+async function getStoreName(storeId: string): Promise<string> {
+  const { data } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
+  return data?.name || 'A store';
+}
+
 /**
- * List the 5 required verification documents for the caller's store, each
+ * List the required verification documents for the caller's store, each
  * with a freshly signed URL (never a stored permanent one — the bucket is
  * private).
  */
@@ -585,6 +610,29 @@ export async function saveVerificationDocument(req: Request, res: Response) {
 
     const storeSuspended = await suspendStoreIfApproved(storeId);
 
+    const storeName = await getStoreName(storeId);
+    const isFirstUploadForThisSlot = !!file && !existing?.storage_path;
+    await notifyAdmins(
+      'document_uploaded',
+      isFirstUploadForThisSlot ? 'Verification document uploaded' : 'Verification document updated',
+      `${storeName} ${isFirstUploadForThisSlot ? 'uploaded' : 'updated'} ${DOC_LABELS[docType]}.`,
+      { store_id: storeId, doc_type: docType }
+    );
+
+    // Only worth checking "is the whole submission now complete" when this
+    // call is what just filled a previously-empty slot — an edit/re-upload of
+    // an already-uploaded document can't newly complete the set (it was
+    // already counted complete, or the set was already incomplete for some
+    // other document either way).
+    if (isFirstUploadForThisSlot && (await allRequiredDocsUploaded(storeId))) {
+      await notifyAdmins(
+        'verification_submitted',
+        'Store ready for verification review',
+        `${storeName} has uploaded all required documents and is ready for review.`,
+        { store_id: storeId }
+      );
+    }
+
     res.json({ success: true, document: data, storeSuspended });
   } catch (error: any) {
     console.error('❌ saveVerificationDocument error:', error);
@@ -643,6 +691,14 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
     }
 
     const storeSuspended = await suspendStoreIfApproved(storeId);
+
+    const storeName = await getStoreName(storeId);
+    await notifyAdmins(
+      'document_removed',
+      'Verification document removed',
+      `${storeName} removed ${DOC_LABELS[docType]}.`,
+      { store_id: storeId, doc_type: docType }
+    );
 
     res.json({ success: true, storeSuspended });
   } catch (error: any) {

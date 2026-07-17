@@ -1,4 +1,8 @@
-export const DOC_TYPES = ['aadhaar', 'pan', 'trade', 'gst', 'fssai'] as const;
+export const DOC_TYPES = [
+  'aadhaar_front', 'aadhaar_back',
+  'pan_front', 'pan_back',
+  'trade', 'gst', 'fssai',
+] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 
 export const VERIFICATION_DOCS_BUCKET = 'store-documents';
@@ -16,22 +20,36 @@ export function isDocType(value: unknown): value is DocType {
   return typeof value === 'string' && (DOC_TYPES as readonly string[]).includes(value);
 }
 
+/** Human-readable label per doc type — used in admin-notification messages. */
+export const DOC_LABELS: Record<DocType, string> = {
+  aadhaar_front: 'Aadhaar Card (Front)',
+  aadhaar_back: 'Aadhaar Card (Back)',
+  pan_front: 'PAN Card (Front)',
+  pan_back: 'PAN Card (Back)',
+  trade: 'Trade License',
+  gst: 'GST Certificate',
+  fssai: 'FSSAI License',
+};
+
 /**
- * Format checks for the 4 centrally-standardized documents. Trade License
+ * Format checks for the centrally-standardized documents. Trade License
  * deliberately has no entry — unlike Aadhaar/PAN/GST/FSSAI, it's issued by
  * local municipal corporations with no single national format, so any fixed
- * pattern would be wrong for shopkeepers in most cities.
+ * pattern would be wrong for shopkeepers in most cities. The "back" side of
+ * Aadhaar/PAN also has no entry — the number is printed on the front only,
+ * so the back is an image-only upload with no number field, same as Trade
+ * License's "no fixed format" treatment below.
  */
 export const DOC_NUMBER_PATTERNS: Partial<Record<DocType, RegExp>> = {
-  aadhaar: /^[2-9][0-9]{11}$/,
-  pan: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
+  aadhaar_front: /^[2-9][0-9]{11}$/,
+  pan_front: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
   gst: /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/,
   fssai: /^[0-9]{14}$/,
 };
 
 export const DOC_NUMBER_FORMATS: Partial<Record<DocType, { description: string; example: string }>> = {
-  aadhaar: { description: '12 digits', example: '234567890123' },
-  pan: { description: '5 letters + 4 digits + 1 letter (10 characters)', example: 'ABCDE1234F' },
+  aadhaar_front: { description: '12 digits', example: '234567890123' },
+  pan_front: { description: '5 letters + 4 digits + 1 letter (10 characters)', example: 'ABCDE1234F' },
   gst: {
     description: '15 characters: 2-digit state code + 10-character PAN + 1 digit (entity number) + "Z" + 1 checksum character',
     example: '22AAAAA0000A1Z5',
@@ -42,7 +60,8 @@ export const DOC_NUMBER_FORMATS: Partial<Record<DocType, { description: string; 
 export function docNumberErrorMessage(docType: DocType): string {
   const format = DOC_NUMBER_FORMATS[docType];
   if (!format) return 'Invalid document number format';
-  return `Invalid ${docType.toUpperCase()} number.\nFormat: ${format.description}\nExample: ${format.example}`;
+  const label = docType.replace(/_/g, ' ').toUpperCase();
+  return `Invalid ${label} number.\nFormat: ${format.description}\nExample: ${format.example}`;
 }
 
 export function validateDocNumber(docType: DocType, number: string): boolean {
