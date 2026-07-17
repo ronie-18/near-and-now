@@ -4,12 +4,14 @@ import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
+  DOC_NUMBER_FORMAT_HINTS,
   DOC_TYPES,
   MAX_DOC_SIZE_BYTES,
   SIGNED_URL_TTL_SECONDS,
   VERIFICATION_DOCS_BUCKET,
   formatFileSize,
   isDocType,
+  validateDocNumber,
 } from '../utils/verificationDocuments.js';
 
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
@@ -474,11 +476,19 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
     }
 
-    const number = typeof req.body?.number === 'string' ? req.body.number.trim() : '';
+    const number = typeof req.body?.number === 'string' ? req.body.number.trim().toUpperCase() : '';
     const file = (req as Request & { file?: UploadedFile }).file;
 
     if (!number && !file) {
       return res.status(400).json({ success: false, error: 'Provide a document number and/or file' });
+    }
+
+    if (number && !validateDocNumber(docType, number)) {
+      const hint = DOC_NUMBER_FORMAT_HINTS[docType];
+      return res.status(400).json({
+        success: false,
+        error: hint ? `Enter a valid ${hint}` : 'Invalid document number format',
+      });
     }
 
     const { data: existing } = await supabaseAdmin
