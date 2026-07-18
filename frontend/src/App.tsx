@@ -34,8 +34,6 @@ import RefundPolicyPage from './pages/policies/RefundPolicyPage';
 // Standalone app pages (no main Layout)
 import DriverApp from './pages/DriverApp';
 import ShopkeeperApp from './pages/ShopkeeperApp';
-import AdminRoutes from './routes/AdminRoutes';
-import AdminLoginPage from './pages/admin/AdminLoginPage';
 
 
 // AppContent component to access context values
@@ -51,8 +49,6 @@ const AppContent: React.FC = () => {
       {/* Standalone Apps - No Layout wrapper */}
       <Route path="/driver" element={<DriverApp />} />
       <Route path="/shopkeeper" element={<ShopkeeperApp />} />
-      <Route path="/admin/login" element={<AdminLoginPage />} />
-      <Route path="/admin/*" element={<AdminRoutes />} />
 
       {/* Frontend Routes - With Layout */}
       <Route path="/*" element={
