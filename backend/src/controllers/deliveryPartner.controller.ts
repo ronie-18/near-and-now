@@ -174,17 +174,17 @@ export class DeliveryPartnerController {
         return res.status(400).json({ success: false, error: 'Phone and name are required' });
       }
 
-      if (!isVehicleType(vehicleType)) {
-        return res.status(400).json({
-          success: false,
-          error: `vehicle_type is required and must be one of ${VEHICLE_TYPES.join(', ')}`
-        });
-      }
-
       if (!verifySignupTicket(body.signupTicket, String(phone), 'delivery_partner')) {
         return res.status(403).json({
           success: false,
           error: 'Phone number was not verified via OTP, or verification expired. Please verify OTP again.'
+        });
+      }
+
+      if (!isVehicleType(vehicleType)) {
+        return res.status(400).json({
+          success: false,
+          error: `vehicle_type is required and must be one of ${VEHICLE_TYPES.join(', ')}`
         });
       }
 
