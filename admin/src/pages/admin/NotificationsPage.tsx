@@ -199,8 +199,8 @@ const NotificationsPage = () => {
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [refunding, setRefunding] = useState<string | null>(null);
 
-  const fetchNotifications = useCallback(async () => {
-    setLoading(true);
+  const fetchNotifications = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const db = getAdminClient();
       const { data, error } = await db
@@ -215,27 +215,19 @@ const NotificationsPage = () => {
     } catch (err) {
       console.error('Failed to fetch notifications:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchNotifications();
 
-    // Subscribe to real-time new notifications
-    const db = getAdminClient();
-    const channel = db
-      .channel('admin-notifications')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'admin_notifications' },
-        (payload) => {
-          setNotifications(prev => [payload.new as AdminNotification, ...prev]);
-        }
-      )
-      .subscribe();
-
-    return () => { db.removeChannel(channel); };
+    // Polled, not Realtime: admin_notifications' RLS policy (is_admin_authenticated())
+    // reads PostgREST's request.headers GUC, which Realtime's postgres_changes feed
+    // never populates (it's a WAL broadcast, not an HTTP request) — so a
+    // postgres_changes subscription here would silently never receive events.
+    const intervalId = setInterval(() => fetchNotifications(true), 15_000);
+    return () => clearInterval(intervalId);
   }, [fetchNotifications]);
 
   const markAllRead = async () => {
@@ -324,7 +316,7 @@ const NotificationsPage = () => {
               Mark all read
             </button>
             <button
-              onClick={fetchNotifications}
+              onClick={() => fetchNotifications()}
               className="p-2.5 bg-white border-2 border-gray-200 text-gray-500 rounded-xl hover:border-gray-300 transition-all"
             >
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />

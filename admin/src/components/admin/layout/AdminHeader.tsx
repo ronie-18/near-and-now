@@ -111,14 +111,12 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
   useEffect(() => {
     fetchNotifications();
 
-    const channel = getAdminClient()
-      .channel('header-notifs')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_notifications' }, (payload) => {
-        setNotifications(prev => [payload.new as DbNotification, ...prev].slice(0, 8));
-      })
-      .subscribe();
-
-    return () => { channel.unsubscribe(); };
+    // Polled, not Realtime: admin_notifications' RLS policy (is_admin_authenticated())
+    // reads PostgREST's request.headers GUC, which Realtime's postgres_changes feed
+    // never populates (it's a WAL broadcast, not an HTTP request) — so a
+    // postgres_changes subscription here would silently never receive events.
+    const intervalId = setInterval(fetchNotifications, 15_000);
+    return () => clearInterval(intervalId);
   }, [fetchNotifications]);
 
   const markAllRead = async () => {
