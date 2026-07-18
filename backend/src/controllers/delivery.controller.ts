@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { VEHICLE_TYPES, isVehicleType } from '../utils/deliveryPartnerVerificationDocuments.js';
 
 export class DeliveryController {
   /** Start mock delivery simulation (driver follows road routes). Runs in background. */
@@ -49,6 +50,14 @@ export class DeliveryController {
   // Create new delivery partner
   async createDeliveryPartner(req: Request, res: Response) {
     try {
+      const { name, phone, vehicle_type } = req.body as Record<string, unknown>;
+      if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
+        return res.status(400).json({ error: 'name and phone are required' });
+      }
+      if (!isVehicleType(vehicle_type)) {
+        return res.status(400).json({ error: `vehicle_type is required and must be one of ${VEHICLE_TYPES.join(', ')}` });
+      }
+
       const partner = await databaseService.createDeliveryPartner(req.body);
       res.status(201).json(partner);
     } catch (error: any) {
