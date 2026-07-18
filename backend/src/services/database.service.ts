@@ -1438,8 +1438,6 @@ export class DatabaseService {
     password_hash?: string;
     address?: string;
     vehicle_number?: string;
-    verification_document?: string;
-    verification_number?: string;
     /**
      * delivery_partner_status: pending_verification | active (verified, delivering) |
      * inactive (verified, not delivering) | suspended | offboarded. Default pending_verification.
@@ -1481,8 +1479,6 @@ export class DatabaseService {
             phone: normalizedPhone,
             address: data.address || null,
             vehicle_number: data.vehicle_number || null,
-            verification_document: data.verification_document || null,
-            verification_number: data.verification_number || null,
             is_online: false,
             is_approved: data.status ? isApprovedStatus(data.status) : false,
             ...(data.status ? { status: data.status } : {})
@@ -1544,8 +1540,6 @@ export class DatabaseService {
     phone?: string;
     address?: string;
     vehicle_number?: string;
-    verification_document?: string;
-    verification_number?: string;
     /** active = delivering; inactive = verified but not delivering */
     status?: 'pending_verification' | 'active' | 'inactive' | 'suspended' | 'offboarded';
   }) {
@@ -1572,8 +1566,6 @@ export class DatabaseService {
     if (data.address !== undefined) profileUpdate.address = data.address;
     if (data.vehicle_number !== undefined) profileUpdate.vehicle_number = data.vehicle_number;
     // is_online is enforced by DB from status (active => true, else false); omit client override
-    if (data.verification_document !== undefined) profileUpdate.verification_document = data.verification_document;
-    if (data.verification_number !== undefined) profileUpdate.verification_number = data.verification_number;
     if (data.status !== undefined) {
       profileUpdate.status = data.status;
       // is_approved is the real gate for going online / accepting orders (mirrors

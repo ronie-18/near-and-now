@@ -180,8 +180,6 @@ export class DeliveryPartnerController {
 
       const str = (v: unknown) => (v != null && String(v).trim() !== '' ? String(v).trim() : undefined);
       const vehicleNumber = str(body.vehicleNumber ?? body.vehicle_number);
-      const verificationDocument = str(body.verificationDocument ?? body.verification_document);
-      const verificationNumber = str(body.verificationNumber ?? body.verification_number);
 
       const partner = await databaseService.createDeliveryPartner({
         name: String(name).trim(),
@@ -189,8 +187,6 @@ export class DeliveryPartnerController {
         email: str(body.email),
         address: str(body.address),
         vehicle_number: vehicleNumber,
-        verification_document: verificationDocument,
-        verification_number: verificationNumber,
         status: 'pending_verification',
       });
 
@@ -224,7 +220,7 @@ export class DeliveryPartnerController {
 
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, vehicle_type, vehicle_image_url, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
+        .select('address, vehicle_number, vehicle_type, vehicle_image_url, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
         .eq('user_id', req.riderId!)
         .maybeSingle();
 
@@ -706,7 +702,7 @@ export class DeliveryPartnerController {
         .from('app_users').select('id, name, email, phone, created_at').eq('id', req.riderId!).single();
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
-        .select('address, vehicle_number, vehicle_type, vehicle_image_url, verification_document, verification_number, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
+        .select('address, vehicle_number, vehicle_type, vehicle_image_url, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
         .eq('user_id', req.riderId!).maybeSingle();
 
       res.json({ success: true, profile: { ...user, ...profile } });
