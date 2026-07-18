@@ -25,6 +25,7 @@ interface PartnerData {
   phone?: string | null;
   address?: string | null;
   vehicle_type?: string | null;
+  vehicle_number?: string | null;
   is_online: boolean;
   status: string;
   is_approved: boolean;
@@ -86,6 +87,7 @@ const DeliveryPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [togglingOnlineId, setTogglingOnlineId] = useState<string | null>(null);
   const [reviewingPartner, setReviewingPartner] = useState<PartnerData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
@@ -207,7 +209,8 @@ const DeliveryPage = () => {
           partner.address?.toLowerCase().includes(q) ||
           partner.phone?.includes(q) ||
           partner.email?.toLowerCase().includes(q) ||
-          (partner.vehicle_type || '').toLowerCase().includes(q)
+          (partner.vehicle_type || '').toLowerCase().includes(q) ||
+          (partner.vehicle_number || '').toLowerCase().includes(q)
         );
         const matchesStat =
           statFilter === 'all' ? true :
@@ -226,6 +229,40 @@ const DeliveryPage = () => {
         return bt.localeCompare(at);
       });
   }, [partners, searchTerm, statFilter, docsUpdatedAt]);
+
+  const toggleOnline = async (partner: PartnerData) => {
+    if (!partner.is_approved && !partner.is_online) {
+      setError('Only approved partners can be set online.');
+      setTimeout(() => setError(null), 4000);
+      return;
+    }
+    setTogglingOnlineId(partner.user_id);
+    try {
+      const nextOnline = !partner.is_online;
+      const patch: Partial<PartnerData> = { is_online: nextOnline };
+      // Going online requires status=active for the rider app to accept orders.
+      if (nextOnline && partner.status !== 'active') {
+        patch.status = 'active';
+      }
+      const { data, error: sbError } = await getAdminClient()
+        .from('delivery_partners')
+        .update(patch)
+        .eq('user_id', partner.user_id)
+        .select('user_id, is_online, status');
+      if (sbError) throw sbError;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setPartners((prev) =>
+        prev.map((p) => (p.user_id === partner.user_id ? { ...p, ...patch } : p))
+      );
+    } catch (err: any) {
+      setError(`Failed to update online status: ${err.message}`);
+      setTimeout(() => setError(null), 4000);
+    } finally {
+      setTogglingOnlineId(null);
+    }
+  };
 
   // Mirrors StoresPage.toggleApproval — is_approved + approved_at/by are the
   // approval gate. Also syncs status so the rider app can go online after
@@ -348,7 +385,7 @@ const DeliveryPage = () => {
             <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
-              placeholder="Search by name, phone, email, address, or vehicle..."
+              placeholder="Search by name, phone, email, address, vehicle type, or number..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-orange-400 focus:ring-0 transition-colors text-gray-800"
@@ -390,6 +427,7 @@ const DeliveryPage = () => {
                     <th className="px-6 py-4">Contact</th>
                     <th className="px-6 py-4">Address</th>
                     <th className="px-6 py-4">Vehicle Type</th>
+                    <th className="px-6 py-4">Vehicle Number</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Verification</th>
                     <th className="px-6 py-4">Approved On</th>
@@ -431,12 +469,12 @@ const DeliveryPage = () => {
                         </div>
                       </td>
 
-                      {/* Address */}
+                      {/* Address — full text, no truncation */}
                       <td className="px-6 py-4">
                         {partner.address ? (
-                          <div className="flex items-start gap-2 text-sm text-gray-600 max-w-xs">
+                          <div className="flex items-start gap-2 text-sm text-gray-600 min-w-[14rem] max-w-sm">
                             <MapPin size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
-                            <span>{partner.address}</span>
+                            <span className="whitespace-normal break-words">{partner.address}</span>
                           </div>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>
@@ -454,19 +492,44 @@ const DeliveryPage = () => {
                         )}
                       </td>
 
-                      {/* Status — online / offline */}
+                      {/* Vehicle Number */}
                       <td className="px-6 py-4">
-                        {partner.is_online ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                            <Wifi size={12} />
-                            Online
+                        {partner.vehicle_number ? (
+                          <span className="text-sm font-mono font-semibold text-gray-800 tracking-wide whitespace-nowrap">
+                            {partner.vehicle_number}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
-                            <WifiOff size={12} />
-                            Offline
-                          </span>
+                          <span className="text-gray-400 text-sm">—</span>
                         )}
+                      </td>
+
+                      {/* Status — online / offline toggle */}
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={() => toggleOnline(partner)}
+                          disabled={togglingOnlineId === partner.user_id || (!partner.is_approved && !partner.is_online)}
+                          title={
+                            !partner.is_approved && !partner.is_online
+                              ? 'Approve partner before setting online'
+                              : partner.is_online
+                                ? 'Set offline'
+                                : 'Set online'
+                          }
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
+                            partner.is_online
+                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {togglingOnlineId === partner.user_id ? (
+                            <RefreshCw size={12} className="animate-spin" />
+                          ) : partner.is_online ? (
+                            <Wifi size={12} />
+                          ) : (
+                            <WifiOff size={12} />
+                          )}
+                          {partner.is_online ? 'Online' : 'Offline'}
+                        </button>
                       </td>
 
                       {/* Verification — same pattern as Stores Approval column */}
