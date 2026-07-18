@@ -11,10 +11,12 @@ import {
   DOC_TYPES,
   MAX_DOC_SIZE_BYTES,
   SIGNED_URL_TTL_SECONDS,
+  VEHICLE_TYPES,
   VERIFICATION_DOCS_BUCKET,
   docNumberErrorMessage,
   formatFileSize,
   isDocType,
+  isVehicleType,
   validateDocNumber,
 } from '../utils/deliveryPartnerVerificationDocuments.js';
 
@@ -166,9 +168,17 @@ export class DeliveryPartnerController {
       const body = req.body as Record<string, unknown>;
       const phone = body.phone;
       const name = body.name;
+      const vehicleType = body.vehicleType ?? body.vehicle_type;
 
       if (!phone || !String(phone).trim() || !name || !String(name).trim()) {
         return res.status(400).json({ success: false, error: 'Phone and name are required' });
+      }
+
+      if (!isVehicleType(vehicleType)) {
+        return res.status(400).json({
+          success: false,
+          error: `vehicle_type is required and must be one of ${VEHICLE_TYPES.join(', ')}`
+        });
       }
 
       if (!verifySignupTicket(body.signupTicket, String(phone), 'delivery_partner')) {
@@ -186,6 +196,7 @@ export class DeliveryPartnerController {
         phone: String(phone).trim(),
         email: str(body.email),
         address: str(body.address),
+        vehicle_type: vehicleType,
         vehicle_number: vehicleNumber,
         status: 'pending_verification',
       });
@@ -753,8 +764,8 @@ export class DeliveryPartnerController {
   async updateVehicleType(req: Request, res: Response) {
     try {
       const { vehicle_type } = req.body as { vehicle_type?: string };
-      if (!['cycle', 'e-bike', 'bike', 'scooty'].includes(String(vehicle_type))) {
-        return res.status(400).json({ success: false, error: 'vehicle_type must be one of cycle, e-bike, bike, scooty' });
+      if (!isVehicleType(vehicle_type)) {
+        return res.status(400).json({ success: false, error: `vehicle_type must be one of ${VEHICLE_TYPES.join(', ')}` });
       }
       await supabaseAdmin
         .from('delivery_partners')

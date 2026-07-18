@@ -1438,6 +1438,7 @@ export class DatabaseService {
     password_hash?: string;
     address?: string;
     vehicle_number?: string;
+    vehicle_type?: string;
     /**
      * delivery_partner_status: pending_verification | active (verified, delivering) |
      * inactive (verified, not delivering) | suspended | offboarded. Default pending_verification.
@@ -1479,6 +1480,7 @@ export class DatabaseService {
             phone: normalizedPhone,
             address: data.address || null,
             vehicle_number: data.vehicle_number || null,
+            vehicle_type: data.vehicle_type || null,
             is_online: false,
             is_approved: data.status ? isApprovedStatus(data.status) : false,
             ...(data.status ? { status: data.status } : {})

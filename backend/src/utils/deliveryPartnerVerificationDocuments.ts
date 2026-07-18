@@ -21,6 +21,13 @@ export function isDocType(value: unknown): value is DocType {
   return typeof value === 'string' && (DOC_TYPES as readonly string[]).includes(value);
 }
 
+export const VEHICLE_TYPES = ['cycle', 'e-bike', 'bike', 'scooty'] as const;
+export type VehicleType = (typeof VEHICLE_TYPES)[number];
+
+export function isVehicleType(value: unknown): value is VehicleType {
+  return typeof value === 'string' && (VEHICLE_TYPES as readonly string[]).includes(value);
+}
+
 /** Human-readable label per doc type — used in admin-notification messages. */
 export const DOC_LABELS: Record<DocType, string> = {
   aadhaar_front: 'Aadhaar Card (Front)',
