@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { supabaseAdmin } from '../config/database.js';
 import { haversineKm } from '../utils/geo.js';
 
 export class DeliveryController {
@@ -86,6 +87,42 @@ export class DeliveryController {
     } catch (error) {
       console.error('Error deleting delivery partner:', error);
       res.status(500).json({ error: 'Failed to delete delivery partner' });
+    }
+  }
+
+  /**
+   * Admin approval itself is a direct Supabase write from the admin panel, not
+   * a backend endpoint — this is called separately, right after that write
+   * succeeds, purely to send the "you're approved" push/notification. Re-reads
+   * is_approved rather than trusting the caller, so this can't be used to fire
+   * a false "approved" notification for a rider who isn't actually approved.
+   */
+  async notifyPartnerApproved(req: Request, res: Response) {
+    try {
+      const { partnerId } = req.params;
+
+      const { data: partner, error } = await supabaseAdmin
+        .from('delivery_partners')
+        .select('is_approved')
+        .eq('user_id', partnerId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error looking up delivery partner for approval notification:', error);
+        return res.status(500).json({ error: error.message });
+      }
+      if (!partner) {
+        return res.status(404).json({ error: 'Delivery partner not found' });
+      }
+      if (!partner.is_approved) {
+        return res.status(409).json({ error: 'Delivery partner is not currently approved' });
+      }
+
+      await notificationService.notifyRiderApproved(partnerId);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error sending delivery partner approval notification:', error);
+      res.status(500).json({ error: error?.message || 'Failed to send approval notification' });
     }
   }
 

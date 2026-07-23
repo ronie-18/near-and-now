@@ -42,6 +42,7 @@ router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmi
 router.post('/partners', requireAdmin, validate(createDeliveryPartnerSchema), deliveryController.createDeliveryPartner.bind(deliveryController));
 router.put('/partners/:partnerId', requireAdmin, validate(updateDeliveryPartnerSchema), deliveryController.updateDeliveryPartner.bind(deliveryController));
 router.delete('/partners/:partnerId', requireAdmin, deliveryController.deleteDeliveryPartner.bind(deliveryController));
+router.post('/partners/:partnerId/notify-approved', requireAdmin, deliveryController.notifyPartnerApproved.bind(deliveryController));
 
 router.get('/partners/:partnerId/agents', requireAdmin, deliveryController.getDeliveryAgents.bind(deliveryController));
 router.post('/orders/:orderId/assign', requireAdmin, deliveryController.assignDeliveryAgent.bind(deliveryController));

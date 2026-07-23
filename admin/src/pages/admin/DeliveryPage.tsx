@@ -309,6 +309,15 @@ const DeliveryPage = () => {
             : prev
         );
       }
+      // Best-effort: let the rider know via push instead of only finding out
+      // next time the app happens to poll. Never blocks/fails the approval
+      // itself — the Supabase write above already succeeded.
+      if (nextApproved) {
+        fetch(`${API_BASE}/api/delivery/partners/${partner.user_id}/notify-approved`, {
+          method: 'POST',
+          headers: adminAuthHeaders(),
+        }).catch(() => {});
+      }
     } catch (err: any) {
       setError(`Failed to update approval: ${err.message}`);
     } finally {

@@ -91,6 +91,44 @@ export class NotificationService {
     }
   }
 
+  // Admin approval of a store/rider happens as a direct Supabase write from
+  // the admin panel, not through this backend — so nothing ever notified the
+  // shopkeeper/rider it had happened; they only found out via polling. Admin
+  // panel now calls these right after that approve write succeeds.
+  async notifyStoreApproved(storeId: string) {
+    const title = 'Store Approved!';
+    const body = "You're verified and ready to receive orders. Go online whenever you're ready.";
+
+    await this.persistNotification('store', storeId, 'store_approved', title, body, { storeId });
+
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('expo_push_token')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (store?.expo_push_token) {
+      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'store_approved' });
+    }
+  }
+
+  async notifyRiderApproved(riderId: string) {
+    const title = 'Account Approved!';
+    const body = "You're verified and ready to deliver. Go online whenever you're ready.";
+
+    await this.persistNotification('rider', riderId, 'rider_approved', title, body, { riderId });
+
+    const { data: partner } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('expo_push_token')
+      .eq('user_id', riderId)
+      .maybeSingle();
+
+    if (partner?.expo_push_token) {
+      await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'rider_approved' });
+    }
+  }
+
   async sendOrderNotification(orderId: string, type: string) {
     console.log(`Sending ${type} notification for order ${orderId}`);
     switch (type) {

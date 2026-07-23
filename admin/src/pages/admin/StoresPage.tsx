@@ -560,6 +560,15 @@ const StoresPage = () => {
           currentAdmin?.full_name ? { ...prev, [patch.approved_by as string]: currentAdmin.full_name } : prev
         );
       }
+      // Best-effort: let the shopkeeper know via push instead of only finding
+      // out next time the app happens to poll. Never blocks/fails the approval
+      // itself — the Supabase write above already succeeded.
+      if (nextApproved) {
+        fetch(`${API_BASE}/api/admin/stores/${store.id}/notify-approved`, {
+          method: 'POST',
+          headers: adminAuthHeaders(),
+        }).catch(() => {});
+      }
     } catch (err: any) {
       setError(`Failed to update approval: ${err.message}`);
     } finally {

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { notificationService } from '../services/notification.service.js';
 import {
   DOC_TYPES,
   SIGNED_URL_TTL_SECONDS,
@@ -125,5 +126,41 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
   } catch (error: any) {
     console.error('❌ reviewStoreVerificationDocument error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to review document' });
+  }
+}
+
+/**
+ * Admin approval itself is a direct Supabase write from the admin panel, not
+ * a backend endpoint — this is called separately, right after that write
+ * succeeds, purely to send the "you're approved" push/notification. Re-reads
+ * is_approved rather than trusting the caller, so this can't be used to fire
+ * a false "approved" notification for a store that isn't actually approved.
+ */
+export async function notifyStoreApproved(req: Request, res: Response) {
+  try {
+    const { id: storeId } = req.params;
+
+    const { data: store, error } = await supabaseAdmin
+      .from('stores')
+      .select('is_approved')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ notifyStoreApproved lookup error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+    if (!store) {
+      return res.status(404).json({ success: false, error: 'Store not found' });
+    }
+    if (!store.is_approved) {
+      return res.status(409).json({ success: false, error: 'Store is not currently approved' });
+    }
+
+    await notificationService.notifyStoreApproved(storeId);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ notifyStoreApproved error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to send approval notification' });
   }
 }
