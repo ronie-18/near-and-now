@@ -411,7 +411,10 @@ export class DatabaseService {
         )
       `)
       .eq('id', orderId)
-      .single();
+      // maybeSingle(), not single() — single() throws when zero rows match,
+      // which turned "order not found" (an expected, everyday case) into a
+      // 500 instead of the 404 both callers already correctly handle below.
+      .maybeSingle();
 
     if (error) throw error;
     return data;
