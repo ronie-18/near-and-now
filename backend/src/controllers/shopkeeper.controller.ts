@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { randomBytes } from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
+import { haversineKm } from '../utils/geo.js';
 
 declare module 'express' {
   interface Request {
@@ -14,13 +15,6 @@ declare module 'express' {
 
 function randomFourDigit(): string {
   return String((randomBytes(2).readUInt16BE(0) % 9000) + 1000);
-}
-
-export function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371, toR = (d: number) => (d * Math.PI) / 180;
-  const dL = toR(lat2 - lat1), dG = toR(lng2 - lng1);
-  const a = Math.sin(dL / 2) ** 2 + Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(dG / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // ── Auth middleware ────────────────────────────────────────────────────────────

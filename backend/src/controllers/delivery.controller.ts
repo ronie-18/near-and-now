@@ -3,6 +3,7 @@ import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { VEHICLE_TYPES, isVehicleType } from '../utils/deliveryPartnerVerificationDocuments.js';
+import { haversineKm } from '../utils/geo.js';
 
 export class DeliveryController {
   /** Start mock delivery simulation (driver follows road routes). Runs in background. */
@@ -208,17 +209,10 @@ export class DeliveryController {
         .from('driver_locations')
         .select('delivery_partner_id, latitude, longitude, updated_at');
 
-      const R = 6371, toR = (v: number) => (v * Math.PI) / 180;
-      const haversine = (lt1: number, lg1: number, lt2: number, lg2: number) => {
-        const dL = toR(lt2 - lt1), dG = toR(lg2 - lg1);
-        const a = Math.sin(dL/2)**2 + Math.cos(toR(lt1))*Math.cos(toR(lt2))*Math.sin(dG/2)**2;
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      };
-
       const o = order as any;
       const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const nearbyIds = (locations || [])
-        .filter((l: any) => l.updated_at >= tenMinsAgo && haversine(o.delivery_latitude, o.delivery_longitude, l.latitude, l.longitude) <= 10)
+        .filter((l: any) => l.updated_at >= tenMinsAgo && haversineKm(o.delivery_latitude, o.delivery_longitude, l.latitude, l.longitude) <= 10)
         .map((l: any) => l.delivery_partner_id);
 
       if (!nearbyIds.length) return res.json({ success: true, broadcast_count: 0, message: 'No drivers online nearby' });
