@@ -78,7 +78,13 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 // already-parsed object produces different bytes and always fails HMAC verification.
 app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
 
-app.use(express.json());
+// Explicit cap instead of Express's implicit default — an oversized JSON body
+// (e.g. against /api/places/* or checkout, both public/low-friction routes)
+// would otherwise be parsed in full before any of our own validation runs.
+// 1mb is generous for every real payload this API accepts (largest is a
+// checkout cart with many line items — a few KB); document/image uploads go
+// through multer as multipart, not JSON, so they're unaffected by this.
+app.use(express.json({ limit: '1mb' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/store-owner', storeOwnerRoutes);
@@ -113,6 +119,11 @@ app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
     const message =
       err.code === 'LIMIT_FILE_SIZE' ? 'File exceeds the maximum allowed size' : err.message;
     return res.status(400).json({ success: false, error: message });
+  }
+  // express.json({ limit }) throws this (via body-parser) when a request body
+  // exceeds the cap set above — a client/attacker error, not a server bug.
+  if (err && typeof err === 'object' && (err as { type?: string }).type === 'entity.too.large') {
+    return res.status(413).json({ success: false, error: 'Request body too large' });
   }
   console.error('❌ Unhandled error:', err);
   res.status(500).json({ success: false, error: 'Internal server error' });
