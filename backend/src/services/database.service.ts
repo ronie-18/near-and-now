@@ -1361,14 +1361,21 @@ export class DatabaseService {
     if (redemptionErr) {
       console.error('[COUPON] Failed to record redemption', { couponId, orderId, error: redemptionErr });
     }
-    // Read-then-write increment (per-user limit check in validateCoupon makes double-redeem unlikely)
-    const { data } = await supabaseAdmin.from('coupons').select('usage_count').eq('id', couponId).maybeSingle();
-    const { error: incrErr } = await supabaseAdmin
-      .from('coupons')
-      .update({ usage_count: ((data as any)?.usage_count ?? 0) + 1 })
-      .eq('id', couponId);
+    // Atomic row-locked increment (increment_coupon_usage_if_available, migration
+    // 20260811000000) — replaces a read-then-write that could lose increments or
+    // let a coupon exceed usage_limit under concurrent redemptions.
+    const { data: incremented, error: incrErr } = await supabaseAdmin.rpc(
+      'increment_coupon_usage_if_available',
+      { p_coupon_id: couponId }
+    );
     if (incrErr) {
       console.error('[COUPON] Failed to increment usage_count', { couponId, error: incrErr });
+    } else if (!incremented) {
+      // The order was already created by the time this runs (this is a
+      // fire-and-forget post-order side effect) — usage_limit was hit by a
+      // concurrent redemption between validateCoupon's check and this call.
+      // Flagged for manual review rather than silently under-counting.
+      console.warn('[COUPON] usage_limit reached at increment time — order already placed', { couponId, orderId });
     }
   }
 
