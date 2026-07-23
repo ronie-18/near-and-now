@@ -1225,27 +1225,18 @@ export class DeliveryPartnerController {
       if (error) throw error;
 
       if (result === 'accepted') {
+        // accept_driver_offer() already sets assigned_driver_id/status on
+        // customer_orders and delivery_partner_id/status/assigned_at on every
+        // store_orders row for this order, inside the same row-locked
+        // transaction that decided this driver won — no follow-up writes
+        // needed here. (An earlier version of this code duplicated those
+        // writes here as two separate, unguarded statements, which really was
+        // a race — a crash between them could leave customer_orders and
+        // store_orders disagreeing about who's assigned. That's now
+        // impossible: both tables are written atomically inside the RPC.)
         const { data: offer } = await supabaseAdmin
           .from('driver_order_offers').select('order_id').eq('id', offerId).single();
         const orderId = offer?.order_id;
-
-        if (orderId) {
-          // Ensure customer_orders has assigned_driver_id + correct status.
-          // The accept_driver_offer RPC may not write these columns.
-          await supabaseAdmin.from('customer_orders').update({
-            assigned_driver_id: req.riderId!,
-            status: 'delivery_partner_assigned',
-            updated_at: new Date().toISOString(),
-          }).eq('id', orderId);
-
-          // Ensure every store_order for this order has delivery_partner_id set
-          // so getOrders() (which joins via store_orders) can find the order.
-          await supabaseAdmin.from('store_orders').update({
-            delivery_partner_id: req.riderId!,
-            status: 'delivery_partner_assigned',
-            assigned_at: new Date().toISOString(),
-          }).eq('customer_order_id', orderId).is('delivery_partner_id', null);
-        }
 
         return res.json({ success: true, result: 'accepted', order_id: orderId });
       }
