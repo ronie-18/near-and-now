@@ -54,7 +54,42 @@ describe('PaymentService', () => {
     ).resolves.toBe(true);
   });
 
+  // createPaymentOrder calls out twice before it ever reaches Razorpay:
+  // databaseService.getOrderPaymentContext() (to get the trusted amount) and,
+  // internally, ensureRazorpayCustomerForOrder()'s two supabaseAdmin lookups
+  // (order → customer_id, then app_users → razorpay_customer_id) — both real
+  // Supabase calls that go through the same global `fetch` as the Razorpay
+  // HTTP call. Stubbing global fetch with a single Razorpay-shaped mock used
+  // to make @supabase/postgrest-js choke on that same response (it calls
+  // res.text() internally, which the mock didn't implement). Mocking the
+  // Supabase-facing calls directly — instead of trying to shape one fetch
+  // mock to satisfy both Supabase and Razorpay — keeps fetchMock scoped to
+  // only the Razorpay order-creation request these tests actually assert on.
+  async function mockSupabaseLookupsForNoExistingCustomer() {
+    const { databaseService } = await import('./database.service.js');
+    vi.spyOn(databaseService, 'getOrderPaymentContext').mockResolvedValue({
+      id: 'order-ctx-id',
+      total_amount: 100,
+      payment_status: 'pending',
+      razorpay_order_id: null,
+      razorpay_payment_id: null,
+      split_upi_amount: null
+    });
+
+    const { supabaseAdmin } = await import('../config/database.js');
+    const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+    const chain: any = {};
+    chain.select = vi.fn(() => chain);
+    chain.eq = vi.fn(() => chain);
+    chain.maybeSingle = maybeSingle;
+    vi.spyOn(supabaseAdmin, 'from').mockReturnValue(chain);
+  }
+
   it('createPaymentOrder maps API response and sets razorpay_mode test for test keys', async () => {
+    setRazorpayEnv('rzp_test_xxxxxxxx');
+    vi.resetModules();
+    await mockSupabaseLookupsForNoExistingCustomer();
+
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -66,8 +101,7 @@ describe('PaymentService', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    setRazorpayEnv('rzp_test_xxxxxxxx');
-    const { paymentService } = await loadPaymentService();
+    const { paymentService } = await import('./payment.service.js');
 
     const result = await paymentService.createPaymentOrder({
       orderId: '550e8400-e29b-41d4-a716-446655440000',
@@ -93,6 +127,10 @@ describe('PaymentService', () => {
   });
 
   it('createPaymentOrder sets razorpay_mode live for live keys', async () => {
+    setRazorpayEnv('rzp_live_xxxxxxxx');
+    vi.resetModules();
+    await mockSupabaseLookupsForNoExistingCustomer();
+
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -106,8 +144,7 @@ describe('PaymentService', () => {
       })
     );
 
-    setRazorpayEnv('rzp_live_xxxxxxxx');
-    const { paymentService } = await loadPaymentService();
+    const { paymentService } = await import('./payment.service.js');
 
     const result = await paymentService.createPaymentOrder({
       orderId: 'id',
