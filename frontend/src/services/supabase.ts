@@ -491,7 +491,7 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
     if (shouldUseBackendApi()) {
       const res = await fetch(apiUrl('/api/orders/place'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           user_id: orderData.user_id,
           customer_name: orderData.customer_name,
