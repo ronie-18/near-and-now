@@ -58,12 +58,38 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+/**
+ * Used to silently alias to the anon `supabase` client when the service-role
+ * key was missing/malformed — meaning every one of the ~100 call sites across
+ * this codebase that use `supabaseAdmin` expecting it to bypass RLS would
+ * instead silently run as anon and get RLS-filtered, degrading into
+ * confusing empty-result bugs (or outright "permission denied" on inserts)
+ * instead of a clear, loud failure. A Proxy that throws on first actual use
+ * closes this for all ~100 call sites at once — no need to manually add a
+ * config-check to each — while still letting the server boot without the key
+ * (the two flows that already have a friendlier upfront check via
+ * `isSupabaseServiceRoleConfigured` still get their nicer message first;
+ * everything else now fails loudly instead of silently).
+ */
+function createMisconfiguredAdminClient(): SupabaseClient {
+  const fail = (): never => {
+    throw new Error(
+      'supabaseAdmin was used but SUPABASE_SERVICE_ROLE_KEY is missing or malformed — ' +
+        'see the console errors logged at startup above for details. Set a valid ' +
+        'service_role key (Supabase → Settings → API) in backend/.env.'
+    );
+  };
+  return new Proxy({} as SupabaseClient, {
+    get: fail
+  });
+}
+
 // Admin client for user creation (bypasses RLS) - service role key only on server
 export const supabaseAdmin: SupabaseClient = supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey, {
       auth: { autoRefreshToken: false, persistSession: false }
     })
-  : supabase;
+  : createMisconfiguredAdminClient();
 
 /** Saved-address merge uses service role to read app_users / customer_saved_addresses under RLS. */
 export const isSupabaseServiceRoleConfigured = Boolean(supabaseServiceKey);
