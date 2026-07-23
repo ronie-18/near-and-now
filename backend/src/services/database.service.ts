@@ -2052,7 +2052,20 @@ export class DatabaseService {
     return data;
   }
 
-  async getAgentLocation(agentId: string) {
+  /** True only if `agentId` is the currently-assigned rider on one of `customerId`'s own orders — used to scope the raw live-location read below, the same way `isOrderOwnedByCustomer` scopes order-keyed tracking reads. */
+  private async isAgentAssignedToCustomer(agentId: string, customerId: string): Promise<boolean> {
+    const { data } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id')
+      .eq('customer_id', customerId)
+      .eq('assigned_driver_id', agentId)
+      .maybeSingle();
+    return !!data;
+  }
+
+  /** Returns null if `agentId` isn't currently assigned to any of `customerId`'s orders — any logged-in customer could otherwise pull any rider's raw live location by id alone. */
+  async getAgentLocation(agentId: string, customerId: string) {
+    if (!(await this.isAgentAssignedToCustomer(agentId, customerId))) return null;
     const { data, error } = await supabaseAdmin
       .from('driver_locations')
       .select('*')

@@ -156,6 +156,23 @@ function mapDbStatusToRider(dbStatus: string): string {
 
 // ── Controller ─────────────────────────────────────────────────────────────────
 
+/**
+ * `requireRider` (below) only proves "a valid, non-expired rider session" — it
+ * deliberately doesn't also gate on is_approved, since unapproved
+ * (pending_verification) riders still need read access to their own
+ * profile/status while waiting on admin review. Order-mutating handlers that
+ * don't go through acceptOrder/acceptOffer (which already check this) need to
+ * check it themselves instead. Mirrors the is_approved check in acceptOrder.
+ */
+async function requireApprovedRider(riderId: string): Promise<boolean> {
+  const { data: partner } = await supabaseAdmin
+    .from('delivery_partners')
+    .select('is_approved')
+    .eq('user_id', riderId)
+    .maybeSingle();
+  return Boolean((partner as { is_approved?: boolean } | null)?.is_approved);
+}
+
 export class DeliveryPartnerController {
 
   // POST /delivery-partner/signup/complete
@@ -538,6 +555,10 @@ export class DeliveryPartnerController {
       const { orderId } = req.params;
       const riderId = req.riderId!;
 
+      if (!(await requireApprovedRider(riderId))) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
+
       // Clear delivery partner assignment and reset to ready_for_pickup so it can be reassigned.
       // Ownership-filtered: only the rider actually assigned to this order can reject it.
       const { data: released, error } = await supabaseAdmin
@@ -576,6 +597,10 @@ export class DeliveryPartnerController {
       const { orderId } = req.params;
       const riderId = req.riderId!;
 
+      if (!(await requireApprovedRider(riderId))) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
+
       // Ownership-filtered: only the rider assigned to this order can mark it picked up.
       const { data: updated, error } = await supabaseAdmin
         .from('customer_orders')
@@ -612,6 +637,10 @@ export class DeliveryPartnerController {
     try {
       const { orderId } = req.params;
       const riderId = req.riderId!;
+
+      if (!(await requireApprovedRider(riderId))) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
 
       // Ownership-filtered: only the rider assigned to this order can mark it delivered.
       const { data: updated, error } = await supabaseAdmin

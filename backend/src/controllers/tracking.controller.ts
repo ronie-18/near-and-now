@@ -101,8 +101,8 @@ export class TrackingController {
   async getAgentLocation(req: Request, res: Response) {
     try {
       const { agentId } = req.params;
-      const location = await databaseService.getAgentLocation(agentId);
-      
+      const location = await databaseService.getAgentLocation(agentId, req.customerId!);
+
       if (!location) {
         return res.status(404).json({ error: 'Agent location not found' });
       }
