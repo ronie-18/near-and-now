@@ -25,15 +25,12 @@ export interface DeliveryFeeBreakdown {
 }
 
 /**
- * Tiered delivery: ₹15 (≤1 km), ₹20 (≤2 km), ₹25 (≤3 km), ₹40 (≤4 km and beyond).
+ * Delivery fee: ₹0 for now, regardless of distance — a launch-goodwill promo
+ * for the first customers. Was tiered ₹15 (≤1 km) / ₹20 (≤2 km) / ₹25 (≤3 km) /
+ * ₹40 (≤4 km and beyond) — see git history to restore when the promo ends.
  */
-export function deliveryChargeForDistanceKm(distanceKm: number): number {
-  if (distanceKm <= 0) return 15;
-  if (distanceKm <= 1) return 15;
-  if (distanceKm <= 2) return 20;
-  if (distanceKm <= 3) return 25;
-  if (distanceKm <= 4) return 40;
-  return 40;
+export function deliveryChargeForDistanceKm(_distanceKm: number): number {
+  return 0;
 }
 
 /**

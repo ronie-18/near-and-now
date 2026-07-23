@@ -137,8 +137,9 @@ export class OrdersController {
       const storeOrders = [];
       let seqNum = 1;
       let totalSubtotal = 0;
-      // Flat ₹20 delivery fee per store — kept here until distance-based pricing is wired
-      const PER_STORE_DELIVERY_FEE = 20;
+      // Delivery fee is a launch-goodwill promo: ₹0 for now, matching placeCheckoutOrder
+      // (the real production checkout path). Revisit when the promo ends.
+      const PER_STORE_DELIVERY_FEE = 0;
 
       for (const [storeId, items] of storeOrdersMap) {
         const subtotal = items.reduce((sum: number, item: any) =>

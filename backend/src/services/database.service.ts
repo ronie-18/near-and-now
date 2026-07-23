@@ -989,10 +989,17 @@ export class DatabaseService {
     // Trusted subtotal from catalog prices — replaces client-supplied orderData.subtotal.
     const trustedSubtotal = items.reduce((sum, it) => sum + it.price * it.quantity, 0);
 
+    // Delivery fee is a launch-goodwill promo: ₹0 for now, regardless of distance
+    // or what the client sends. Never trust orderData.delivery_fee — a client could
+    // otherwise send an inflated value the customer never agreed to, or (before
+    // this fix) an unverified one at all. Revisit when the promo ends and
+    // real distance-tiered pricing comes back.
+    const trustedDeliveryFee = 0;
+
     // Floor check on order_total: the frontend's own total = subtotal * 1.05 (its
-    // fixed checkout GST-equivalent markup) + PLATFORM_FEE + HANDLING_FEE + a
-    // distance-based delivery fee + an optional customer tip. Delivery fee and tip
-    // aren't independently verifiable server-side yet (tip isn't sent as its own
+    // fixed checkout GST-equivalent markup) + PLATFORM_FEE + HANDLING_FEE +
+    // trustedDeliveryFee (currently always 0) + an optional customer tip. Tip
+    // isn't independently verifiable server-side yet (it isn't sent as its own
     // field — see checkout follow-up), so this only enforces the portion that's
     // fully determined by trusted item prices: it can't be bypassed by lowballing
     // order_total (e.g. the demonstrated `order_total: 1` exploit), while never
@@ -1000,7 +1007,7 @@ export class DatabaseService {
     const CHECKOUT_GST_MULTIPLIER = 1.05;
     const PLATFORM_FEE = 9.5;
     const HANDLING_FEE = 5.5;
-    const trustedFloor = trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE;
+    const trustedFloor = trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee;
     if (orderData.order_total < trustedFloor - 1) {
       throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
     }
@@ -1017,7 +1024,7 @@ export class DatabaseService {
         payment_status: 'pending',
         payment_method: paymentMethodEnum,
         subtotal_amount: trustedSubtotal,
-        delivery_fee: orderData.delivery_fee,
+        delivery_fee: trustedDeliveryFee,
         discount_amount: 0,
         total_amount: orderData.order_total,
         delivery_address: fullAddress,
@@ -1041,8 +1048,10 @@ export class DatabaseService {
       if (!chunk?.length || !storeId) continue;
 
       const chunkSubtotal = chunk.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      // trustedDeliveryFee is currently always 0, so this division is a no-op today,
+      // but keeps the per-store split correct if the promo ends and it's nonzero again.
       const chunkDeliveryFee =
-        itemChunks.length > 1 ? orderData.delivery_fee / itemChunks.length : orderData.delivery_fee;
+        itemChunks.length > 1 ? trustedDeliveryFee / itemChunks.length : trustedDeliveryFee;
 
       const { data: storeOrder, error: soError } = await supabaseAdmin
         .from('store_orders')
@@ -1152,7 +1161,7 @@ export class DatabaseService {
       payment_method: orderData.payment_method,
       order_total: orderData.order_total,
       subtotal: trustedSubtotal,
-      delivery_fee: orderData.delivery_fee,
+      delivery_fee: trustedDeliveryFee,
       items,
       items_count: items.length,
       shipping_address: orderData.shipping_address,
