@@ -61,17 +61,22 @@ const createOrderSchema = z.object({
   coupon_id: z.string().optional()
 });
 
-// NOTE: /create is not yet gated by requireCustomer — it trusts customer_id
-// in the request body (see SECURITY-010 follow-up in QA_AUDIT.md). /place was
-// locked down on 2026-07-16: it now requires requireCustomer and the
-// controller overwrites req.body.user_id with req.customerId.
 router.post(
   '/place',
   requireCustomer,
   validate(placeCheckoutSchema),
   ordersController.placeCheckout.bind(ordersController)
 );
-router.post('/create', validate(createOrderSchema), ordersController.createOrder.bind(ordersController));
+// SECURITY-010: /create now requires requireCustomer (was unauthenticated,
+// trusting customer_id + cart_items[].unit_price straight from the request
+// body); the controller overwrites req.body.customer_id with req.customerId
+// and reprices every item server-side from master_products before use.
+router.post(
+  '/create',
+  requireCustomer,
+  validate(createOrderSchema),
+  ordersController.createOrder.bind(ordersController)
+);
 router.get('/customer/:customerId', requireCustomer, ordersController.getCustomerOrders.bind(ordersController));
 router.get('/:orderId', requireCustomer, ordersController.getOrderById.bind(ordersController));
 router.patch('/:orderId/status', requireAdmin, ordersController.updateOrderStatus.bind(ordersController));

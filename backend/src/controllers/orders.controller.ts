@@ -49,7 +49,6 @@ export class OrdersController {
   async createOrder(req: Request, res: Response) {
     try {
       const {
-        customer_id,
         delivery_address,
         delivery_latitude,
         delivery_longitude,
@@ -58,10 +57,63 @@ export class OrdersController {
         coupon_id,
         cart_items
       } = req.body;
+      // Never trust the client-sent customer_id — the order must belong to
+      // whoever actually authenticated (requireCustomer), not whoever the body claims.
+      const customer_id = req.customerId;
 
       if (!customer_id || !delivery_address || !delivery_latitude || !delivery_longitude) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
+
+      // SECURITY-010: never trust cart_items[].unit_price from the request body —
+      // a client can set an arbitrary/near-zero price per line item. Overwrite with
+      // the real catalog price (admin-controlled, on master_products), looked up via
+      // each item's store-scoped products row. Same pricing formula as placeCheckoutOrder:
+      // sellable price = discounted_price + (discounted_price * gst_rate / 100), with
+      // loose products (is_loose = true) sold at discounted_price with no per-item GST.
+      const productIds = [...new Set(cart_items.map((it: any) => it.product_id))];
+      const { data: productRows, error: productsError } = await supabaseAdmin
+        .from('products')
+        .select('id, store_id, master_product_id')
+        .in('id', productIds)
+        .eq('is_active', true);
+      if (productsError) {
+        throw new Error('Failed to verify product prices');
+      }
+      const productById = new Map((productRows || []).map((row: any) => [row.id, row]));
+
+      const masterProductIds = [...new Set((productRows || []).map((row: any) => row.master_product_id))];
+      const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
+        .from('master_products')
+        .select('id, discounted_price, gst_rate, is_loose')
+        .in('id', masterProductIds);
+      if (masterPriceError) {
+        throw new Error('Failed to verify product prices');
+      }
+      const trustedPriceByMaster = new Map<string, number>();
+      for (const row of masterPriceRows || []) {
+        const preTax = Number((row as any).discounted_price) || 0;
+        const isLoose = Boolean((row as any).is_loose);
+        const rawGstRate = (row as any).gst_rate;
+        const gstRate = isLoose
+          ? 0
+          : Number.isFinite(Number(rawGstRate)) && Number(rawGstRate) >= 0
+            ? Number(rawGstRate)
+            : 0;
+        trustedPriceByMaster.set(row.id, preTax + (preTax * gstRate) / 100);
+      }
+
+      const trustedCartItems = cart_items.map((item: any) => {
+        const product = productById.get(item.product_id);
+        if (!product || product.store_id !== item.store_id) {
+          throw new Error(`Product "${item.product_name}" is not available at this store.`);
+        }
+        const trustedPrice = trustedPriceByMaster.get(product.master_product_id);
+        if (trustedPrice == null) {
+          throw new Error(`Product "${item.product_name}" is not available.`);
+        }
+        return { ...item, unit_price: trustedPrice };
+      });
 
       const customerOrder = await databaseService.createCustomerOrder({
         customer_id,
@@ -75,7 +127,7 @@ export class OrdersController {
 
       const storeOrdersMap = new Map();
 
-      for (const item of cart_items) {
+      for (const item of trustedCartItems) {
         if (!storeOrdersMap.has(item.store_id)) {
           storeOrdersMap.set(item.store_id, []);
         }
