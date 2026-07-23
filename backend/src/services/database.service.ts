@@ -802,6 +802,7 @@ export class DatabaseService {
     split_cash_amount?: number;
     /** Free-text delivery note from the customer (e.g. "leave at door"). */
     notes?: string;
+    coupon_id?: string;
     items: Array<{
       product_id?: string;
       id?: string;
@@ -1000,18 +1001,44 @@ export class DatabaseService {
     // real distance-tiered pricing comes back.
     const trustedDeliveryFee = 0;
 
+    // Coupon: validate + compute the actual discount server-side, instead of
+    // trusting a client-supplied discount_amount (which nothing sent anyway —
+    // this endpoint didn't previously accept a coupon_id at all). Reuses
+    // validateCoupon() itself (same eligibility rules: active, in date range,
+    // under usage_limit, min_order_value, per_user_limit, applies_to_first_n_orders)
+    // rather than duplicating that logic here. If the coupon has become invalid
+    // between when the customer applied it and now (e.g. someone else just used
+    // the last redemption), fail the whole checkout rather than silently
+    // dropping the discount — the customer should never be charged more than
+    // what they saw and agreed to.
+    let trustedDiscountAmount = 0;
+    let appliedCouponId: string | null = null;
+    if (orderData.coupon_id) {
+      const { data: couponRow } = await supabaseAdmin
+        .from('coupons')
+        .select('code')
+        .eq('id', orderData.coupon_id)
+        .maybeSingle();
+      if (couponRow?.code) {
+        const coupon = await this.validateCoupon(couponRow.code, orderData.user_id, trustedSubtotal);
+        trustedDiscountAmount = this.computeCouponDiscount(coupon, trustedSubtotal);
+        appliedCouponId = coupon.id;
+      }
+    }
+
     // Floor check on order_total: the frontend's own total = subtotal * 1.05 (its
     // fixed checkout GST-equivalent markup) + PLATFORM_FEE + HANDLING_FEE +
-    // trustedDeliveryFee (currently always 0) + an optional customer tip. Tip
-    // isn't independently verifiable server-side yet (it isn't sent as its own
-    // field — see checkout follow-up), so this only enforces the portion that's
-    // fully determined by trusted item prices: it can't be bypassed by lowballing
-    // order_total (e.g. the demonstrated `order_total: 1` exploit), while never
-    // rejecting a legitimate order (whose real total is always >= this floor).
+    // trustedDeliveryFee (currently always 0) - trustedDiscountAmount + an optional
+    // customer tip. Tip isn't independently verifiable server-side yet (it isn't
+    // sent as its own field — see checkout follow-up), so this only enforces the
+    // portion that's fully determined by trusted item prices: it can't be bypassed
+    // by lowballing order_total (e.g. the demonstrated `order_total: 1` exploit),
+    // while never rejecting a legitimate order (whose real total is always >= this floor).
     const CHECKOUT_GST_MULTIPLIER = 1.05;
     const PLATFORM_FEE = 9.5;
     const HANDLING_FEE = 5.5;
-    const trustedFloor = trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee;
+    const trustedFloor =
+      trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee - trustedDiscountAmount;
     if (orderData.order_total < trustedFloor - 1) {
       throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
     }
@@ -1029,7 +1056,7 @@ export class DatabaseService {
         payment_method: paymentMethodEnum,
         subtotal_amount: trustedSubtotal,
         delivery_fee: trustedDeliveryFee,
-        discount_amount: 0,
+        discount_amount: trustedDiscountAmount,
         total_amount: orderData.order_total,
         delivery_address: fullAddress,
         delivery_latitude: geocoded.lat,
@@ -1044,6 +1071,13 @@ export class DatabaseService {
 
     if (coError || !customerOrder) {
       throw new Error(coError?.message || 'Failed to create order');
+    }
+
+    if (appliedCouponId) {
+      // Non-fatal by design (recordCouponUsage logs its own errors internally
+      // rather than throwing) — the order itself is already placed at this
+      // point, so a redemption-recording hiccup shouldn't fail the checkout.
+      await this.recordCouponUsage(appliedCouponId, orderData.user_id, customerOrder.id);
     }
 
     for (let i = 0; i < itemChunks.length; i++) {
@@ -1166,6 +1200,7 @@ export class DatabaseService {
       order_total: orderData.order_total,
       subtotal: trustedSubtotal,
       delivery_fee: trustedDeliveryFee,
+      discount_amount: trustedDiscountAmount,
       items,
       items_count: items.length,
       shipping_address: orderData.shipping_address,
@@ -1175,6 +1210,29 @@ export class DatabaseService {
         new Date().toISOString(),
       order_number: orderCode
     };
+  }
+
+  /**
+   * Computes the actual rupee discount for a validated coupon (validateCoupon
+   * already confirmed it's active, in date range, and under all usage limits —
+   * this only turns coupon_type + discount_value into a real amount).
+   * 'percent' and 'first_order_discount' both treat discount_value as a
+   * percentage (no prior implementation existed to establish otherwise —
+   * documented here since it's a real design decision, not just arithmetic).
+   * Clamped to [0, subtotal] so a coupon can never discount more than the
+   * order is actually worth.
+   */
+  private computeCouponDiscount(coupon: Coupon, subtotal: number): number {
+    let discount: number;
+    if (coupon.coupon_type === 'flat') {
+      discount = coupon.discount_value;
+    } else {
+      discount = (subtotal * coupon.discount_value) / 100;
+      if (coupon.max_discount_amount != null) {
+        discount = Math.min(discount, coupon.max_discount_amount);
+      }
+    }
+    return Math.max(0, Math.min(discount, subtotal));
   }
 
   // Coupons - CRUD operations
