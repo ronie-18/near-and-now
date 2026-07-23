@@ -419,6 +419,7 @@ export interface CreateOrderData {
   shipping_address: ShippingAddress;
   split_cash_amount?: number;
   split_upi_amount?: number;
+  coupon_id?: string;
 }
 
 export interface Order {
@@ -505,7 +506,8 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
           items: orderData.items ?? [],
           shipping_address: orderData.shipping_address,
           ...(orderData.split_upi_amount != null && { split_upi_amount: orderData.split_upi_amount }),
-          ...(orderData.split_cash_amount != null && { split_cash_amount: orderData.split_cash_amount })
+          ...(orderData.split_cash_amount != null && { split_cash_amount: orderData.split_cash_amount }),
+          ...(orderData.coupon_id != null && { coupon_id: orderData.coupon_id })
         })
       });
       if (!res.ok) {

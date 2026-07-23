@@ -6,9 +6,11 @@ import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
-import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft } from 'lucide-react';
+import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft, Tag, X } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
+import { apiUrl } from '../utils/apiBase';
+import { getAuthHeaders } from '../utils/authHeader';
 
 /* ─────────────────────────────────────────────
    Tiny reusable components
@@ -36,6 +38,37 @@ const FieldLabel = ({ children }: { children: React.ReactNode }) => (
 
 const inputCls = "w-full px-4 py-3 border border-stone-200 rounded-2xl text-sm text-stone-800 placeholder-stone-300 bg-stone-50 focus:bg-white focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all duration-200";
 const textareaCls = `${inputCls} resize-none`;
+
+/** Shape of a coupon row as returned by POST /api/coupons/validate. */
+type AppliedCoupon = {
+  id: string;
+  code: string;
+  coupon_type: 'flat' | 'percent' | 'first_order_discount';
+  discount_value: number;
+  max_discount_amount: number | null;
+};
+
+/**
+ * Mirrors the backend's computeCouponDiscount() (database.service.ts) exactly —
+ * 'flat' discounts a fixed rupee amount, 'percent'/'first_order_discount' discount
+ * a percentage of the subtotal capped at max_discount_amount, always clamped to
+ * [0, subtotal] so a coupon can never discount more than the order is worth. Kept
+ * in sync manually since there's no shared package between frontend and backend;
+ * if this ever drifts, the backend's trusted-total floor check is still the real
+ * enforcement — this is only for showing the customer the right number pre-submit.
+ */
+function computeCouponDiscount(coupon: AppliedCoupon, subtotal: number): number {
+  let discount: number;
+  if (coupon.coupon_type === 'flat') {
+    discount = coupon.discount_value;
+  } else {
+    discount = (subtotal * coupon.discount_value) / 100;
+    if (coupon.max_discount_amount != null) {
+      discount = Math.min(discount, coupon.max_discount_amount);
+    }
+  }
+  return Math.max(0, Math.min(discount, subtotal));
+}
 
 /* ─────────────────────────────────────────────
    Main Component
@@ -72,6 +105,11 @@ const CheckoutPage = () => {
   const [tipAmount, setTipAmount] = useState(0);
   const [customTip, setCustomTip] = useState('');
   const [selectedTip, setSelectedTip] = useState<string | null>(null);
+
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponLoading, setCouponLoading] = useState(false);
 
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [splitCashAmount, setSplitCashAmount] = useState('');
@@ -423,7 +461,7 @@ const CheckoutPage = () => {
       }));
 
       const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
-      const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+      const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, appliedCoupon ? computeCouponDiscount(appliedCoupon, cartTotal) : 0);
       const finalOrderTotal = Math.round(totals.grandTotal + tipAmount);
 
       let shippingLat: number | undefined;
@@ -459,6 +497,7 @@ const CheckoutPage = () => {
         order_total: finalOrderTotal,
         subtotal: totals.itemsTaxableValue,
         delivery_fee: totals.deliveryFee,
+        coupon_id: appliedCoupon?.id,
         items: orderItems,
         shipping_address: {
           address: formData.address,
@@ -546,7 +585,7 @@ const CheckoutPage = () => {
   const handleSplitToggle = () => {
     if (!splitEnabled) {
       const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
-      const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+      const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, appliedCoupon ? computeCouponDiscount(appliedCoupon, cartTotal) : 0);
       const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
       const half = Math.round(currentFinalTotal / 2);
       setSplitCashAmount(half.toString());
@@ -561,7 +600,7 @@ const CheckoutPage = () => {
   const handleSplitCashChange = (value: string) => {
     setSplitCashAmount(value);
     const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
-    const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+    const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, appliedCoupon ? computeCouponDiscount(appliedCoupon, cartTotal) : 0);
     const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
     const cash = parseFloat(value) || 0;
     const upi = Math.max(0, currentFinalTotal - cash);
@@ -571,11 +610,42 @@ const CheckoutPage = () => {
   const handleSplitUpiChange = (value: string) => {
     setSplitUpiAmount(value);
     const deliveryFeeAmount = getFeeBreakdown().deliveryFee;
-    const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, 0);
+    const totals = calculateCheckoutTotals(cartTotal, deliveryFeeAmount, appliedCoupon ? computeCouponDiscount(appliedCoupon, cartTotal) : 0);
     const currentFinalTotal = Math.round(totals.grandTotal + tipAmount);
     const upi = parseFloat(value) || 0;
     const cash = Math.max(0, currentFinalTotal - upi);
     setSplitCashAmount(cash > 0 ? cash.toString() : '0');
+  };
+
+  const applyCoupon = async () => {
+    const code = couponCode.trim();
+    if (!code || !user?.id) return;
+    setCouponLoading(true);
+    setCouponError(null);
+    try {
+      const res = await fetch(apiUrl('/api/coupons/validate'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ code, customerId: user.id, orderTotal: cartTotal })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Invalid coupon code');
+      }
+      setAppliedCoupon(data as AppliedCoupon);
+      showNotification(`Coupon "${data.code}" applied!`, 'success');
+    } catch (err: any) {
+      setAppliedCoupon(null);
+      setCouponError(err.message || 'Invalid coupon code');
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const removeCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponError(null);
   };
 
   /* ─── Not authenticated ─── */
@@ -600,7 +670,7 @@ const CheckoutPage = () => {
   }
 
   const deliveryFee = getFeeBreakdown().deliveryFee;
-  const checkoutTotals = calculateCheckoutTotals(cartTotal, deliveryFee, 0);
+  const checkoutTotals = calculateCheckoutTotals(cartTotal, deliveryFee, appliedCoupon ? computeCouponDiscount(appliedCoupon, cartTotal) : 0);
   const finalTotal = Math.round(checkoutTotals.grandTotal + tipAmount);
 
   return (
@@ -1186,6 +1256,47 @@ const CheckoutPage = () => {
                             <p className="text-sm font-bold text-stone-900 w-14 text-right">₹{Math.round(item.price * item.quantity)}</p>
                           </div>
                         ))}
+                      </div>
+
+                      {/* Coupon */}
+                      <div className="mx-6 my-4">
+                        {appliedCoupon ? (
+                          <div className="flex items-center justify-between gap-3 bg-green-50 border border-green-200 rounded-2xl px-4 py-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Tag className="w-4 h-4 text-green-600 shrink-0" />
+                              <span className="text-sm font-bold text-green-700 truncate">{appliedCoupon.code} applied</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={removeCoupon}
+                              className="text-green-700 hover:text-green-900 shrink-0"
+                              aria-label="Remove coupon"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={couponCode}
+                                onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponError(null); }}
+                                placeholder="Enter coupon code"
+                                className={`${inputCls} flex-1`}
+                              />
+                              <button
+                                type="button"
+                                onClick={applyCoupon}
+                                disabled={!couponCode.trim() || couponLoading}
+                                className="px-5 py-3 rounded-2xl bg-primary text-white text-sm font-bold disabled:opacity-40 hover:opacity-90 active:scale-[0.98] transition-all duration-200 shrink-0"
+                              >
+                                {couponLoading ? '...' : 'Apply'}
+                              </button>
+                            </div>
+                            {couponError && <p className="text-xs text-red-500 mt-1.5 font-medium">{couponError}</p>}
+                          </div>
+                        )}
                       </div>
 
                       {/* Divider */}
