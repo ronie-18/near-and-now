@@ -69,8 +69,9 @@ export class NotificationsController {
   // Get notification preferences
   async getNotificationPreferences(req: Request, res: Response) {
     try {
-      const { userId } = req.params;
-      const preferences = await databaseService.getNotificationPreferences(userId);
+      // Same rationale as getUserNotifications/markAllAsRead above: :userId in
+      // the URL is not trusted — scope to the authenticated caller instead.
+      const preferences = await databaseService.getNotificationPreferences(req.customerId!);
       res.json(preferences);
     } catch (error) {
       console.error('Error fetching notification preferences:', error);
@@ -81,10 +82,8 @@ export class NotificationsController {
   // Update notification preferences
   async updateNotificationPreferences(req: Request, res: Response) {
     try {
-      const { userId } = req.params;
       const preferences = req.body;
-
-      const result = await databaseService.updateNotificationPreferences(userId, preferences);
+      const result = await databaseService.updateNotificationPreferences(req.customerId!, preferences);
       res.json(result);
     } catch (error) {
       console.error('Error updating notification preferences:', error);

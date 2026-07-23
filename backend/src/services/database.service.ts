@@ -1847,12 +1847,30 @@ export class DatabaseService {
     return { success: true };
   }
 
-  async getNotificationPreferences(_userId: string) {
-    return { email: true, sms: true, push: true };
+  async getNotificationPreferences(userId: string) {
+    const { data, error } = await supabaseAdmin
+      .from('app_users')
+      .select('notification_preferences')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { notification_preferences?: Record<string, unknown> } | null)?.notification_preferences
+      ?? { email: true, sms: true, push: true };
   }
 
-  async updateNotificationPreferences(_userId: string, preferences: Record<string, unknown>) {
-    return preferences;
+  async updateNotificationPreferences(userId: string, preferences: Record<string, unknown>) {
+    // Merge with the existing saved value so a partial update (e.g. just
+    // { sms: false }) doesn't wipe out the other channels' settings.
+    const current = await this.getNotificationPreferences(userId);
+    const merged = { ...current, ...preferences };
+    const { data, error } = await supabaseAdmin
+      .from('app_users')
+      .update({ notification_preferences: merged })
+      .eq('id', userId)
+      .select('notification_preferences')
+      .single();
+    if (error) throw error;
+    return (data as { notification_preferences: Record<string, unknown> }).notification_preferences;
   }
 
   // Payment
