@@ -219,10 +219,28 @@ export class ShopkeeperController {
 
       const code = randomFourDigit();
 
-      // Confirm accepted items, unassign unavailable ones for reallocation
-      await supabaseAdmin.from('order_store_allocations').update({
-        status: 'accepted', pickup_code: code, accepted_item_ids, accepted_at: new Date().toISOString(),
-      }).eq('id', allocationId);
+      // Confirm accepted items, unassign unavailable ones for reallocation.
+      // The `.eq('status', 'pending_acceptance')` guard here (not just on the
+      // read above) is what actually prevents a double-accept: two concurrent
+      // requests for the same allocation (a client retry, or two devices on the
+      // same store account) can both pass the read-check above before either
+      // writes, but only one of these updates can ever match this WHERE clause —
+      // the loser gets 0 rows back and bails out instead of generating a second
+      // pickup code and running the reallocation/finalize side effects twice.
+      const { data: updatedAlloc, error: acceptUpdateError } = await supabaseAdmin
+        .from('order_store_allocations')
+        .update({
+          status: 'accepted', pickup_code: code, accepted_item_ids, accepted_at: new Date().toISOString(),
+        })
+        .eq('id', allocationId)
+        .eq('status', 'pending_acceptance')
+        .select('id')
+        .maybeSingle();
+
+      if (acceptUpdateError) throw acceptUpdateError;
+      if (!updatedAlloc) {
+        return res.status(409).json({ error: 'Already responded' });
+      }
 
       if (accepted_item_ids.length) {
         await supabaseAdmin.from('order_items').update({ item_status: 'confirmed' }).in('id', accepted_item_ids);
