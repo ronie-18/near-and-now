@@ -42,10 +42,30 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
  * Returns a Supabase client that includes the admin session token in the
  * x-admin-token header. PostgREST passes this header into the DB session so
  * is_admin_authenticated() can validate it via admin_sessions, bypassing RLS.
+ *
+ * When there's no token (expired/logged-out mid-session — the route-level
+ * `AdminAuthGuard` only checks this once, on mount, not on every call here),
+ * this used to silently fall back to a plain anon client instead of erroring
+ * — every RLS-gated query would then just come back empty/blocked, with no
+ * indication to the admin *why* the page looks broken. Now it redirects to
+ * login instead, matching what the mount-time guard already does, so a
+ * session that dies mid-use gets the same "please log in again" outcome
+ * instead of a silently-anonymous one. Still returns the anon client as the
+ * function's return value (a redirect is async/navigational, not something
+ * that can replace a synchronous return) — callers in flight will get an
+ * RLS-empty result for this one request while the redirect takes effect.
  */
 export function getAdminClient() {
   const token = sessionStorage.getItem('adminToken') || '';
-  if (!token) return supabaseAdmin;
+  if (!token) {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      sessionStorage.removeItem('adminToken');
+      sessionStorage.removeItem('adminData');
+      sessionStorage.removeItem('adminTokenExpiry');
+      window.location.href = '/login';
+    }
+    return supabaseAdmin;
+  }
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: {
       headers: { 'x-admin-token': token }

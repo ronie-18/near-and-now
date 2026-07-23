@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { AdminController } from '../controllers/admin.controller.js';
+import { requireAdmin } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const ctrl = new AdminController();
@@ -16,5 +17,6 @@ const adminLoginLimiter = rateLimit({
 });
 
 router.post('/login', adminLoginLimiter, ctrl.login.bind(ctrl));
+router.post('/create', requireAdmin, ctrl.createAdmin.bind(ctrl));
 
 export default router;

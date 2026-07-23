@@ -164,40 +164,39 @@ export async function getAdminById(id: string): Promise<Admin | null> {
   }
 }
 
-// Create new admin (super_admin only)
+// Create new admin (super_admin only — enforced server-side; see admin.controller.ts's
+// createAdmin, which re-checks the *calling* admin's own role. This used to be a direct
+// Supabase insert with the password hashed client-side and nothing checking who was
+// actually allowed to grant a new super_admin — any authenticated admin could.)
 export async function createAdmin(adminData: CreateAdminData): Promise<Admin | null> {
   try {
     console.log('👤 Creating new admin:', adminData.email);
 
-    // Hash password
-    const passwordHash = await hashPassword(adminData.password);
-
-    // Get default permissions for role if not provided
     const permissions = adminData.permissions || ROLE_PERMISSIONS[adminData.role];
+    const token = sessionStorage.getItem('adminToken') || '';
 
-    const { data, error } = await getAdminClient()
-      .from('admins')
-      .insert([
-        {
-          email: adminData.email.toLowerCase().trim(),
-          password_hash: passwordHash,
-          full_name: adminData.full_name,
-          role: adminData.role,
-          permissions: permissions,
-          created_by: adminData.created_by || null,
-          status: 'active'
-        }
-      ])
-      .select('id, email, full_name, role, permissions, created_by, status, last_login_at, created_at, updated_at')
-      .single();
+    const res = await fetch(apiUrl('/api/admin/create'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        email: adminData.email.toLowerCase().trim(),
+        password: adminData.password,
+        full_name: adminData.full_name,
+        role: adminData.role,
+        permissions
+      })
+    });
 
-    if (error) {
-      console.error('❌ Error creating admin:', error);
-      throw error;
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json?.error || 'Failed to create admin');
     }
 
     console.log('✅ Admin created successfully');
-    return data;
+    return json.admin;
   } catch (error: any) {
     console.error('❌ Error in createAdmin:', error);
     throw error;
