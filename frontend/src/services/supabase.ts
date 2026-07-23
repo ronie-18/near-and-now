@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import { geocodeAddress } from './placesService';
 import { parseGstRatePercent, priceWithGst } from '../utils/priceGst';
 import { apiUrl, shouldUseBackendApi } from '../utils/apiBase';
 import { getAuthHeaders } from '../utils/authHeader';
@@ -442,44 +441,6 @@ export interface Order {
   order_number?: string;
 }
 
-// Generate order number in format: NNYYYYMMDD-XXXX
-// Uses database-side atomic generation via RPC to prevent race conditions
-async function generateOrderNumber(): Promise<string> {
-  try {
-    // Get today's date in YYYYMMDD format
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const dateString = `${year}${month}${day}`;
-
-    // Date prefix for the order number
-    const prefix = `NN${dateString}`;
-
-    // Call the database RPC function to atomically generate the next order number
-    // This uses FOR UPDATE locking to prevent race conditions
-    const { data, error } = await supabase.rpc('generate_next_order_number', {
-      prefix_input: prefix
-    });
-
-    if (error) {
-      console.error('Error generating order number via RPC:', error);
-      // Propagate the database error
-      throw new Error(`Failed to generate order number: ${error.message}`);
-    }
-
-    if (!data || typeof data !== 'string') {
-      throw new Error('Invalid response from order number generator');
-    }
-
-    return data;
-  } catch (error) {
-    console.error('Error generating order number:', error);
-    // Re-throw to propagate database errors
-    throw error;
-  }
-}
-
 // Create order (uses customer_orders, store_orders, order_items)
 export async function createOrder(orderData: CreateOrderData): Promise<Order> {
   try {
@@ -516,235 +477,18 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
       return (await res.json()) as Order;
     }
 
-    const fullAddress = [
-      orderData.shipping_address.address,
-      orderData.shipping_address.city,
-      orderData.shipping_address.state,
-      orderData.shipping_address.pincode
-    ]
-      .filter(Boolean)
-      .join(', ');
-
-    // Use existing coordinates if provided (saved address or map picker); otherwise geocode
-    let geocoded: { lat: number; lng: number };
-    const lat = orderData.shipping_address.latitude;
-    const lng = orderData.shipping_address.longitude;
-    if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
-      geocoded = { lat, lng };
-    } else {
-      const result = await geocodeAddress(fullAddress);
-      if (!result) {
-        throw new Error('Could not verify delivery address. Please use the map to pick your location or try a different address.');
-      }
-      geocoded = { lat: result.lat, lng: result.lng };
-    }
-
-    const orderCode = await generateOrderNumber();
-    console.log('📝 Generated order code:', orderCode);
-
-    // Get real stores near delivery address (from stores table, no mock data)
-    const storeIds = await getNearbyStoreIdsExpanding(geocoded.lat, geocoded.lng);
-    if (!storeIds.length) {
-      throw new Error('No store available for your delivery address. Please contact support.');
-    }
-
-    const items = orderData.items;
-    const masterProductIds = [...new Set(items.map((it) => it.product_id || it.id).filter((id): id is string => id != null && id !== ''))];
-    if (masterProductIds.length === 0) {
-      throw new Error('No valid products in order');
-    }
-
-    // Which stores have which of our products (from products table)
-    const { data: productRows } = await supabaseAdmin
-      .from('products')
-      .select('id, store_id, master_product_id')
-      .in('store_id', storeIds)
-      .in('master_product_id', masterProductIds)
-      .eq('is_active', true);
-    const byMaster: Map<string, Array<{ store_id: string; product_id: string }>> = new Map();
-    for (const row of productRows || []) {
-      const list = byMaster.get(row.master_product_id) || [];
-      list.push({ store_id: row.store_id, product_id: row.id });
-      byMaster.set(row.master_product_id, list);
-    }
-
-    // Assign each item to a store that has it (greedy: minimize number of stores)
-    const storeToItems = new Map<string, typeof items>();
-    const assigned = new Set<number>();
-    while (assigned.size < items.length) {
-      let bestStore: string | null = null;
-      let bestCount = 0;
-      for (const storeId of storeIds) {
-        let count = 0;
-        for (const it of items) {
-          const idx = items.indexOf(it);
-          if (assigned.has(idx)) continue;
-          const mid = it.product_id || it.id;
-          const options = (mid ? byMaster.get(mid) : undefined) ?? [];
-          if (options.some((o) => o.store_id === storeId)) count++;
-        }
-        if (count > bestCount) {
-          bestCount = count;
-          bestStore = storeId;
-        }
-      }
-      if (!bestStore || bestCount === 0) break;
-      const chunk: typeof items = [];
-      for (let i = 0; i < items.length; i++) {
-        if (assigned.has(i)) continue;
-        const it = items[i];
-        const mid = it.product_id || it.id;
-        const options = (mid ? byMaster.get(mid) : undefined) ?? [];
-        if (options.some((o) => o.store_id === bestStore)) {
-          chunk.push(it);
-          assigned.add(i);
-        }
-      }
-      const existing = storeToItems.get(bestStore) || [];
-      storeToItems.set(bestStore, [...existing, ...chunk]);
-    }
-    const unassigned = items.filter((_, i) => !assigned.has(i));
-    if (unassigned.length > 0) {
-      throw new Error(`Product(s) not available from any store near you: ${unassigned.map((u) => u.name).join(', ')}`);
-    }
-
-    const storeIdsToUse = Array.from(storeToItems.keys());
-    const itemChunks = storeIdsToUse.map((sid) => storeToItems.get(sid)!);
-
-    // DB enum public.payment_method: 'razorpay' | 'cod'
-    const pm = orderData.payment_method?.toLowerCase() ?? '';
-    const paymentMethodEnum =
-      pm.includes('split') || pm.includes('online') || pm.includes('upi') ? 'razorpay' : 'cod';
-
-    // Create customer_order
-    const { data: customerOrder, error: coError } = await supabaseAdmin
-      .from('customer_orders')
-      .insert({
-        customer_id: orderData.user_id,
-        order_code: orderCode,
-        status: 'pending_at_store',
-        payment_status: orderData.payment_status,
-        payment_method: paymentMethodEnum,
-        subtotal_amount: orderData.subtotal,
-        delivery_fee: orderData.delivery_fee,
-        discount_amount: 0,
-        total_amount: orderData.order_total,
-        delivery_address: fullAddress,
-        delivery_latitude: geocoded.lat,
-        delivery_longitude: geocoded.lng,
-        notes: null
-      })
-      .select()
-      .single();
-
-    if (coError || !customerOrder) {
-      console.error('❌ Error creating customer_order:', coError);
-      throw new Error(coError?.message || 'Failed to create order');
-    }
-
-    for (let i = 0; i < itemChunks.length; i++) {
-      const chunk = itemChunks[i];
-      const storeId = storeIdsToUse[i];
-      if (!chunk?.length || !storeId) continue;
-
-      const chunkSubtotal = chunk.reduce((sum, it) => sum + it.price * it.quantity, 0);
-      const chunkDeliveryFee = itemChunks.length > 1 ? orderData.delivery_fee / itemChunks.length : orderData.delivery_fee;
-
-      const { data: storeOrder, error: soError } = await supabaseAdmin
-        .from('store_orders')
-        .insert({
-          customer_order_id: customerOrder.id,
-          store_id: storeId,
-          subtotal_amount: chunkSubtotal,
-          delivery_fee: chunkDeliveryFee,
-          status: 'pending_at_store'
-        })
-        .select()
-        .single();
-
-      if (soError || !storeOrder) {
-        console.error('❌ Error creating store_order:', soError);
-        throw new Error(soError?.message || 'Failed to create store order');
-      }
-
-      const masterProductIds = chunk
-        .map((item) => item.product_id || item.id)
-        .filter((id): id is string => id != null && id !== '');
-
-      if (masterProductIds.length === 0) continue;
-
-      const { data: products, error: productsError } = await supabaseAdmin
-        .from('products')
-        .select('id, master_product_id')
-        .eq('store_id', storeId)
-        .in('master_product_id', masterProductIds)
-        .eq('is_active', true);
-
-      if (productsError) {
-        console.error('❌ Error fetching products:', productsError);
-        throw new Error('Failed to verify product availability');
-      }
-
-      const masterToProduct = new Map<string, string>();
-      for (const p of products || []) {
-        masterToProduct.set(p.master_product_id, p.id);
-      }
-
-      const orderItemsPayload = chunk.map((item) => {
-        const masterId = item.product_id || item.id;
-        const productId = masterId ? masterToProduct.get(masterId) : null;
-        if (!productId) {
-          throw new Error(`Product "${item.name}" is not available from the store.`);
-        }
-        return {
-          store_order_id: storeOrder.id,
-          product_id: productId,
-          product_name: item.name,
-          unit: item.unit || null,
-          image_url: item.image || null,
-          unit_price: item.price,
-          quantity: item.quantity
-        };
-      });
-
-      const { error: itemsError } = await supabaseAdmin
-        .from('order_items')
-        .insert(orderItemsPayload);
-
-      if (itemsError) {
-        console.error('❌ Error creating order_items:', itemsError);
-        throw new Error(itemsError.message || 'Failed to create order items');
-      }
-    }
-
-    // Add initial status to order_status_history
-    await supabaseAdmin.from('order_status_history').insert({
-      customer_order_id: customerOrder.id,
-      status: 'pending_at_store',
-      notes: 'Order placed',
-      created_at: new Date().toISOString()
-    });
-
-    console.log('✅ Order created successfully:', customerOrder.id);
-
-    return {
-      id: customerOrder.id,
-      user_id: orderData.user_id,
-      customer_name: orderData.customer_name,
-      customer_email: orderData.customer_email,
-      customer_phone: orderData.customer_phone,
-      order_status: 'placed',
-      payment_status: orderData.payment_status,
-      payment_method: orderData.payment_method,
-      order_total: orderData.order_total,
-      subtotal: orderData.subtotal,
-      delivery_fee: orderData.delivery_fee,
-      items: orderData.items,
-      items_count: orderData.items.length,
-      shipping_address: orderData.shipping_address,
-      created_at: customerOrder.placed_at || customerOrder.created_at || new Date().toISOString(),
-      order_number: orderCode
-    };
+    // Orders always go through the backend now — it's the only path that
+    // recomputes trusted prices/totals and locks payment_status server-side.
+    // There used to be a fallback here that wrote customer_orders/store_orders/
+    // order_items directly from the browser via an anon-key client, trusting
+    // whatever order_total/discount_amount/payment_status the caller passed —
+    // bypassing every safeguard placeCheckoutOrder enforces. Removed rather
+    // than fixed: if VITE_API_URL is ever unset, checkout should fail loudly
+    // with a clear configuration error, not silently degrade to something
+    // exploitable.
+    throw new Error(
+      'Checkout is not configured correctly (missing API URL). Please contact support — do not retry with a different payment method.'
+    );
   } catch (error) {
     console.error('❌ Error in createOrder:', error);
     throw error;
