@@ -1178,13 +1178,27 @@ export class DatabaseService {
   }
 
   // Coupons - CRUD operations
+  // Intentionally returns every coupon, including expired/inactive ones — this
+  // is the admin management list, which needs full visibility (to review
+  // history or re-activate something), not just what's currently redeemable.
+  // What it was missing was any way to tell, at a glance, which rows are
+  // actually live right now — so each row gets an `is_currently_valid` flag
+  // computed with the same rule getActiveCoupons() already enforces server-side.
   async getCoupons() {
     const { data, error } = await supabaseAdmin
       .from('coupons')
       .select('*')
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data ?? [];
+    const now = new Date().toISOString();
+    return (data ?? []).map((coupon: any) => ({
+      ...coupon,
+      is_currently_valid: Boolean(
+        coupon.is_active &&
+        coupon.valid_from <= now &&
+        (coupon.valid_until == null || coupon.valid_until >= now)
+      )
+    }));
   }
 
   async getCouponById(couponId: string) {
