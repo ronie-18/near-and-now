@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 import { notificationService } from '../services/notification.service.js';
-import { VEHICLE_TYPES, isVehicleType } from '../utils/deliveryPartnerVerificationDocuments.js';
 import { haversineKm } from '../utils/geo.js';
 
 export class DeliveryController {
@@ -49,16 +48,10 @@ export class DeliveryController {
   }
 
   // Create new delivery partner
+  // name/phone/vehicle_type presence and shape are enforced by
+  // createDeliveryPartnerSchema (delivery.routes.ts) before this runs.
   async createDeliveryPartner(req: Request, res: Response) {
     try {
-      const { name, phone, vehicle_type } = req.body as Record<string, unknown>;
-      if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
-        return res.status(400).json({ error: 'name and phone are required' });
-      }
-      if (!isVehicleType(vehicle_type)) {
-        return res.status(400).json({ error: `vehicle_type is required and must be one of ${VEHICLE_TYPES.join(', ')}` });
-      }
-
       const partner = await databaseService.createDeliveryPartner(req.body);
       res.status(201).json(partner);
     } catch (error: any) {
