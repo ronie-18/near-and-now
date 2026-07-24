@@ -23,14 +23,12 @@
 -- against a database where it already succeeded would fail on those
 -- constraint statements (existing tables/indexes are unaffected either way).
 --
--- Also found while pulling the real schema, worth flagging separately (not
--- fixed here, different bug): admins.role is typed as `admin_role` (only
--- 'super_admin'/'admin'), but the admin panel's frontend and the new
--- POST /api/admin/create endpoint both expect 4 roles including
--- 'manager'/'viewer' -- creating an admin with either of those two roles
--- would fail at the database level. Needs a product decision (widen the
--- enum, or narrow the app to the 2 roles the DB actually supports) before
--- fixing.
+-- Also found while pulling the real schema: admins.role is typed as
+-- `admin_role` (only 'super_admin'/'admin' in the live DB), but the admin
+-- panel's frontend and the POST /api/admin/create endpoint both expect 4
+-- roles including 'manager'/'viewer'. Fixed in
+-- 20260814000000_admin_role_add_manager_viewer.sql (widened the enum to
+-- match the app's already-built permission logic for those two roles).
 
 -- ============================================================================
 -- Missing enum types (6 of 9 total types in this schema were never tracked)
