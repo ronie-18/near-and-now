@@ -133,6 +133,7 @@ const OrderTrackingPage = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [showItems, setShowItems] = useState(true);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
+  const [invoiceLoading, setInvoiceLoading] = useState(false);
 
   // Resolve order_code → orderId
   useEffect(() => {
@@ -723,15 +724,31 @@ const OrderTrackingPage = () => {
                 <span className="text-xs font-bold text-gray-600 group-hover:text-primary">Reorder</span>
               </Link>
             )}
-            <Link
-              to={`/api/invoices/${orderId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-gray-100 hover:border-primary/30 hover:bg-primary/5 transition-all group"
+            <button
+              type="button"
+              disabled={invoiceLoading}
+              onClick={async () => {
+                if (!orderId || invoiceLoading) return;
+                setInvoiceLoading(true);
+                try {
+                  const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
+                  const res = await authedFetch(`${apiBase}/api/invoices/order/${orderId}/customer`, {
+                    headers: getAuthHeaders(),
+                  });
+                  if (!res.ok) throw new Error('Failed to fetch invoice');
+                  const data = await res.json();
+                  if (data.url) window.open(data.url, '_blank');
+                } catch {
+                  alert('Invoice download failed. Please try again.');
+                } finally {
+                  setInvoiceLoading(false);
+                }
+              }}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-gray-100 hover:border-primary/30 hover:bg-primary/5 transition-all group disabled:opacity-50"
             >
               <FileText className="w-6 h-6 text-gray-500 group-hover:text-primary" />
               <span className="text-xs font-bold text-gray-600 group-hover:text-primary">Invoice</span>
-            </Link>
+            </button>
             {isDelivered && (
               <button
                 type="button"
