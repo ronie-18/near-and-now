@@ -74,14 +74,25 @@ export function useOrderTrackingRealtime(
   const orderRef = useRef(order);
   orderRef.current = order;
 
+  // Monotonic sequence number: each call to refreshOrderAndHistory (whether
+  // triggered by realtime or by the polling fallback) claims the next number
+  // before it starts fetching. If a newer call has already started by the
+  // time an older one's response comes back, the older one's result is
+  // discarded instead of being applied — otherwise a slow response landing
+  // after a fresher one could overwrite the screen with stale data (e.g. on
+  // unmount/navigation, or just two calls racing each other).
+  const orderSeqRef = useRef(0);
+
   const refreshOrderAndHistory = async () => {
     const order = orderRef.current;
     if (!orderId || !order) return;
     const build = buildRef.current;
+    const mySeq = ++orderSeqRef.current;
 
     // Use backend API (bypasses Supabase RLS 403)
     const data = await fetchOrderTrackingFull(orderId);
     if (!data) return;
+    if (mySeq !== orderSeqRef.current) return; // a newer call already won
 
     const { order: co, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
     const storeOrders = co.store_orders || [];
@@ -112,6 +123,13 @@ export function useOrderTrackingRealtime(
   // Subscribe to order/store_orders/status changes + polling fallback (runs when order loads)
   useEffect(() => {
     if (!orderId || !order) return;
+
+    // Tracks whether the realtime channel is currently confirmed connected.
+    // The 3s interval below still ticks on a fixed schedule, but skips doing
+    // any work while realtime is healthy — it's a fallback for when realtime
+    // isn't (e.g. simulation updates that don't trigger it, a dropped
+    // connection), not a permanent second source of the same data.
+    let realtimeHealthy = false;
 
     const channel = supabaseAdmin
       .channel(`order-tracking-${orderId}`)
@@ -146,13 +164,17 @@ export function useOrderTrackingRealtime(
         () => refreshOrderAndHistory()
       )
       .subscribe((status) => {
+        realtimeHealthy = status === 'SUBSCRIBED';
         if (status === 'SUBSCRIBED') {
           console.log('📡 Realtime tracking subscribed for order', orderId);
         }
       });
 
-    // Poll every 3 sec as fallback (simulation updates may not trigger realtime)
-    const pollInterval = setInterval(refreshOrderAndHistory, 3000);
+    // Poll every 3 sec as fallback (simulation updates may not trigger realtime),
+    // but only actually fetch when realtime isn't confirmed healthy.
+    const pollInterval = setInterval(() => {
+      if (!realtimeHealthy) refreshOrderAndHistory();
+    }, 3000);
 
     return () => {
       clearInterval(pollInterval);
@@ -160,13 +182,20 @@ export function useOrderTrackingRealtime(
     };
   }, [orderId, !!order]);
 
-  // Driver locations: poll backend API every 2 sec (backend gets partner IDs from DB)
-  // Poll whenever we have orderId - no need to wait for order.store_orders to have delivery_partner_id
+  // Driver locations: poll backend API every 2 sec (backend gets partner IDs from DB).
+  // Poll whenever we have orderId - no need to wait for order.store_orders to have
+  // delivery_partner_id. Unlike order status above, there's no realtime channel for
+  // driver_locations to gate against — a moving GPS marker needs this cadence
+  // regardless — but still guarded against overlapping/stale responses the same way.
   useEffect(() => {
     if (!orderId) return;
 
+    const driverSeqRef = { current: 0 };
+
     const pollDriverLocations = async () => {
+      const mySeq = ++driverSeqRef.current;
       const locations = await fetchDriverLocations(orderId);
+      if (mySeq !== driverSeqRef.current) return; // a newer poll already won
       if (Object.keys(locations).length > 0) {
         setDriverLocations((prev) => ({ ...prev, ...locations }));
       }
