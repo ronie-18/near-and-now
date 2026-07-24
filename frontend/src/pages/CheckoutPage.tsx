@@ -1183,7 +1183,7 @@ const CheckoutPage = () => {
                           <p className="font-semibold text-stone-800 text-sm">Add GSTIN</p>
                           <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">Business</span>
                         </div>
-                        <p className="text-xs text-stone-400 mt-0.5">Claim GST credit up to 18% on the order</p>
+                        <p className="text-xs text-stone-400 mt-0.5">Get a GST-compliant invoice for input tax credit claims</p>
                       </div>
                     </label>
 
