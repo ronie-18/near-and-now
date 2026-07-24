@@ -337,7 +337,7 @@ export class OrdersController {
       });
     } catch (error: any) {
       console.error('Error cancelling order:', error);
-      if (error.message?.includes('delivery partner')) {
+      if (error.message?.includes('delivery partner') || error.message?.includes('already')) {
         return res.status(400).json({ error: error.message });
       }
       res.status(500).json({ error: 'Failed to cancel order' });

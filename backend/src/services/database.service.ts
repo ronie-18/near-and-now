@@ -442,12 +442,19 @@ export class DatabaseService {
       throw new Error('Cannot cancel order - delivery partner already assigned');
     }
 
-    // Fetch customer order to check payment status before cancelling
+    // Fetch customer order to check payment/order status before cancelling
     const { data: customerOrder } = await supabaseAdmin
       .from('customer_orders')
-      .select('payment_status, razorpay_payment_id, total_amount')
+      .select('status, payment_status, razorpay_payment_id, total_amount')
       .eq('id', orderId)
       .single();
+
+    if (customerOrder?.status === 'order_delivered') {
+      throw new Error('Cannot cancel order - it has already been delivered');
+    }
+    if (customerOrder?.status === 'order_cancelled') {
+      throw new Error('Order is already cancelled');
+    }
 
     // Cancel all store allocations so shopkeepers and riders stop seeing this order.
     await supabaseAdmin
