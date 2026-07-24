@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { CouponsController } from '../controllers/coupons.controller.js';
-import { requireAdmin } from '../middleware/adminAuth.middleware.js';
+import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 import { validate } from '../middleware/validate.js';
 
@@ -32,10 +32,10 @@ router.get('/active', couponsController.getActiveCoupons.bind(couponsController)
 router.post('/validate', requireCustomer, couponsController.validateCoupon.bind(couponsController));
 
 // Admin-only: full CRUD
-router.get('/', requireAdmin, couponsController.getCoupons.bind(couponsController));
-router.get('/:couponId', requireAdmin, couponsController.getCouponById.bind(couponsController));
-router.post('/', requireAdmin, validate(createCouponSchema), couponsController.createCoupon.bind(couponsController));
-router.put('/:couponId', requireAdmin, validate(updateCouponSchema), couponsController.updateCoupon.bind(couponsController));
-router.delete('/:couponId', requireAdmin, couponsController.deleteCoupon.bind(couponsController));
+router.get('/', requireAdmin, requirePermission('coupons.view'), couponsController.getCoupons.bind(couponsController));
+router.get('/:couponId', requireAdmin, requirePermission('coupons.view'), couponsController.getCouponById.bind(couponsController));
+router.post('/', requireAdmin, requirePermission('coupons.edit'), validate(createCouponSchema), couponsController.createCoupon.bind(couponsController));
+router.put('/:couponId', requireAdmin, requirePermission('coupons.edit'), validate(updateCouponSchema), couponsController.updateCoupon.bind(couponsController));
+router.delete('/:couponId', requireAdmin, requirePermission('coupons.edit'), couponsController.deleteCoupon.bind(couponsController));
 
 export default router;

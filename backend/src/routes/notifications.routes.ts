@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { NotificationsController } from '../controllers/notifications.controller.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
-import { requireAdmin } from '../middleware/adminAuth.middleware.js';
+import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const notificationsController = new NotificationsController();
@@ -15,6 +15,6 @@ router.get('/users/:userId/preferences', requireCustomer, notificationsControlle
 router.put('/users/:userId/preferences', requireCustomer, notificationsController.updateNotificationPreferences.bind(notificationsController));
 
 // Admin-only: trigger a push/email/SMS notification for an order
-router.post('/send', requireAdmin, notificationsController.sendOrderNotification.bind(notificationsController));
+router.post('/send', requireAdmin, requirePermission('notifications.edit'), notificationsController.sendOrderNotification.bind(notificationsController));
 
 export default router;

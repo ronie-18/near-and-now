@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { hasPermission } from '../utils/adminPermissions.js';
 
 declare module 'express' {
   interface Request {
@@ -37,4 +38,35 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 
   req.adminId = session.admin_id;
   next();
+}
+
+/**
+ * Role-based permission gate — run after requireAdmin (needs req.adminId
+ * already set). Previously nothing below the React component layer checked
+ * role at all: hasPermission() in the admin frontend was only ever consulted
+ * to decide what UI to render, so any authenticated admin session regardless
+ * of role — including `viewer` — could call any of these routes directly
+ * (devtools, curl, a saved Postman request) and it would succeed identically
+ * to a super_admin calling it. Mirrors the role-lookup pattern
+ * admin.controller.ts's createAdmin/updateAdmin/deleteAdmin already use for
+ * admin-management, generalized to every permission string in adminPermissions.ts.
+ */
+export function requirePermission(permission: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const { data: caller, error } = await supabaseAdmin
+      .from('admins')
+      .select('role')
+      .eq('id', req.adminId)
+      .maybeSingle();
+
+    if (error || !caller) {
+      return res.status(401).json({ error: 'Invalid admin session' });
+    }
+
+    if (!hasPermission((caller as { role: string }).role, permission)) {
+      return res.status(403).json({ error: `Missing permission: ${permission}` });
+    }
+
+    next();
+  };
 }

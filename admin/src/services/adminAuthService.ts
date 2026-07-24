@@ -39,7 +39,13 @@ export interface AuthenticatedAdmin {
   token: string;
 }
 
-// Role-based default permissions
+// Role-based default permissions.
+//
+// Mirrors backend/src/utils/adminPermissions.ts and the SQL copy in
+// supabase/migrations/20260821000000_admin_role_permission_rls.sql — keep
+// all three in sync. This copy is UI-only (which buttons/pages render); the
+// backend and RLS copies are the real enforcement, since this one is
+// trivially bypassed via devtools.
 const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
   super_admin: ['*'], // All permissions
   admin: [
@@ -49,7 +55,13 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'customers.view',
     'customers.edit',
     'reports.view',
-    'dashboard.view'
+    'dashboard.view',
+    'coupons.*',
+    'delivery_partners.*',
+    'store_verification.*',
+    'invoices.*',
+    'notifications.*',
+    'payments.*'
   ],
   manager: [
     'products.view',
@@ -58,7 +70,13 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'categories.view',
     'customers.view',
     'reports.view',
-    'dashboard.view'
+    'dashboard.view',
+    'coupons.view',
+    'delivery_partners.view',
+    'store_verification.view',
+    'invoices.view',
+    'notifications.view',
+    'payments.view'
   ],
   viewer: [
     'products.view',
@@ -66,7 +84,13 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'categories.view',
     'customers.view',
     'reports.view',
-    'dashboard.view'
+    'dashboard.view',
+    'coupons.view',
+    'delivery_partners.view',
+    'store_verification.view',
+    'invoices.view',
+    'notifications.view',
+    'payments.view'
   ]
 };
 
@@ -252,15 +276,27 @@ export async function deleteAdmin(id: string): Promise<boolean> {
   }
 }
 
-// Check if admin has permission
+// Check if admin has permission.
+//
+// Computed live from admin.role via ROLE_PERMISSIONS, not from the stored
+// admin.permissions column. That column is only ever populated once, at
+// account-creation time, from whichever version of ROLE_PERMISSIONS existed
+// then — CreateAdminPage/EditAdminPage have no UI for customizing an
+// individual admin's permissions away from their role's defaults, so in
+// practice it's always meant to equal the role default, just a stale
+// snapshot of it. Every already-existing admin's stored permissions predate
+// the 6 categories added in ROLE_PERMISSIONS above (coupons/
+// delivery_partners/store_verification/invoices/notifications/payments) —
+// computing live avoids needing a backfill migration to stay correct, and
+// avoids this drifting again the next time a category is added.
 export function hasPermission(admin: Admin, permission: string): boolean {
-  // Super admin has all permissions
-  if (admin.permissions.includes('*')) {
+  const perms = ROLE_PERMISSIONS[admin.role] ?? admin.permissions;
+
+  if (perms.includes('*')) {
     return true;
   }
 
-  // Check exact permission
-  if (admin.permissions.includes(permission)) {
+  if (perms.includes(permission)) {
     return true;
   }
 
@@ -268,7 +304,7 @@ export function hasPermission(admin: Admin, permission: string): boolean {
   const [resource] = permission.split('.');
   const wildcardPermission = `${resource}.*`;
 
-  return admin.permissions.includes(wildcardPermission);
+  return perms.includes(wildcardPermission);
 }
 
 // Check if admin has role

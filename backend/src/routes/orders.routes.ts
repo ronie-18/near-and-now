@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { OrdersController } from '../controllers/orders.controller.js';
 import { validate } from '../middleware/validate.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
-import { requireAdmin } from '../middleware/adminAuth.middleware.js';
+import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const ordersController = new OrdersController();
@@ -86,7 +86,7 @@ router.post(
 );
 router.get('/customer/:customerId', requireCustomer, ordersController.getCustomerOrders.bind(ordersController));
 router.get('/:orderId', requireCustomer, ordersController.getOrderById.bind(ordersController));
-router.patch('/:orderId/status', requireAdmin, ordersController.updateOrderStatus.bind(ordersController));
+router.patch('/:orderId/status', requireAdmin, requirePermission('orders.edit'), ordersController.updateOrderStatus.bind(ordersController));
 router.post('/:orderId/cancel', requireCustomer, ordersController.cancelOrder.bind(ordersController));
 
 export default router;

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { DeliveryController } from '../controllers/delivery.controller.js';
-import { requireAdmin } from '../middleware/adminAuth.middleware.js';
+import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
 import { validate } from '../middleware/validate.js';
 import { VEHICLE_TYPES } from '../utils/deliveryPartnerVerificationDocuments.js';
 import {
@@ -34,21 +34,26 @@ const updateDeliveryPartnerSchema = z.object({
   status: partnerStatusEnum.optional()
 });
 
-// All delivery admin routes require a valid admin session
-router.get('/partners', requireAdmin, deliveryController.getDeliveryPartners.bind(deliveryController));
-router.get('/partners/:partnerId', requireAdmin, deliveryController.getDeliveryPartnerById.bind(deliveryController));
-router.get('/partners/:partnerId/verification-documents', requireAdmin, getDeliveryPartnerVerificationDocuments);
-router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmin, reviewDeliveryPartnerVerificationDocument);
-router.post('/partners', requireAdmin, validate(createDeliveryPartnerSchema), deliveryController.createDeliveryPartner.bind(deliveryController));
-router.put('/partners/:partnerId', requireAdmin, validate(updateDeliveryPartnerSchema), deliveryController.updateDeliveryPartner.bind(deliveryController));
-router.delete('/partners/:partnerId', requireAdmin, deliveryController.deleteDeliveryPartner.bind(deliveryController));
-router.post('/partners/:partnerId/notify-approved', requireAdmin, deliveryController.notifyPartnerApproved.bind(deliveryController));
+// All delivery admin routes require a valid admin session, plus the
+// specific permission for what the route actually does — see
+// backend/src/utils/adminPermissions.ts.
+router.get('/partners', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getDeliveryPartners.bind(deliveryController));
+router.get('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getDeliveryPartnerById.bind(deliveryController));
+router.get('/partners/:partnerId/verification-documents', requireAdmin, requirePermission('delivery_partners.view'), getDeliveryPartnerVerificationDocuments);
+router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmin, requirePermission('delivery_partners.edit'), reviewDeliveryPartnerVerificationDocument);
+router.post('/partners', requireAdmin, requirePermission('delivery_partners.edit'), validate(createDeliveryPartnerSchema), deliveryController.createDeliveryPartner.bind(deliveryController));
+router.put('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.edit'), validate(updateDeliveryPartnerSchema), deliveryController.updateDeliveryPartner.bind(deliveryController));
+router.delete('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.edit'), deliveryController.deleteDeliveryPartner.bind(deliveryController));
+router.post('/partners/:partnerId/notify-approved', requireAdmin, requirePermission('delivery_partners.edit'), deliveryController.notifyPartnerApproved.bind(deliveryController));
 
-router.get('/partners/:partnerId/agents', requireAdmin, deliveryController.getDeliveryAgents.bind(deliveryController));
-router.post('/orders/:orderId/assign', requireAdmin, deliveryController.assignDeliveryAgent.bind(deliveryController));
-router.post('/simulate/:orderId', requireAdmin, deliveryController.startSimulation.bind(deliveryController));
-router.get('/agents/:agentId/schedule', requireAdmin, deliveryController.getAgentSchedule.bind(deliveryController));
-router.put('/orders/:orderId/status', requireAdmin, deliveryController.updateDeliveryStatus.bind(deliveryController));
-router.post('/orders/:orderId/broadcast', requireAdmin, deliveryController.broadcastToDrivers.bind(deliveryController));
+// Dispatch actions operate on orders, not partner accounts — gated on the
+// existing orders permission (every role that can manage orders already
+// gets orders.*/orders.view, so this doesn't change who can dispatch today).
+router.get('/partners/:partnerId/agents', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getDeliveryAgents.bind(deliveryController));
+router.post('/orders/:orderId/assign', requireAdmin, requirePermission('orders.edit'), deliveryController.assignDeliveryAgent.bind(deliveryController));
+router.post('/simulate/:orderId', requireAdmin, requirePermission('orders.edit'), deliveryController.startSimulation.bind(deliveryController));
+router.get('/agents/:agentId/schedule', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getAgentSchedule.bind(deliveryController));
+router.put('/orders/:orderId/status', requireAdmin, requirePermission('orders.edit'), deliveryController.updateDeliveryStatus.bind(deliveryController));
+router.post('/orders/:orderId/broadcast', requireAdmin, requirePermission('orders.edit'), deliveryController.broadcastToDrivers.bind(deliveryController));
 
 export default router;

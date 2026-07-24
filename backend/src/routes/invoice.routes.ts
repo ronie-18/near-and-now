@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { InvoiceController } from '../controllers/invoice.controller.js';
-import { requireAdmin } from '../middleware/adminAuth.middleware.js';
+import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
 import { requireRider } from '../controllers/deliveryPartner.controller.js';
 import { requireShopkeeper } from '../controllers/shopkeeper.controller.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
@@ -33,6 +33,7 @@ router.get(
 router.get(
   '/order/:orderId/admin/:docType',
   requireAdmin,
+  requirePermission('invoices.view'),
   ctrl.getAdminInvoice.bind(ctrl)
 );
 
@@ -40,6 +41,7 @@ router.get(
 router.post(
   '/regenerate/:orderId',
   requireAdmin,
+  requirePermission('invoices.edit'),
   ctrl.regenerateInvoice.bind(ctrl)
 );
 
@@ -47,6 +49,7 @@ router.post(
 router.post(
   '/generate/:orderId',
   requireAdmin,
+  requirePermission('invoices.edit'),
   ctrl.generateInvoice.bind(ctrl)
 );
 
