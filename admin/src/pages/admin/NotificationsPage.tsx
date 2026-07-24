@@ -71,8 +71,9 @@ const PushNotificationPanel = () => {
     try {
       const db = getAdminClient();
 
-      // Fetch push tokens based on target
-      // Drivers use expo_push_token stored on delivery_partners table
+      // Fetch push tokens based on target. Previously "All Apps" only ever
+      // queried delivery_partners regardless — same as picking "Drivers" — so
+      // shopkeepers never actually received an "all apps" broadcast either.
       let tokens: string[] = [];
 
       if (targetApp === 'drivers' || targetApp === 'all') {
@@ -83,11 +84,35 @@ const PushNotificationPanel = () => {
         tokens = [...tokens, ...(driverData?.map(r => r.expo_push_token).filter(Boolean) || [])];
       }
 
+      if (targetApp === 'all') {
+        const { data: storeData } = await db
+          .from('stores')
+          .select('expo_push_token')
+          .not('expo_push_token', 'is', null);
+        tokens = [...tokens, ...(storeData?.map(r => r.expo_push_token).filter(Boolean) || [])];
+      }
+
       const uniqueTokens = [...new Set(tokens)];
 
       if (uniqueTokens.length === 0) {
         setResult({ ok: false, message: 'No push tokens found for the selected target.' });
         return;
+      }
+
+      // Actually send the push — this previously only logged an admin_notifications
+      // row and reported success with no real Expo push API call anywhere, so
+      // admins believed a broadcast went out when nothing was ever delivered to
+      // any device. Same request shape already used server-side for real order
+      // broadcasts (backend/src/controllers/delivery.controller.ts).
+      const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          uniqueTokens.map((t) => ({ to: t, sound: 'default', title, body, data: { type: 'admin_broadcast' } }))
+        ),
+      });
+      if (!pushRes.ok) {
+        throw new Error(`Push API returned ${pushRes.status} — no notifications were delivered.`);
       }
 
       // Log the notification in admin_notifications
