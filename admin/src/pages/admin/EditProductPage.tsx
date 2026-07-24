@@ -17,7 +17,9 @@ import {
   Upload,
   FileImage
 } from 'lucide-react';
-import { getProductById, updateProduct, createCategory, uploadProductImage, getCategories } from '../../services/adminService';
+import { getProductById, updateProduct, createCategory, uploadProductImage, getCategories, notifyAdminAction } from '../../services/adminService';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { hasRole } from '../../services/adminAuthService';
 
 // Image item interface
 interface ImageData {
@@ -165,6 +167,8 @@ const ImageItem: React.FC<ImageItemProps> = ({
 const EditProductPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const currentAdmin = getCurrentAdmin();
+  const canEditProducts = Boolean(currentAdmin && hasRole(currentAdmin, ['super_admin', 'admin']));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -192,7 +196,16 @@ const EditProductPage = () => {
     category: '',
     in_stock: true,
     rating: '4.5',
+    rating_count: '0',
     size: '',
+    brand: '',
+    min_quantity: '1',
+    max_quantity: '100',
+    gst_rate: '',
+    hsn_code: '',
+    hsn_description: '',
+    cgst: '',
+    sgst: '',
   });
 
   // Fetch product and categories
@@ -226,7 +239,16 @@ const EditProductPage = () => {
           category: product.category || '',
           in_stock: product.in_stock ?? true,
           rating: String(product.rating || '4.5'),
+          rating_count: String(product.rating_count ?? '0'),
           size: product.size || '',
+          brand: product.brand || '',
+          min_quantity: String(product.min_quantity ?? '1'),
+          max_quantity: String(product.max_quantity ?? '100'),
+          gst_rate: product.gst_rate != null ? String(product.gst_rate) : '',
+          hsn_code: product.hsn_code || '',
+          hsn_description: product.hsn_description || '',
+          cgst: product.cgst != null ? String(product.cgst) : '',
+          sgst: product.sgst != null ? String(product.sgst) : '',
         });
 
         // Load existing images
@@ -514,13 +536,23 @@ const EditProductPage = () => {
         category: categoryToUse,
         in_stock: formData.in_stock,
         rating: formData.rating ? parseFloat(formData.rating) : undefined,
+        rating_count: formData.rating_count ? parseInt(formData.rating_count, 10) : undefined,
         size: formData.size.trim() || undefined,
         unit: formData.size?.trim() || 'piece',
+        brand: formData.brand.trim() || undefined,
+        min_quantity: formData.min_quantity ? parseInt(formData.min_quantity, 10) : undefined,
+        max_quantity: formData.max_quantity ? parseInt(formData.max_quantity, 10) : undefined,
+        gst_rate: formData.gst_rate ? parseFloat(formData.gst_rate) : undefined,
+        hsn_code: formData.hsn_code.trim() || undefined,
+        hsn_description: formData.hsn_description.trim() || undefined,
+        cgst: formData.cgst ? parseFloat(formData.cgst) : undefined,
+        sgst: formData.sgst ? parseFloat(formData.sgst) : undefined,
       };
 
       const result = await updateProduct(id, productData);
 
       if (result) {
+        await notifyAdminAction('updated product', productData.name, { product_id: id, product_name: productData.name });
         setSuccess(true);
         setTimeout(() => {
           navigate('/products');
@@ -548,6 +580,18 @@ const EditProductPage = () => {
             <Loader2 size={48} className="animate-spin text-emerald-500 mx-auto mb-4" />
             <p className="text-gray-600">Loading product...</p>
           </div>
+        </div>
+      </AdminLayout>
+    );
+  }
+
+  if (!canEditProducts) {
+    return (
+      <AdminLayout>
+        <div className="max-w-2xl mx-auto mt-12 p-8 bg-white rounded-2xl border-2 border-gray-100 text-center">
+          <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-4" />
+          <h1 className="text-xl font-bold text-gray-900 mb-2">Not permitted</h1>
+          <p className="text-gray-500">Only super admins and admins can edit catalog products.</p>
         </div>
       </AdminLayout>
     );
@@ -895,6 +939,161 @@ const EditProductPage = () => {
                     onChange={handleChange}
                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
                     placeholder="e.g., 1kg, 500g"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="brand" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Brand <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="brand"
+                    name="brand"
+                    value={formData.brand}
+                    onChange={handleChange}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="e.g., Amul"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="rating_count" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Rating Count
+                  </label>
+                  <input
+                    type="number"
+                    id="rating_count"
+                    name="rating_count"
+                    value={formData.rating_count}
+                    onChange={handleChange}
+                    min="0"
+                    step="1"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="0"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="min_quantity" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Min Order Quantity
+                  </label>
+                  <input
+                    type="number"
+                    id="min_quantity"
+                    name="min_quantity"
+                    value={formData.min_quantity}
+                    onChange={handleChange}
+                    min="1"
+                    step="1"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="1"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="max_quantity" className="block text-sm font-semibold text-gray-700 mb-2">
+                    Max Order Quantity
+                  </label>
+                  <input
+                    type="number"
+                    id="max_quantity"
+                    name="max_quantity"
+                    value={formData.max_quantity}
+                    onChange={handleChange}
+                    min="1"
+                    step="1"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="100"
+                  />
+                </div>
+              </div>
+
+              <h2 className="text-lg font-bold text-gray-800 mb-4 mt-6 flex items-center gap-2">
+                Tax &amp; HSN Details
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+                <div>
+                  <label htmlFor="gst_rate" className="block text-sm font-semibold text-gray-700 mb-2">
+                    GST Rate (%) <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="gst_rate"
+                    name="gst_rate"
+                    value={formData.gst_rate}
+                    onChange={handleChange}
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="e.g., 18"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="cgst" className="block text-sm font-semibold text-gray-700 mb-2">
+                    CGST (%) <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="cgst"
+                    name="cgst"
+                    value={formData.cgst}
+                    onChange={handleChange}
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="e.g., 9"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="sgst" className="block text-sm font-semibold text-gray-700 mb-2">
+                    SGST (%) <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="sgst"
+                    name="sgst"
+                    value={formData.sgst}
+                    onChange={handleChange}
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="e.g., 9"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="hsn_code" className="block text-sm font-semibold text-gray-700 mb-2">
+                    HSN Code <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="hsn_code"
+                    name="hsn_code"
+                    value={formData.hsn_code}
+                    onChange={handleChange}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="e.g., 1905"
+                  />
+                </div>
+
+                <div className="md:col-span-2 lg:col-span-4">
+                  <label htmlFor="hsn_description" className="block text-sm font-semibold text-gray-700 mb-2">
+                    HSN Description <span className="text-gray-400 text-xs font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="hsn_description"
+                    name="hsn_description"
+                    value={formData.hsn_description}
+                    onChange={handleChange}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
+                    placeholder="e.g., Bread, pastry, cakes"
                   />
                 </div>
               </div>

@@ -95,6 +95,14 @@ export interface Product {
   created_at?: string;
   updated_at?: string;
   isLoose?: boolean;
+  brand?: string;
+  min_quantity?: number;
+  max_quantity?: number;
+  hsn_code?: string;
+  hsn_description?: string;
+  cgst?: number;
+  sgst?: number;
+  rating_count?: number;
 }
 
 export interface ProductFetchOptions {

@@ -24,6 +24,7 @@ import shopkeeperRoutes from './routes/shopkeeper.routes.js';
 import pushTokenRoutes from './routes/pushToken.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import adminStoresRoutes from './routes/adminStores.routes.js';
+import adminStoreProductsRoutes from './routes/adminStoreProducts.routes.js';
 
 // Load .env from backend and project root
 dotenv.config();
@@ -103,6 +104,7 @@ app.use('/shopkeeper', shopkeeperRoutes);
 app.use('/api/push-token', pushTokenRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminStoresRoutes);
+app.use('/api/admin', adminStoreProductsRoutes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

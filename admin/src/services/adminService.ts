@@ -1,5 +1,6 @@
 import { getAdminClient } from './supabase';
 import { Product } from './supabase';
+import { getCurrentAdmin } from './secureAdminAuth';
 
 // Image Upload Constants
 const STORAGE_BUCKET = 'product-images';
@@ -9,6 +10,30 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 function adminAuthHeaders(): Record<string, string> {
   const token = sessionStorage.getItem('adminToken') || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// Logs an admin's own action to admin_notifications so it shows up on their
+// own bell (AdminHeader.tsx polls this table every 15s). Must never throw —
+// a failed notification log should never block the mutation that already
+// succeeded. Mirrors the exact insert shape NotificationsPage.tsx already
+// uses for its own push-notification-log write.
+export async function notifyAdminAction(
+  action: string,
+  summary: string,
+  data?: Record<string, unknown>
+): Promise<void> {
+  try {
+    const admin = getCurrentAdmin();
+    const actor = admin?.full_name || admin?.email || 'An admin';
+    await getAdminClient().from('admin_notifications').insert({
+      type: 'product_updated',
+      title: `${actor} ${action}`,
+      message: summary,
+      data: data ?? null,
+    });
+  } catch (e) {
+    console.error('notifyAdminAction failed (non-blocking):', e);
+  }
 }
 
 // Image Upload Functions
@@ -221,6 +246,12 @@ function toMasterProduct(product: Partial<Product>): Record<string, unknown> {
     min_quantity: p.min_quantity ?? 1,
     max_quantity: p.max_quantity ?? 100,
     rating: p.rating ?? 4,
+    rating_count: p.rating_count ?? 0,
+    gst_rate: p.gst_rate ?? null,
+    hsn_code: p.hsn_code || null,
+    hsn_description: p.hsn_description || null,
+    cgst: p.cgst ?? null,
+    sgst: p.sgst ?? null,
     is_active: p.is_active ?? p.in_stock ?? true
   };
 }
@@ -271,6 +302,15 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     if (u.unit !== undefined) row.unit = u.unit;
     if (u.is_loose !== undefined || u.isLoose !== undefined) row.is_loose = u.is_loose ?? u.isLoose;
     if (u.is_active !== undefined || u.in_stock !== undefined) row.is_active = u.is_active ?? u.in_stock;
+    if (u.min_quantity !== undefined) row.min_quantity = u.min_quantity;
+    if (u.max_quantity !== undefined) row.max_quantity = u.max_quantity;
+    if (u.rating !== undefined) row.rating = u.rating;
+    if (u.rating_count !== undefined) row.rating_count = u.rating_count;
+    if (u.gst_rate !== undefined) row.gst_rate = u.gst_rate;
+    if (u.hsn_code !== undefined) row.hsn_code = u.hsn_code;
+    if (u.hsn_description !== undefined) row.hsn_description = u.hsn_description;
+    if (u.cgst !== undefined) row.cgst = u.cgst;
+    if (u.sgst !== undefined) row.sgst = u.sgst;
 
     const { data, error } = await getAdminClient()
       .from('master_products')
@@ -929,4 +969,67 @@ export async function getDashboardStats() {
     console.error('Error fetching dashboard stats:', error);
     throw error;
   }
+}
+
+// ─── Per-store product inventory (the `products` table) ───────────────────────
+// Unlike master_products/categories, `products` has no admin-facing RLS policy —
+// these go through new backend routes (service-role, permission-gated) instead
+// of a direct getAdminClient() write. See backend/src/controllers/adminStoreProducts.controller.ts.
+
+export interface StoreProductRow {
+  id: string;
+  store_id: string;
+  master_product_id: string;
+  is_active: boolean;
+  product_name: string | null;
+  created_at: string;
+  master_product: {
+    name: string;
+    image_url: string | null;
+    base_price: number;
+    discounted_price: number;
+    unit: string;
+  } | null;
+}
+
+async function adminApiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...adminAuthHeaders(),
+      ...(options.headers as Record<string, string> | undefined),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.error || `Request failed (${res.status})`);
+  }
+  return data as T;
+}
+
+export async function getStoreProducts(storeId: string): Promise<StoreProductRow[]> {
+  const data = await adminApiFetch<{ products: StoreProductRow[] }>(`/api/admin/stores/${storeId}/products`);
+  return data.products;
+}
+
+export async function addStoreProduct(storeId: string, masterProductId: string): Promise<StoreProductRow> {
+  const data = await adminApiFetch<{ product: StoreProductRow }>(`/api/admin/stores/${storeId}/products`, {
+    method: 'POST',
+    body: JSON.stringify({ master_product_id: masterProductId }),
+  });
+  return data.product;
+}
+
+export async function setStoreProductActive(storeId: string, productId: string, isActive: boolean): Promise<void> {
+  await adminApiFetch(`/api/admin/stores/${storeId}/products/${productId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_active: isActive }),
+  });
+}
+
+export async function removeStoreProduct(storeId: string, productId: string): Promise<void> {
+  await adminApiFetch(`/api/admin/stores/${storeId}/products/${productId}`, {
+    method: 'DELETE',
+  });
 }

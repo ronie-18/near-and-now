@@ -34,6 +34,7 @@ import {
   updateProduct,
   getCategories,
   Category,
+  notifyAdminAction,
 } from "../../services/adminService";
 import { Product } from "../../services/supabase";
 
@@ -767,6 +768,7 @@ const ProductsPage = () => {
 
         if (successResult) {
           setProducts((prev) => prev.filter((p) => p.id !== id));
+          await notifyAdminAction('deleted product', productName, { product_id: id, product_name: productName });
           setSuccess(`"${productName}" has been deleted successfully.`);
           setTimeout(() => setSuccess(null), 3000);
         } else {
@@ -791,14 +793,17 @@ const ProductsPage = () => {
 
       if (updated) {
         // Update the product in the state
+        const productName = products.find((p) => p.id === id)?.name ?? id;
         setProducts((prev) =>
           prev.map((p) =>
             p.id === id ? { ...p, in_stock: !currentStatus } : p
           )
         );
 
-        // Show success message
         const newStatus = currentStatus ? "Out of Stock" : "In Stock";
+        await notifyAdminAction(`set "${newStatus}"`, productName, { product_id: id, product_name: productName });
+
+        // Show success message
         setSuccess(`Stock status updated to "${newStatus}"`);
         setTimeout(() => setSuccess(null), 2000);
       } else {

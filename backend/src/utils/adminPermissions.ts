@@ -28,6 +28,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, string[]> = {
     'invoices.*',
     'notifications.*',
     'payments.*',
+    'store_products.*',
   ],
   manager: [
     'products.view',

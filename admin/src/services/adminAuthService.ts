@@ -61,7 +61,8 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'store_verification.*',
     'invoices.*',
     'notifications.*',
-    'payments.*'
+    'payments.*',
+    'store_products.*'
   ],
   manager: [
     'products.view',

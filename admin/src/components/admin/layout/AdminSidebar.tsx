@@ -127,7 +127,8 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
           submenu: [
             { title: 'All Products', path: '/products', icon: <Package size={14} /> },
             { title: 'Add Product', path: '/products/add', icon: <Plus size={14} /> },
-            { title: 'Categories', path: '/categories', icon: <Layers size={14} /> }
+            { title: 'Categories', path: '/categories', icon: <Layers size={14} /> },
+            { title: 'Store Inventory', path: '/stores/products', icon: <Store size={14} /> }
           ]
         }
       ]
