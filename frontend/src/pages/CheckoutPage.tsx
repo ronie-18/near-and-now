@@ -75,10 +75,20 @@ function computeCouponDiscount(coupon: AppliedCoupon, subtotal: number): number 
 ───────────────────────────────────────────── */
 
 const CheckoutPage = () => {
-  const { cartItems, cartTotal, clearCart, updateCartQuantity, removeFromCart, getFeeBreakdown } = useCart();
+  const { cartItems, cartTotal, clearCart, updateCartQuantity, removeFromCart, getFeeBreakdown, hasLoadedCart } = useCart();
   const { showNotification } = useNotification();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
+
+  // Guests/returning users land here directly (bookmark, back button, refresh)
+  // with an empty cart fairly often. Wait for hasLoadedCart so we don't redirect
+  // away from a real cart that just hasn't finished loading from localStorage yet.
+  useEffect(() => {
+    if (hasLoadedCart && cartItems.length === 0) {
+      showNotification('Your cart is empty', 'error');
+      navigate('/shop', { replace: true });
+    }
+  }, [hasLoadedCart, cartItems.length, navigate, showNotification]);
 
   const [formData, setFormData] = useState({
     name: user?.name || '',

@@ -51,6 +51,7 @@ interface CartContextType {
   platformFee: number;
   handlingFee: number;
   isAuthenticated: boolean;
+  hasLoadedCart: boolean;
 }
 
 // Create context (exported for testing)
@@ -247,7 +248,8 @@ export function CartProvider({ children }: CartProviderProps) {
     getFeeBreakdown,
     platformFee: PLATFORM_FEE,
     handlingFee: HANDLING_FEE,
-    isAuthenticated
+    isAuthenticated,
+    hasLoadedCart
   };
 
   return (
