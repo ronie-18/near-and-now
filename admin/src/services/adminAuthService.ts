@@ -1,6 +1,5 @@
 import { getAdminClient } from './supabase';
 import { apiUrl } from '../utils/apiBase';
-import bcrypt from 'bcryptjs';
 import { logAdminAction, logSecurityEvent, logFailedLogin } from './auditLog';
 
 // Admin types
@@ -70,17 +69,6 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'dashboard.view'
   ]
 };
-
-// Hash password using bcrypt
-export async function hashPassword(password: string): Promise<string> {
-  const saltRounds = 10;
-  return await bcrypt.hash(password, saltRounds);
-}
-
-// Verify password against hash
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return await bcrypt.compare(password, hash);
-}
 
 // Authenticate admin — verification + session issuance happen server-side
 // (POST /api/admin/login) so password_hash never reaches the browser and the
@@ -203,58 +191,56 @@ export async function createAdmin(adminData: CreateAdminData): Promise<Admin | n
   }
 }
 
-// Update admin
+// Update admin — routed through the backend (same pattern as createAdmin) rather
+// than a direct Supabase write, which previously had zero role check: any
+// logged-in admin, including 'viewer', could edit any other admin's
+// role/permissions/status. The backend allows a self password-change for any
+// role, but requires super_admin for anything else (editing someone else, or
+// changing role/permissions/status even for yourself).
 export async function updateAdmin(id: string, updates: UpdateAdminData): Promise<Admin | null> {
   try {
     console.log('✏️ Updating admin:', id);
 
-    const updateData: any = {
-      updated_at: new Date().toISOString()
-    };
+    const token = sessionStorage.getItem('adminToken') || '';
+    const res = await fetch(apiUrl(`/api/admin/${id}`), {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(updates)
+    });
 
-    if (updates.email) updateData.email = updates.email.toLowerCase().trim();
-    if (updates.full_name) updateData.full_name = updates.full_name;
-    if (updates.role) updateData.role = updates.role;
-    if (updates.permissions) updateData.permissions = updates.permissions;
-    if (updates.status) updateData.status = updates.status;
-
-    // Hash new password if provided
-    if (updates.password) {
-      updateData.password_hash = await hashPassword(updates.password);
-    }
-
-    const { data, error } = await getAdminClient()
-      .from('admins')
-      .update(updateData)
-      .eq('id', id)
-      .select('id, email, full_name, role, permissions, created_by, status, last_login_at, created_at, updated_at')
-      .single();
-
-    if (error) {
-      console.error('❌ Error updating admin:', error);
-      throw error;
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json?.error || 'Failed to update admin');
     }
 
     console.log('✅ Admin updated successfully');
-    return data;
+    return json.admin;
   } catch (error) {
     console.error('❌ Error in updateAdmin:', error);
     throw error;
   }
 }
 
-// Delete admin (super_admin only)
+// Delete admin — routed through the backend, same reasoning as updateAdmin
+// above. Server-side enforces super_admin only, and blocks self-deletion.
 export async function deleteAdmin(id: string): Promise<boolean> {
   try {
     console.log('🗑️ Deleting admin:', id);
 
-    const { error } = await getAdminClient()
-      .from('admins')
-      .delete()
-      .eq('id', id);
+    const token = sessionStorage.getItem('adminToken') || '';
+    const res = await fetch(apiUrl(`/api/admin/${id}`), {
+      method: 'DELETE',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
 
-    if (error) {
-      console.error('❌ Error deleting admin:', error);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('❌ Error deleting admin:', json?.error);
       return false;
     }
 

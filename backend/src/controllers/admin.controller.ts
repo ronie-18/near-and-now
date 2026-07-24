@@ -128,4 +128,105 @@ export class AdminController {
       res.status(500).json({ error: 'Failed to create admin' });
     }
   }
+
+  // PATCH /api/admin/:id
+  // Previously a direct Supabase write from the admin panel with zero role
+  // check — any logged-in admin (including 'viewer') could edit any other
+  // admin's role/permissions/status, the same class of privilege-escalation
+  // gap already closed on createAdmin. Two allowed cases: (1) an admin
+  // changing their own password only (self-service, any role), or (2) a
+  // super_admin editing anything, for themself or anyone else.
+  async updateAdmin(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { email, password, full_name, role, permissions, status } = req.body as {
+        email?: string;
+        password?: string;
+        full_name?: string;
+        role?: string;
+        permissions?: string[];
+        status?: string;
+      };
+
+      const { data: caller, error: callerError } = await supabaseAdmin
+        .from('admins')
+        .select('role')
+        .eq('id', req.adminId)
+        .maybeSingle();
+      if (callerError || !caller) {
+        return res.status(401).json({ error: 'Invalid admin session' });
+      }
+
+      const onlyChangingOwnPassword =
+        id === req.adminId &&
+        password !== undefined &&
+        email === undefined && full_name === undefined && role === undefined &&
+        permissions === undefined && status === undefined;
+
+      if (!onlyChangingOwnPassword && (caller as any).role !== 'super_admin') {
+        return res.status(403).json({ error: 'Only super admins can edit other admin accounts, or change role/permissions/status.' });
+      }
+
+      const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (email !== undefined) updateData.email = email.toLowerCase().trim();
+      if (full_name !== undefined) updateData.full_name = full_name;
+      if (role !== undefined) updateData.role = role;
+      if (permissions !== undefined) updateData.permissions = permissions;
+      if (status !== undefined) updateData.status = status;
+      if (password !== undefined) {
+        if (password.length < 8) {
+          return res.status(400).json({ error: 'Password must be at least 8 characters' });
+        }
+        updateData.password_hash = await bcrypt.hash(password, 10);
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('admins')
+        .update(updateData)
+        .eq('id', id)
+        .select('id, email, full_name, role, permissions, created_by, status, last_login_at, created_at, updated_at')
+        .single();
+
+      if (error) {
+        const code = (error as any).code === '23505' ? 409 : 500;
+        return res.status(code).json({ error: code === 409 ? 'An admin with this email already exists' : error.message });
+      }
+
+      res.json({ admin: data });
+    } catch (err) {
+      console.error('admin updateAdmin error:', err);
+      res.status(500).json({ error: 'Failed to update admin' });
+    }
+  }
+
+  // DELETE /api/admin/:id
+  // Same gap as updateAdmin — was a direct Supabase delete with no role check.
+  async deleteAdmin(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+
+      const { data: caller, error: callerError } = await supabaseAdmin
+        .from('admins')
+        .select('role')
+        .eq('id', req.adminId)
+        .maybeSingle();
+      if (callerError || !caller) {
+        return res.status(401).json({ error: 'Invalid admin session' });
+      }
+      if ((caller as any).role !== 'super_admin') {
+        return res.status(403).json({ error: 'Only super admins can delete admin accounts' });
+      }
+      if (id === req.adminId) {
+        return res.status(400).json({ error: 'You cannot delete your own admin account.' });
+      }
+
+      const { error } = await supabaseAdmin.from('admins').delete().eq('id', id);
+      if (error) throw error;
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('admin deleteAdmin error:', err);
+      res.status(500).json({ error: 'Failed to delete admin' });
+    }
+  }
 }

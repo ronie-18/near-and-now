@@ -18,5 +18,7 @@ const adminLoginLimiter = rateLimit({
 
 router.post('/login', adminLoginLimiter, ctrl.login.bind(ctrl));
 router.post('/create', requireAdmin, ctrl.createAdmin.bind(ctrl));
+router.patch('/:id', requireAdmin, ctrl.updateAdmin.bind(ctrl));
+router.delete('/:id', requireAdmin, ctrl.deleteAdmin.bind(ctrl));
 
 export default router;
