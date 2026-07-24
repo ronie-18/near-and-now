@@ -40,7 +40,7 @@ import {
 import { Product } from "../../services/supabase";
 
 // Constants
-const ITEMS_PER_PAGE = 10;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 
 // Helper functions
 const formatPrice = (price: number) => `₹${Math.round(price).toLocaleString("en-IN")}`;
@@ -712,6 +712,7 @@ const ProductsPage = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(PAGE_SIZE_OPTIONS[0]);
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [toggleLoading, setToggleLoading] = useState<string | null>(null);
@@ -869,18 +870,18 @@ const ProductsPage = () => {
   );
 
   // Pagination
-  const totalPages = Math.ceil(filteredProducts.length / ITEMS_PER_PAGE);
-  const indexOfLastProduct = currentPage * ITEMS_PER_PAGE;
-  const indexOfFirstProduct = indexOfLastProduct - ITEMS_PER_PAGE;
+  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage);
+  const indexOfLastProduct = currentPage * itemsPerPage;
+  const indexOfFirstProduct = indexOfLastProduct - itemsPerPage;
   const currentProducts = filteredProducts.slice(
     indexOfFirstProduct,
     indexOfLastProduct
   );
 
-  // Reset page on filter change
+  // Reset page on filter or page-size change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory]);
+  }, [searchTerm, selectedCategory, itemsPerPage]);
 
   // Get unique categories from products
   const productCategories = useMemo(
@@ -1096,23 +1097,40 @@ const ProductsPage = () => {
           )}
 
           {/* Pagination */}
-          {totalPages > 1 && (
+          {filteredProducts.length > 0 && (
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <p className="text-sm text-gray-600">
-                Showing{" "}
-                <span className="font-semibold text-gray-800">
-                  {indexOfFirstProduct + 1}
-                </span>{" "}
-                to{" "}
-                <span className="font-semibold text-gray-800">
-                  {Math.min(indexOfLastProduct, filteredProducts.length)}
-                </span>{" "}
-                of{" "}
-                <span className="font-semibold text-gray-800">
-                  {filteredProducts.length}
-                </span>{" "}
-                products
-              </p>
+              <div className="flex items-center gap-4">
+                <p className="text-sm text-gray-600">
+                  Showing{" "}
+                  <span className="font-semibold text-gray-800">
+                    {indexOfFirstProduct + 1}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-semibold text-gray-800">
+                    {Math.min(indexOfLastProduct, filteredProducts.length)}
+                  </span>{" "}
+                  of{" "}
+                  <span className="font-semibold text-gray-800">
+                    {filteredProducts.length}
+                  </span>{" "}
+                  products
+                </p>
+                <label className="flex items-center gap-2 text-sm text-gray-600">
+                  Show
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                    className="px-2 py-1.5 border border-gray-200 rounded-lg bg-white text-gray-800 font-semibold focus:outline-none focus:border-emerald-400 transition-colors"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                  per page
+                </label>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() =>
