@@ -1,7 +1,7 @@
-  import { Link, useLocation, useNavigate } from 'react-router-dom';
+  import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { formatPrice } from '../utils/formatters';
-import { Order, OrderItem } from '../services/supabase';
+import { Order, OrderItem, getOrderById } from '../services/supabase';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 
@@ -10,11 +10,26 @@ const THANK_YOU_DISPLAY_SEC = 3;
 const ThankYouPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const orderData = location.state as { order?: Order; orderId?: string; orderNumber?: string } | null;
 
-  const order = orderData?.order;
+  // location.state is lost on a full page reload (very common right after
+  // payment — checking email, app-switching), so the order ID also rides
+  // along in the URL as a recovery path; `fetchedOrder` fills in the rest.
+  const [fetchedOrder, setFetchedOrder] = useState<Order | null>(null);
+
+  const order = orderData?.order || fetchedOrder || undefined;
   const orderNumber = orderData?.orderNumber || order?.order_number;
-  const orderId = orderData?.orderId || order?.id;
+  const orderId = orderData?.orderId || order?.id || searchParams.get('orderId') || undefined;
+
+  useEffect(() => {
+    if (orderData?.order || !orderId) return;
+    let cancelled = false;
+    getOrderById(orderId)
+      .then((fetched) => { if (!cancelled && fetched) setFetchedOrder(fetched); })
+      .catch((error) => console.error('Error fetching order for Thank You page:', error));
+    return () => { cancelled = true; };
+  }, [orderId, orderData?.order]);
 
   const [redirectCountdown, setRedirectCountdown] = useState<number>(THANK_YOU_DISPLAY_SEC);
   const redirectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);

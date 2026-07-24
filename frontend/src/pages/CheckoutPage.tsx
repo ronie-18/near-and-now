@@ -564,7 +564,7 @@ const CheckoutPage = () => {
           }
           clearCart();
           lastCreatedAddressRef.current = null;
-          navigate('/thank-you', { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
+          navigate(`/thank-you?orderId=${createdOrder.id}`, { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
           return;
         }
       }
@@ -572,7 +572,7 @@ const CheckoutPage = () => {
       showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
       lastCreatedAddressRef.current = null;
-      navigate('/thank-you', { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
+      navigate(`/thank-you?orderId=${createdOrder.id}`, { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
     } catch (error: any) {
       console.error('Error placing order:', error);
       const message = error?.message || 'Failed to place order. Please try again.';

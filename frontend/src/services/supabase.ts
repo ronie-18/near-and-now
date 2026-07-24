@@ -628,6 +628,56 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
   }
 }
 
+// Fetch a single order by ID, from the backend's `GET /api/orders/:orderId`
+// (a raw `customer_orders` row joined with `store_orders`/`order_items`,
+// different column names/shape than the flat `Order` the checkout flow
+// returns) — used as a fallback when a page only has the order ID (e.g. a
+// page refresh lost React Router state) and needs the full order shape.
+export async function getOrderById(orderId: string): Promise<Order | null> {
+  const res = await authedFetch(apiUrl(`/api/orders/${orderId}`), { headers: getAuthHeaders() });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await readApiErrorMessage(res));
+  const co = await res.json();
+
+  const allItems: OrderItem[] = [];
+  for (const so of co.store_orders || []) {
+    for (const i of so.order_items || []) {
+      allItems.push({
+        product_id: i.product_id,
+        name: i.product_name,
+        price: Number(i.unit_price),
+        quantity: i.quantity,
+        image: i.image_url,
+        unit: i.unit
+      });
+    }
+  }
+
+  return {
+    id: co.id,
+    user_id: co.customer_id,
+    customer_name: co.customer_name || '',
+    customer_email: co.customer_email,
+    customer_phone: co.customer_phone || '',
+    order_status: co.status as Order['order_status'],
+    payment_status: co.payment_status as Order['payment_status'],
+    payment_method: co.payment_method || '',
+    order_total: Number(co.total_amount),
+    subtotal: Number(co.subtotal_amount),
+    delivery_fee: Number(co.delivery_fee || 0),
+    items: allItems,
+    items_count: allItems.length,
+    shipping_address: {
+      address: co.delivery_address || '',
+      city: '',
+      state: '',
+      pincode: ''
+    },
+    created_at: co.placed_at || co.created_at || '',
+    order_number: co.order_code
+  };
+}
+
 // Newsletter subscription types
 export interface NewsletterSubscription {
   id: string;
