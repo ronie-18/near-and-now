@@ -17,24 +17,32 @@ const SearchPage = () => {
     const query = queryParams.get('q') || '';
     setSearchTerm(query);
 
+    // Guards against a slower, older search response overwriting a newer
+    // one — e.g. typing "a" then quickly "apple", if "a"'s request resolves
+    // after "apple"'s, it must not clobber the fresher results on screen.
+    let cancelled = false;
+
     const fetchSearchResults = async () => {
       try {
         setLoading(true);
         if (query.trim()) {
           const results = await searchProducts(query);
-          setProducts(results);
+          if (!cancelled) setProducts(results);
         } else {
-          setProducts([]);
+          if (!cancelled) setProducts([]);
         }
       } catch (error) {
         console.error('Error searching products:', error);
-        showNotification('Failed to load search results. Please try again.', 'error');
+        if (!cancelled) showNotification('Failed to load search results. Please try again.', 'error');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchSearchResults();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search]);
 
