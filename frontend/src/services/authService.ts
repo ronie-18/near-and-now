@@ -37,20 +37,6 @@ export interface AuthResponse {
   isNewUser: boolean;
 }
 
-// Base URL for backend API.
-// Prefer VITE_API_URL; optional EXPO_PUBLIC_API_BASE_URL fallback (Expo / shared .env).
-// In Vite dev, if VITE_API_URL points at a remote https API, use same-origin `/api` instead so the
-// dev server proxy (vite.config) forwards the request — avoids CORS (localhost → production).
-const getApiBase = () => {
-  let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
-    .toString()
-    .replace(/\/$/, '');
-  if (import.meta.env.DEV && base.startsWith('https://')) {
-    return '';
-  }
-  return base;
-};
-
 function isHtmlResponseBody(text: string): boolean {
   const trimmed = text.trim().toLowerCase();
   return trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
@@ -79,8 +65,7 @@ export async function sendOTP(phone: string): Promise<void> {
   try {
     console.log('📱 Sending OTP to:', phone);
 
-    const apiBase = getApiBase();
-    const url = apiBase ? `${apiBase}/api/auth/send-otp` : '/api/auth/send-otp';
+    const url = apiUrl('/api/auth/send-otp');
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -131,8 +116,7 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
   try {
     console.log('� Verifying OTP for:', phone);
 
-    const apiBase = getApiBase();
-    const url = apiBase ? `${apiBase}/api/auth/verify-otp` : '/api/auth/verify-otp';
+    const url = apiUrl('/api/auth/verify-otp');
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

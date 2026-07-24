@@ -1,15 +1,6 @@
 import { Order } from './supabase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
-
-const getApiBase = () => {
-  let base = (import.meta.env.VITE_API_URL || import.meta.env.EXPO_PUBLIC_API_BASE_URL || '')
-    .toString()
-    .replace(/\/$/, '');
-  if (import.meta.env.DEV && base.startsWith('https://')) {
-    return '';
-  }
-  return base;
-};
+import { apiUrl } from '../utils/apiBase';
 
 export interface CustomerOrderResponse {
   id: string;
@@ -41,8 +32,7 @@ export interface CustomerOrderResponse {
 
 export async function fetchCustomerOrders(customerId: string): Promise<Order[]> {
   try {
-    const apiBase = getApiBase();
-    const url = `${apiBase}/api/orders/customer/${customerId}`;
+    const url = apiUrl(`/api/orders/customer/${customerId}`);
     
     console.log('📦 Fetching customer orders from:', url);
     
@@ -114,8 +104,7 @@ export async function fetchCustomerOrders(customerId: string): Promise<Order[]> 
 
 export async function fetchOrderById(orderId: string): Promise<CustomerOrderResponse | null> {
   try {
-    const apiBase = getApiBase();
-    const url = `${apiBase}/api/orders/${orderId}`;
+    const url = apiUrl(`/api/orders/${orderId}`);
     
     const response = await authedFetch(url, {
       method: 'GET',
@@ -140,8 +129,7 @@ export async function fetchOrderById(orderId: string): Promise<CustomerOrderResp
 
 export async function cancelOrder(orderId: string): Promise<{ success: boolean; message: string; order?: any }> {
   try {
-    const apiBase = getApiBase();
-    const url = `${apiBase}/api/orders/${orderId}/cancel`;
+    const url = apiUrl(`/api/orders/${orderId}/cancel`);
     
     const response = await authedFetch(url, {
       method: 'POST',
