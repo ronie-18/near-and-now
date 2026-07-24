@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 
 // Define notification types
 export type NotificationType = 'success' | 'error' | 'info' | 'warning';
@@ -30,27 +30,10 @@ interface NotificationProviderProps {
 export function NotificationProvider({ children }: NotificationProviderProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // Remove notification after duration
-  useEffect(() => {
-    if (notifications.length > 0) {
-      const timers = notifications.map(notification => {
-        const duration = notification.duration || 3000;
-        return setTimeout(() => {
-          removeNotification(notification.id);
-        }, duration);
-      });
-
-      // Cleanup timers
-      return () => {
-        timers.forEach(timer => clearTimeout(timer));
-      };
-    }
-  }, [notifications]);
-
   // Show notification
   const showNotification = (
-    message: string, 
-    type: NotificationType = 'info', 
+    message: string,
+    type: NotificationType = 'info',
     duration = 3000
   ) => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -62,6 +45,15 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
     };
 
     setNotifications(prevNotifications => [...prevNotifications, notification]);
+
+    // Scheduled once here, at creation, instead of via a useEffect keyed on
+    // the whole `notifications` array — that previously re-derived a fresh
+    // timer for every *currently visible* toast on every add/remove, so a
+    // burst of notifications kept resetting every earlier toast's countdown
+    // back to its full duration instead of letting it expire on schedule.
+    setTimeout(() => {
+      removeNotification(id);
+    }, duration);
   };
 
   // Remove notification
