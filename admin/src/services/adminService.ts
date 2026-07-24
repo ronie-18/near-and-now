@@ -4,6 +4,12 @@ import { Product } from './supabase';
 // Image Upload Constants
 const STORAGE_BUCKET = 'product-images';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
+function adminAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem('adminToken') || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 // Image Upload Functions
 export async function uploadProductImage(file: File): Promise<string | null> {
@@ -657,7 +663,7 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
     console.log(`Updating order ${id} to status: ${status}`);
 
     // Map frontend order_status to database status
-    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup', 
+    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup',
     // 'delivery_partner_assigned', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
     const statusMap: Record<Order['order_status'], string> = {
       'placed': 'pending_at_store',
@@ -669,24 +675,23 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 
     const dbStatus = statusMap[status] || status;
 
-    const { data, error } = await getAdminClient()
-      .from('customer_orders')
-      .update({ status: dbStatus, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
+    // Routed through the backend (not a direct Supabase write) so this goes through
+    // the same state-machine guard, store_orders sync, and customer notification
+    // that the real order-status flow already has — a direct write here bypassed
+    // all three.
+    const res = await fetch(`${API_BASE}/api/orders/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+      body: JSON.stringify({ status: dbStatus }),
+    });
+    const json = await res.json().catch(() => ({}));
 
-    if (error) {
-      console.error('Supabase error updating order status:', error);
-      // Provide more specific error messages
-      if (error.message.includes('invalid input value')) {
-        throw new Error(`Status "${status}" is not valid in the database. Please update the database schema to include this status.`);
-      }
-      throw new Error(error.message || 'Failed to update order status');
+    if (!res.ok) {
+      throw new Error(json?.error || 'Failed to update order status');
     }
 
-    console.log('Order status updated successfully:', data);
-    
+    console.log('Order status updated successfully:', json.order);
+
     // Return full order data
     return await getOrderById(id);
   } catch (error: any) {

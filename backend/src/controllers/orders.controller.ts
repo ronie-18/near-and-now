@@ -268,6 +268,7 @@ export class OrdersController {
         'preparing_order',
         'ready_for_pickup',
         'delivery_partner_assigned',
+        'picking_up',
         'order_picked_up',
         'in_transit',
         'order_delivered',
@@ -286,6 +287,16 @@ export class OrdersController {
 
       if (fetchErr || !existing) {
         return res.status(404).json({ error: 'Order not found' });
+      }
+
+      // Terminal states can't be moved out of once reached — otherwise an admin
+      // could move a delivered/cancelled order back to an earlier stage,
+      // re-triggering customer notifications ("order confirmed", "shipped", etc.)
+      // for something that already finished.
+      if (existing.status === 'order_delivered' || existing.status === 'order_cancelled') {
+        return res.status(409).json({
+          error: `Order is already ${existing.status === 'order_delivered' ? 'delivered' : 'cancelled'} and its status cannot be changed.`,
+        });
       }
 
       const { data, error } = await supabaseAdmin
