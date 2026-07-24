@@ -61,7 +61,21 @@ export function useOrderTrackingRealtime(
   const buildRef = useRef(buildTrackingHistory);
   buildRef.current = buildTrackingHistory;
 
+  // Effects below intentionally depend on [orderId, !!order] rather than
+  // [orderId, order] — subscribing/re-subscribing the realtime channel on
+  // every order field update (not just the initial null -> non-null
+  // transition) would tear down and recreate it constantly. But that means
+  // refreshOrderAndHistory, as captured by the effect's closure, otherwise
+  // stays pinned to whatever `order` was on the render the effect last ran —
+  // any field not explicitly re-assigned in updatedOrder below would silently
+  // revert to its first-render value forever. Read the latest order via a ref
+  // instead (same pattern already used for buildRef above) so the closure
+  // itself can go stale without the data it operates on going stale too.
+  const orderRef = useRef(order);
+  orderRef.current = order;
+
   const refreshOrderAndHistory = async () => {
+    const order = orderRef.current;
     if (!orderId || !order) return;
     const build = buildRef.current;
 
