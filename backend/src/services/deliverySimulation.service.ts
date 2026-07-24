@@ -164,30 +164,47 @@ async function updateAllStoreOrders(
 
 // ── Find a real driver ────────────────────────────────────────────────────────
 
-async function findRealDriver(): Promise<string | null> {
+// Drivers currently the assigned_driver_id on some *other* order that hasn't
+// reached a terminal status yet are mid-delivery for real — picking one of
+// these would overwrite their live driver_locations row with fabricated GPS
+// and silently reassign them away from their actual delivery.
+async function getBusyDriverIds(excludeOrderId: string): Promise<Set<string>> {
+  const { data } = await supabaseAdmin
+    .from('customer_orders')
+    .select('assigned_driver_id')
+    .not('assigned_driver_id', 'is', null)
+    .not('status', 'in', '(order_delivered,order_cancelled)')
+    .neq('id', excludeOrderId);
+
+  return new Set((data || []).map((row: any) => row.assigned_driver_id as string).filter(Boolean));
+}
+
+async function findRealDriver(excludeOrderId: string): Promise<string | null> {
+  const busy = await getBusyDriverIds(excludeOrderId);
+
   // Priority 1: online + active
   const { data: onlineActive } = await supabaseAdmin
     .from('delivery_partners')
     .select('user_id')
     .eq('is_online', true)
-    .eq('status', 'active')
-    .limit(1);
-  if (onlineActive?.[0]?.user_id) return onlineActive[0].user_id;
+    .eq('status', 'active');
+  const freeOnlineActive = (onlineActive || []).find((d: any) => !busy.has(d.user_id));
+  if (freeOnlineActive?.user_id) return freeOnlineActive.user_id;
 
   // Priority 2: any active driver
   const { data: anyActive } = await supabaseAdmin
     .from('delivery_partners')
     .select('user_id')
-    .eq('status', 'active')
-    .limit(1);
-  if (anyActive?.[0]?.user_id) return anyActive[0].user_id;
+    .eq('status', 'active');
+  const freeActive = (anyActive || []).find((d: any) => !busy.has(d.user_id));
+  if (freeActive?.user_id) return freeActive.user_id;
 
   // Priority 3: any partner at all (for dev environments with no active drivers)
   const { data: anyPartner } = await supabaseAdmin
     .from('delivery_partners')
-    .select('user_id')
-    .limit(1);
-  return anyPartner?.[0]?.user_id ?? null;
+    .select('user_id');
+  const freePartner = (anyPartner || []).find((d: any) => !busy.has(d.user_id));
+  return freePartner?.user_id ?? null;
 }
 
 // ── Main simulation ───────────────────────────────────────────────────────────
@@ -299,10 +316,10 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
   await updateAllStoreOrders(soIds, { status: 'ready_for_pickup' });
   await sleep(storePhaseStep);
 
-  // 5. Find a real driver from delivery_partners
-  const driverId = await findRealDriver();
+  // 5. Find a real, currently-free driver from delivery_partners
+  const driverId = await findRealDriver(orderId);
   if (!driverId) {
-    console.error('[Sim] No delivery_partners found — cannot assign driver');
+    console.error('[Sim] No free delivery_partners found (all busy on real deliveries) — cannot assign driver');
     return;
   }
   console.log(`[Sim] Using driver ${driverId}`);
