@@ -4,7 +4,7 @@
  * and driver_locations for live updates on the tracking page.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { supabaseAdmin } from '../services/supabase';
 import { fetchOrderTrackingFull, fetchDriverLocations } from '../services/trackingApi';
 
@@ -182,17 +182,35 @@ export function useOrderTrackingRealtime(
     };
   }, [orderId, !!order]);
 
-  // Driver locations: poll backend API every 2 sec (backend gets partner IDs from DB).
-  // Poll whenever we have orderId - no need to wait for order.store_orders to have
-  // delivery_partner_id. Unlike order status above, there's no realtime channel for
-  // driver_locations to gate against — a moving GPS marker needs this cadence
-  // regardless — but still guarded against overlapping/stale responses the same way.
+  // driver_locations is already in the supabase_realtime publication (added
+  // 2026-04-27/28 for an unrelated feature) — this hook just never subscribed
+  // to it, unlike order status above. `driverIdsKey` is a stable string derived
+  // from the currently-assigned driver ids, used as the effect dependency
+  // instead of `order` itself, so the channel only actually re-subscribes when
+  // the set of assigned drivers changes (e.g. reassignment) — not on every
+  // order refresh, which would otherwise create a new object reference and
+  // churn the subscription constantly.
+  const driverIds = useMemo(() => {
+    const ids = (order?.store_orders || [])
+      .map((so) => so.delivery_partner_id)
+      .filter((id): id is string => !!id);
+    return [...new Set(ids)];
+  }, [order?.store_orders]);
+  const driverIdsKey = driverIds.join(',');
+
+  // Driver locations: real Supabase realtime channel when we know which
+  // driver(s) to watch, plus a 2s poll — but the poll only actually fetches
+  // while realtime isn't confirmed connected for this channel, same gating
+  // approach as order status above. Guarded against overlapping/stale
+  // responses either way.
   useEffect(() => {
     if (!orderId) return;
 
     const driverSeqRef = { current: 0 };
+    let realtimeHealthy = false;
 
     const pollDriverLocations = async () => {
+      if (realtimeHealthy) return;
       const mySeq = ++driverSeqRef.current;
       const locations = await fetchDriverLocations(orderId);
       if (mySeq !== driverSeqRef.current) return; // a newer poll already won
@@ -201,9 +219,49 @@ export function useOrderTrackingRealtime(
       }
     };
 
+    // Always do one immediate fetch — realtime's subscribe() callback hasn't
+    // resolved yet at this point, so realtimeHealthy is still false here.
     pollDriverLocations();
 
+    let channel: ReturnType<typeof supabaseAdmin.channel> | null = null;
+    if (driverIds.length > 0) {
+      channel = supabaseAdmin
+        .channel(`driver-locations-${orderId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'driver_locations',
+            filter: `delivery_partner_id=in.(${driverIds.join(',')})`,
+          },
+          (payload) => {
+            const row = payload.new as {
+              delivery_partner_id?: string;
+              latitude?: number;
+              longitude?: number;
+              updated_at?: string;
+            };
+            if (!row?.delivery_partner_id || row.latitude == null || row.longitude == null) return;
+            setDriverLocations((prev) => ({
+              ...prev,
+              [row.delivery_partner_id!]: {
+                latitude: row.latitude!,
+                longitude: row.longitude!,
+                updated_at: row.updated_at || new Date().toISOString(),
+              },
+            }));
+          }
+        )
+        .subscribe((status) => {
+          realtimeHealthy = status === 'SUBSCRIBED';
+        });
+    }
+
     const pollInterval = setInterval(pollDriverLocations, 2000);
-    return () => clearInterval(pollInterval);
-  }, [orderId]);
+    return () => {
+      clearInterval(pollInterval);
+      if (channel) supabaseAdmin.removeChannel(channel);
+    };
+  }, [orderId, driverIdsKey]);
 }
