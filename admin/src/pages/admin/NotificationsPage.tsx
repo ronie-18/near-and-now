@@ -91,12 +91,19 @@ const PushNotificationPanel = () => {
       }
 
       // Log the notification in admin_notifications
-      await db.from('admin_notifications').insert({
-        type: 'system',
-        title,
-        message: body,
-        data: { target: targetApp, tokens_count: uniqueTokens.length }
-      });
+      const { data: inserted, error: insertError } = await db
+        .from('admin_notifications')
+        .insert({
+          type: 'system',
+          title,
+          message: body,
+          data: { target: targetApp, tokens_count: uniqueTokens.length }
+        })
+        .select('id');
+      if (insertError) throw insertError;
+      if (!inserted || inserted.length === 0) {
+        throw new Error('Insert was blocked (no admin session or insufficient permissions).');
+      }
 
       setResult({ ok: true, message: `Notification sent to ${uniqueTokens.length} device(s).` });
       setTitle('');
@@ -231,24 +238,62 @@ const NotificationsPage = () => {
   }, [fetchNotifications]);
 
   const markAllRead = async () => {
-    const db = getAdminClient();
-    await db
-      .from('admin_notifications')
-      .update({ is_read: true })
-      .eq('is_read', false);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    // Bulk update, so an empty result is ambiguous on its own (could mean
+    // "nothing was unread" instead of "the write was silently blocked") —
+    // only treat it as a failure if we know from local state there was
+    // actually something to mark.
+    const hadUnread = notifications.some(n => !n.is_read);
+    try {
+      const db = getAdminClient();
+      const { data, error } = await db
+        .from('admin_notifications')
+        .update({ is_read: true })
+        .eq('is_read', false)
+        .select('id');
+      if (error) throw error;
+      if (hadUnread && (!data || data.length === 0)) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to mark notifications as read');
+    }
   };
 
   const markOneRead = async (id: string) => {
-    const db = getAdminClient();
-    await db.from('admin_notifications').update({ is_read: true }).eq('id', id);
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    try {
+      const db = getAdminClient();
+      const { data, error } = await db
+        .from('admin_notifications')
+        .update({ is_read: true })
+        .eq('id', id)
+        .select('id');
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to mark notification as read');
+    }
   };
 
   const deleteNotification = async (id: string) => {
-    const db = getAdminClient();
-    await db.from('admin_notifications').delete().eq('id', id);
-    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      const db = getAdminClient();
+      const { data, error } = await db
+        .from('admin_notifications')
+        .delete()
+        .eq('id', id)
+        .select('id');
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Delete was blocked (no admin session or insufficient permissions).');
+      }
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete notification');
+    }
   };
 
   const resolveRefund = async (id: string) => {

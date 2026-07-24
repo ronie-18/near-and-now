@@ -122,8 +122,20 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
   const markAllRead = async () => {
     const unreadIds = notifications.filter(n => !n.is_read).map(n => n.id);
     if (unreadIds.length === 0) return;
-    await getAdminClient().from('admin_notifications').update({ is_read: true }).in('id', unreadIds);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    try {
+      const { data, error } = await getAdminClient()
+        .from('admin_notifications')
+        .update({ is_read: true })
+        .in('id', unreadIds)
+        .select('id');
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to mark notifications as read');
+    }
   };
 
   const handleLogout = async () => {
