@@ -175,20 +175,6 @@ export class DeliveryController {
     }
   }
 
-  // Get delivery schedule for an agent
-  async getAgentSchedule(req: Request, res: Response) {
-    try {
-      const { agentId } = req.params;
-      const { date } = req.query;
-
-      const schedule = await databaseService.getAgentSchedule(agentId, date as string);
-      res.json(schedule);
-    } catch (error) {
-      console.error('Error fetching agent schedule:', error);
-      res.status(500).json({ error: 'Failed to fetch agent schedule' });
-    }
-  }
-
   // Update delivery status
   async updateDeliveryStatus(req: Request, res: Response) {
     try {

@@ -52,7 +52,6 @@ router.post('/partners/:partnerId/notify-approved', requireAdmin, requirePermiss
 router.get('/partners/:partnerId/agents', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getDeliveryAgents.bind(deliveryController));
 router.post('/orders/:orderId/assign', requireAdmin, requirePermission('orders.edit'), deliveryController.assignDeliveryAgent.bind(deliveryController));
 router.post('/simulate/:orderId', requireAdmin, requirePermission('orders.edit'), deliveryController.startSimulation.bind(deliveryController));
-router.get('/agents/:agentId/schedule', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getAgentSchedule.bind(deliveryController));
 router.put('/orders/:orderId/status', requireAdmin, requirePermission('orders.edit'), deliveryController.updateDeliveryStatus.bind(deliveryController));
 router.post('/orders/:orderId/broadcast', requireAdmin, requirePermission('orders.edit'), deliveryController.broadcastToDrivers.bind(deliveryController));
 

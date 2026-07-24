@@ -1792,10 +1792,6 @@ export class DatabaseService {
     return data;
   }
 
-  async getAgentSchedule(_agentId: string, _date?: string) {
-    return [];
-  }
-
   async updateDeliveryStatus(orderId: string, params: { status: string; location?: string; notes?: string }) {
     const { data: co } = await supabase
       .from('customer_orders')
