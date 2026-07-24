@@ -486,25 +486,6 @@ const CheckoutPage = () => {
         paymentMethodLabel = `Split — Cash ₹${Math.round(cashAmt)} + UPI ₹${Math.round(upiAmt)}`;
       }
 
-      // The backend only persists a single free-text `notes` field (see
-      // placeCheckoutOrder) — there's no dedicated gstin/receiver-info column
-      // on customer_orders. GSTIN and "order for someone else" receiver details
-      // were previously only saved when the address itself got saved to the
-      // address book, never actually attached to the real order. Fold them into
-      // notes instead, matching the customer mobile app's already-working
-      // equivalent (nearandnowcustomerapp/app/support/checkout.tsx).
-      const notesParts: string[] = [];
-      if (gstinEnabled && gstin.trim()) {
-        notesParts.push(`GSTIN: ${gstin.trim()}${businessName.trim() ? ` (Name: ${businessName.trim()})` : ''}`);
-      }
-      if (orderForOthers) {
-        const rxParts: string[] = [];
-        if (receiverName.trim()) rxParts.push(receiverName.trim());
-        if (receiverPhone.trim()) rxParts.push(receiverPhone.trim());
-        if (receiverAddress.trim()) rxParts.push(receiverAddress.trim());
-        if (rxParts.length) notesParts.push(`Deliver to: ${rxParts.join(' | ')}`);
-      }
-
       const orderData: CreateOrderData = {
         user_id: user?.id,
         customer_name: formData.name,
@@ -517,7 +498,6 @@ const CheckoutPage = () => {
         subtotal: totals.itemsTaxableValue,
         delivery_fee: totals.deliveryFee,
         coupon_id: appliedCoupon?.id,
-        notes: notesParts.length ? notesParts.join(' | ') : undefined,
         items: orderItems,
         shipping_address: {
           address: formData.address,
@@ -529,7 +509,12 @@ const CheckoutPage = () => {
         ...(splitEnabled && {
           split_cash_amount: parseFloat(splitCashAmount) || 0,
           split_upi_amount: parseFloat(splitUpiAmount) || 0
-        })
+        }),
+        ...(gstinEnabled && gstin.trim() && { gstin: gstin.trim() }),
+        ...(gstinEnabled && businessName.trim() && { gstin_business_name: businessName.trim() }),
+        ...(orderForOthers && receiverName.trim() && { receiver_name: receiverName.trim() }),
+        ...(orderForOthers && receiverPhone.trim() && { receiver_phone: receiverPhone.trim() }),
+        ...(orderForOthers && receiverAddress.trim() && { receiver_address: receiverAddress.trim() })
       };
 
       const createdOrder = await createOrder(orderData);

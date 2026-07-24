@@ -419,9 +419,15 @@ export interface CreateOrderData {
   split_cash_amount?: number;
   split_upi_amount?: number;
   coupon_id?: string;
-  /** Free-text delivery note — the only field the backend actually persists for
-   * things like GSTIN/receiver-for-someone-else info (see placeCheckoutOrder). */
+  /** Free-text delivery note (e.g. "leave at door"). */
   notes?: string;
+  /** Customer's GSTIN for a proper GST invoice — separate from the platform's own seller GSTIN. */
+  gstin?: string;
+  gstin_business_name?: string;
+  /** "Order for someone else" — who actually receives the order, if not the customer themself. */
+  receiver_name?: string;
+  receiver_phone?: string;
+  receiver_address?: string;
 }
 
 export interface Order {
@@ -472,7 +478,12 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
           ...(orderData.split_upi_amount != null && { split_upi_amount: orderData.split_upi_amount }),
           ...(orderData.split_cash_amount != null && { split_cash_amount: orderData.split_cash_amount }),
           ...(orderData.coupon_id != null && { coupon_id: orderData.coupon_id }),
-          ...(orderData.notes != null && { notes: orderData.notes })
+          ...(orderData.notes != null && { notes: orderData.notes }),
+          ...(orderData.gstin != null && { gstin: orderData.gstin }),
+          ...(orderData.gstin_business_name != null && { gstin_business_name: orderData.gstin_business_name }),
+          ...(orderData.receiver_name != null && { receiver_name: orderData.receiver_name }),
+          ...(orderData.receiver_phone != null && { receiver_phone: orderData.receiver_phone }),
+          ...(orderData.receiver_address != null && { receiver_address: orderData.receiver_address })
         })
       });
       if (!res.ok) {

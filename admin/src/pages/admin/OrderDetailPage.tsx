@@ -271,6 +271,39 @@ const OrderDetailPage = () => {
                 <p className="text-gray-500 italic">No address provided</p>
               )}
             </div>
+
+            {/* Receiver Info (order placed for someone else) */}
+            {(order.receiver_name || order.receiver_phone || order.receiver_address) && (
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                  <User className="w-5 h-5 text-gray-600" />
+                  Deliver To (Receiver)
+                </h2>
+                <p className="text-xs text-gray-500 mb-3">
+                  This order was placed for someone other than the customer above.
+                </p>
+                <div className="space-y-3">
+                  {order.receiver_name && (
+                    <div>
+                      <p className="text-sm text-gray-500">Name</p>
+                      <p className="font-semibold text-gray-800">{order.receiver_name}</p>
+                    </div>
+                  )}
+                  {order.receiver_phone && (
+                    <div className="flex items-center gap-2">
+                      <Phone size={16} className="text-gray-400" />
+                      <p className="text-sm text-gray-700">{order.receiver_phone}</p>
+                    </div>
+                  )}
+                  {order.receiver_address && (
+                    <div>
+                      <p className="text-sm text-gray-500">Address</p>
+                      <p className="text-sm text-gray-700">{order.receiver_address}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Sidebar */}
@@ -324,6 +357,15 @@ const OrderDetailPage = () => {
                   <div className="flex items-center gap-2">
                     <Phone size={16} className="text-gray-400" />
                     <p className="text-sm text-gray-700">{order.customer_phone}</p>
+                  </div>
+                )}
+                {order.gstin && (
+                  <div>
+                    <p className="text-sm text-gray-500">GSTIN</p>
+                    <p className="font-semibold text-gray-800">
+                      {order.gstin}
+                      {order.gstin_business_name && ` (${order.gstin_business_name})`}
+                    </p>
                   </div>
                 )}
               </div>

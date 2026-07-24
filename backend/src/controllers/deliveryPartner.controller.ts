@@ -1261,7 +1261,7 @@ export class DeliveryPartnerController {
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
-        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id')
+        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address')
         .eq('id', orderId)
         .eq('assigned_driver_id', req.riderId!)
         .maybeSingle();
@@ -1325,6 +1325,9 @@ export class DeliveryPartnerController {
           customer_address: o.delivery_address,
           customer_lat: o.delivery_latitude, customer_lng: o.delivery_longitude,
           total_stores: stops.length, all_picked_up,
+          receiver_name: o.receiver_name || null,
+          receiver_phone: o.receiver_phone || null,
+          receiver_address: o.receiver_address || null,
         },
         stops,
       });

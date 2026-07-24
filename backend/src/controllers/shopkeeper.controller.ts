@@ -121,7 +121,7 @@ export class ShopkeeperController {
 
       const [{ data: orders }, { data: items }, { data: storeRows }] = await Promise.all([
         supabaseAdmin.from('customer_orders')
-          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at')
+          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, receiver_name, receiver_phone, receiver_address')
           .in('id', orderIds),
         supabaseAdmin.from('order_items')
           .select('id, customer_order_id, product_name, quantity, unit, unit_price, image_url, item_status, assigned_store_id')
@@ -166,6 +166,9 @@ export class ShopkeeperController {
           customer_area: order.delivery_address,
           customer_distance: distance,
           placed_at: order.placed_at,
+          receiver_name: order.receiver_name || null,
+          receiver_phone: order.receiver_phone || null,
+          receiver_address: order.receiver_address || null,
           items: itemsByOrderAndStore[`${alloc.order_id}:${alloc.store_id}`] || [],
           accepted_at: alloc.accepted_at,
         };

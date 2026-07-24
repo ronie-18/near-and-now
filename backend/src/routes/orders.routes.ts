@@ -20,6 +20,11 @@ const placeCheckoutSchema = z.object({
   payment_method: z.string().min(1),
   notes: z.string().optional(),
   coupon_id: z.string().uuid().optional(),
+  gstin: z.string().optional(),
+  gstin_business_name: z.string().optional(),
+  receiver_name: z.string().optional(),
+  receiver_phone: z.string().optional(),
+  receiver_address: z.string().optional(),
   items: z
     .array(
       z.object({

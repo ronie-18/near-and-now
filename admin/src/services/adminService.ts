@@ -130,6 +130,11 @@ export interface Order {
   delivered_at?: string;
   is_gift?: boolean;
   source?: string;
+  gstin?: string | null;
+  gstin_business_name?: string | null;
+  receiver_name?: string | null;
+  receiver_phone?: string | null;
+  receiver_address?: string | null;
 }
 
 export interface Customer {
@@ -650,7 +655,12 @@ export async function getOrderById(id: string): Promise<Order | null> {
       },
       created_at: customerOrder.placed_at || customerOrder.created_at || '',
       order_number: customerOrder.order_code,
-      updated_at: customerOrder.updated_at
+      updated_at: customerOrder.updated_at,
+      gstin: customerOrder.gstin || null,
+      gstin_business_name: customerOrder.gstin_business_name || null,
+      receiver_name: customerOrder.receiver_name || null,
+      receiver_phone: customerOrder.receiver_phone || null,
+      receiver_address: customerOrder.receiver_address || null
     };
   } catch (error) {
     console.error('Error in getOrderById:', error);

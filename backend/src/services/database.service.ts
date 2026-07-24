@@ -811,6 +811,13 @@ export class DatabaseService {
     /** Free-text delivery note from the customer (e.g. "leave at door"). */
     notes?: string;
     coupon_id?: string;
+    /** Customer's GSTIN, for a proper GST invoice — separate from the platform's own seller_gstin. */
+    gstin?: string;
+    gstin_business_name?: string;
+    /** "Order for someone else" — who actually receives the order, if not the customer themself. */
+    receiver_name?: string;
+    receiver_phone?: string;
+    receiver_address?: string;
     items: Array<{
       product_id?: string;
       id?: string;
@@ -1083,6 +1090,11 @@ export class DatabaseService {
         items,
         items_count: items.length,
         shipping_address: orderData.shipping_address,
+        gstin: recentDuplicate.gstin,
+        gstin_business_name: recentDuplicate.gstin_business_name,
+        receiver_name: recentDuplicate.receiver_name,
+        receiver_phone: recentDuplicate.receiver_phone,
+        receiver_address: recentDuplicate.receiver_address,
         created_at: recentDuplicate.created_at,
         order_number: recentDuplicate.order_code
       };
@@ -1109,6 +1121,11 @@ export class DatabaseService {
         notes: orderData.split_upi_amount != null
           ? JSON.stringify({ split_upi_amount: orderData.split_upi_amount, split_cash_amount: orderData.split_cash_amount ?? 0 })
           : orderData.notes || null,
+        gstin: orderData.gstin || null,
+        gstin_business_name: orderData.gstin_business_name || null,
+        receiver_name: orderData.receiver_name || null,
+        receiver_phone: orderData.receiver_phone || null,
+        receiver_address: orderData.receiver_address || null,
         delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
       })
       .select()
@@ -1249,6 +1266,11 @@ export class DatabaseService {
       items,
       items_count: items.length,
       shipping_address: orderData.shipping_address,
+      gstin: orderData.gstin,
+      gstin_business_name: orderData.gstin_business_name,
+      receiver_name: orderData.receiver_name,
+      receiver_phone: orderData.receiver_phone,
+      receiver_address: orderData.receiver_address,
       created_at:
         (customerOrder as { placed_at?: string; created_at?: string }).placed_at ||
         (customerOrder as { created_at?: string }).created_at ||
