@@ -20,7 +20,7 @@ import {
   Layers
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getDashboardStats, getAdminProducts, getOrders, Order } from '../../services/adminService';
+import { getDashboardStats, getOrders, Order } from '../../services/adminService';
 
 // Stat tile — label, value, and an optional sub-line (e.g. "42 approved").
 // No decorative gradients/blobs and no fabricated trend percentages — a flat
@@ -294,25 +294,23 @@ const AdminDashboardPage = () => {
       setAllOrders(orders);
       setRecentOrders(orders.slice(0, 5));
 
-      const [products] = await Promise.all([
-        getAdminProducts()
-      ]);
-      
-      // Calculate real sales data from orders
-      // Use normalized product names (lowercase, trimmed) as keys for matching
-      const productSales: Record<string, { sold: number; revenue: number }> = {};
-      
-      // Aggregate sales from all delivered/confirmed orders
+      // Calculate real sales data directly from order items — order_items
+      // already carries name/price/image_url at order time, so there's no
+      // need to separately fetch the full master_products catalog (44k+ rows,
+      // paginated across 45 requests) just to look up an image for the top 5.
+      // Use normalized product names (lowercase, trimmed) as keys for matching.
+      const productSales: Record<string, { name: string; image?: string; sold: number; revenue: number }> = {};
+
       orders
         .filter(order => order.order_status !== 'cancelled')
         .forEach(order => {
           if (order.items && order.items.length > 0) {
             order.items.forEach((item: any) => {
-              // Use normalized product name as key for matching
-              const productName = (item.name || item.product_name || '').trim().toLowerCase();
+              const displayName = item.name || item.product_name || '';
+              const productName = displayName.trim().toLowerCase();
               if (productName) {
                 if (!productSales[productName]) {
-                  productSales[productName] = { sold: 0, revenue: 0 };
+                  productSales[productName] = { name: displayName, image: item.image_url || item.image, sold: 0, revenue: 0 };
                 }
                 const quantity = Number(item.quantity) || 1;
                 const price = Number(item.price) || 0;
@@ -322,27 +320,13 @@ const AdminDashboardPage = () => {
             });
           }
         });
-      
-      // Map products with their sales data
-      const productsWithSales = products.map(product => {
-        // Match by normalized product name (case-insensitive, trimmed)
-        const normalizedName = (product.name || '').trim().toLowerCase();
-        const sales = productSales[normalizedName] || { sold: 0, revenue: 0 };
-        
-        return {
-          name: product.name,
-          image: product.image,
-          sold: Math.round(sales.sold),
-          revenue: Math.round(sales.revenue),
-          stock: product.in_stock ? 100 : 0 // Placeholder - could fetch from database
-        };
-      });
-      
+
       // Sort by revenue and take top 5
-      const topProds = productsWithSales
+      const topProds = Object.values(productSales)
+        .map(p => ({ name: p.name, image: p.image, sold: Math.round(p.sold), revenue: Math.round(p.revenue) }))
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 5);
-      
+
       setTopProducts(topProds);
     } catch (err) {
       setError('Failed to load dashboard data. Please try again.');
@@ -663,12 +647,6 @@ const AdminDashboardPage = () => {
                         </div>
                         <div className="text-right">
                           <p className="font-bold text-gray-800">₹{product.revenue.toLocaleString()}</p>
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-                            ${product.stock > 100 ? 'bg-emerald-100 text-emerald-700' :
-                              product.stock > 50 ? 'bg-amber-100 text-amber-700' :
-                              'bg-red-100 text-red-700'}`}>
-                            {product.stock} in stock
-                          </span>
                         </div>
                       </div>
                     ))}

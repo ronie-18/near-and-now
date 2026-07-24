@@ -4,8 +4,11 @@ import {
   AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter, IndianRupee,
   FileText, ShieldCheck
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { getNotificationLink } from '../../utils/notificationLink';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,7 +21,7 @@ interface AdminNotification {
   title: string;
   message: string;
   data: Record<string, any>;
-  is_read: boolean;
+  read_by: string[];
   created_at: string;
 }
 
@@ -224,6 +227,9 @@ const PushNotificationPanel = () => {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const NotificationsPage = () => {
+  const navigate = useNavigate();
+  const currentAdmin = getCurrentAdmin();
+  const isUnread = (n: AdminNotification) => !currentAdmin?.id || !n.read_by.includes(currentAdmin.id);
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required'
@@ -240,7 +246,7 @@ const NotificationsPage = () => {
       const db = getAdminClient();
       const { data, error } = await db
         .from('admin_notifications')
-        .select('*')
+        .select('id, type, title, message, data, read_by, created_at')
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -266,44 +272,38 @@ const NotificationsPage = () => {
   }, [fetchNotifications]);
 
   const markAllRead = async () => {
-    // Bulk update, so an empty result is ambiguous on its own (could mean
-    // "nothing was unread" instead of "the write was silently blocked") —
-    // only treat it as a failure if we know from local state there was
-    // actually something to mark.
-    const hadUnread = notifications.some(n => !n.is_read);
+    if (!currentAdmin?.id) return;
     try {
-      const db = getAdminClient();
-      const { data, error } = await db
-        .from('admin_notifications')
-        .update({ is_read: true })
-        .eq('is_read', false)
-        .select('id');
+      // Per-admin (mark_all_admin_notifications_read RPC, migration
+      // 20260827000001) — this admin marking read must never hide anything
+      // from any other admin's list/bell.
+      const { error } = await getAdminClient().rpc('mark_all_admin_notifications_read');
       if (error) throw error;
-      if (hadUnread && (!data || data.length === 0)) {
-        throw new Error('Update was blocked (no admin session or insufficient permissions).');
-      }
-      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setNotifications(prev => prev.map(n => (
+        n.read_by.includes(currentAdmin.id) ? n : { ...n, read_by: [...n.read_by, currentAdmin.id] }
+      )));
     } catch (err: any) {
       alert(err?.message || 'Failed to mark notifications as read');
     }
   };
 
   const markOneRead = async (id: string) => {
+    if (!currentAdmin?.id) return;
     try {
-      const db = getAdminClient();
-      const { data, error } = await db
-        .from('admin_notifications')
-        .update({ is_read: true })
-        .eq('id', id)
-        .select('id');
+      const { error } = await getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: id });
       if (error) throw error;
-      if (!data || data.length === 0) {
-        throw new Error('Update was blocked (no admin session or insufficient permissions).');
-      }
-      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      setNotifications(prev => prev.map(n => (
+        n.id === id && !n.read_by.includes(currentAdmin.id) ? { ...n, read_by: [...n.read_by, currentAdmin.id] } : n
+      )));
     } catch (err: any) {
       alert(err?.message || 'Failed to mark notification as read');
     }
+  };
+
+  const handleRowClick = (notif: AdminNotification) => {
+    if (isUnread(notif)) markOneRead(notif.id);
+    const link = getNotificationLink(notif.type, notif.data);
+    if (link) navigate(link);
   };
 
   const deleteNotification = async (id: string) => {
@@ -344,14 +344,14 @@ const NotificationsPage = () => {
   };
 
   const filtered = notifications.filter(n => {
-    if (filter === 'unread' && n.is_read) return false;
+    if (filter === 'unread' && !isUnread(n)) return false;
     if (filter !== 'all' && filter !== 'unread' && n.type !== filter) return false;
     if (search && !n.title.toLowerCase().includes(search.toLowerCase()) &&
         !n.message.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
-  const unreadCount = notifications.filter(n => !n.is_read).length;
+  const unreadCount = notifications.filter(isUnread).length;
 
   return (
     <AdminLayout>
@@ -470,14 +470,19 @@ const NotificationsPage = () => {
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="p-4 space-y-3">
               {filtered.map(notif => {
                 const meta = TYPE_META[notif.type] || TYPE_META.system;
                 const Icon = meta.icon;
+                const unread = isUnread(notif);
+                const clickable = Boolean(getNotificationLink(notif.type, notif.data)) || unread;
                 return (
                   <div
                     key={notif.id}
-                    className={`flex items-start gap-4 p-4 hover:bg-gray-50 transition-colors ${!notif.is_read ? 'bg-blue-50/40' : ''}`}
+                    onClick={clickable ? () => handleRowClick(notif) : undefined}
+                    className={`flex items-start gap-4 p-4 rounded-2xl border transition-all ${clickable ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5' : ''} ${
+                      unread ? 'bg-blue-50/60 border-blue-100' : 'bg-white border-gray-100 hover:border-gray-200'
+                    }`}
                   >
                     <div className={`w-10 h-10 ${meta.bg} rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5`}>
                       <Icon className={`w-5 h-5 ${meta.color}`} />
@@ -485,9 +490,9 @@ const NotificationsPage = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <p className={`text-sm font-semibold ${!notif.is_read ? 'text-gray-900' : 'text-gray-700'}`}>
+                          <p className={`text-sm font-semibold ${unread ? 'text-gray-900' : 'text-gray-700'}`}>
                             {notif.title}
-                            {!notif.is_read && (
+                            {unread && (
                               <span className="ml-2 inline-block w-2 h-2 bg-blue-500 rounded-full align-middle" />
                             )}
                           </p>
@@ -499,7 +504,7 @@ const NotificationsPage = () => {
                               </span>
                             ) : notif.data?.refund_eligible ? (
                               <button
-                                onClick={() => resolveRefund(notif.id)}
+                                onClick={(e) => { e.stopPropagation(); resolveRefund(notif.id); }}
                                 disabled={refunding === notif.id}
                                 className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 px-3 py-1.5 rounded-lg transition-colors"
                               >
@@ -521,9 +526,9 @@ const NotificationsPage = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      {!notif.is_read && (
+                      {unread && (
                         <button
-                          onClick={() => markOneRead(notif.id)}
+                          onClick={(e) => { e.stopPropagation(); markOneRead(notif.id); }}
                           className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                           title="Mark as read"
                         >
@@ -531,7 +536,7 @@ const NotificationsPage = () => {
                         </button>
                       )}
                       <button
-                        onClick={() => deleteNotification(notif.id)}
+                        onClick={(e) => { e.stopPropagation(); deleteNotification(notif.id); }}
                         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                         title="Delete"
                       >

@@ -524,9 +524,12 @@ const ProductRow: React.FC<{
       <div className="flex items-center gap-4">
         <ProductImage imageUrl={product.image} productName={product.name} />
         <div>
-          <p className="font-semibold text-gray-800 group-hover:text-emerald-600 transition-colors">
+          <Link
+            to={`/products/edit/${product.id}`}
+            className="font-semibold text-gray-800 group-hover:text-emerald-600 transition-colors hover:underline"
+          >
             {product.name}
-          </p>
+          </Link>
           {product.description && (
             <p className="text-xs text-gray-500 truncate max-w-[200px]">
               {product.description}

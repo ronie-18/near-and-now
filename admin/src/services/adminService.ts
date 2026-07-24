@@ -453,38 +453,20 @@ export async function deleteCategory(id: string): Promise<boolean> {
 // Get product counts for each category
 export async function getProductCountsByCategory(): Promise<Record<string, number>> {
   try {
-    // Fetch all category values in batches to bypass Supabase's 1000 row limit
-    let allCategories: string[] = [];
-    let from = 0;
-    const batchSize = 1000;
-    let hasMore = true;
-
-    while (hasMore) {
-      const { data: batchData, error: batchError } = await getAdminClient()
-        .from('master_products')
-        .select('category')
-        .range(from, from + batchSize - 1);
-
-      if (batchError) {
-        console.error('Error fetching product counts:', batchError);
-        throw batchError;
-      }
-
-      if (batchData && batchData.length > 0) {
-        allCategories = [...allCategories, ...batchData.map(p => p.category)];
-        from += batchSize;
-        hasMore = batchData.length === batchSize; // Continue if we got a full batch
-      } else {
-        hasMore = false;
-      }
+    // Single server-side GROUP BY (get_product_counts_by_category RPC,
+    // migration 20260827000000) instead of paginating the whole 44k+-row
+    // master_products table client-side — confirmed live that the old
+    // 45-sequential-request pattern was unreliable enough to intermittently
+    // fail outright as "Failed to fetch", not just slow.
+    const { data, error } = await getAdminClient().rpc('get_product_counts_by_category');
+    if (error) {
+      console.error('Error fetching product counts:', error);
+      throw error;
     }
 
-    // Count products by category
     const counts: Record<string, number> = {};
-    allCategories.forEach(category => {
-      if (category) {
-        counts[category] = (counts[category] || 0) + 1;
-      }
+    (data || []).forEach((row: { category: string; product_count: number }) => {
+      if (row.category) counts[row.category] = Number(row.product_count);
     });
 
     return counts;
@@ -868,39 +850,22 @@ export async function updateCustomerStatus(_id: string, _status: Customer['statu
 // Dashboard Statistics
 export async function getDashboardStats() {
   try {
-    // Get total products with pagination to handle >1000 products
-    let allProducts: any[] = [];
-    let from = 0;
-    const batchSize = 1000;
-    let hasMore = true;
+    // totalProducts: a plain count instead of a paginated fetch of the whole
+    // 44k+-row master_products table (previously 45 sequential requests just
+    // to derive products.length — wasteful enough to intermittently fail as
+    // "Failed to fetch" outright, especially stacked with the same pattern
+    // below and in fetchDashboardData's now-removed getAdminProducts() call).
+    const { count: totalProducts, error: totalProductsError } = await getAdminClient()
+      .from('master_products')
+      .select('id', { count: 'exact', head: true });
+    if (totalProductsError) throw totalProductsError;
 
-    while (hasMore) {
-      const { data, error } = await getAdminClient()
-        .from('master_products')
-        .select('id, category')
-        .range(from, from + batchSize - 1);
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        allProducts = [...allProducts, ...data];
-        from += batchSize;
-        hasMore = data.length === batchSize;
-      } else {
-        hasMore = false;
-      }
-    }
-
-    const products = allProducts;
-    
-    // Calculate unique categories from products (only categories that have products)
-    const uniqueCategories = new Set<string>();
-    products?.forEach(product => {
-      if (product.category) {
-        uniqueCategories.add(product.category);
-      }
-    });
-    const totalCategories = uniqueCategories.size;
+    // totalCategories means "categories that actually have products", matching
+    // CategoriesPage's own definition — reuses the shared getProductCountsByCategory()
+    // instead of re-deriving a separate unique-category Set from a second full
+    // product-table scan (still one paginated fetch, but only one, not two).
+    const productCounts = await getProductCountsByCategory();
+    const totalCategories = Object.keys(productCounts).length;
 
     // Store + delivery partner counts (head:true — count only, no rows fetched)
     const { count: totalStores, error: totalStoresError } = await getAdminClient()
@@ -936,7 +901,6 @@ export async function getDashboardStats() {
     });
 
     // Calculate statistics
-    const totalProducts = products?.length || 0;
     const totalOrders = orders?.length || 0;
     const totalCustomers = uniqueCustomers.size;
     const totalSales = Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0);
@@ -951,11 +915,11 @@ export async function getDashboardStats() {
     const cancelledOrders = orders?.filter(order => order.status === 'order_cancelled').length || 0;
 
     return {
-      totalProducts,
+      totalProducts: totalProducts || 0,
       totalOrders,
       totalCustomers,
       totalSales,
-      totalCategories,
+      totalCategories: totalCategories || 0,
       totalStores: totalStores || 0,
       approvedStores: approvedStores || 0,
       totalDeliveryPartners: totalDeliveryPartners || 0,

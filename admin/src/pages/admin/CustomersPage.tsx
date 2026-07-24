@@ -241,9 +241,12 @@ const CustomersPage = () => {
                             </span>
                           </div>
                           <div>
-                            <p className="font-semibold text-gray-800 group-hover:text-purple-600 transition-colors">
+                            <Link
+                              to={`/customers/${customer.id}`}
+                              className="font-semibold text-gray-800 group-hover:text-purple-600 transition-colors hover:underline"
+                            >
                               {customer.name}
-                            </p>
+                            </Link>
                             <div className="mt-1"><IdCell id={customer.id} prefix="#" /></div>
                           </div>
                         </div>

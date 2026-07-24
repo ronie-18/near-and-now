@@ -336,9 +336,12 @@ const CategoriesPage = () => {
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-4">
                           <CategoryImage imageUrl={category.image_url} categoryName={category.name} />
-                          <span className="font-semibold text-gray-800 group-hover:text-violet-600 transition-colors">
+                          <Link
+                            to={`/categories/edit/${category.id}`}
+                            className="font-semibold text-gray-800 group-hover:text-violet-600 transition-colors hover:underline"
+                          >
                             {category.name}
-                          </span>
+                          </Link>
                         </div>
                       </td>
                       <td className="px-6 py-4">

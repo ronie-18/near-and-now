@@ -3,6 +3,7 @@ import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, P
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
 import { getAdminClient } from '../../../services/supabase';
+import { getNotificationLink } from '../../../utils/notificationLink';
 
 interface AdminHeaderProps {
   toggleSidebar: () => void;
@@ -55,7 +56,8 @@ interface DbNotification {
   type: string;
   title: string;
   message: string;
-  is_read: boolean;
+  data: Record<string, any> | null;
+  read_by: string[];
   created_at: string;
 }
 
@@ -102,7 +104,7 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
   const fetchNotifications = useCallback(async () => {
     const { data } = await getAdminClient()
       .from('admin_notifications')
-      .select('id, type, title, message, is_read, created_at')
+      .select('id, type, title, message, data, read_by, created_at')
       .order('created_at', { ascending: false })
       .limit(8);
     if (data) setNotifications(data);
@@ -120,19 +122,16 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
   }, [fetchNotifications]);
 
   const markAllRead = async () => {
-    const unreadIds = notifications.filter(n => !n.is_read).map(n => n.id);
-    if (unreadIds.length === 0) return;
+    if (!currentAdmin?.id) return;
     try {
-      const { data, error } = await getAdminClient()
-        .from('admin_notifications')
-        .update({ is_read: true })
-        .in('id', unreadIds)
-        .select('id');
+      // read_by is per-admin (mark_all_admin_notifications_read RPC, migration
+      // 20260827000001) — this admin marking read must never hide anything
+      // from any other admin's bell.
+      const { error } = await getAdminClient().rpc('mark_all_admin_notifications_read');
       if (error) throw error;
-      if (!data || data.length === 0) {
-        throw new Error('Update was blocked (no admin session or insufficient permissions).');
-      }
-      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setNotifications(prev => prev.map(n => (
+        n.read_by.includes(currentAdmin.id) ? n : { ...n, read_by: [...n.read_by, currentAdmin.id] }
+      )));
     } catch (err: any) {
       alert(err?.message || 'Failed to mark notifications as read');
     }
@@ -169,7 +168,18 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
     ? currentAdmin.full_name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
     : 'AD';
 
-  const unreadCount = notifications.filter(n => !n.is_read).length;
+  const isUnread = (n: DbNotification) => !currentAdmin?.id || !n.read_by.includes(currentAdmin.id);
+  const unreadCount = notifications.filter(isUnread).length;
+
+  const handleNotifClick = async (notif: DbNotification) => {
+    setShowNotifications(false);
+    if (currentAdmin?.id && isUnread(notif)) {
+      void getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: notif.id });
+      setNotifications(prev => prev.map(n => (n.id === notif.id ? { ...n, read_by: [...n.read_by, currentAdmin.id] } : n)));
+    }
+    const link = getNotificationLink(notif.type, notif.data);
+    if (link) navigate(link);
+  };
 
   return (
     <header className="bg-white border-b border-gray-200 z-30 flex-shrink-0">
@@ -262,19 +272,24 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
                   ) : (
                     notifications.map(notif => {
                       const { iconBg, Icon } = notifStyle(notif.type);
+                      const unread = isUnread(notif);
                       return (
-                        <div key={notif.id} className={`flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer ${!notif.is_read ? 'bg-blue-50/40' : ''}`}>
+                        <div
+                          key={notif.id}
+                          onClick={() => handleNotifClick(notif)}
+                          className={`flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer ${unread ? 'bg-blue-50/40' : ''}`}
+                        >
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 ${iconBg}`}>
                             <Icon size={14} />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className={`text-sm leading-tight ${!notif.is_read ? 'font-semibold text-gray-800' : 'font-medium text-gray-700'}`}>
+                            <p className={`text-sm leading-tight ${unread ? 'font-semibold text-gray-800' : 'font-medium text-gray-700'}`}>
                               {notif.title}
                             </p>
                             <p className="text-xs text-gray-500 mt-0.5 truncate">{notif.message}</p>
                             <p className="text-[10px] text-gray-400 mt-1">{timeAgo(notif.created_at)}</p>
                           </div>
-                          {!notif.is_read && <span className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2" />}
+                          {unread && <span className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2" />}
                         </div>
                       );
                     })
