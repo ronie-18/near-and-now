@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, User, Mail, Phone, MapPin, Calendar, ShoppingBag, TrendingUp, Package, CheckCircle, Clock, XCircle } from 'lucide-react';
 import { getCustomerById, Customer, getOrders } from '../../services/adminService';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
+import IdCell from '../../components/admin/IdCell';
 
 const CustomerDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -106,7 +107,10 @@ const CustomerDetailPage = () => {
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-gray-900">{customer.name}</h2>
-                <p className="text-gray-600">Customer ID: {customer.id.substring(0, 8)}...</p>
+                <div className="flex items-center gap-2 text-gray-600 mt-1">
+                  <span>Customer ID:</span>
+                  <IdCell id={customer.id} />
+                </div>
               </div>
             </div>
             <span className={`px-4 py-2 rounded-lg font-medium ${

@@ -27,6 +27,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import AdminLayout from "../../components/admin/layout/AdminLayout";
+import IdCell from "../../components/admin/IdCell";
 import {
   getAdminProducts,
   deleteProduct,
@@ -42,7 +43,6 @@ import { Product } from "../../services/supabase";
 const ITEMS_PER_PAGE = 10;
 
 // Helper functions
-const truncateId = (id: string) => id.substring(0, 8);
 const formatPrice = (price: number) => `₹${Math.round(price).toLocaleString("en-IN")}`;
 
 type SortField = "name" | "price" | "category" | "in_stock" | "created_at";
@@ -518,9 +518,7 @@ const ProductRow: React.FC<{
 }> = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading }) => (
   <tr className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-emerald-50/30 transition-all duration-200">
     <td className="px-5 py-4">
-      <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">
-        {truncateId(product.id)}
-      </span>
+      <IdCell id={product.id} />
     </td>
     <td className="px-5 py-4">
       <div className="flex items-center gap-4">
@@ -646,9 +644,7 @@ const ProductCard: React.FC<{
 
     {/* Content */}
     <div className="p-4">
-      <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
-        #{truncateId(product.id)}
-      </span>
+      <IdCell id={product.id} />
       <h3 className="font-bold text-gray-800 mt-2 line-clamp-1">
         {product.name}
       </h3>

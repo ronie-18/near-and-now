@@ -19,12 +19,10 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getCategories, deleteCategory, getProductCountsByCategory, Category } from '../../services/adminService';
+import IdCell from '../../components/admin/IdCell';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
-
-// Helper function
-const truncateId = (id: string) => id.substring(0, 8);
 
 // Modern Stat Card
 interface StatCardProps {
@@ -333,9 +331,7 @@ const CategoriesPage = () => {
                   {currentCategories.map((category) => (
                     <tr key={category.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
                       <td className="px-6 py-4">
-                        <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">
-                          {truncateId(category.id)}
-                        </span>
+                        <IdCell id={category.id} />
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-4">

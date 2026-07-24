@@ -20,6 +20,7 @@ import {
   UserX
 } from 'lucide-react';
 import { getCustomers, Customer } from '../../services/adminService';
+import IdCell from '../../components/admin/IdCell';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -243,7 +244,7 @@ const CustomersPage = () => {
                             <p className="font-semibold text-gray-800 group-hover:text-purple-600 transition-colors">
                               {customer.name}
                             </p>
-                            <p className="text-xs text-gray-400 font-mono">#{customer.id.substring(0, 8)}</p>
+                            <div className="mt-1"><IdCell id={customer.id} prefix="#" /></div>
                           </div>
                         </div>
                       </td>

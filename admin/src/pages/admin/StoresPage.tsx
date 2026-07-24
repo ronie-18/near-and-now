@@ -15,6 +15,7 @@ import {
   FileCheck,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
+import IdCell from '../../components/admin/IdCell';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 
@@ -676,7 +677,7 @@ const StoresPage = () => {
                     <tr key={store.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
                       <td className="px-6 py-4">
                         <p className="font-semibold text-gray-800">{store.name}</p>
-                        <p className="text-xs font-mono text-gray-400 mt-0.5">{store.id}</p>
+                        <div className="mt-1"><IdCell id={store.id} /></div>
                       </td>
                       <td className="px-6 py-4">
                         {store.phone ? (

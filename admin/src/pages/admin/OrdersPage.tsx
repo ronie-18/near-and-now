@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getOrders, updateOrderStatus, Order } from '../../services/adminService';
+import IdCell from '../../components/admin/IdCell';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -147,7 +148,6 @@ const StatusDropdown = ({
 );
 
 // Helper
-const truncateId = (id: string) => id.substring(0, 8);
 const formatDate = (date: string) => new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
 
@@ -325,9 +325,7 @@ const OrdersPage = () => {
                   {currentOrders.map((order) => (
                     <tr key={order.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-blue-50/30 transition-all duration-200">
                       <td className="px-6 py-4">
-                        <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">
-                          #{truncateId(order.id)}
-                        </span>
+                        <IdCell id={order.id} prefix="#" />
                       </td>
                       <td className="px-6 py-4">
                         <div>
