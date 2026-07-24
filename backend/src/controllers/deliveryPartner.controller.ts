@@ -173,6 +173,65 @@ async function requireApprovedRider(riderId: string): Promise<boolean> {
   return Boolean((partner as { is_approved?: boolean } | null)?.is_approved);
 }
 
+// Flat per-order rider fee, paid by the platform (not the customer — delivery_fee
+// is currently a ₹0 launch promo). No commission-based payout system exists yet;
+// this is the current agreed business model, not a placeholder rate.
+const RIDER_FLAT_FEE = 17;
+
+/**
+ * Writes the one delivery_partners_payouts row for this order, once, when the
+ * rider marks it delivered. This is the first real write path for that table —
+ * previously the schema existed but nothing anywhere ever inserted into it, and
+ * the rider app's "earnings" screen computed a hardcoded 15% of order_total
+ * client-side with no server record backing it at all.
+ *
+ * Amount = flat RIDER_FLAT_FEE + 100% of any customer tip. Idempotent: skips if
+ * a payout for this (rider, order) already exists, since markDelivered has no
+ * guard against being called twice for the same order.
+ */
+async function payRiderForDeliveredOrder(orderId: string, riderId: string, customerId: string, tipAmount: number): Promise<void> {
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('delivery_partners_payouts')
+      .select('id')
+      .eq('customer_order_id', orderId)
+      .eq('partner_user_id', riderId)
+      .maybeSingle();
+    if (existing) return;
+
+    // delivery_partners_payouts.store_id is NOT NULL — this table's schema was
+    // designed for one row per store leg, but no such per-leg system exists
+    // (or is needed) today. Attach the payout to any one store on this order
+    // (the first in pickup sequence) purely to satisfy the FK; the payout
+    // itself is for the whole delivery job, not specific to that store.
+    const { data: firstAlloc } = await supabaseAdmin
+      .from('order_store_allocations')
+      .select('store_id')
+      .eq('order_id', orderId)
+      .order('sequence_number', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!firstAlloc?.store_id) {
+      console.error(`payRiderForDeliveredOrder: no store allocation found for order ${orderId}, skipping payout`);
+      return;
+    }
+
+    const amount = RIDER_FLAT_FEE + Math.max(0, Number(tipAmount) || 0);
+    const { error } = await supabaseAdmin.from('delivery_partners_payouts').insert({
+      partner_user_id: riderId,
+      customer_id: customerId,
+      customer_order_id: orderId,
+      store_id: firstAlloc.store_id,
+      amount,
+      status: 'pending',
+      notes: tipAmount > 0 ? `Flat fee ₹${RIDER_FLAT_FEE} + tip ₹${tipAmount}` : `Flat fee ₹${RIDER_FLAT_FEE}`,
+    });
+    if (error) console.error('payRiderForDeliveredOrder insert failed:', error);
+  } catch (err) {
+    console.error('payRiderForDeliveredOrder error:', err);
+  }
+}
+
 export class DeliveryPartnerController {
 
   // POST /delivery-partner/signup/complete
@@ -423,6 +482,21 @@ export class DeliveryPartnerController {
         });
       });
 
+      // For completed orders, fetch this rider's real payout row per order —
+      // the earnings screen used to compute 15% of total_amount client-side
+      // with nothing server-side backing it. payRiderForDeliveredOrder (see
+      // markDelivered) writes one row per order once delivered; orders
+      // delivered before that existed have no payout row (payout_amount null).
+      let payoutByOrder: Record<string, number> = {};
+      if (statusParam === 'completed') {
+        const { data: payouts } = await supabaseAdmin
+          .from('delivery_partners_payouts')
+          .select('customer_order_id, amount')
+          .eq('partner_user_id', req.riderId!)
+          .in('customer_order_id', orders.map((o: any) => o.id));
+        (payouts || []).forEach((p: any) => { payoutByOrder[p.customer_order_id] = Number(p.amount); });
+      }
+
       const mapped = orders.map((o: any) => {
         const storeId = storeIdMap[o.id];
         const store = storeId ? storeById[storeId] : null;
@@ -437,6 +511,7 @@ export class DeliveryPartnerController {
             phone: store.phone,
           } : null,
           order_items: itemsByOrder[o.id] || [],
+          payout_amount: statusParam === 'completed' ? (payoutByOrder[o.id] ?? null) : undefined,
         };
       });
 
@@ -671,11 +746,12 @@ export class DeliveryPartnerController {
       try {
         const { data: order } = await supabaseAdmin
           .from('customer_orders')
-          .select('customer_id, order_code')
+          .select('customer_id, order_code, tip_amount')
           .eq('id', orderId)
           .single();
         if (order) {
           await notificationService.sendOrderNotification(orderId, 'order_delivered');
+          await payRiderForDeliveredOrder(orderId, riderId, order.customer_id, order.tip_amount);
         }
       } catch { /* non-critical */ }
 

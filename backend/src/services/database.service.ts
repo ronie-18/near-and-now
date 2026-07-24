@@ -818,6 +818,8 @@ export class DatabaseService {
     receiver_name?: string;
     receiver_phone?: string;
     receiver_address?: string;
+    /** Optional customer tip for the delivery partner — paid out 100% to the rider on delivery. */
+    tip_amount?: number;
     items: Array<{
       product_id?: string;
       id?: string;
@@ -1041,19 +1043,20 @@ export class DatabaseService {
       }
     }
 
+    // Tip now has a real, dedicated field (see tip_amount migration) — no longer
+    // folded anonymously into order_total with no way to verify or pay it out.
+    const trustedTipAmount = Math.max(0, Number(orderData.tip_amount) || 0);
+
     // Floor check on order_total: the frontend's own total = subtotal * 1.05 (its
     // fixed checkout GST-equivalent markup) + PLATFORM_FEE + HANDLING_FEE +
-    // trustedDeliveryFee (currently always 0) - trustedDiscountAmount + an optional
-    // customer tip. Tip isn't independently verifiable server-side yet (it isn't
-    // sent as its own field — see checkout follow-up), so this only enforces the
-    // portion that's fully determined by trusted item prices: it can't be bypassed
-    // by lowballing order_total (e.g. the demonstrated `order_total: 1` exploit),
-    // while never rejecting a legitimate order (whose real total is always >= this floor).
+    // trustedDeliveryFee (currently always 0) - trustedDiscountAmount + tip_amount.
+    // Now that tip is a real, known field, the floor accounts for it exactly
+    // instead of only checking the portion determined by item prices alone.
     const CHECKOUT_GST_MULTIPLIER = 1.05;
     const PLATFORM_FEE = 9.5;
     const HANDLING_FEE = 5.5;
     const trustedFloor =
-      trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee - trustedDiscountAmount;
+      trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee - trustedDiscountAmount + trustedTipAmount;
     if (orderData.order_total < trustedFloor - 1) {
       throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
     }
@@ -1095,6 +1098,7 @@ export class DatabaseService {
         receiver_name: recentDuplicate.receiver_name,
         receiver_phone: recentDuplicate.receiver_phone,
         receiver_address: recentDuplicate.receiver_address,
+        tip_amount: recentDuplicate.tip_amount,
         created_at: recentDuplicate.created_at,
         order_number: recentDuplicate.order_code
       };
@@ -1126,6 +1130,7 @@ export class DatabaseService {
         receiver_name: orderData.receiver_name || null,
         receiver_phone: orderData.receiver_phone || null,
         receiver_address: orderData.receiver_address || null,
+        tip_amount: trustedTipAmount,
         delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
       })
       .select()
@@ -1271,6 +1276,7 @@ export class DatabaseService {
       receiver_name: orderData.receiver_name,
       receiver_phone: orderData.receiver_phone,
       receiver_address: orderData.receiver_address,
+      tip_amount: trustedTipAmount,
       created_at:
         (customerOrder as { placed_at?: string; created_at?: string }).placed_at ||
         (customerOrder as { created_at?: string }).created_at ||

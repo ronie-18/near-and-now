@@ -514,7 +514,8 @@ const CheckoutPage = () => {
         ...(gstinEnabled && businessName.trim() && { gstin_business_name: businessName.trim() }),
         ...(orderForOthers && receiverName.trim() && { receiver_name: receiverName.trim() }),
         ...(orderForOthers && receiverPhone.trim() && { receiver_phone: receiverPhone.trim() }),
-        ...(orderForOthers && receiverAddress.trim() && { receiver_address: receiverAddress.trim() })
+        ...(orderForOthers && receiverAddress.trim() && { receiver_address: receiverAddress.trim() }),
+        ...(tipAmount > 0 && { tip_amount: tipAmount })
       };
 
       const createdOrder = await createOrder(orderData);

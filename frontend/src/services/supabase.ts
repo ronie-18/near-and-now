@@ -428,6 +428,8 @@ export interface CreateOrderData {
   receiver_name?: string;
   receiver_phone?: string;
   receiver_address?: string;
+  /** Optional customer tip for the delivery partner — paid out 100% to the rider on delivery. */
+  tip_amount?: number;
 }
 
 export interface Order {
@@ -483,7 +485,8 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
           ...(orderData.gstin_business_name != null && { gstin_business_name: orderData.gstin_business_name }),
           ...(orderData.receiver_name != null && { receiver_name: orderData.receiver_name }),
           ...(orderData.receiver_phone != null && { receiver_phone: orderData.receiver_phone }),
-          ...(orderData.receiver_address != null && { receiver_address: orderData.receiver_address })
+          ...(orderData.receiver_address != null && { receiver_address: orderData.receiver_address }),
+          ...(orderData.tip_amount != null && { tip_amount: orderData.tip_amount })
         })
       });
       if (!res.ok) {

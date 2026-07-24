@@ -25,6 +25,7 @@ const placeCheckoutSchema = z.object({
   receiver_name: z.string().optional(),
   receiver_phone: z.string().optional(),
   receiver_address: z.string().optional(),
+  tip_amount: z.number().min(0).optional(),
   items: z
     .array(
       z.object({
