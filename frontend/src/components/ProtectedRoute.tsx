@@ -1,6 +1,6 @@
 import { useEffect, ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ErrorBoundary } from 'react-error-boundary';
+import { ErrorBoundary, FallbackProps } from 'react-error-boundary';
 import { useAuth } from '../context/AuthContext';
 
 interface ProtectedRouteProps {
@@ -9,11 +9,12 @@ interface ProtectedRouteProps {
   unauthorizedComponent?: ReactNode;
 }
 
-function ErrorFallback({ error, resetErrorBoundary }: { error: Error; resetErrorBoundary: () => void }) {
+function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
+  const message = error instanceof Error ? error.message : String(error);
   return (
     <div role="alert" className="p-4 bg-red-50 rounded-lg">
       <p className="text-red-700 font-semibold">Something went wrong:</p>
-      <pre className="text-red-600 mt-2">{error.message}</pre>
+      <pre className="text-red-600 mt-2">{message}</pre>
       <button
         onClick={resetErrorBoundary}
         className="mt-3 px-4 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
