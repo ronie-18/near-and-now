@@ -189,7 +189,7 @@ const RIDER_FLAT_FEE = 17;
  * a payout for this (rider, order) already exists, since markDelivered has no
  * guard against being called twice for the same order.
  */
-async function payRiderForDeliveredOrder(orderId: string, riderId: string, customerId: string, tipAmount: number): Promise<void> {
+export async function payRiderForDeliveredOrder(orderId: string, riderId: string, customerId: string, tipAmount: number): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
       .from('delivery_partners_payouts')

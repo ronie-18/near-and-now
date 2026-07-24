@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
 
 /** Maps an order status to the customer-facing push notification type, if any. */
 function mapOrderStatusToNotificationType(status: string): string | null {
@@ -320,6 +321,19 @@ export class OrdersController {
       if (notificationType) {
         notificationService.sendOrderNotification(orderId, notificationType).catch((err) => {
           console.error('[updateOrderStatus] customer push notification failed (non-fatal)', err);
+        });
+      }
+
+      // Admin manually setting this order to delivered bypasses the rider's own
+      // markDelivered action (deliveryPartner.controller.ts) — which is the only
+      // other place that creates the delivery_partners_payouts row. Without this,
+      // an admin correcting a stuck order would silently leave the assigned
+      // rider unpaid for real work. Idempotent (payRiderForDeliveredOrder skips
+      // if a payout already exists), so this is safe even if the rider's own
+      // markDelivered already ran for this order.
+      if (status === 'order_delivered' && data.assigned_driver_id) {
+        payRiderForDeliveredOrder(orderId, data.assigned_driver_id, data.customer_id, data.tip_amount).catch((err) => {
+          console.error('[updateOrderStatus] rider payout failed (non-fatal)', err);
         });
       }
 
