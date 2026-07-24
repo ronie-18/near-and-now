@@ -132,9 +132,13 @@ export function CartProvider({ children }: CartProviderProps) {
       );
 
       if (existingItemIndex >= 0) {
-        // Update existing item
+        // Update existing item — clone the item itself, not just the array,
+        // so we never write through to the object still referenced by prevItems.
         const updatedItems = [...prevItems];
-        updatedItems[existingItemIndex].quantity += quantity;
+        updatedItems[existingItemIndex] = {
+          ...updatedItems[existingItemIndex],
+          quantity: updatedItems[existingItemIndex].quantity + quantity,
+        };
         return updatedItems;
       } else {
         // Add new item
