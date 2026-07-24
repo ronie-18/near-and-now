@@ -1,6 +1,7 @@
 import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../config/database.js';
 import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
 import { haversineKm } from '../utils/geo.js';
+import { validateQuantity } from '../utils/quantity.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -909,7 +910,7 @@ export class DatabaseService {
     // GoI-mandated business-level tax, not a per-product one.
     const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
       .from('master_products')
-      .select('id, discounted_price, gst_rate, is_loose')
+      .select('id, discounted_price, gst_rate, is_loose, min_quantity, max_quantity')
       .in('id', masterProductIds);
 
     if (masterPriceError) {
@@ -917,6 +918,7 @@ export class DatabaseService {
     }
 
     const trustedPriceByMaster = new Map<string, number>();
+    const boundsByMaster = new Map<string, { min_quantity: number | null; max_quantity: number | null }>();
     for (const row of masterPriceRows || []) {
       const preTax = Number((row as any).discounted_price) || 0;
       const isLoose = Boolean((row as any).is_loose);
@@ -928,6 +930,10 @@ export class DatabaseService {
           : 0;
       const priceWithGst = preTax + (preTax * gstRate) / 100;
       trustedPriceByMaster.set(row.id, priceWithGst);
+      boundsByMaster.set(row.id, {
+        min_quantity: (row as any).min_quantity ?? null,
+        max_quantity: (row as any).max_quantity ?? null,
+      });
     }
 
     items = items.map((it) => {
@@ -936,7 +942,8 @@ export class DatabaseService {
       if (trustedPrice == null) {
         throw new Error(`Product "${it.name}" is not available.`);
       }
-      return { ...it, price: trustedPrice };
+      const quantity = validateQuantity(it.quantity, masterId ? boundsByMaster.get(masterId) : undefined, it.name);
+      return { ...it, price: trustedPrice, quantity };
     });
 
     const byMaster = new Map<string, Array<{ store_id: string; product_id: string }>>();

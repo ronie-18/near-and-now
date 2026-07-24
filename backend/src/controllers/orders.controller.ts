@@ -3,6 +3,7 @@ import { databaseService } from '../services/database.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
+import { validateQuantity } from '../utils/quantity.js';
 
 /** Maps an order status to the customer-facing push notification type, if any. */
 function mapOrderStatusToNotificationType(status: string): string | null {
@@ -40,7 +41,9 @@ export class OrdersController {
         msg.includes('verify delivery') ||
         msg.includes('No valid products') ||
         msg.includes('No items') ||
-        msg.includes('verify your email')
+        msg.includes('verify your email') ||
+        msg.includes('Invalid quantity') ||
+        msg.includes('Quantity for')
           ? 400
           : 500;
       res.status(status).json({ error: msg });
@@ -86,12 +89,13 @@ export class OrdersController {
       const masterProductIds = [...new Set((productRows || []).map((row: any) => row.master_product_id))];
       const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
         .from('master_products')
-        .select('id, discounted_price, gst_rate, is_loose')
+        .select('id, discounted_price, gst_rate, is_loose, min_quantity, max_quantity')
         .in('id', masterProductIds);
       if (masterPriceError) {
         throw new Error('Failed to verify product prices');
       }
       const trustedPriceByMaster = new Map<string, number>();
+      const boundsByMaster = new Map<string, { min_quantity: number | null; max_quantity: number | null }>();
       for (const row of masterPriceRows || []) {
         const preTax = Number((row as any).discounted_price) || 0;
         const isLoose = Boolean((row as any).is_loose);
@@ -102,6 +106,10 @@ export class OrdersController {
             ? Number(rawGstRate)
             : 0;
         trustedPriceByMaster.set(row.id, preTax + (preTax * gstRate) / 100);
+        boundsByMaster.set(row.id, {
+          min_quantity: (row as any).min_quantity ?? null,
+          max_quantity: (row as any).max_quantity ?? null,
+        });
       }
 
       const trustedCartItems = cart_items.map((item: any) => {
@@ -113,7 +121,12 @@ export class OrdersController {
         if (trustedPrice == null) {
           throw new Error(`Product "${item.product_name}" is not available.`);
         }
-        return { ...item, unit_price: trustedPrice };
+        const quantity = validateQuantity(
+          item.quantity,
+          boundsByMaster.get(product.master_product_id) ?? undefined,
+          item.product_name
+        );
+        return { ...item, unit_price: trustedPrice, quantity };
       });
 
       const customerOrder = await databaseService.createCustomerOrder({
@@ -222,7 +235,13 @@ export class OrdersController {
     } catch (error: unknown) {
       console.error('Error creating order:', error);
       const msg = error instanceof Error ? error.message : 'Failed to create order';
-      const status = msg.includes('verify your email') ? 400 : 500;
+      const status =
+        msg.includes('verify your email') ||
+        msg.includes('is not available') ||
+        msg.includes('Invalid quantity') ||
+        msg.includes('Quantity for')
+          ? 400
+          : 500;
       res.status(status).json({ error: msg });
     }
   }
