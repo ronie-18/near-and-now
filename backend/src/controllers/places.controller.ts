@@ -18,7 +18,7 @@ function getApiKey(): string {
 }
 
 export async function autocomplete(req: Request, res: Response) {
-  const { input } = req.query;
+  const { input, sessiontoken } = req.query;
   const apiKey = getApiKey();
 
   if (!apiKey) {
@@ -34,6 +34,9 @@ export async function autocomplete(req: Request, res: Response) {
     url.searchParams.set('key', apiKey);
     url.searchParams.set('components', 'country:in');
     url.searchParams.set('types', 'geocode');
+    if (typeof sessiontoken === 'string' && sessiontoken) {
+      url.searchParams.set('sessiontoken', sessiontoken);
+    }
 
     const response = await fetch(url.toString());
     const data = await response.json();
@@ -48,7 +51,7 @@ export async function autocomplete(req: Request, res: Response) {
 }
 
 export async function placeDetails(req: Request, res: Response) {
-  const { place_id } = req.query;
+  const { place_id, sessiontoken } = req.query;
   const apiKey = getApiKey();
 
   if (!apiKey) {
@@ -62,7 +65,10 @@ export async function placeDetails(req: Request, res: Response) {
     const url = new URL(PLACE_DETAILS_URL);
     url.searchParams.set('place_id', place_id);
     url.searchParams.set('key', apiKey);
-    url.searchParams.set('fields', 'formatted_address,address_components,geometry');
+    url.searchParams.set('fields', 'place_id,name,formatted_address,address_components,geometry');
+    if (typeof sessiontoken === 'string' && sessiontoken) {
+      url.searchParams.set('sessiontoken', sessiontoken);
+    }
 
     const response = await fetch(url.toString());
     const data = await response.json();
