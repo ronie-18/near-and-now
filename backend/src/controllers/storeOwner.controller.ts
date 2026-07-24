@@ -15,6 +15,43 @@ import {
   validateDocNumber,
 } from '../utils/verificationDocuments.js';
 
+/**
+ * Builds a signup error message that's useful to both audiences at once:
+ * a plain-English sentence explaining what happened for the shopkeeper
+ * reading it in an alert, followed by the real Postgres error code/message
+ * for whoever's debugging it (support, or the shopkeeper reading it back to
+ * a developer over the phone) — instead of either a raw, user-hostile DB
+ * error or a bare "failed, try again" that hides what actually went wrong.
+ */
+function describeSignupDbError(step: 'account' | 'store', error: { code?: string; message?: string } | null): string {
+  const friendly =
+    step === 'account'
+      ? "We couldn't create your account."
+      : "We couldn't create your store.";
+
+  // Known, specific cause: duplicate phone on stores.phone. Should no longer
+  // be possible once 20260816000000_drop_stores_phone_unique_constraint.sql
+  // is applied (owning multiple stores on one phone is intentionally
+  // supported), but give a real explanation for it while that's pending or
+  // if it somehow recurs, rather than the generic fallback below.
+  if (step === 'store' && error?.code === '23505' && error.message?.includes('stores_phone_key')) {
+    return (
+      "We couldn't create your store: a store is already registered with this phone number. " +
+      'If you already have an account, please log in instead of signing up again. If you were ' +
+      'trying to add another store on the same number, that is supported — this specific error ' +
+      'means a database update is still pending and needs to be applied. ' +
+      `[Technical detail: stores insert failed — Postgres ${error.code} unique_violation on stores_phone_key.]`
+    );
+  }
+
+  const code = error?.code ? ` ${error.code}` : '';
+  const detail = error?.message ? `: ${error.message}` : '';
+  return (
+    `${friendly} Please try again — if this keeps happening, contact support with the detail below. ` +
+    `[Technical detail: ${step === 'account' ? 'app_users' : 'stores'} insert failed — Postgres${code}${detail}]`
+  );
+}
+
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -270,7 +307,7 @@ export async function signupComplete(req: Request, res: Response) {
       console.error('❌ Store owner signup: app_users insert failed', userError);
       return res.status(500).json({
         success: false,
-        error: 'Failed to create account. Please try again.'
+        error: describeSignupDbError('account', userError)
       });
     }
 
@@ -289,28 +326,9 @@ export async function signupComplete(req: Request, res: Response) {
     if (storeError) {
       console.error('❌ Store owner signup: stores insert failed', storeError);
       await supabaseAdmin.from('app_users').delete().eq('id', newUser.id);
-
-      // Postgres unique_violation on stores_phone_key: the constraint should
-      // no longer exist (see 20260816000000_drop_stores_phone_unique_constraint.sql),
-      // but until that migration is actually applied to this database, it
-      // still blocks one owner from registering a second store — or from
-      // safely retrying a signup that had already succeeded once. Give a
-      // real explanation for this specific, known cause instead of a bare
-      // "failed, try again" that leaves the shopkeeper with no idea why.
-      if (storeError.code === '23505' && storeError.message?.includes('stores_phone_key')) {
-        return res.status(500).json({
-          success: false,
-          error:
-            'Failed to create store. A store is already registered with this phone number. ' +
-            'If you already have an account, please log in instead of signing up again. ' +
-            '(If you were trying to register a second store on the same number, that is supported — ' +
-            'this specific error means a pending database update needs to be applied first.)'
-        });
-      }
-
       return res.status(500).json({
         success: false,
-        error: 'Failed to create store. Please try again.'
+        error: describeSignupDbError('store', storeError)
       });
     }
 
