@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { calculateDistance } from '../utils/deliveryFees';
+import { useAuth } from './AuthContext';
 
 export interface UserLocation {
   latitude: number;
@@ -24,6 +25,7 @@ interface LocationProviderProps {
 }
 
 export function LocationProvider({ children }: LocationProviderProps) {
+  const { isAuthenticated } = useAuth();
   const [userLocation, setUserLocationState] = useState<UserLocation | null>(null);
 
   // Load location from localStorage on mount
@@ -38,6 +40,19 @@ export function LocationProvider({ children }: LocationProviderProps) {
       }
     }
   }, []);
+
+  // Clear the saved location on logout (isAuthenticated true -> false), not on
+  // initial mount where a guest starts out already unauthenticated. Same
+  // shared/kiosk-device reasoning as CartContext: a saved home address is
+  // exactly the kind of thing that shouldn't carry over to whoever logs in next.
+  const wasAuthenticated = useRef(isAuthenticated);
+  useEffect(() => {
+    if (wasAuthenticated.current && !isAuthenticated) {
+      setUserLocationState(null);
+      localStorage.removeItem('userLocation');
+    }
+    wasAuthenticated.current = isAuthenticated;
+  }, [isAuthenticated]);
 
   // Save location to localStorage whenever it changes
   const setUserLocation = (location: UserLocation | null) => {

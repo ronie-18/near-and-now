@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { Product } from '../services/supabase';
 import { useAuth } from './AuthContext';
 import {
@@ -89,6 +89,19 @@ export function CartProvider({ children }: CartProviderProps) {
     }
     setHasLoadedCart(true);
   }, []);
+
+  // Clear the cart on logout (isAuthenticated true -> false), not on initial mount
+  // where a guest starts out already unauthenticated. Cart is shared localStorage
+  // state, not scoped per-user, so without this a shared/kiosk device would let the
+  // next person to log in see (and check out) the previous customer's cart.
+  const wasAuthenticated = useRef(isAuthenticated);
+  useEffect(() => {
+    if (wasAuthenticated.current && !isAuthenticated) {
+      setCartItems([]);
+      localStorage.removeItem('nearNowCartItems');
+    }
+    wasAuthenticated.current = isAuthenticated;
+  }, [isAuthenticated]);
 
   // Save cart to localStorage whenever it changes (works for both guests and logged-in users)
   useEffect(() => {
