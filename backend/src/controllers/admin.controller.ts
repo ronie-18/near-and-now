@@ -64,10 +64,16 @@ export class AdminController {
         return res.status(500).json({ error: 'Failed to create session' });
       }
 
-      await supabaseAdmin
+      // Non-blocking: a failed last_login_at write is a display/audit detail,
+      // not a reason to fail a login whose real session row already exists —
+      // but it was previously discarded with no logging at all, silently.
+      const { error: lastLoginError } = await supabaseAdmin
         .from('admins')
         .update({ last_login_at: new Date().toISOString() })
         .eq('id', (admin as any).id);
+      if (lastLoginError) {
+        console.error('admin login: failed to update last_login_at (non-blocking)', lastLoginError);
+      }
 
       const { password_hash, ...adminData } = admin as any;
       res.json({ admin: adminData, token, expiresAt });
