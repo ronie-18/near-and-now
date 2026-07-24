@@ -1,6 +1,20 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { expireStaleAllocations } from './shopkeeper.controller.js';
+import type { OrderStatus } from '../types/database.types.js';
+
+const VALID_ORDER_STATUSES: OrderStatus[] = [
+  'pending_at_store',
+  'store_accepted',
+  'preparing_order',
+  'ready_for_pickup',
+  'delivery_partner_assigned',
+  'picking_up',
+  'order_picked_up',
+  'in_transit',
+  'order_delivered',
+  'order_cancelled'
+];
 
 export class TrackingController {
   // Get order tracking information
@@ -77,18 +91,23 @@ export class TrackingController {
       const { orderId } = req.params;
       const { status, location, latitude, longitude, notes } = req.body;
 
-      if (!status) {
-        return res.status(400).json({ error: 'Status is required' });
+      if (!status || !VALID_ORDER_STATUSES.includes(status)) {
+        return res.status(400).json({ error: 'A valid status is required' });
       }
 
       const update = await databaseService.addTrackingUpdate({
         order_id: orderId,
         status,
+        rider_id: req.riderId!,
         location,
         latitude,
         longitude,
         notes
       });
+
+      if (!update) {
+        return res.status(403).json({ error: 'This order is not assigned to you' });
+      }
 
       res.status(201).json(update);
     } catch (error) {
@@ -119,6 +138,10 @@ export class TrackingController {
     try {
       const { agentId } = req.params;
       const { latitude, longitude } = req.body;
+
+      if (agentId !== req.riderId) {
+        return res.status(403).json({ error: 'You can only update your own location' });
+      }
 
       if (!latitude || !longitude) {
         return res.status(400).json({ error: 'Latitude and longitude are required' });

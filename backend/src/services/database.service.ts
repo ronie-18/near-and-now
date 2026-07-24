@@ -12,7 +12,8 @@ import type {
   OrderItem,
   Coupon,
   Admin,
-  ProductsWithDetails
+  ProductsWithDetails,
+  OrderStatus
 } from '../types/database.types.js';
 
 /** Same rules as auth verify-otp / frontend — match app_users.customers phone storage variants. */
@@ -2112,14 +2113,24 @@ export class DatabaseService {
     return { order, statusHistory, storeLocations, deliveryAgent, deliveryAgents };
   }
 
+  /** Returns null (not this rider's order) rather than throwing, so the controller can 403 consistently. */
   async addTrackingUpdate(params: {
     order_id: string;
-    status: string;
+    status: OrderStatus;
+    rider_id: string;
     location?: string;
     latitude?: number;
     longitude?: number;
     notes?: string;
   }) {
+    const { data: order } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id')
+      .eq('id', params.order_id)
+      .eq('assigned_driver_id', params.rider_id)
+      .maybeSingle();
+    if (!order) return null;
+
     const { data, error } = await supabaseAdmin
       .from('order_status_history')
       .insert({
