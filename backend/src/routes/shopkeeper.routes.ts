@@ -11,6 +11,5 @@ router.get('/profile',                               ctrl.getProfile.bind(ctrl))
 router.get('/orders',                                ctrl.getIncomingOrders.bind(ctrl));
 router.post('/allocations/:allocationId/accept',     ctrl.acceptAllocation.bind(ctrl));
 router.post('/allocations/:allocationId/reject',     ctrl.rejectAllocation.bind(ctrl));
-router.post('/allocations/:allocationId/complete',   ctrl.completeAllocation.bind(ctrl));
 
 export default router;

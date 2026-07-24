@@ -264,57 +264,6 @@ export class ShopkeeperController {
     }
   }
 
-  // POST /shopkeeper/allocations/:allocationId/complete
-  // Simulation endpoint: marks allocation as picked_up and order as delivered.
-  async completeAllocation(req: Request, res: Response) {
-    try {
-      const { allocationId } = req.params;
-
-      const { data: alloc } = await supabaseAdmin
-        .from('order_store_allocations')
-        .select('id, order_id, store_id, status')
-        .eq('id', allocationId)
-        .in('store_id', req.shopkeeperStoreIds!)
-        .maybeSingle();
-
-      if (!alloc) return res.status(404).json({ error: 'Allocation not found' });
-      if (alloc.status !== 'accepted') {
-        return res.status(409).json({ error: `Cannot complete allocation with status: ${alloc.status}` });
-      }
-
-      await supabaseAdmin
-        .from('order_store_allocations')
-        .update({ status: 'picked_up' })
-        .eq('id', allocationId);
-
-      // Mark store_orders row as delivered
-      await supabaseAdmin
-        .from('store_orders')
-        .update({ status: 'order_delivered' })
-        .eq('customer_order_id', alloc.order_id)
-        .eq('store_id', alloc.store_id);
-
-      // Check if all allocations for this order are now picked_up
-      const { data: remaining } = await supabaseAdmin
-        .from('order_store_allocations')
-        .select('id')
-        .eq('order_id', alloc.order_id)
-        .not('status', 'in', '("picked_up","rejected")');
-
-      if (!remaining?.length) {
-        await supabaseAdmin
-          .from('customer_orders')
-          .update({ status: 'order_delivered' })
-          .eq('id', alloc.order_id);
-      }
-
-      res.json({ success: true });
-    } catch (err) {
-      console.error('shopkeeper completeAllocation:', err);
-      res.status(500).json({ error: 'Failed to complete allocation' });
-    }
-  }
-
   // POST /shopkeeper/allocations/:allocationId/reject
   async rejectAllocation(req: Request, res: Response) {
     try {
