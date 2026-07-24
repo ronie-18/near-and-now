@@ -720,8 +720,12 @@ export async function registerPushToken(req: Request, res: Response) {
     const userId = await resolveShopkeeperFromToken(req, res);
     if (!userId) return;
 
-    const { pushToken } = req.body as { pushToken?: string };
-    if (!pushToken) return res.status(400).json({ success: false, error: 'pushToken required' });
+    // pushToken: null explicitly clears the stored token (called on logout, so a
+    // shared device doesn't keep delivering this shopkeeper's order notifications
+    // to whoever logs in next) — distinct from omitting the field, which is still
+    // rejected as a client error.
+    const { pushToken } = req.body as { pushToken?: string | null };
+    if (pushToken === undefined) return res.status(400).json({ success: false, error: 'pushToken required' });
 
     await supabaseAdmin
       .from('stores')
