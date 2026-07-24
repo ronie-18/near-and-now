@@ -15,6 +15,7 @@ import {
   Info
 } from 'lucide-react';
 import { createAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
+import { CreateAdminSchema } from '../../schemas/admin.schema';
 
 const CreateAdminPage = () => {
   const navigate = useNavigate();
@@ -62,8 +63,12 @@ const CreateAdminPage = () => {
       return;
     }
 
-    if (formData.password.length < 8) {
-      setError('Password must be at least 8 characters long.');
+    // The schema (upper/lower/digit/special-char) was already defined but
+    // never actually enforced here — only a bare length check ran, so a
+    // password like "aaaaaaaa" was accepted for an admin account.
+    const passwordCheck = CreateAdminSchema.shape.password.safeParse(formData.password);
+    if (!passwordCheck.success) {
+      setError(passwordCheck.error.issues[0]?.message || 'Password does not meet the strength requirements.');
       return;
     }
 
@@ -180,7 +185,9 @@ const CreateAdminPage = () => {
                 required
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Min. 8 characters, with at least one uppercase, lowercase, number, and special character.
+            </p>
           </div>
 
           {/* Confirm Password */}

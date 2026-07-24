@@ -3,6 +3,22 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { supabaseAdmin } from '../config/database.js';
 
+/**
+ * Same strength rules already defined (but only ever enforced client-side,
+ * as a bare length check) in admin/src/schemas/admin.schema.ts. The backend
+ * is the real authority — client-side validation can be bypassed entirely —
+ * so this needs its own copy rather than trusting the frontend to have run it.
+ */
+function passwordStrengthError(password: string): string | null {
+  if (password.length < 8) return 'Password must be at least 8 characters';
+  if (password.length > 100) return 'Password is too long';
+  if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter';
+  if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter';
+  if (!/[0-9]/.test(password)) return 'Password must contain at least one number';
+  if (!/[^A-Za-z0-9]/.test(password)) return 'Password must contain at least one special character';
+  return null;
+}
+
 export class AdminController {
   // POST /api/admin/login
   // Body: { email, password }
@@ -97,8 +113,9 @@ export class AdminController {
       if (!email || !password || !full_name || !role || !validRoles.includes(role)) {
         return res.status(400).json({ error: 'email, password, full_name, and a valid role are required' });
       }
-      if (password.length < 8) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      const strengthError = passwordStrengthError(password);
+      if (strengthError) {
+        return res.status(400).json({ error: strengthError });
       }
 
       const passwordHash = await bcrypt.hash(password, 10);
@@ -174,8 +191,9 @@ export class AdminController {
       if (permissions !== undefined) updateData.permissions = permissions;
       if (status !== undefined) updateData.status = status;
       if (password !== undefined) {
-        if (password.length < 8) {
-          return res.status(400).json({ error: 'Password must be at least 8 characters' });
+        const strengthError = passwordStrengthError(password);
+        if (strengthError) {
+          return res.status(400).json({ error: strengthError });
         }
         updateData.password_hash = await bcrypt.hash(password, 10);
       }

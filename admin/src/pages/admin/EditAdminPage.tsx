@@ -16,6 +16,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { getAdminById, updateAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
+import { UpdateAdminSchema } from '../../schemas/admin.schema';
 
 const EditAdminPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -107,9 +108,14 @@ const EditAdminPage = () => {
       return;
     }
 
-    if (formData.password && formData.password.length < 8) {
-      setError('Password must be at least 8 characters long.');
-      return;
+    if (formData.password) {
+      // Same schema as CreateAdminPage — was already defined but never
+      // actually enforced here either, only a bare length check.
+      const passwordCheck = UpdateAdminSchema.shape.password.unwrap().safeParse(formData.password);
+      if (!passwordCheck.success) {
+        setError(passwordCheck.error.issues[0]?.message || 'Password does not meet the strength requirements.');
+        return;
+      }
     }
 
     try {
@@ -261,7 +267,10 @@ const EditAdminPage = () => {
                 minLength={8}
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Leave blank to keep current password</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Leave blank to keep current password. If set: min. 8 characters, with at least one
+              uppercase, lowercase, number, and special character.
+            </p>
           </div>
 
           {/* Confirm Password */}
