@@ -289,6 +289,25 @@ export async function signupComplete(req: Request, res: Response) {
     if (storeError) {
       console.error('❌ Store owner signup: stores insert failed', storeError);
       await supabaseAdmin.from('app_users').delete().eq('id', newUser.id);
+
+      // Postgres unique_violation on stores_phone_key: the constraint should
+      // no longer exist (see 20260816000000_drop_stores_phone_unique_constraint.sql),
+      // but until that migration is actually applied to this database, it
+      // still blocks one owner from registering a second store — or from
+      // safely retrying a signup that had already succeeded once. Give a
+      // real explanation for this specific, known cause instead of a bare
+      // "failed, try again" that leaves the shopkeeper with no idea why.
+      if (storeError.code === '23505' && storeError.message?.includes('stores_phone_key')) {
+        return res.status(500).json({
+          success: false,
+          error:
+            'Failed to create store. A store is already registered with this phone number. ' +
+            'If you already have an account, please log in instead of signing up again. ' +
+            '(If you were trying to register a second store on the same number, that is supported — ' +
+            'this specific error means a pending database update needs to be applied first.)'
+        });
+      }
+
       return res.status(500).json({
         success: false,
         error: 'Failed to create store. Please try again.'
