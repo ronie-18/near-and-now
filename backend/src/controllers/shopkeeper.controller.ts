@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { randomBytes } from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { haversineKm } from '../utils/geo.js';
+import { notificationService } from '../services/notification.service.js';
 
 declare module 'express' {
   interface Request {
@@ -253,10 +254,14 @@ export class ShopkeeperController {
         const resolved = await finalizeIfAllResolved(alloc.order_id);
         if (!resolved) {
           // Partial acceptance — update parent order status
-          await supabaseAdmin.from('customer_orders')
+          const { data: partialUpdate } = await supabaseAdmin.from('customer_orders')
             .update({ status: 'store_accepted' })
             .eq('id', alloc.order_id)
-            .eq('status', 'pending_at_store');
+            .eq('status', 'pending_at_store')
+            .select('id');
+          if (partialUpdate?.length) {
+            notificationService.sendOrderNotification(alloc.order_id, 'order_confirmed').catch(console.error);
+          }
         }
       }
 
@@ -369,7 +374,10 @@ async function finalizeIfAllResolved(orderId: string): Promise<boolean> {
     console.error('finalize_order_if_ready RPC failed:', error);
     return false;
   }
-  if (didFinalize) broadcastToNearbyDrivers(orderId).catch(console.error);
+  if (didFinalize) {
+    broadcastToNearbyDrivers(orderId).catch(console.error);
+    notificationService.sendOrderNotification(orderId, 'ready_for_pickup').catch(console.error);
+  }
   return !!didFinalize;
 }
 

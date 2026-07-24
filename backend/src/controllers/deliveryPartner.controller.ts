@@ -624,6 +624,8 @@ export class DeliveryPartnerController {
         notes: 'Rider accepted order',
       });
 
+      notificationService.sendOrderNotification(orderId, 'rider_assigned').catch(console.error);
+
       res.json({ success: true });
     } catch (err) {
       console.error('acceptOrder error:', err);
@@ -706,6 +708,8 @@ export class DeliveryPartnerController {
         status: 'order_picked_up',
         notes: 'Rider picked up order from store',
       });
+
+      notificationService.sendOrderNotification(orderId, 'order_shipped').catch(console.error);
 
       res.json({ success: true });
     } catch (err) {
@@ -1320,6 +1324,10 @@ export class DeliveryPartnerController {
           .from('driver_order_offers').select('order_id').eq('id', offerId).single();
         const orderId = offer?.order_id;
 
+        if (orderId) {
+          notificationService.sendOrderNotification(orderId, 'rider_assigned').catch(console.error);
+        }
+
         return res.json({ success: true, result: 'accepted', order_id: orderId });
       }
       if (result === 'already_taken') {
@@ -1468,6 +1476,7 @@ export class DeliveryPartnerController {
           supabaseAdmin.from('store_orders').update({ status: 'order_picked_up', picked_up_at: new Date().toISOString() }).eq('customer_order_id', orderId),
           supabaseAdmin.from('order_status_history').insert({ customer_order_id: orderId, status: 'order_picked_up', notes: 'All stores picked up — driver en route to customer' }),
         ]);
+        notificationService.sendOrderNotification(orderId, 'order_shipped').catch(console.error);
       } else {
         // Partial pickup — driver has more stops to visit
         const nextStoreId = (remaining[0] as any).store_id;

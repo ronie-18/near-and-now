@@ -132,11 +132,13 @@ export class NotificationService {
   async sendOrderNotification(orderId: string, type: string) {
     console.log(`Sending ${type} notification for order ${orderId}`);
     switch (type) {
-      case 'order_placed':      return this.sendOrderPlacedNotification(orderId);
-      case 'order_confirmed':   return this.sendOrderConfirmedNotification(orderId);
-      case 'order_shipped':     return this.sendOrderShippedNotification(orderId);
-      case 'order_delivered':   return this.sendOrderDeliveredNotification(orderId);
-      case 'order_cancelled':   return this.sendOrderCancelledNotification(orderId);
+      case 'order_placed':          return this.sendOrderPlacedNotification(orderId);
+      case 'order_confirmed':       return this.sendOrderConfirmedNotification(orderId);
+      case 'ready_for_pickup':      return this.sendOrderReadyForPickupNotification(orderId);
+      case 'rider_assigned':        return this.sendRiderAssignedNotification(orderId);
+      case 'order_shipped':         return this.sendOrderShippedNotification(orderId);
+      case 'order_delivered':       return this.sendOrderDeliveredNotification(orderId);
+      case 'order_cancelled':       return this.sendOrderCancelledNotification(orderId);
       default: console.log('Unknown notification type:', type);
     }
   }
@@ -230,6 +232,14 @@ export class NotificationService {
 
   private async sendOrderConfirmedNotification(orderId: string) {
     await this.notifyCustomerByOrderId(orderId, 'Order Confirmed', 'Your order has been confirmed and is being prepared.', 'order_confirmed');
+  }
+
+  private async sendOrderReadyForPickupNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Ready for Pickup', 'Your order is packed and ready — waiting for a delivery partner.', 'ready_for_pickup');
+  }
+
+  private async sendRiderAssignedNotification(orderId: string) {
+    await this.notifyCustomerByOrderId(orderId, 'Delivery Partner Assigned', 'A delivery partner has been assigned to your order.', 'rider_assigned');
   }
 
   private async sendOrderShippedNotification(orderId: string) {
