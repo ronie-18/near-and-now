@@ -5,6 +5,7 @@ import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
 import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
+import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -285,11 +286,16 @@ export class DeliveryPartnerController {
 
       const { password_hash: _, ...userWithoutPassword } = partner as any;
 
+      // Best-effort — see riderAuthBridge.service.ts. A failure here doesn't
+      // block signup; the app just falls back to its status poll.
+      const supabaseSession = await mintRiderRealtimeSession(partner.id);
+
       res.json({
         success: true,
         message: 'Registration complete — pending admin verification',
         token,
         user: userWithoutPassword,
+        ...(supabaseSession ? { supabaseSession } : {}),
       });
     } catch (err: any) {
       console.error('deliveryPartner signupComplete error:', err);

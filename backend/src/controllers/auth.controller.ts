@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { createSignupTicket } from '../utils/signupTicket.js';
+import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 
 function extractErrorMessage(err: any, fallback: string): string {
   if (!err) return fallback;
@@ -211,12 +212,22 @@ export class AuthController {
               .eq('id', existingUser.id);
           }
 
+          // Only riders currently have a Realtime-scoped RLS policy
+          // (partner_own_record) waiting for a real auth.uid() — see
+          // riderAuthBridge.service.ts. Best-effort: a failure here doesn't
+          // block login, the app just falls back to polling.
+          const supabaseSession =
+            requestedRole === 'delivery_partner'
+              ? await mintRiderRealtimeSession(existingUser.id)
+              : null;
+
           return res.json({
             success: true,
             message: 'OTP verified successfully',
             mode: 'login',
             user: userWithoutPassword,
-            token
+            token,
+            ...(supabaseSession ? { supabaseSession } : {})
           });
         }
 
