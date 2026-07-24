@@ -270,7 +270,7 @@ export async function signupComplete(req: Request, res: Response) {
       console.error('❌ Store owner signup: app_users insert failed', userError);
       return res.status(500).json({
         success: false,
-        error: userError?.message || 'Failed to create account'
+        error: 'Failed to create account. Please try again.'
       });
     }
 
@@ -291,7 +291,7 @@ export async function signupComplete(req: Request, res: Response) {
       await supabaseAdmin.from('app_users').delete().eq('id', newUser.id);
       return res.status(500).json({
         success: false,
-        error: storeError.message || 'Failed to create store'
+        error: 'Failed to create store. Please try again.'
       });
     }
 

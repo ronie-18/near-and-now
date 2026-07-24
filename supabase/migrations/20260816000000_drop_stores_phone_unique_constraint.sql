@@ -1,0 +1,11 @@
+-- stores.phone had a UNIQUE constraint that doesn't match the actual business
+-- model: one shopkeeper can legitimately own multiple stores, all reachable on
+-- the same personal/business phone number. In practice this meant the second
+-- store a shopkeeper tried to register (or, more commonly, a retry of a
+-- signup that had actually already succeeded server-side once) failed with a
+-- raw "duplicate key value violates unique constraint stores_phone_key"
+-- Postgres error surfaced straight to the client. app_users.phone was never
+-- unique either (regular index only), so this was the odd one out.
+-- No code anywhere queries stores by phone expecting a single/unique match
+-- (confirmed via repo-wide grep) — safe to drop.
+ALTER TABLE public.stores DROP CONSTRAINT IF EXISTS stores_phone_key;
