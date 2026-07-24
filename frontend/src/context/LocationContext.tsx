@@ -18,7 +18,8 @@ interface LocationContextType {
   isLocationSet: boolean;
 }
 
-const LocationContext = createContext<LocationContextType | undefined>(undefined);
+// Create context (exported for testing)
+export const LocationContext = createContext<LocationContextType | undefined>(undefined);
 
 interface LocationProviderProps {
   children: ReactNode;

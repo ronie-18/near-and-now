@@ -1,9 +1,10 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { getAllProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
 import { getCategories, Category } from '../services/adminService';
 import { useNotification } from '../context/NotificationContext';
+import { useLocation } from '../context/LocationContext';
 import { formatCategoryName } from '../utils/formatCategoryName';
 import ProductCard from '../components/products/ProductCard';
 
@@ -16,14 +17,17 @@ const HomePage = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const { showNotification } = useNotification();
+  const { userLocation } = useLocation();
+  const lastLocationKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchData = async (lat?: number, lng?: number) => {
       try {
         setLoading(true);
 
+        const opts = lat != null && lng != null ? { lat, lng } : undefined;
         const [products, categoriesData] = await Promise.all([
-          getAllProducts(),
+          getAllProducts(opts),
           getCategories()
         ]);
 
@@ -48,8 +52,22 @@ const HomePage = () => {
       }
     };
 
-    fetchData();
-  }, []); // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Re-fetch whenever the user's delivery location changes (rounded to a
+    // ~110m grid to avoid re-fetching on GPS jitter) — matches ShopPage's
+    // pattern. Previously this ran once on mount only, so switching delivery
+    // location left the "nearby store" listing stale until a full reload.
+    const lat = userLocation?.latitude;
+    const lng = userLocation?.longitude;
+    const key = lat != null && lng != null
+      ? `${lat.toFixed(3)},${lng.toFixed(3)}`
+      : 'no-location';
+
+    if (lastLocationKeyRef.current === key) return;
+    lastLocationKeyRef.current = key;
+
+    fetchData(lat, lng);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLocation?.latitude, userLocation?.longitude]);
 
   return (
     <>
