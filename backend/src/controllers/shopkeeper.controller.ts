@@ -597,13 +597,31 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
 }
 
 async function broadcastToNearbyDrivers(orderId: string) {
-  const { data: order } = await supabaseAdmin
-    .from('customer_orders')
-    .select('delivery_latitude, delivery_longitude')
-    .eq('id', orderId)
-    .single();
+  // Search center should be where the driver actually needs to go first — the
+  // pickup store, not the customer's drop-off — otherwise a driver right next
+  // to the store but far from the eventual delivery address never gets offered
+  // the order, while one nowhere near the store (but close to the drop-off) does.
+  // For a multi-store order, use the first stop in pickup sequence (same
+  // convention deliverySimulation.service.ts already uses for "spawn driver
+  // near first store").
+  const { data: firstAlloc } = await supabaseAdmin
+    .from('order_store_allocations')
+    .select('store_id')
+    .eq('order_id', orderId)
+    .eq('status', 'accepted')
+    .order('sequence_number', { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
-  if (!order?.delivery_latitude) return;
+  if (!firstAlloc?.store_id) return;
+
+  const { data: store } = await supabaseAdmin
+    .from('stores')
+    .select('latitude, longitude')
+    .eq('id', firstAlloc.store_id)
+    .maybeSingle();
+
+  if (!store?.latitude) return;
 
   const { data: locations } = await supabaseAdmin
     .from('driver_locations')
@@ -612,7 +630,7 @@ async function broadcastToNearbyDrivers(orderId: string) {
 
   const distanceByDriverId = new Map<string, number>();
   for (const l of (locations || []) as any[]) {
-    const dist = haversineKm(order.delivery_latitude, order.delivery_longitude, l.latitude, l.longitude);
+    const dist = haversineKm(store.latitude, store.longitude, l.latitude, l.longitude);
     if (dist <= 10) distanceByDriverId.set(l.delivery_partner_id, dist);
   }
 

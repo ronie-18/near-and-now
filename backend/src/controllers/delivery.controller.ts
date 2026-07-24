@@ -224,7 +224,7 @@ export class DeliveryController {
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
-        .select('id, status, delivery_latitude, delivery_longitude')
+        .select('id, status')
         .eq('id', orderId)
         .single();
 
@@ -235,14 +235,37 @@ export class DeliveryController {
         return res.status(400).json({ error: `Order not ready for dispatch (status: ${(order as any).status})` });
       }
 
+      // Search center should be the pickup store, not the customer's drop-off —
+      // same fix/reasoning as shopkeeper.controller.ts's broadcastToNearbyDrivers.
+      // For a multi-store order, use the first stop in pickup sequence.
+      const { data: firstAlloc } = await supabaseAdmin
+        .from('order_store_allocations')
+        .select('store_id')
+        .eq('order_id', orderId)
+        .eq('status', 'accepted')
+        .order('sequence_number', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (!firstAlloc?.store_id) {
+        return res.json({ success: true, broadcast_count: 0, message: 'No accepted store allocation for this order' });
+      }
+
+      const { data: store } = await supabaseAdmin
+        .from('stores')
+        .select('latitude, longitude')
+        .eq('id', firstAlloc.store_id)
+        .maybeSingle();
+
+      if (!store?.latitude) return res.json({ success: true, broadcast_count: 0, message: 'Store has no location set' });
+
       const { data: locations } = await supabaseAdmin
         .from('driver_locations')
         .select('delivery_partner_id, latitude, longitude, updated_at');
 
-      const o = order as any;
       const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const nearbyIds = (locations || [])
-        .filter((l: any) => l.updated_at >= tenMinsAgo && haversineKm(o.delivery_latitude, o.delivery_longitude, l.latitude, l.longitude) <= 10)
+        .filter((l: any) => l.updated_at >= tenMinsAgo && haversineKm(store.latitude, store.longitude, l.latitude, l.longitude) <= 10)
         .map((l: any) => l.delivery_partner_id);
 
       if (!nearbyIds.length) return res.json({ success: true, broadcast_count: 0, message: 'No drivers online nearby' });
