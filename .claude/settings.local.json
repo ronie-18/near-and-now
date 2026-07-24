@@ -60,7 +60,9 @@
       "Skill(dataviz)",
       "Bash(echo \"EXIT: $?\")",
       "Bash(npm test *)",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Bash(npx expo *)",
+      "Bash(node_modules/.bin/tsc --noEmit -p tsconfig.json)"
     ]
   }
 }
