@@ -1820,7 +1820,7 @@ export class DatabaseService {
     return { success: true };
   }
 
-  async updateCustomerPushToken(customerId: string, expoPushToken: string) {
+  async updateCustomerPushToken(customerId: string, expoPushToken: string | null) {
     const { error } = await supabaseAdmin
       .from('app_users')
       .update({ expo_push_token: expoPushToken })

@@ -153,12 +153,16 @@ export class CustomersController {
    * reach their device. The token is taken from the body, but the customer
    * identity always comes from the authenticated session (req.customerId),
    * never from a client-supplied id.
+   *
+   * `token: null` explicitly clears it (called on logout, so a shared/reused
+   * device doesn't keep receiving the previous customer's order notifications)
+   * — distinct from an omitted/undefined token, which is still a bad request.
    */
   async registerPushToken(req: Request, res: Response) {
     try {
       const customerId = req.customerId!;
-      const { token } = req.body as { token?: string };
-      if (!token) {
+      const { token } = req.body as { token?: string | null };
+      if (token === undefined) {
         return res.status(400).json({ error: 'token required' });
       }
       await databaseService.updateCustomerPushToken(customerId, token);
