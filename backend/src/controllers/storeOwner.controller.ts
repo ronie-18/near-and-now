@@ -115,19 +115,8 @@ export async function updateStoreStatus(req: Request, res: Response) {
  */
 export async function deleteStoreProduct(req: Request, res: Response) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized' });
-    }
-
-    const token = authHeader.slice(7);
-    const { data: user } = await supabaseAdmin
-      .from('app_users')
-      .select('id')
-      .eq('session_token', token)
-      .maybeSingle();
-
-    if (!user) return res.status(401).json({ success: false, error: 'Invalid token' });
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
 
     const productId = req.params.productId;
 
@@ -135,7 +124,7 @@ export async function deleteStoreProduct(req: Request, res: Response) {
     const { data: stores } = await supabaseAdmin
       .from('stores')
       .select('id')
-      .eq('owner_id', user.id);
+      .eq('owner_id', userId);
 
     const storeIds = (stores || []).map((s: any) => s.id);
     if (!storeIds.length) {
