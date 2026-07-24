@@ -895,8 +895,8 @@ const CheckoutPage = () => {
                             <input type="tel" name="phone" value={formData.phone} onChange={handleChange} required placeholder="+91 98765 43210" className={inputCls} />
                           </div>
                           <div>
-                            <FieldLabel>Email</FieldLabel>
-                            <input type="email" name="email" value={formData.email} onChange={handleChange} placeholder="jane@example.com" className={inputCls} />
+                            <FieldLabel>Email *</FieldLabel>
+                            <input type="email" name="email" value={formData.email} onChange={handleChange} required placeholder="jane@example.com" className={inputCls} />
                           </div>
                           <div>
                             <FieldLabel>PIN Code *</FieldLabel>
