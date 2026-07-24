@@ -9,7 +9,6 @@ import { supabaseAdmin } from '../services/supabase';
 import { useOrderTrackingRealtime, type Order, type OrderStatus } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
 import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
-import { SIMULATION_STORAGE_KEY } from '../services/deliverySimulation';
 import { geocodeAddress } from '../services/placesService';
 import { fetchOrderTrackingFull } from '../services/trackingApi';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
@@ -209,17 +208,6 @@ const OrderTrackingPage = () => {
     });
     return () => { cancelled = true; };
   }, [order?.delivery_address, order?.delivery_latitude, order?.delivery_longitude]);
-
-  // Start simulation
-  useEffect(() => {
-    if (!orderId || !order) return;
-    const st = order.status;
-    if (st !== 'pending_at_store' && st !== 'store_accepted') return;
-    if (sessionStorage.getItem(`${SIMULATION_STORAGE_KEY}-${orderId}`)) return;
-    sessionStorage.setItem(`${SIMULATION_STORAGE_KEY}-${orderId}`, '1');
-    const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).toString().replace(/\/$/, '');
-    fetch(`${apiBase}/api/delivery/simulate/${orderId}`, { method: 'POST' }).catch(console.error);
-  }, [orderId, order?.status]);
 
   const formatStatusForDisplay = useCallback(
     (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
