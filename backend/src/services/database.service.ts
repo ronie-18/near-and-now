@@ -1044,6 +1044,43 @@ export class DatabaseService {
       throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
     }
 
+    // Idempotency guard: a fast double-tap on "Place Order" (or a client retry
+    // after a slow/dropped response) can otherwise create two identical orders.
+    // No idempotency key is sent by any client today, so this checks for an
+    // equivalent order (same customer, same total, same item count) placed in
+    // the last 30 seconds and returns that instead of inserting a new one.
+    const dedupeWindowStart = new Date(Date.now() - 30_000).toISOString();
+    const { data: recentDuplicate } = await supabaseAdmin
+      .from('customer_orders')
+      .select('*')
+      .eq('customer_id', orderData.user_id)
+      .eq('total_amount', orderData.order_total)
+      .gte('created_at', dedupeWindowStart)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentDuplicate) {
+      return {
+        id: recentDuplicate.id,
+        user_id: orderData.user_id,
+        customer_name: orderData.customer_name,
+        customer_email: orderData.customer_email,
+        customer_phone: orderData.customer_phone,
+        order_status: 'placed',
+        payment_status: recentDuplicate.payment_status ?? 'pending',
+        payment_method: orderData.payment_method,
+        order_total: recentDuplicate.total_amount,
+        subtotal: recentDuplicate.subtotal_amount,
+        delivery_fee: recentDuplicate.delivery_fee,
+        discount_amount: recentDuplicate.discount_amount,
+        items,
+        items_count: items.length,
+        shipping_address: orderData.shipping_address,
+        created_at: recentDuplicate.created_at,
+        order_number: recentDuplicate.order_code
+      };
+    }
+
     const { data: customerOrder, error: coError } = await supabaseAdmin
       .from('customer_orders')
       .insert({
