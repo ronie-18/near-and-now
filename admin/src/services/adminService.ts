@@ -736,10 +736,12 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 // Use app_users table and aggregate order data
 export async function getCustomers(): Promise<Customer[]> {
   try {
-    // Fetch all app_users
+    // Fetch all app_users with role = customer (app_users also holds shopkeepers and
+    // delivery partners, which must not leak into the customer list/count)
     const { data: users, error: usersError } = await getAdminClient()
       .from('app_users')
       .select('id, name, email, phone, created_at')
+      .eq('role', 'customer')
       .order('created_at', { ascending: false });
 
     if (usersError) {
@@ -795,11 +797,12 @@ export async function getCustomers(): Promise<Customer[]> {
 
 export async function getCustomerById(id: string): Promise<Customer | null> {
   try {
-    // Fetch user from app_users
+    // Fetch user from app_users, scoped to role = customer (see getCustomers)
     const { data: user, error: userError } = await getAdminClient()
       .from('app_users')
       .select('id, name, email, phone, created_at')
       .eq('id', id)
+      .eq('role', 'customer')
       .single();
 
     if (userError || !user) {
