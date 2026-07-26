@@ -26,7 +26,7 @@ import IdCell from '../../components/admin/IdCell';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
-const ORDER_STATUSES = ['placed', 'confirmed', 'shipped', 'delivered', 'cancelled'] as const;
+const ORDER_STATUSES = ['placed', 'confirmed', 'preparing', 'shipped', 'delivered', 'cancelled'] as const;
 
 // Modern Stat Card
 interface StatCardProps {
@@ -59,6 +59,7 @@ const getStatusStyle = (status: string) => {
     case 'delivered': return 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700';
     case 'placed': return 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700';
     case 'confirmed': return 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700';
+    case 'preparing': return 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700';
     case 'shipped': return 'bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700';
     case 'cancelled': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700';
     default: return 'bg-gray-100 text-gray-700';
@@ -206,6 +207,7 @@ const OrdersPage = () => {
     total: orders.length,
     placed: orders.filter(o => o.order_status === 'placed').length,
     confirmed: orders.filter(o => o.order_status === 'confirmed').length,
+    preparing: orders.filter(o => o.order_status === 'preparing').length,
     shipped: orders.filter(o => o.order_status === 'shipped').length,
     delivered: orders.filter(o => o.order_status === 'delivered').length,
     cancelled: orders.filter(o => o.order_status === 'cancelled').length,
@@ -258,10 +260,11 @@ const OrdersPage = () => {
         {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
           <StatCard icon={ShoppingBag} gradient="bg-gradient-to-br from-gray-700 to-gray-900" label="Total Orders" value={orderStats.total} />
           <StatCard icon={Clock} gradient="bg-gradient-to-br from-blue-500 to-indigo-600" label="Placed" value={orderStats.placed} />
           <StatCard icon={Package} gradient="bg-gradient-to-br from-amber-500 to-orange-600" label="Confirmed" value={orderStats.confirmed} />
+          <StatCard icon={Package} gradient="bg-gradient-to-br from-yellow-500 to-amber-600" label="Preparing" value={orderStats.preparing} />
           <StatCard icon={Truck} gradient="bg-gradient-to-br from-violet-500 to-purple-600" label="Shipped" value={orderStats.shipped} />
           <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-emerald-500 to-teal-600" label="Delivered" value={orderStats.delivered} />
           <StatCard icon={XCircle} gradient="bg-gradient-to-br from-red-500 to-rose-600" label="Cancelled" value={orderStats.cancelled} />

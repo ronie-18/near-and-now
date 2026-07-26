@@ -87,6 +87,7 @@ const OrderDetailPage = () => {
       case 'delivered': return 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700';
       case 'placed': return 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700';
       case 'confirmed': return 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700';
+      case 'preparing': return 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700';
       case 'shipped': return 'bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700';
       case 'cancelled': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700';
       default: return 'bg-gray-100 text-gray-700';
@@ -97,6 +98,7 @@ const OrderDetailPage = () => {
     switch (status) {
       case 'delivered': return <CheckCircle className="w-4 h-4" />;
       case 'placed': return <Clock className="w-4 h-4" />;
+      case 'preparing': return <Package className="w-4 h-4" />;
       case 'confirmed': case 'shipped': return <Truck className="w-4 h-4" />;
       case 'cancelled': return <XCircle className="w-4 h-4" />;
       default: return <Clock className="w-4 h-4" />;
@@ -322,6 +324,7 @@ const OrderDetailPage = () => {
                   >
                     <option value="placed">Placed</option>
                     <option value="confirmed">Confirmed</option>
+                    <option value="preparing">Preparing</option>
                     <option value="shipped">Shipped</option>
                     <option value="delivered">Delivered</option>
                     <option value="cancelled">Cancelled</option>
