@@ -5,6 +5,13 @@ import { getAdminClient } from './supabase';
  * Tracks all admin actions for security and compliance
  */
 
+// `navigator` is undefined outside a browser context (e.g. SSR, a test
+// runner, or a future non-browser caller) — guard it so a missing/failed
+// audit-log write doesn't throw before the outer try/catch even starts.
+function getUserAgent(): string | undefined {
+  return typeof navigator !== 'undefined' ? navigator.userAgent : undefined;
+}
+
 export interface AuditLogEntry {
   admin_id?: string;
   user_id?: string;
@@ -34,7 +41,7 @@ export async function logAdminAction(entry: AuditLogEntry): Promise<void> {
       old_values: entry.old_values || null,
       new_values: entry.new_values || null,
       ip_address: entry.ip_address || null,
-      user_agent: entry.user_agent || navigator.userAgent,
+      user_agent: entry.user_agent || getUserAgent() || null,
       status: entry.status || 'success',
       error_message: entry.error_message || null,
     });
@@ -59,7 +66,7 @@ export async function logSecurityEvent(
       severity,
       description,
       metadata: metadata || null,
-      user_agent: navigator.userAgent,
+      user_agent: getUserAgent() || null,
     });
   } catch (error) {
     console.error('Failed to log security event:', error);
@@ -75,7 +82,7 @@ export async function logFailedLogin(email: string): Promise<void> {
       email: email.toLowerCase().trim(),
       // ip_address column is inet — omit entirely so DB uses its default/null
       // (migration sets it nullable; browsers cannot provide real IPs)
-      user_agent: navigator.userAgent,
+      user_agent: getUserAgent() || null,
     });
   } catch (error) {
     console.error('Failed to log failed login:', error);
