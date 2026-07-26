@@ -583,25 +583,9 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
       newOrderIds.map((o: any) => ({ order_id: o.id, driver_id: driverId, status: 'pending' }))
     );
 
-    const { data: partner } = await supabaseAdmin
-      .from('delivery_partners')
-      .select('expo_push_token')
-      .eq('user_id', driverId)
-      .maybeSingle();
-
-    if ((partner as any)?.expo_push_token) {
-      fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify([{
-          to: (partner as any).expo_push_token,
-          sound: 'default',
-          title: '🛵 New Delivery Request',
-          body: `${newOrderIds.length} order${newOrderIds.length > 1 ? 's' : ''} available near you!`,
-          data: { type: 'new_order_offer' },
-        }]),
-      }).catch(console.error);
-    }
+    notificationService
+      .notifyRiderOrderOffer(driverId, newOrderIds.map((o: any) => o.id))
+      .catch((err) => console.error('notifyRiderOrderOffer failed:', err));
   } catch (err) {
     console.error('dispatchReadyOrdersToDriver error:', err);
   }

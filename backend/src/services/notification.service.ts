@@ -91,6 +91,29 @@ export class NotificationService {
     }
   }
 
+  // Broadcast dispatch offering a rider one or more ready-for-pickup orders
+  // near them (as opposed to notifyRiderNewOrder, which is a single order
+  // already assigned to them). Persisted like every other notification so a
+  // dismissed/missed push still shows up in the rider's in-app notifications
+  // panel instead of vanishing if the (up to 15s-delayed) offers poll is missed.
+  async notifyRiderOrderOffer(riderId: string, orderIds: string[]) {
+    if (!orderIds.length) return;
+    const title = '🛵 New Delivery Request';
+    const body = `${orderIds.length} order${orderIds.length > 1 ? 's' : ''} available near you!`;
+
+    await this.persistNotification('rider', riderId, 'new_order_offer', title, body, { orderIds });
+
+    const { data: partner } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('expo_push_token')
+      .eq('user_id', riderId)
+      .maybeSingle();
+
+    if (partner?.expo_push_token) {
+      await this.sendExpoPush(partner.expo_push_token, title, body, { orderIds, type: 'new_order_offer' });
+    }
+  }
+
   // Admin approval of a store/rider happens as a direct Supabase write from
   // the admin panel, not through this backend — so nothing ever notified the
   // shopkeeper/rider it had happened; they only found out via polling. Admin
