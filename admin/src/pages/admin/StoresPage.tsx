@@ -429,9 +429,13 @@ const StoresPage = () => {
   };
 
   const refreshAll = async () => {
+    // expo_push_token is deliberately excluded: it's not used on this page, and the
+    // column is no longer anon-readable at all (see 20260830000000 migration) — a
+    // plain select('*') would fail outright since Postgres denies SELECT * when any
+    // column is inaccessible, rather than silently omitting it.
     const { data, error: sbError } = await getAdminClient()
       .from('stores')
-      .select('*')
+      .select('id, owner_id, name, phone, address, latitude, longitude, is_active, created_at, updated_at, image_url, owner_image_url, is_approved, approved_at, approved_by, verification_submitted_at')
       .order('created_at', { ascending: false });
     if (sbError) throw sbError;
     setStores(data || []);

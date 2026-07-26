@@ -90,11 +90,11 @@ const PushNotificationPanel = () => {
       }
 
       if (targetApp === 'all') {
-        const { data: storeData } = await db
-          .from('stores')
-          .select('expo_push_token')
-          .not('expo_push_token', 'is', null);
-        tokens = [...tokens, ...(storeData?.map(r => r.expo_push_token).filter(Boolean) || [])];
+        // expo_push_token is no longer anon-readable off stores directly (see
+        // 20260830000000 migration, closing a public read of every store's push
+        // token) — this admin-gated RPC is the only remaining way to fetch it.
+        const { data: storeData } = await db.rpc('admin_get_store_push_tokens');
+        tokens = [...tokens, ...((storeData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
       }
 
       const uniqueTokens = [...new Set(tokens)];

@@ -284,9 +284,13 @@ export class DatabaseService {
   }
 
   async getNearbyStores(latitude: number, longitude: number, radiusKm: number = 5) {
+    // expo_push_token excluded: not used by any caller of this customer-facing
+    // "nearby stores" list, and the anon client this runs under no longer has
+    // column-level access to it at all (see 20260830000000 migration) — a plain
+    // select('*') would fail outright rather than silently omitting the column.
     const { data, error } = await supabase
       .from('stores')
-      .select('*')
+      .select('id, owner_id, name, phone, address, latitude, longitude, is_active, created_at, updated_at, image_url, owner_image_url, is_approved, approved_at, approved_by, verification_submitted_at')
       .eq('is_active', true);
 
     if (error) throw error;
