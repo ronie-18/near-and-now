@@ -128,7 +128,7 @@ export interface Order {
   customer_name: string;
   customer_email?: string;
   customer_phone?: string;
-  order_status: 'placed' | 'confirmed' | 'preparing' | 'shipped' | 'delivered' | 'cancelled';
+  order_status: 'placed' | 'confirmed' | 'preparing' | 'ready' | 'shipped' | 'delivered' | 'cancelled';
   payment_status:
     | 'pending'
     | 'authorized'
@@ -480,7 +480,7 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
 function mapDbStatusToFrontend(dbStatus: string): Order['order_status'] {
   if (dbStatus === 'pending_at_store' || dbStatus === 'store_accepted') return 'placed';
   if (dbStatus === 'preparing_order') return 'preparing';
-  if (dbStatus === 'ready_for_pickup') return 'confirmed';
+  if (dbStatus === 'ready_for_pickup') return 'ready';
   if (dbStatus === 'delivery_partner_assigned' || dbStatus === 'order_picked_up' || dbStatus === 'in_transit') return 'shipped';
   if (dbStatus === 'order_delivered') return 'delivered';
   if (dbStatus === 'order_cancelled') return 'cancelled';
@@ -702,6 +702,7 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
       'placed': 'pending_at_store',
       'confirmed': 'store_accepted',
       'preparing': 'preparing_order',
+      'ready': 'ready_for_pickup',
       'shipped': 'in_transit',
       'delivered': 'order_delivered',
       'cancelled': 'order_cancelled'
