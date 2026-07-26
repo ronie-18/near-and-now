@@ -101,6 +101,10 @@ declare module 'express' {
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Location-fix quality gates for updateLocation() — see the comment there.
+const MAX_ACCEPTABLE_LOCATION_ACCURACY_METERS = 100;
+const MAX_LOCATION_FIX_AGE_MS = 2 * 60 * 1000; // 2 minutes
+
 export async function requireRider(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
@@ -388,9 +392,35 @@ export class DeliveryPartnerController {
 
   async updateLocation(req: Request, res: Response) {
     try {
-      const { latitude, longitude, heading, speed, accuracy } = req.body;
+      const { latitude, longitude, heading, speed, accuracy, timestamp } = req.body;
       if (latitude == null || longitude == null) {
         return res.status(400).json({ error: 'latitude and longitude required' });
+      }
+
+      // last_seen is a connectivity heartbeat ("is this rider's app still
+      // alive"), independent of whether this particular fix is trustworthy
+      // enough to show as their location — always updated, even when the
+      // coordinates below get rejected.
+      await supabaseAdmin
+        .from('delivery_partners')
+        .update({ last_seen: new Date().toISOString() })
+        .eq('user_id', req.riderId!);
+
+      // A too-inaccurate fix (e.g. a cold GPS lock) or a stale cached one
+      // (e.g. Location.getLastKnownPositionAsync() returning an hours-old
+      // fix) would otherwise get shown to a customer's live tracking map as
+      // current — `driver_locations.updated_at` reflects server receipt
+      // time, not when the GPS fix was actually taken, so without this check
+      // a stale fix looks perfectly "fresh" downstream. Skip the upsert
+      // rather than erroring the request — this is a routine best-effort
+      // heartbeat, not a user-initiated action worth failing loudly.
+      const accuracyNum = accuracy != null ? Number(accuracy) : null;
+      const tooInaccurate = accuracyNum != null && accuracyNum > MAX_ACCEPTABLE_LOCATION_ACCURACY_METERS;
+      const fixTimestamp = timestamp != null ? Number(timestamp) : null;
+      const tooStale = fixTimestamp != null && Date.now() - fixTimestamp > MAX_LOCATION_FIX_AGE_MS;
+
+      if (tooInaccurate || tooStale) {
+        return res.json({ success: true, locationAccepted: false, reason: tooInaccurate ? 'inaccurate' : 'stale' });
       }
 
       const fields: Record<string, unknown> = {
@@ -401,19 +431,13 @@ export class DeliveryPartnerController {
       };
       if (heading != null) fields.heading = Number(heading);
       if (speed != null) fields.speed = Number(speed);
-      if (accuracy != null) fields.accuracy = Number(accuracy);
+      if (accuracyNum != null) fields.accuracy = accuracyNum;
 
       await supabaseAdmin
         .from('driver_locations')
         .upsert(fields, { onConflict: 'delivery_partner_id' });
 
-      // Also update last_seen on delivery_partners for heartbeat tracking
-      await supabaseAdmin
-        .from('delivery_partners')
-        .update({ last_seen: new Date().toISOString() })
-        .eq('user_id', req.riderId!);
-
-      res.json({ success: true });
+      res.json({ success: true, locationAccepted: true });
 
       // Throttled: if this driver just came into range of a ready order they missed, offer it to them
       if (shouldCheckDispatch(req.riderId!)) {
