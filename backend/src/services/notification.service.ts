@@ -114,6 +114,25 @@ export class NotificationService {
     }
   }
 
+  async notifyProfileChangeReviewed(storeId: string, approved: boolean, rejectionReason?: string | null) {
+    const title = approved ? 'Profile Change Approved' : 'Profile Change Rejected';
+    const body = approved
+      ? 'Your requested store profile changes are now live.'
+      : `Your requested store profile changes were rejected${rejectionReason ? `: ${rejectionReason}` : '.'}`;
+
+    await this.persistNotification('store', storeId, 'profile_change_reviewed', title, body, { storeId, approved, rejectionReason: rejectionReason ?? null });
+
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('expo_push_token')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (store?.expo_push_token) {
+      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'profile_change_reviewed' });
+    }
+  }
+
   // Admin approval of a store/rider happens as a direct Supabase write from
   // the admin panel, not through this backend — so nothing ever notified the
   // shopkeeper/rider it had happened; they only found out via polling. Admin

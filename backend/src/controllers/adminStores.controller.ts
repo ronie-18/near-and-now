@@ -130,6 +130,103 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
 }
 
 /**
+ * List store profile-change requests for admin review. Defaults to pending
+ * only (the review queue); pass ?status=approved|rejected|all for history.
+ */
+export async function listProfileChangeRequests(req: Request, res: Response) {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : 'pending';
+
+    let query = supabaseAdmin
+      .from('store_profile_change_requests')
+      .select('*, stores(name)')
+      .order('created_at', { ascending: false });
+
+    if (status !== 'all') {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('❌ listProfileChangeRequests error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    const requests = (data ?? []).map((row: any) => ({
+      ...row,
+      store_name: row.stores?.name ?? null,
+      stores: undefined,
+    }));
+
+    res.json({ success: true, requests });
+  } catch (error: any) {
+    console.error('❌ listProfileChangeRequests error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch change requests' });
+  }
+}
+
+/**
+ * Approve or reject a pending store profile-change request. Approving
+ * applies the requested "new" values to `stores`; rejecting requires a
+ * reason so the shopkeeper app can tell them what to fix, mirroring
+ * reviewStoreVerificationDocument's same requirement above.
+ */
+export async function reviewProfileChangeRequest(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { status, rejection_reason } = req.body as { status?: string; rejection_reason?: string };
+
+    if (status !== 'approved' && status !== 'rejected') {
+      return res.status(400).json({ success: false, error: 'status must be "approved" or "rejected"' });
+    }
+    const reason = typeof rejection_reason === 'string' ? rejection_reason.trim() : '';
+    if (status === 'rejected' && !reason) {
+      return res.status(400).json({ success: false, error: 'rejection_reason is required when rejecting a request' });
+    }
+
+    // Row-locked SQL function (migration 20260901000000) — re-checks status
+    // under the lock and applies the stores patch + marks the request
+    // reviewed in one transaction, so two concurrent reviews of the same
+    // request can't both apply, and a mid-way failure can't leave the store
+    // already changed while the request row still shows 'pending'.
+    // Function returns a single (non-SETOF) row type, so `data` is already
+    // the row object directly (or null) — no `.single()` needed/wanted here.
+    const { data: updated, error: rpcErr } = await supabaseAdmin
+      .rpc('review_store_profile_change_request', {
+        p_request_id: id,
+        p_status: status,
+        p_rejection_reason: status === 'rejected' ? reason : null,
+        p_reviewed_by: req.adminId,
+      });
+
+    if (rpcErr) {
+      // The function raises 'ALREADY_REVIEWED:<status>' when it lost the
+      // race for the row lock (or was called again after resolution) —
+      // distinguish that from a real DB error instead of a flat 500.
+      const already = rpcErr.message?.match(/ALREADY_REVIEWED:(\w+)/);
+      if (already) {
+        return res.status(409).json({ success: false, error: `This request was already ${already[1]}.` });
+      }
+      console.error('❌ reviewProfileChangeRequest error:', rpcErr);
+      return res.status(500).json({ success: false, error: rpcErr.message });
+    }
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Change request not found' });
+    }
+
+    notificationService
+      .notifyProfileChangeReviewed(updated.store_id, status === 'approved', status === 'rejected' ? reason : null)
+      .catch((err) => console.error('notifyProfileChangeReviewed failed:', err));
+
+    res.json({ success: true, request: updated });
+  } catch (error: any) {
+    console.error('❌ reviewProfileChangeRequest error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to review change request' });
+  }
+}
+
+/**
  * Admin approval itself is a direct Supabase write from the admin panel, not
  * a backend endpoint — this is called separately, right after that write
  * succeeds, purely to send the "you're approved" push/notification. Re-reads

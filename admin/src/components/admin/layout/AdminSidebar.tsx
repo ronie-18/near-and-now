@@ -18,7 +18,8 @@ import {
   Package,
   Plus,
   X,
-  Store
+  Store,
+  FileText
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
@@ -175,6 +176,11 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
           title: 'Stores',
           path: '/stores',
           icon: <Store size={18} />
+        },
+        {
+          title: 'Profile Change Requests',
+          path: '/stores/profile-change-requests',
+          icon: <FileText size={18} />
         }
       ]
     },

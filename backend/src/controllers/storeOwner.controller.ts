@@ -379,7 +379,10 @@ export async function updateStore(req: Request, res: Response) {
 
     if (!owned) return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
 
-    const allowed = ['name', 'address', 'phone', 'image_url', 'owner_image_url'] as const;
+    // name/address/phone are deliberately NOT in this list — those identity
+    // fields now go through requestProfileChange()'s admin-review queue
+    // instead of taking effect immediately. Image fields stay immediate.
+    const allowed = ['image_url', 'owner_image_url'] as const;
     type AllowedKey = typeof allowed[number];
 
     const patch: Partial<Record<AllowedKey, string>> = {};
@@ -410,6 +413,140 @@ export async function updateStore(req: Request, res: Response) {
   } catch (error: any) {
     console.error('❌ updateStore error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to update store' });
+  }
+}
+
+const PROFILE_CHANGE_FIELDS = ['name', 'address', 'phone'] as const;
+type ProfileChangeField = typeof PROFILE_CHANGE_FIELDS[number];
+
+/**
+ * Get the caller's store's current pending profile-change request, if any —
+ * so the profile screen can show a "pending review" banner across sessions
+ * instead of only right after submitting.
+ */
+export async function getProfileChangeRequest(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('store_profile_change_requests')
+      .select('*')
+      .eq('store_id', storeId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ getProfileChangeRequest error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true, request: data ?? null });
+  } catch (error: any) {
+    console.error('❌ getProfileChangeRequest error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch change request' });
+  }
+}
+
+/**
+ * Submit a change to the store's name/address/phone for admin review — does
+ * NOT apply anything to `stores` directly. Diffs the request against the
+ * store's current values so `changes` only ever holds fields that actually
+ * changed. Resubmitting while a request is still pending replaces it in
+ * place (one open request per store) rather than stacking duplicates.
+ */
+export async function requestProfileChange(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('id, name, address, phone, owner_id')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (!store || store.owner_id !== userId) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const changes: Partial<Record<ProfileChangeField, { old: string | null; new: string }>> = {};
+    for (const field of PROFILE_CHANGE_FIELDS) {
+      const val = (req.body as Record<string, unknown>)[field];
+      if (typeof val === 'string' && val.trim() !== '' && val.trim() !== (store[field] ?? '')) {
+        changes[field] = { old: store[field] ?? null, new: val.trim() };
+      }
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return res.status(400).json({ success: false, error: 'No changes to submit' });
+    }
+
+    const now = new Date().toISOString();
+
+    // Update-first, not select-then-branch: the WHERE clause on the UPDATE
+    // itself (not a prior SELECT) is what makes the "replace vs. create"
+    // decision race-safe — two concurrent submissions can't both see "no
+    // existing pending row" and both INSERT, because the partial unique
+    // index (migration 20260901000000, one pending row per store) turns the
+    // loser's INSERT into a clean 23505 that's retried as an UPDATE below.
+    const { data: updatedExisting, error: updateErr } = await supabaseAdmin
+      .from('store_profile_change_requests')
+      .update({ changes, created_at: now })
+      .eq('store_id', storeId)
+      .eq('status', 'pending')
+      .select()
+      .maybeSingle();
+
+    if (updateErr) throw updateErr;
+
+    let saved = updatedExisting;
+    if (!saved) {
+      const { data: inserted, error: insertErr } = await supabaseAdmin
+        .from('store_profile_change_requests')
+        .insert({ store_id: storeId, changes })
+        .select()
+        .single();
+
+      if (insertErr) {
+        if (insertErr.code === '23505') {
+          const { data: retried, error: retryErr } = await supabaseAdmin
+            .from('store_profile_change_requests')
+            .update({ changes, created_at: now })
+            .eq('store_id', storeId)
+            .eq('status', 'pending')
+            .select()
+            .single();
+          if (retryErr) throw retryErr;
+          saved = retried;
+        } else {
+          throw insertErr;
+        }
+      } else {
+        saved = inserted;
+      }
+    }
+
+    const fieldList = Object.keys(changes).join(', ');
+    await notifyAdmins(
+      'profile_change_request',
+      'Store Profile Change Requested',
+      `${store.name || 'A store'} requested a change to: ${fieldList}`,
+      { storeId, requestId: saved.id, changes }
+    );
+
+    res.json({ success: true, request: saved });
+  } catch (error: any) {
+    console.error('❌ requestProfileChange error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to submit change request' });
   }
 }
 
