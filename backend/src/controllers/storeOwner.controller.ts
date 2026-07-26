@@ -550,6 +550,178 @@ export async function requestProfileChange(req: Request, res: Response) {
   }
 }
 
+const STORE_IMAGES_BUCKET = 'store-images';
+const MAX_STORE_IMAGES = 5;
+
+/** Recovers the Storage object path from a public URL for this bucket —
+ * everything after `${STORE_IMAGES_BUCKET}/`, query string stripped. */
+function storagePathFromUrl(url: string): string | null {
+  const marker = `${STORE_IMAGES_BUCKET}/`;
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return url.slice(idx + marker.length).split('?')[0];
+}
+
+/**
+ * Keeps `stores.image_url` pointing at the lowest-sort_order image, or NULL
+ * if the gallery is empty — a plain re-derive-and-write rather than a
+ * trigger, matching how this schema already hand-syncs denormalized fields
+ * elsewhere (e.g. stores.is_approved/approved_at). Nothing customer-facing
+ * currently reads this column (confirmed via repo-wide grep), but it's kept
+ * in sync anyway as a cheap single-field convenience for any future reader
+ * that doesn't want to join store_images for a quick cover thumbnail.
+ */
+async function syncStoreCoverImage(storeId: string) {
+  const { data: cover } = await supabaseAdmin
+    .from('store_images')
+    .select('url')
+    .eq('store_id', storeId)
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  await supabaseAdmin
+    .from('stores')
+    .update({ image_url: cover?.url ?? null, updated_at: new Date().toISOString() })
+    .eq('id', storeId);
+}
+
+/** List a store's gallery images, ordered. */
+export async function getStoreImages(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('store_images')
+      .select('*')
+      .eq('store_id', storeId)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('❌ getStoreImages error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true, images: data ?? [] });
+  } catch (error: any) {
+    console.error('❌ getStoreImages error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch store images' });
+  }
+}
+
+/**
+ * Register a newly-uploaded image as the next slot in the store's gallery.
+ * The file itself is already uploaded directly to Storage by the app (same
+ * anon-key flow as before — see lib/storage.ts) before calling this; this
+ * endpoint only records it in `store_images` and re-syncs the cover column.
+ */
+export async function addStoreImage(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!url) {
+      return res.status(400).json({ success: false, error: 'url is required' });
+    }
+    const storagePath = storagePathFromUrl(url);
+    if (!storagePath) {
+      return res.status(400).json({ success: false, error: 'url is not a recognized store-images Storage URL' });
+    }
+
+    const { count } = await supabaseAdmin
+      .from('store_images')
+      .select('id', { count: 'exact', head: true })
+      .eq('store_id', storeId);
+
+    if ((count ?? 0) >= MAX_STORE_IMAGES) {
+      return res.status(400).json({ success: false, error: `A store can have at most ${MAX_STORE_IMAGES} images. Remove one before adding another.` });
+    }
+
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from('store_images')
+      .insert({ store_id: storeId, url, storage_path: storagePath, sort_order: count ?? 0 })
+      .select()
+      .single();
+
+    if (insertErr) {
+      console.error('❌ addStoreImage error:', insertErr);
+      return res.status(500).json({ success: false, error: insertErr.message });
+    }
+
+    await syncStoreCoverImage(storeId);
+
+    res.json({ success: true, image: inserted });
+  } catch (error: any) {
+    console.error('❌ addStoreImage error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to add store image' });
+  }
+}
+
+/** Remove one image from the gallery (row + underlying Storage object). */
+export async function deleteStoreImage(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { id: storeId, imageId } = req.params;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const { data: image, error: fetchErr } = await supabaseAdmin
+      .from('store_images')
+      .select('id, storage_path')
+      .eq('id', imageId)
+      .eq('store_id', storeId)
+      .maybeSingle();
+
+    if (fetchErr || !image) {
+      return res.status(404).json({ success: false, error: 'Image not found' });
+    }
+
+    const { error: deleteErr } = await supabaseAdmin
+      .from('store_images')
+      .delete()
+      .eq('id', imageId);
+
+    if (deleteErr) {
+      console.error('❌ deleteStoreImage error:', deleteErr);
+      return res.status(500).json({ success: false, error: deleteErr.message });
+    }
+
+    // Best-effort — an orphaned Storage object is a much smaller problem than
+    // failing the delete the shopkeeper is actively waiting on. Storage calls
+    // report failure via a returned `error`, not a rejection, so check both.
+    try {
+      const { error: storageErr } = await supabaseAdmin.storage.from(STORE_IMAGES_BUCKET).remove([image.storage_path]);
+      if (storageErr) console.error('❌ deleteStoreImage storage cleanup error:', storageErr);
+    } catch (err) {
+      console.error('❌ deleteStoreImage storage cleanup error:', err);
+    }
+
+    await syncStoreCoverImage(storeId);
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ deleteStoreImage error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to delete store image' });
+  }
+}
+
 type UploadedFile = { buffer: Buffer; mimetype: string; size: number };
 
 async function assertOwnsStore(storeId: string, userId: string): Promise<boolean> {

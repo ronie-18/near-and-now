@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage } from '../controllers/storeOwner.controller.js';
 import { MAX_DOC_SIZE_BYTES } from '../utils/verificationDocuments.js';
 
 const router = Router();
@@ -12,6 +12,9 @@ router.patch('/stores/:id', updateStore);
 router.patch('/stores/:id/online', updateStoreStatus);
 router.get('/stores/:id/profile-change-request', getProfileChangeRequest);
 router.post('/stores/:id/profile-change-request', requestProfileChange);
+router.get('/stores/:id/images', getStoreImages);
+router.post('/stores/:id/images', addStoreImage);
+router.delete('/stores/:id/images/:imageId', deleteStoreImage);
 router.get('/stores/:id/verification-documents', getVerificationDocuments);
 router.post('/stores/:id/verification-documents/:docType', docUpload.single('file'), saveVerificationDocument);
 router.delete('/stores/:id/verification-documents/:docType', deleteVerificationDocument);
