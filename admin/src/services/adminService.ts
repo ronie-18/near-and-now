@@ -128,7 +128,7 @@ export interface Order {
   customer_name: string;
   customer_email?: string;
   customer_phone?: string;
-  order_status: 'placed' | 'confirmed' | 'preparing' | 'ready' | 'shipped' | 'delivered' | 'cancelled';
+  order_status: 'placed' | 'confirmed' | 'preparing' | 'ready' | 'assigned' | 'picking_up' | 'picked_up' | 'shipped' | 'delivered' | 'cancelled';
   payment_status:
     | 'pending'
     | 'authorized'
@@ -481,7 +481,10 @@ function mapDbStatusToFrontend(dbStatus: string): Order['order_status'] {
   if (dbStatus === 'pending_at_store' || dbStatus === 'store_accepted') return 'placed';
   if (dbStatus === 'preparing_order') return 'preparing';
   if (dbStatus === 'ready_for_pickup') return 'ready';
-  if (dbStatus === 'delivery_partner_assigned' || dbStatus === 'order_picked_up' || dbStatus === 'in_transit') return 'shipped';
+  if (dbStatus === 'delivery_partner_assigned') return 'assigned';
+  if (dbStatus === 'picking_up') return 'picking_up';
+  if (dbStatus === 'order_picked_up') return 'picked_up';
+  if (dbStatus === 'in_transit') return 'shipped';
   if (dbStatus === 'order_delivered') return 'delivered';
   if (dbStatus === 'order_cancelled') return 'cancelled';
   return 'placed'; // default
@@ -697,12 +700,15 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 
     // Map frontend order_status to database status
     // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup',
-    // 'delivery_partner_assigned', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
+    // 'delivery_partner_assigned', 'picking_up', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
     const statusMap: Record<Order['order_status'], string> = {
       'placed': 'pending_at_store',
       'confirmed': 'store_accepted',
       'preparing': 'preparing_order',
       'ready': 'ready_for_pickup',
+      'assigned': 'delivery_partner_assigned',
+      'picking_up': 'picking_up',
+      'picked_up': 'order_picked_up',
       'shipped': 'in_transit',
       'delivered': 'order_delivered',
       'cancelled': 'order_cancelled'
@@ -912,11 +918,11 @@ export async function getDashboardStats() {
     const totalSales = Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0);
 
     // Order status counts (mapping database statuses to frontend statuses)
-    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup', 
-    // 'delivery_partner_assigned', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
+    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup',
+    // 'delivery_partner_assigned', 'picking_up', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
     const placedOrders = orders?.filter(order => order.status === 'pending_at_store' || order.status === 'store_accepted').length || 0;
     const confirmedOrders = orders?.filter(order => order.status === 'preparing_order' || order.status === 'ready_for_pickup').length || 0;
-    const shippedOrders = orders?.filter(order => order.status === 'delivery_partner_assigned' || order.status === 'order_picked_up' || order.status === 'in_transit').length || 0;
+    const shippedOrders = orders?.filter(order => order.status === 'delivery_partner_assigned' || order.status === 'picking_up' || order.status === 'order_picked_up' || order.status === 'in_transit').length || 0;
     const deliveredOrders = orders?.filter(order => order.status === 'order_delivered').length || 0;
     const cancelledOrders = orders?.filter(order => order.status === 'order_cancelled').length || 0;
 

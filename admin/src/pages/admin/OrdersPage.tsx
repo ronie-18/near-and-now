@@ -26,7 +26,7 @@ import IdCell from '../../components/admin/IdCell';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
-const ORDER_STATUSES = ['placed', 'confirmed', 'preparing', 'ready', 'shipped', 'delivered', 'cancelled'] as const;
+const ORDER_STATUSES = ['placed', 'confirmed', 'preparing', 'ready', 'assigned', 'picking_up', 'picked_up', 'shipped', 'delivered', 'cancelled'] as const;
 
 // Modern Stat Card
 interface StatCardProps {
@@ -61,6 +61,9 @@ const getStatusStyle = (status: string) => {
     case 'confirmed': return 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700';
     case 'preparing': return 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700';
     case 'ready': return 'bg-gradient-to-r from-cyan-100 to-sky-100 text-cyan-700';
+    case 'assigned': return 'bg-gradient-to-r from-indigo-100 to-blue-100 text-indigo-700';
+    case 'picking_up': return 'bg-gradient-to-r from-fuchsia-100 to-purple-100 text-fuchsia-700';
+    case 'picked_up': return 'bg-gradient-to-r from-purple-100 to-violet-100 text-purple-700';
     case 'shipped': return 'bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700';
     case 'cancelled': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700';
     default: return 'bg-gray-100 text-gray-700';
@@ -135,7 +138,7 @@ const StatusDropdown = ({
     >
       {ORDER_STATUSES.map(status => (
         <option key={status} value={status}>
-          {status.charAt(0).toUpperCase() + status.slice(1)}
+          {formatStatusLabel(status)}
         </option>
       ))}
     </select>
@@ -152,6 +155,7 @@ const StatusDropdown = ({
 // Helper
 const formatDate = (date: string) => new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
+const formatStatusLabel = (str: string) => str.split('_').map(capitalize).join(' ');
 
 const OrdersPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -210,7 +214,7 @@ const OrdersPage = () => {
     confirmed: orders.filter(o => o.order_status === 'confirmed').length,
     preparing: orders.filter(o => o.order_status === 'preparing').length,
     ready: orders.filter(o => o.order_status === 'ready').length,
-    shipped: orders.filter(o => o.order_status === 'shipped').length,
+    shipped: orders.filter(o => ['assigned', 'picking_up', 'picked_up', 'shipped'].includes(o.order_status)).length,
     delivered: orders.filter(o => o.order_status === 'delivered').length,
     cancelled: orders.filter(o => o.order_status === 'cancelled').length,
     totalRevenue: orders.filter(o => o.order_status !== 'cancelled').reduce((sum, o) => sum + (o.order_total || 0), 0),
@@ -299,7 +303,7 @@ const OrdersPage = () => {
                 className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-0 transition-colors min-w-[140px] text-gray-700"
               >
                 {statuses.map(status => (
-                  <option key={status} value={status}>{capitalize(status)}</option>
+                  <option key={status} value={status}>{formatStatusLabel(status)}</option>
                 ))}
               </select>
             </div>

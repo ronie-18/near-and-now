@@ -400,7 +400,7 @@ const AdminDashboardPage = () => {
       case 'delivered': return <CheckCircle className="w-4 h-4" />;
       case 'placed': return <Clock className="w-4 h-4" />;
       case 'preparing': return <Package className="w-4 h-4" />;
-      case 'ready': case 'confirmed': case 'shipped': return <Truck className="w-4 h-4" />;
+      case 'ready': case 'confirmed': case 'assigned': case 'picking_up': case 'picked_up': case 'shipped': return <Truck className="w-4 h-4" />;
       case 'cancelled': return <XCircle className="w-4 h-4" />;
       default: return <Clock className="w-4 h-4" />;
     }
@@ -413,6 +413,9 @@ const AdminDashboardPage = () => {
       case 'confirmed': return 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700';
       case 'preparing': return 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700';
       case 'ready': return 'bg-gradient-to-r from-cyan-100 to-sky-100 text-cyan-700';
+      case 'assigned': return 'bg-gradient-to-r from-indigo-100 to-blue-100 text-indigo-700';
+      case 'picking_up': return 'bg-gradient-to-r from-fuchsia-100 to-purple-100 text-fuchsia-700';
+      case 'picked_up': return 'bg-gradient-to-r from-purple-100 to-violet-100 text-purple-700';
       case 'shipped': return 'bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700';
       case 'cancelled': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700';
       default: return 'bg-gray-100 text-gray-700';
@@ -607,7 +610,7 @@ const AdminDashboardPage = () => {
                           <p className="font-bold text-gray-800">₹{order.order_total}</p>
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getStatusStyle(order.order_status)}`}>
                             {getStatusIcon(order.order_status)}
-                            {order.order_status.charAt(0).toUpperCase() + order.order_status.slice(1)}
+                            {order.order_status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
                           </span>
                         </div>
                       </div>
