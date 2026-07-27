@@ -66,7 +66,10 @@
       "Bash(npx supabase *)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(npx vitest *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(awk '/^## Rider app/{f++} f==1' /Users/tiasmondal166/projects/near-and-now/bug_fixes_2026-07-23.md)",
+      "Bash(awk '/^# Fixed Issues/{exit} {print}' /Users/tiasmondal166/projects/near-and-now/bug_fixes_2026-07-23.md)",
+      "Bash(awk '/^## Store-owner app/{f++} f==1' /Users/tiasmondal166/projects/near-and-now/bug_fixes_2026-07-23.md)"
     ]
   }
 }
