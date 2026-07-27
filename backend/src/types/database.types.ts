@@ -229,26 +229,3 @@ export interface Admin {
   updated_at: string;
 }
 
-export interface ProductsWithDetails {
-  id: string;
-  store_id: string;
-  stock_quantity: number;
-  available_in_store: boolean;
-  master_product_id: string;
-  name: string;
-  category: string;
-  brand: string | null;
-  description: string | null;
-  image_url: string | null;
-  mrp: number;
-  price: number;
-  unit: string;
-  is_loose: boolean;
-  min_quantity: number;
-  max_quantity: number;
-  rating: number;
-  rating_count: number;
-  store_name: string;
-  store_latitude: number;
-  store_longitude: number;
-}

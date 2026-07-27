@@ -9,6 +9,7 @@ declare module 'express' {
     shopkeeperId?: string;
     shopkeeperStoreId?: string;   // first store (kept for compat)
     shopkeeperStoreIds?: string[]; // all stores owned by this shopkeeper
+    shopkeeperHasApprovedStore?: boolean;
   }
 }
 
@@ -22,7 +23,11 @@ function randomFourDigit(): string {
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-export async function requireShopkeeper(req: Request, res: Response, next: NextFunction) {
+// Verifies the session token and attaches shopkeeperId/store ids — but does
+// NOT require the store to be admin-approved. Use this directly for
+// read-only endpoints (e.g. GET /profile) that a newly-signed-up shopkeeper
+// should be able to reach before approval, just to check their own status.
+export async function requireShopkeeperAuth(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
 
@@ -54,15 +59,26 @@ export async function requireShopkeeper(req: Request, res: Response, next: NextF
 
   if (!stores?.length) return res.status(403).json({ error: 'No store found for this account' });
 
-  // Order management is gated behind admin approval — same single gate as going online.
-  if (!stores.some((s: any) => s.is_approved)) {
-    return res.status(403).json({ error: 'Your store is pending admin approval' });
-  }
-
   req.shopkeeperId = user.id;
   req.shopkeeperStoreIds = stores.map((s: any) => s.id);
   req.shopkeeperStoreId = stores[0].id; // primary store for backward compat
+  req.shopkeeperHasApprovedStore = stores.some((s: any) => s.is_approved);
   next();
+}
+
+// Order management (and everything else state-changing) is additionally
+// gated behind admin approval — same single gate as going online. A newly
+// signed-up shopkeeper previously couldn't even load GET /profile to check
+// their own approval status, since this was the only middleware and it
+// blocked everything under it; read-only endpoints now use
+// requireShopkeeperAuth above instead.
+export async function requireShopkeeper(req: Request, res: Response, next: NextFunction) {
+  await requireShopkeeperAuth(req, res, () => {
+    if (!req.shopkeeperHasApprovedStore) {
+      return res.status(403).json({ error: 'Your store is pending admin approval' });
+    }
+    next();
+  });
 }
 
 // ── Controller ─────────────────────────────────────────────────────────────────
@@ -660,15 +676,15 @@ async function broadcastToNearbyDrivers(orderId: string) {
     { onConflict: 'order_id,driver_id', ignoreDuplicates: true }
   );
 
-  const tokens = partners.map((p) => p.expo_push_token).filter(Boolean);
-  if (tokens.length) {
-    fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(tokens.map((t: string) => ({
-        to: t, sound: 'default', title: '🛵 New Delivery Request',
-        body: 'New order available — tap to accept!', data: { orderId, type: 'new_order_offer' },
-      }))),
-    }).catch(console.error);
+  const partnersWithTokens = partners.filter((p) => p.expo_push_token);
+  if (partnersWithTokens.length) {
+    notificationService
+      .sendExpoPushBatchToDrivers(
+        partnersWithTokens,
+        '🛵 New Delivery Request',
+        'New order available — tap to accept!',
+        { orderId, type: 'new_order_offer' }
+      )
+      .catch((err) => console.error('sendExpoPushBatchToDrivers failed:', err));
   }
 }

@@ -2,17 +2,13 @@ import { Request, Response } from 'express';
 import { invoiceService } from '../services/invoice.service.js';
 import { supabaseAdmin } from '../config/database.js';
 
-// ---------------------------------------------------------------------------
-// Type extensions
-// ---------------------------------------------------------------------------
-
-declare module 'express' {
-  interface Request {
-    customerId?: string;
-    shopkeeperId?: string;
-    adminId?: string;
-  }
-}
+// customerId/shopkeeperId/adminId/riderId are already declared on Express's
+// Request type by customerAuth.middleware.ts, shopkeeper.controller.ts,
+// adminAuth.middleware.ts, and deliveryPartner.controller.ts respectively —
+// TypeScript module augmentation merges globally regardless of which file
+// declares it, so redeclaring a subset here was pure redundancy (and a risk:
+// duplicated declarations across files can silently drift out of sync with
+// each other, which has caused a real bug here before).
 
 // ---------------------------------------------------------------------------
 // Auth middleware

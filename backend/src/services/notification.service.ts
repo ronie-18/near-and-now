@@ -14,12 +14,30 @@ if (!resend) {
   console.warn('Resend API key not configured - email notifications will be disabled');
 }
 
+// Where to null out a recipient's expo_push_token if Expo reports it as
+// permanently dead (DeviceNotRegistered) — every sendExpoPush call site
+// already knows this, since it just queried the token from here.
+type StaleTokenTarget = { table: 'app_users' | 'stores' | 'delivery_partners'; idColumn: string; idValue: string };
+
 export class NotificationService {
 
-  async sendExpoPush(expoPushToken: string, title: string, body: string, data: object = {}, sound: string = 'default') {
+  // Expo's push API returns HTTP 200 even when an individual ticket failed —
+  // per-message errors (e.g. a stale/uninstalled-app token) live in the
+  // response body's `data.status`/`data.details.error`, not the HTTP status.
+  // Previously nothing here ever looked at the response at all: a stale
+  // token was silently never cleared, and no other send failure was ever
+  // logged (silent past the top-level network-error catch).
+  async sendExpoPush(
+    expoPushToken: string,
+    title: string,
+    body: string,
+    data: object = {},
+    sound: string = 'default',
+    staleTokenTarget?: StaleTokenTarget
+  ) {
     if (!expoPushToken?.startsWith('ExponentPushToken')) return;
     try {
-      await fetch(EXPO_PUSH_URL, {
+      const res = await fetch(EXPO_PUSH_URL, {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -28,8 +46,65 @@ export class NotificationService {
         },
         body: JSON.stringify({ to: expoPushToken, sound, title, body, data }),
       });
+      const json: any = await res.json().catch(() => null);
+      const ticket = json?.data;
+      if (ticket?.status === 'error') {
+        console.error('Expo push ticket error:', ticket.message, ticket.details);
+        if (ticket.details?.error === 'DeviceNotRegistered' && staleTokenTarget) {
+          await supabaseAdmin
+            .from(staleTokenTarget.table)
+            .update({ expo_push_token: null })
+            .eq(staleTokenTarget.idColumn, staleTokenTarget.idValue)
+            .then(({ error }) => {
+              if (error) console.error('Failed to clear stale expo_push_token:', error);
+            });
+        }
+      }
     } catch (err) {
       console.error('Expo push send failed:', err);
+    }
+  }
+
+  // Same stale-token detection as sendExpoPush, batched — used by the two
+  // driver-broadcast dispatch call sites (delivery.controller.ts,
+  // shopkeeper.controller.ts) that push to many drivers at once instead of a
+  // single known recipient. Expo's batch response returns one ticket per
+  // input message, in the same order, so ticket[i] maps to partners[i].
+  async sendExpoPushBatchToDrivers(
+    partners: { user_id: string; expo_push_token: string }[],
+    title: string,
+    body: string,
+    data: object
+  ) {
+    if (!partners.length) return;
+    try {
+      const res = await fetch(EXPO_PUSH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(partners.map((p) => ({
+          to: p.expo_push_token, sound: 'default', title, body, data,
+        }))),
+      });
+      const json: any = await res.json().catch(() => null);
+      const tickets = Array.isArray(json?.data) ? json.data : [];
+      const staleIds: string[] = [];
+      tickets.forEach((ticket: any, i: number) => {
+        if (ticket?.status === 'error') {
+          console.error('Expo push ticket error:', ticket.message, ticket.details);
+          if (ticket.details?.error === 'DeviceNotRegistered' && partners[i]) {
+            staleIds.push(partners[i].user_id);
+          }
+        }
+      });
+      if (staleIds.length) {
+        const { error } = await supabaseAdmin
+          .from('delivery_partners')
+          .update({ expo_push_token: null })
+          .in('user_id', staleIds);
+        if (error) console.error('Failed to clear stale expo_push_token(s):', error);
+      }
+    } catch (err) {
+      console.error('Expo push batch send failed:', err);
     }
   }
 
@@ -70,7 +145,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (store?.expo_push_token) {
-      await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'new_order' }, 'order_chime.wav');
+      await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'new_order' }, 'order_chime.wav', { table: 'stores', idColumn: 'id', idValue: storeId });
     }
   }
 
@@ -87,7 +162,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (partner?.expo_push_token) {
-      await this.sendExpoPush(partner.expo_push_token, title, body, { orderId, type: 'new_order' }, 'order_chime.wav');
+      await this.sendExpoPush(partner.expo_push_token, title, body, { orderId, type: 'new_order' }, 'order_chime.wav', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
     }
   }
 
@@ -110,7 +185,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (partner?.expo_push_token) {
-      await this.sendExpoPush(partner.expo_push_token, title, body, { orderIds, type: 'new_order_offer' });
+      await this.sendExpoPush(partner.expo_push_token, title, body, { orderIds, type: 'new_order_offer' }, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
     }
   }
 
@@ -129,7 +204,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (store?.expo_push_token) {
-      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'profile_change_reviewed' });
+      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'profile_change_reviewed' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });
     }
   }
 
@@ -148,7 +223,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (partner?.expo_push_token) {
-      await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'profile_change_reviewed' });
+      await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'profile_change_reviewed' }, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
     }
   }
 
@@ -169,7 +244,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (store?.expo_push_token) {
-      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'store_approved' });
+      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'store_approved' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });
     }
   }
 
@@ -186,7 +261,7 @@ export class NotificationService {
       .maybeSingle();
 
     if (partner?.expo_push_token) {
-      await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'rider_approved' });
+      await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'rider_approved' }, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
     }
   }
 
@@ -235,12 +310,6 @@ export class NotificationService {
     );
   }
 
-  async sendSMS(to: string, message: string) {
-    // TODO: Twilio / AWS SNS
-    console.log(`Sending SMS to ${to}: ${message}`);
-    return { success: true };
-  }
-
   async sendPushNotification(userId: string, title: string, body: string) {
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')
@@ -248,7 +317,7 @@ export class NotificationService {
       .eq('user_id', userId)
       .maybeSingle();
     if (partner?.expo_push_token) {
-      await this.sendExpoPush(partner.expo_push_token, title, body);
+      await this.sendExpoPush(partner.expo_push_token, title, body, {}, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: userId });
     }
     return { success: true };
   }
@@ -273,7 +342,7 @@ export class NotificationService {
     await this.persistNotification('customer', order.customer_id, type, title, body, { orderId });
 
     if (customer.expo_push_token) {
-      await this.sendExpoPush(customer.expo_push_token, title, body, { orderId, type: 'order_status' }, 'order_chime.wav');
+      await this.sendExpoPush(customer.expo_push_token, title, body, { orderId, type: 'order_status' }, 'order_chime.wav', { table: 'app_users', idColumn: 'id', idValue: order.customer_id });
     }
 
     // Most customers won't have an email on file yet (signup is phone-only) —

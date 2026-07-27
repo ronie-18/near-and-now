@@ -1,6 +1,5 @@
 import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../config/database.js';
 import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
-import { haversineKm } from '../utils/geo.js';
 import { validateQuantity } from '../utils/quantity.js';
 import type {
   CustomerSavedAddress,
@@ -13,7 +12,6 @@ import type {
   OrderItem,
   Coupon,
   Admin,
-  ProductsWithDetails,
   OrderStatus
 } from '../types/database.types.js';
 
@@ -245,68 +243,6 @@ export class DatabaseService {
     return data as MasterProduct[];
   }
 
-  async getProductsWithDetails(filters?: {
-    storeId?: string;
-    category?: string;
-    latitude?: number;
-    longitude?: number;
-    radiusKm?: number;
-  }) {
-    let query = supabase.from('products_with_details').select('*');
-
-    if (filters?.storeId) {
-      query = query.eq('store_id', filters.storeId);
-    }
-
-    if (filters?.category) {
-      query = query.eq('category', filters.category);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    let products = data as ProductsWithDetails[];
-
-    if (filters?.latitude && filters?.longitude && filters?.radiusKm) {
-      products = products.filter(product => {
-        const distance = haversineKm(
-          filters.latitude!,
-          filters.longitude!,
-          product.store_latitude,
-          product.store_longitude
-        );
-        return distance <= filters.radiusKm!;
-      });
-    }
-
-    return products;
-  }
-
-  async getNearbyStores(latitude: number, longitude: number, radiusKm: number = 5) {
-    // expo_push_token excluded: not used by any caller of this customer-facing
-    // "nearby stores" list, and the anon client this runs under no longer has
-    // column-level access to it at all (see 20260830000000 migration) — a plain
-    // select('*') would fail outright rather than silently omitting the column.
-    const { data, error } = await supabase
-      .from('stores')
-      .select('id, owner_id, name, phone, address, latitude, longitude, is_active, created_at, updated_at, image_url, owner_image_url, is_approved, approved_at, approved_by, verification_submitted_at')
-      .eq('is_active', true);
-
-    if (error) throw error;
-
-    const stores = data as Store[];
-
-    return stores.filter(store => {
-      const distance = haversineKm(
-        latitude,
-        longitude,
-        store.latitude,
-        store.longitude
-      );
-      return distance <= radiusKm;
-    });
-  }
 
   async createCustomerOrder(orderData: {
     customer_id: string;

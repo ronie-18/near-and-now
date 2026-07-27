@@ -73,7 +73,11 @@
       "Bash(npx jest *)",
       "Bash(awk '/^## Admin panel/{f=1} f{print} /^## Supabase/{if\\(f && NR>1\\) exit}' /Users/tiasmondal166/projects/near-and-now/bug_fixes_2026-07-23.md)",
       "Bash(awk *)",
-      "Bash(awk '/^# *)"
+      "Bash(awk '/^# *)",
+      "Bash(git -C \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" log --oneline -5)",
+      "Bash(git -C \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" log --oneline -25)",
+      "Bash(git -C \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" show --stat cbf001fe)",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\"; grep -n \"^import.*crypto\" {}')"
     ],
     "additionalDirectories": [
       "/tmp"

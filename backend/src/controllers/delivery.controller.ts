@@ -373,16 +373,16 @@ export class DeliveryController {
         { onConflict: 'order_id,driver_id', ignoreDuplicates: true }
       );
 
-      const tokens = (partners as any[]).map((p) => p.expo_push_token).filter(Boolean);
-      if (tokens.length) {
-        fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(tokens.map((t: string) => ({
-            to: t, sound: 'default', title: '🛵 New Delivery Request',
-            body: 'New order available — tap to accept!', data: { orderId, type: 'new_order_offer' },
-          }))),
-        }).catch(console.error);
+      const partnersWithTokens = (partners as any[]).filter((p) => p.expo_push_token);
+      if (partnersWithTokens.length) {
+        notificationService
+          .sendExpoPushBatchToDrivers(
+            partnersWithTokens,
+            '🛵 New Delivery Request',
+            'New order available — tap to accept!',
+            { orderId, type: 'new_order_offer' }
+          )
+          .catch((err) => console.error('sendExpoPushBatchToDrivers failed:', err));
       }
 
       res.json({ success: true, broadcast_count: (partners as any[]).length });

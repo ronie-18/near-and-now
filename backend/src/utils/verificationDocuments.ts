@@ -57,7 +57,19 @@ export const DOC_NUMBER_FORMATS: Partial<Record<DocType, { description: string; 
   fssai: { description: '14 digits', example: '12345678901234' },
 };
 
+// aadhaar_back/pan_back genuinely have no number field at all (the number is
+// printed on the front only) — distinct from `trade`, which has no *fixed
+// format* but is still a legitimate field to submit. Previously both cases
+// were treated identically (no pattern in DOC_NUMBER_PATTERNS → accept
+// anything), so a number submitted alongside a back-side upload was silently
+// stored unvalidated instead of rejected.
+const DOC_TYPES_WITH_NO_NUMBER_FIELD = new Set<DocType>(['aadhaar_back', 'pan_back']);
+
 export function docNumberErrorMessage(docType: DocType): string {
+  if (DOC_TYPES_WITH_NO_NUMBER_FIELD.has(docType)) {
+    const label = docType.replace(/_/g, ' ').toUpperCase();
+    return `${label} does not have a document number — upload the image only.`;
+  }
   const format = DOC_NUMBER_FORMATS[docType];
   if (!format) return 'Invalid document number format';
   const label = docType.replace(/_/g, ' ').toUpperCase();
@@ -65,6 +77,7 @@ export function docNumberErrorMessage(docType: DocType): string {
 }
 
 export function validateDocNumber(docType: DocType, number: string): boolean {
+  if (DOC_TYPES_WITH_NO_NUMBER_FIELD.has(docType)) return false;
   const pattern = DOC_NUMBER_PATTERNS[docType];
   if (!pattern) return true; // trade — no fixed format to check
   return pattern.test(number);
