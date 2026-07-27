@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { OrdersController } from '../controllers/orders.controller.js';
+import { createAdditionPayment, verifyAdditionPayment } from '../controllers/orderAdditions.controller.js';
 import { validate } from '../middleware/validate.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
@@ -49,6 +50,20 @@ const placeCheckoutSchema = z.object({
   })
 });
 
+const addItemsSchema = z.object({
+  items: z.array(z.object({
+    product_id: z.string().uuid(),
+    quantity: z.number().int().positive()
+  })).min(1, 'No items to add')
+});
+
+const verifyAdditionSchema = z.object({
+  request_id: z.string().uuid(),
+  razorpay_payment_id: z.string().min(1),
+  razorpay_order_id: z.string().min(1),
+  razorpay_signature: z.string().min(1)
+});
+
 const createOrderSchema = z.object({
   customer_id: z.string().uuid('Invalid customer ID'),
   delivery_address: z.string().min(5, 'Address too short'),
@@ -88,5 +103,7 @@ router.get('/customer/:customerId', requireCustomer, ordersController.getCustome
 router.get('/:orderId', requireCustomer, ordersController.getOrderById.bind(ordersController));
 router.patch('/:orderId/status', requireAdmin, requirePermission('orders.edit'), ordersController.updateOrderStatus.bind(ordersController));
 router.post('/:orderId/cancel', requireCustomer, ordersController.cancelOrder.bind(ordersController));
+router.post('/:orderId/add-items/create-payment', requireCustomer, validate(addItemsSchema), createAdditionPayment);
+router.post('/:orderId/add-items/verify-payment', requireCustomer, validate(verifyAdditionSchema), verifyAdditionPayment);
 
 export default router;

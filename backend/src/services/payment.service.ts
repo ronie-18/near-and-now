@@ -183,6 +183,58 @@ export class PaymentService {
   }
 
   /**
+   * Separate Razorpay order for an "add more items" delta (see
+   * order_addition_requests / orderAdditions.controller.ts) — unlike
+   * createPaymentOrder, the trusted amount isn't re-derived from
+   * customer_orders here; the caller already computed and stored it on the
+   * addition-request row at creation time, since that's a different total
+   * than the main order's. No split-payment concept applies to this charge.
+   */
+  async createAdditionPaymentOrder(data: {
+    additionRequestId: string;
+    customerOrderId: string;
+    amount: number; // rupees
+  }) {
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+      throw new Error('Razorpay credentials not configured');
+    }
+    const amountPaise = Math.round(data.amount * 100);
+    if (!Number.isFinite(amountPaise) || amountPaise <= 0) {
+      const err = new Error('Invalid addition amount');
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const razorpayCustomerId = await this.ensureRazorpayCustomerForOrder(data.customerOrderId);
+
+    const orderBody: Record<string, unknown> = {
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: `addn_${data.additionRequestId.slice(0, 20)}`,
+      notes: { internal_order_id: data.customerOrderId, addition_request_id: data.additionRequestId }
+    };
+    if (razorpayCustomerId) orderBody.customer_id = razorpayCustomerId;
+
+    // Idempotency key scoped to the addition request, not the order — the
+    // main checkout's `ord_<orderId>` key must never collide with this.
+    const idempotencyKey = `addn_${data.additionRequestId}`;
+    const order = await razorpayRequest('POST', '/orders', orderBody, idempotencyKey) as any;
+    console.log('[PAYMENT] Addition Razorpay order created', {
+      additionRequestId: data.additionRequestId,
+      customerOrderId: data.customerOrderId,
+      razorpayOrderId: order.id,
+      amount: order.amount
+    });
+    return {
+      razorpay_order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key_id: RAZORPAY_KEY_ID,
+      razorpay_mode: RAZORPAY_KEY_ID.startsWith('rzp_test_') ? ('test' as const) : ('live' as const)
+    };
+  }
+
+  /**
    * Saved cards/UPIs for the mobile app "Preferred Payment" section.
    * Shape matches what nearandnowcustomerapp/lib/razorpayService.ts consumes.
    * Returns [] (never throws) when the user has no Razorpay customer yet,
