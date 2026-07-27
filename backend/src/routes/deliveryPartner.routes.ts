@@ -40,7 +40,8 @@ router.use(requireRider);
 
 // Profile & status
 router.get('/profile',                                            ctrl.getProfile.bind(ctrl));
-router.patch('/profile',                                          ctrl.updateProfile.bind(ctrl));
+router.get('/profile-change-request',                             ctrl.getProfileChangeRequest.bind(ctrl));
+router.post('/profile-change-request',                            ctrl.requestProfileChange.bind(ctrl));
 router.patch('/profile-image',                                    ctrl.updateProfileImage.bind(ctrl));
 router.patch('/vehicle-type',                                     ctrl.updateVehicleType.bind(ctrl));
 router.patch('/photo-urls',                                       ctrl.updatePhotoUrls.bind(ctrl));

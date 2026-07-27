@@ -831,34 +831,121 @@ export class DeliveryPartnerController {
     }
   }
 
-  async updateProfile(req: Request, res: Response) {
+  /**
+   * Get the caller's current pending profile-change request, if any — so the
+   * profile screen can show a "pending review" banner across sessions
+   * instead of only right after submitting.
+   */
+  async getProfileChangeRequest(req: Request, res: Response) {
     try {
-      const { name, email, address } = req.body as { name?: string; email?: string; address?: string };
+      const { data, error } = await supabaseAdmin
+        .from('rider_profile_change_requests')
+        .select('*')
+        .eq('rider_id', req.riderId!)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      if (name !== undefined) {
-        await supabaseAdmin.from('app_users').update({ name }).eq('id', req.riderId!);
+      if (error) {
+        console.error('❌ getProfileChangeRequest error:', error);
+        return res.status(500).json({ success: false, error: error.message });
       }
 
-      const dpUpdates: Record<string, unknown> = {};
-      if (email !== undefined) dpUpdates.email = email || null;
-      if (address !== undefined) dpUpdates.address = address || null;
+      res.json({ success: true, request: data ?? null });
+    } catch (err: any) {
+      console.error('❌ getProfileChangeRequest error:', err);
+      res.status(500).json({ success: false, error: err?.message || 'Failed to fetch change request' });
+    }
+  }
 
-      if (Object.keys(dpUpdates).length) {
-        await supabaseAdmin.from('delivery_partners').update(dpUpdates).eq('user_id', req.riderId!);
-      }
-
-      // Re-fetch full profile to return
+  /**
+   * Submit a change to name/email/address for admin review — does NOT apply
+   * anything directly. name lives on app_users, email/address on
+   * delivery_partners, so the diff is built against both. Resubmitting
+   * while a request is still pending replaces it in place (one open request
+   * per rider, enforced by a partial unique index) rather than stacking
+   * duplicates.
+   */
+  async requestProfileChange(req: Request, res: Response) {
+    try {
+      const riderId = req.riderId!;
       const { data: user } = await supabaseAdmin
-        .from('app_users').select('id, name, email, phone, created_at').eq('id', req.riderId!).single();
-      const { data: profile } = await supabaseAdmin
-        .from('delivery_partners')
-        .select('address, vehicle_number, vehicle_type, vehicle_image_url, is_online, status, is_approved, expo_push_token, profile_image_url, verification_submitted_at')
-        .eq('user_id', req.riderId!).maybeSingle();
+        .from('app_users').select('name').eq('id', riderId).maybeSingle();
+      const { data: partner } = await supabaseAdmin
+        .from('delivery_partners').select('email, address').eq('user_id', riderId).maybeSingle();
 
-      res.json({ success: true, profile: { ...user, ...profile } });
-    } catch (err) {
-      console.error('updateProfile error:', err);
-      res.status(500).json({ error: 'Failed to update profile' });
+      if (!user || !partner) {
+        return res.status(404).json({ success: false, error: 'Rider not found' });
+      }
+
+      const body = req.body as { name?: string; email?: string; address?: string };
+      const current: Record<string, string> = {
+        name: user.name ?? '',
+        email: partner.email ?? '',
+        address: partner.address ?? '',
+      };
+      const changes: Record<string, { old: string | null; new: string }> = {};
+      for (const field of ['name', 'email', 'address'] as const) {
+        const val = body[field];
+        if (typeof val === 'string' && val.trim() !== '' && val.trim() !== current[field]) {
+          changes[field] = { old: current[field] || null, new: val.trim() };
+        }
+      }
+
+      if (Object.keys(changes).length === 0) {
+        return res.status(400).json({ success: false, error: 'No changes to submit' });
+      }
+
+      const now = new Date().toISOString();
+      const { data: updatedExisting, error: updateErr } = await supabaseAdmin
+        .from('rider_profile_change_requests')
+        .update({ changes, created_at: now })
+        .eq('rider_id', riderId)
+        .eq('status', 'pending')
+        .select()
+        .maybeSingle();
+      if (updateErr) throw updateErr;
+
+      let saved = updatedExisting;
+      if (!saved) {
+        const { data: inserted, error: insertErr } = await supabaseAdmin
+          .from('rider_profile_change_requests')
+          .insert({ rider_id: riderId, changes })
+          .select()
+          .single();
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            const { data: retried, error: retryErr } = await supabaseAdmin
+              .from('rider_profile_change_requests')
+              .update({ changes, created_at: now })
+              .eq('rider_id', riderId)
+              .eq('status', 'pending')
+              .select()
+              .single();
+            if (retryErr) throw retryErr;
+            saved = retried;
+          } else {
+            throw insertErr;
+          }
+        } else {
+          saved = inserted;
+        }
+      }
+
+      const fieldList = Object.keys(changes).join(', ');
+      await notifyAdminsOfRiderDocs(
+        'profile_change_request',
+        'Rider Profile Change Requested',
+        `${user.name || 'A rider'} requested a change to: ${fieldList}`,
+        { riderId, requestId: saved.id, changes }
+      );
+
+      res.json({ success: true, request: saved });
+    } catch (err: any) {
+      console.error('❌ requestProfileChange error:', err);
+      res.status(500).json({ success: false, error: err?.message || 'Failed to submit change request' });
     }
   }
 

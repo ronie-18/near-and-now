@@ -26,6 +26,16 @@ export function getNotificationLink(type: string, data: Record<string, any> | nu
     case 'rider_document_uploaded':
     case 'rider_document_removed':
       return '/delivery';
+    // Store's requestProfileChange() and the rider's equivalent both fire
+    // this same type string (found 2026-07-27, during a deep-dive review —
+    // this case was simply missing, so both silently fell into `default:
+    // null` and clicking either notification just marked it read with no
+    // navigation at all). The two are disambiguated by which id is present
+    // on `data`, not by type.
+    case 'profile_change_request':
+      if (d.storeId) return '/stores/profile-change-requests';
+      if (d.riderId) return '/delivery/profile-change-requests';
+      return null;
     default:
       return null;
   }

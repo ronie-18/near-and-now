@@ -173,12 +173,17 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
           icon: <Truck size={18} />
         },
         {
+          title: 'Rider Profile Change Requests',
+          path: '/delivery/profile-change-requests',
+          icon: <FileText size={18} />
+        },
+        {
           title: 'Stores',
           path: '/stores',
           icon: <Store size={18} />
         },
         {
-          title: 'Profile Change Requests',
+          title: 'Store Profile Change Requests',
           path: '/stores/profile-change-requests',
           icon: <FileText size={18} />
         }
