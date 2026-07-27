@@ -38,7 +38,16 @@ const FIELD_LABELS: Record<string, string> = {
  * StoreProfileChangeRequestsPage.tsx exactly; this is the review step for
  * backend/deliveryPartner.controller.ts's requestProfileChange().
  */
+type Tab = 'pending' | 'approved' | 'rejected' | 'all';
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'rejected', label: 'Rejected' },
+  { key: 'all', label: 'All' },
+];
+
 const RiderProfileChangeRequestsPage = () => {
+  const [tab, setTab] = useState<Tab>('pending');
   const [requests, setRequests] = useState<ChangeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,11 +55,11 @@ const RiderProfileChangeRequestsPage = () => {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (status: Tab) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/delivery/partners/profile-change-requests?status=pending`, {
+      const res = await fetch(`${API_BASE}/api/delivery/partners/profile-change-requests?status=${status}`, {
         headers: adminAuthHeaders(),
       });
       const json = await res.json();
@@ -63,7 +72,7 @@ const RiderProfileChangeRequestsPage = () => {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(tab); }, [load, tab]);
 
   const review = async (id: string, status: 'approved' | 'rejected', rejection_reason?: string) => {
     setActingId(id);
@@ -75,7 +84,11 @@ const RiderProfileChangeRequestsPage = () => {
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to review request');
-      setRequests((prev) => prev.filter((r) => r.id !== id));
+      if (tab === 'pending') {
+        setRequests((prev) => prev.filter((r) => r.id !== id));
+      } else {
+        setRequests((prev) => prev.map((r) => (r.id === id ? { ...r, status, rejection_reason: rejection_reason ?? null, reviewed_at: new Date().toISOString() } : r)));
+      }
       setRejectingId(null);
       setReason('');
     } catch (err: any) {
@@ -94,12 +107,28 @@ const RiderProfileChangeRequestsPage = () => {
             <p className="text-gray-500 mt-1">Rider-submitted name/email/address changes awaiting review</p>
           </div>
           <button
-            onClick={load}
+            onClick={() => load(tab)}
             className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
           >
             <RefreshCw size={18} className="mr-2" />
             Refresh
           </button>
+        </div>
+
+        <div className="flex gap-1 border-b border-gray-200">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+                tab === t.key
+                  ? 'border-emerald-600 text-emerald-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
         {error && (
@@ -119,8 +148,14 @@ const RiderProfileChangeRequestsPage = () => {
             <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <FileText className="w-10 h-10 text-gray-400" />
             </div>
-            <h3 className="text-lg font-bold text-gray-800 mb-1">No pending requests</h3>
-            <p className="text-gray-500">Profile change requests will appear here for review.</p>
+            <h3 className="text-lg font-bold text-gray-800 mb-1">
+              {tab === 'pending' ? 'No pending requests' : `No ${tab === 'all' ? '' : tab} requests`}
+            </h3>
+            <p className="text-gray-500">
+              {tab === 'pending'
+                ? 'Profile change requests will appear here for review.'
+                : 'Reviewed requests will show up here.'}
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -134,6 +169,16 @@ const RiderProfileChangeRequestsPage = () => {
                       Requested {new Date(req.created_at).toLocaleString('en-IN')}
                     </div>
                   </div>
+                  {req.status !== 'pending' && (
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
+                        req.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+                      }`}
+                    >
+                      {req.status === 'approved' ? <CheckCircle size={13} className="mr-1" /> : <XCircle size={13} className="mr-1" />}
+                      {req.status === 'approved' ? 'Approved' : 'Rejected'}
+                    </span>
+                  )}
                 </div>
 
                 <div className="space-y-2 mb-4">
@@ -147,49 +192,58 @@ const RiderProfileChangeRequestsPage = () => {
                   ))}
                 </div>
 
-                {rejectingId === req.id ? (
-                  <div className="space-y-3">
-                    <textarea
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="Reason for rejection (required)"
-                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-red-400 focus:ring-0 text-sm"
-                      rows={2}
-                    />
+                {req.status === 'pending' ? (
+                  rejectingId === req.id ? (
+                    <div className="space-y-3">
+                      <textarea
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder="Reason for rejection (required)"
+                        className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-red-400 focus:ring-0 text-sm"
+                        rows={2}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          disabled={!reason.trim() || actingId === req.id}
+                          onClick={() => review(req.id, 'rejected', reason.trim())}
+                          className="px-4 py-2 bg-red-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:bg-red-700"
+                        >
+                          {actingId === req.id ? 'Rejecting...' : 'Confirm Reject'}
+                        </button>
+                        <button
+                          onClick={() => { setRejectingId(null); setReason(''); }}
+                          className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <div className="flex gap-2">
                       <button
-                        disabled={!reason.trim() || actingId === req.id}
-                        onClick={() => review(req.id, 'rejected', reason.trim())}
-                        className="px-4 py-2 bg-red-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:bg-red-700"
+                        disabled={actingId === req.id}
+                        onClick={() => review(req.id, 'approved')}
+                        className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:bg-emerald-700"
                       >
-                        {actingId === req.id ? 'Rejecting...' : 'Confirm Reject'}
+                        <CheckCircle size={16} className="mr-1.5" />
+                        {actingId === req.id ? 'Approving...' : 'Approve'}
                       </button>
                       <button
-                        onClick={() => { setRejectingId(null); setReason(''); }}
-                        className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200"
+                        disabled={actingId === req.id}
+                        onClick={() => setRejectingId(req.id)}
+                        className="inline-flex items-center px-4 py-2 bg-white border-2 border-red-200 text-red-600 rounded-xl font-semibold disabled:opacity-50 hover:bg-red-50"
                       >
-                        Cancel
+                        <XCircle size={16} className="mr-1.5" />
+                        Reject
                       </button>
                     </div>
-                  </div>
+                  )
                 ) : (
-                  <div className="flex gap-2">
-                    <button
-                      disabled={actingId === req.id}
-                      onClick={() => review(req.id, 'approved')}
-                      className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:bg-emerald-700"
-                    >
-                      <CheckCircle size={16} className="mr-1.5" />
-                      {actingId === req.id ? 'Approving...' : 'Approve'}
-                    </button>
-                    <button
-                      disabled={actingId === req.id}
-                      onClick={() => setRejectingId(req.id)}
-                      className="inline-flex items-center px-4 py-2 bg-white border-2 border-red-200 text-red-600 rounded-xl font-semibold disabled:opacity-50 hover:bg-red-50"
-                    >
-                      <XCircle size={16} className="mr-1.5" />
-                      Reject
-                    </button>
+                  <div className="text-xs text-gray-400 flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {req.reviewed_at && <span>Reviewed {new Date(req.reviewed_at).toLocaleString('en-IN')}</span>}
+                    {req.status === 'rejected' && req.rejection_reason && (
+                      <span className="text-gray-500">Reason: {req.rejection_reason}</span>
+                    )}
                   </div>
                 )}
               </div>
