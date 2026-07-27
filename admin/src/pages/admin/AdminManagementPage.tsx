@@ -19,6 +19,7 @@ import {
   Ban
 } from 'lucide-react';
 import { getAdmins, deleteAdmin, Admin, getRoleDisplayName, hasPermission } from '../../services/adminAuthService';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
 
 // Stat Card
 interface StatCardProps {
@@ -121,9 +122,7 @@ const AdminManagementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
-  // Get current admin from sessionStorage (where login stores it)
-  const currentAdminData = sessionStorage.getItem('adminData');
-  const currentAdmin: Admin | null = currentAdminData ? JSON.parse(currentAdminData) : null;
+  const currentAdmin: Admin | null = getCurrentAdmin();
 
   const fetchAdmins = async () => {
     try {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getAdminToken } from '../../services/adminSession';
 import {
   Bell, Check, Search, RefreshCw, ShoppingBag, Users, Package,
   AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter, IndianRupee,
@@ -9,6 +10,7 @@ import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { getNotificationLink } from '../../utils/notificationLink';
+import { docTypeLabel } from '../../utils/docLabels';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,7 +30,7 @@ interface AdminNotification {
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function adminAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -519,6 +521,22 @@ const NotificationsPage = () => {
                                 Not eligible for online refund (COD/unpaid)
                               </span>
                             )
+                          )}
+                          {(notif.type === 'document_uploaded' || notif.type === 'document_removed'
+                            || notif.type === 'rider_document_uploaded' || notif.type === 'rider_document_removed') && notif.data?.doc_type && (
+                            <span className="inline-block mt-2 text-xs font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
+                              Document: {docTypeLabel(notif.data.doc_type)}
+                            </span>
+                          )}
+                          {(notif.type === 'verification_submitted' || notif.type === 'rider_verification_submitted') && (
+                            <span className="inline-block mt-2 text-xs font-medium text-teal-700 bg-teal-50 px-2.5 py-1 rounded-lg">
+                              All documents submitted — ready for review
+                            </span>
+                          )}
+                          {notif.type === 'product_updated' && (notif.data?.product_name || notif.data?.product_id) && (
+                            <span className="inline-block mt-2 text-xs font-medium text-orange-700 bg-orange-50 px-2.5 py-1 rounded-lg">
+                              Product: {notif.data?.product_name || notif.data?.product_id}
+                            </span>
                           )}
                         </div>
                         <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">{timeAgo(notif.created_at)}</span>

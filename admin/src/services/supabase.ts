@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { geocodeAddress } from './placesService';
 import { parseGstRatePercent, priceWithGst } from '../utils/priceGst';
 import { apiUrl, shouldUseBackendApi } from '../utils/apiBase';
+import { getAdminToken, clearAdminSession } from './adminSession';
 
 async function readApiErrorMessage(res: Response): Promise<string> {
   const text = await res.text();
@@ -56,12 +57,10 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
  * RLS-empty result for this one request while the redirect takes effect.
  */
 export function getAdminClient() {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   if (!token) {
     if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-      sessionStorage.removeItem('adminToken');
-      sessionStorage.removeItem('adminData');
-      sessionStorage.removeItem('adminTokenExpiry');
+      clearAdminSession();
       window.location.href = '/login';
     }
     return supabaseAdmin;

@@ -15,13 +15,14 @@
 
 import { logSecurityEvent } from './auditLog';
 import { getAdminClient } from './supabase';
+import { getAdminToken, getAdminDataRaw, getAdminTokenExpiry, clearAdminSession } from './adminSession';
 
 /**
  * Secure admin logout — invalidates the server-side session row and clears local storage.
  */
 export async function secureAdminLogout(): Promise<void> {
   try {
-    const token = sessionStorage.getItem('adminToken');
+    const token = getAdminToken();
     if (token) {
       await getAdminClient()
         .from('admin_sessions')
@@ -34,9 +35,7 @@ export async function secureAdminLogout(): Promise<void> {
     console.error('Error during logout:', error);
   } finally {
     // Always clear local storage regardless of server-side success.
-    sessionStorage.removeItem('adminToken');
-    sessionStorage.removeItem('adminData');
-    sessionStorage.removeItem('adminTokenExpiry');
+    clearAdminSession();
   }
 }
 
@@ -44,7 +43,7 @@ export async function secureAdminLogout(): Promise<void> {
  * Get current admin data
  */
 export function getCurrentAdmin(): any | null {
-  const adminData = sessionStorage.getItem('adminData');
+  const adminData = getAdminDataRaw();
 
   if (!adminData) {
     return null;
@@ -63,9 +62,9 @@ export function getCurrentAdmin(): any | null {
  * client-side clock.
  */
 export async function isAdminAuthenticated(): Promise<boolean> {
-  const adminToken = sessionStorage.getItem('adminToken');
-  const adminData = sessionStorage.getItem('adminData');
-  const adminTokenExpiry = sessionStorage.getItem('adminTokenExpiry');
+  const adminToken = getAdminToken();
+  const adminData = getAdminDataRaw();
+  const adminTokenExpiry = getAdminTokenExpiry();
 
   if (!adminToken || !adminData) {
     return false;
@@ -75,7 +74,7 @@ export async function isAdminAuthenticated(): Promise<boolean> {
   if (adminTokenExpiry) {
     const expiry = parseInt(adminTokenExpiry);
     if (Date.now() >= expiry) {
-      clearAdminAuthStorage();
+      clearAdminSession();
       return false;
     }
   }
@@ -102,7 +101,7 @@ export async function isAdminAuthenticated(): Promise<boolean> {
       !!data && data.logged_out_at == null && new Date(data.expires_at).getTime() > Date.now();
 
     if (!stillValid) {
-      clearAdminAuthStorage();
+      clearAdminSession();
       return false;
     }
   } catch {
@@ -111,10 +110,4 @@ export async function isAdminAuthenticated(): Promise<boolean> {
   }
 
   return true;
-}
-
-function clearAdminAuthStorage(): void {
-  sessionStorage.removeItem('adminToken');
-  sessionStorage.removeItem('adminData');
-  sessionStorage.removeItem('adminTokenExpiry');
 }

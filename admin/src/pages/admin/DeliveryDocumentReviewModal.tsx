@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
+import { getAdminToken } from '../../services/adminSession';
 import { X, CheckCircle, XCircle, AlertCircle, FileText, FileCheck } from 'lucide-react';
 import { getAdminClient } from '../../services/supabase';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function adminAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

@@ -8,6 +8,7 @@ import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { updateAdmin } from '../../services/adminAuthService';
 import { getAdminClient } from '../../services/supabase';
+import { updateStoredAdminData } from '../../services/adminSession';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -212,29 +213,37 @@ const AccountTab = () => {
 
 // ─── Notifications Tab ───────────────────────────────────────────────────────
 
-const NOTIF_PREFS_KEY = 'admin_notif_prefs';
+const DEFAULT_NOTIF_PREFS = {
+  newOrders: true, newCustomers: true,
+  orderStatus: true, deliveryUpdates: true, systemAlerts: true,
+};
 
 const NotificationsTab = () => {
-  const [prefs, setPrefs] = useState(() => {
-    try {
-      const stored = localStorage.getItem(NOTIF_PREFS_KEY);
-      return stored ? JSON.parse(stored) : {
-        newOrders: true, newCustomers: true,
-        orderStatus: true, deliveryUpdates: true, systemAlerts: true,
-      };
-    } catch { return { newOrders: true, newCustomers: true, orderStatus: true, deliveryUpdates: true, systemAlerts: true }; }
-  });
+  const admin = getCurrentAdmin();
+  const [prefs, setPrefs] = useState(() => ({ ...DEFAULT_NOTIF_PREFS, ...(admin?.notification_preferences || {}) }));
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const update = (key: string, value: boolean) => {
     setPrefs((p: any) => ({ ...p, [key]: value }));
     setSaved(false);
   };
 
-  const save = () => {
-    localStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(prefs));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const save = async () => {
+    if (!admin?.id) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateAdmin(admin.id, { notification_preferences: prefs });
+      if (updated) updateStoredAdminData(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save preferences.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -247,12 +256,14 @@ const NotificationsTab = () => {
           <Toggle checked={prefs.deliveryUpdates} onChange={v => update('deliveryUpdates', v)} label="Delivery Updates" description="Partner pickup and delivery confirmations" />
           <Toggle checked={prefs.systemAlerts} onChange={v => update('systemAlerts', v)} label="System Alerts" description="Security events and important system notices" />
         </div>
+        {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
         <div className="mt-4 flex items-center gap-3 pt-4 border-t border-gray-100">
           <button
             onClick={save}
-            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white text-sm font-semibold rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all"
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white text-sm font-semibold rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50"
           >
-            <Save size={14} />
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
             Save Preferences
           </button>
           {saved && (
@@ -268,26 +279,34 @@ const NotificationsTab = () => {
 
 // ─── Appearance Tab ──────────────────────────────────────────────────────────
 
-const DISPLAY_PREFS_KEY = 'admin_display_prefs';
+const DEFAULT_DISPLAY_PREFS = { compactMode: false, showAnimations: true, language: 'en', timezone: 'Asia/Kolkata', currency: 'INR' };
 
 const AppearanceTab = () => {
-  const [prefs, setPrefs] = useState(() => {
-    try {
-      const stored = localStorage.getItem(DISPLAY_PREFS_KEY);
-      return stored ? JSON.parse(stored) : { compactMode: false, showAnimations: true, language: 'en', timezone: 'Asia/Kolkata', currency: 'INR' };
-    } catch { return { compactMode: false, showAnimations: true, language: 'en', timezone: 'Asia/Kolkata', currency: 'INR' }; }
-  });
+  const admin = getCurrentAdmin();
+  const [prefs, setPrefs] = useState(() => ({ ...DEFAULT_DISPLAY_PREFS, ...(admin?.display_preferences || {}) }));
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const update = (key: string, value: any) => {
     setPrefs((p: any) => ({ ...p, [key]: value }));
     setSaved(false);
   };
 
-  const save = () => {
-    localStorage.setItem(DISPLAY_PREFS_KEY, JSON.stringify(prefs));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const save = async () => {
+    if (!admin?.id) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateAdmin(admin.id, { display_preferences: prefs });
+      if (updated) updateStoredAdminData(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save settings.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -326,9 +345,10 @@ const AppearanceTab = () => {
             </select>
           </div>
         </div>
+        {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
         <div className="mt-4 flex items-center gap-3 pt-4 border-t border-gray-100">
-          <button onClick={save} className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-emerald-600 text-white text-sm font-semibold rounded-xl hover:from-teal-600 hover:to-emerald-700 transition-all">
-            <Save size={14} />Save Settings
+          <button onClick={save} disabled={saving} className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-emerald-600 text-white text-sm font-semibold rounded-xl hover:from-teal-600 hover:to-emerald-700 transition-all disabled:opacity-50">
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}Save Settings
           </button>
           {saved && <span className="flex items-center gap-1 text-sm text-emerald-600 font-medium"><CheckCircle size={14} /> Saved</span>}
         </div>

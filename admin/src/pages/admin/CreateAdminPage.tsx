@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { createAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
 import { CreateAdminSchema } from '../../schemas/admin.schema';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
 
 const CreateAdminPage = () => {
   const navigate = useNavigate();
@@ -30,9 +31,7 @@ const CreateAdminPage = () => {
     role: 'admin' as Admin['role']
   });
 
-  // Get current admin from sessionStorage
-  const currentAdminData = sessionStorage.getItem('adminData');
-  const currentAdmin: Admin | null = currentAdminData ? JSON.parse(currentAdminData) : null;
+  const currentAdmin: Admin | null = getCurrentAdmin();
 
   // Check permission
   if (!currentAdmin || !hasPermission(currentAdmin, 'admins.create')) {

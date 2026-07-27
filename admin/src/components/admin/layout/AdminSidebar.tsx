@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
+import { clearAdminSession } from '../../../services/adminSession';
 
 interface AdminSidebarProps {
   isOpen: boolean;
@@ -76,11 +77,9 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
   const handleLogout = async () => {
     try {
       await secureAdminLogout();
-      sessionStorage.removeItem('adminToken');
-      sessionStorage.removeItem('adminTokenExpiry');
       navigate('/login');
     } catch {
-      sessionStorage.clear();
+      clearAdminSession();
       navigate('/login');
     }
   };

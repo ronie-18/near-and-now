@@ -1,4 +1,5 @@
 import { getAdminClient } from './supabase';
+import { getAdminToken } from './adminSession';
 import { Product } from './supabase';
 import { getCurrentAdmin } from './secureAdminAuth';
 
@@ -8,7 +9,7 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function adminAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

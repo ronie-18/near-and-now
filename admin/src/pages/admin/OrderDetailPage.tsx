@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getAdminToken } from '../../services/adminSession';
 import { useNavigate, useParams } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import {
@@ -123,7 +124,7 @@ const OrderDetailPage = () => {
 
   const handleAdminInvoiceDownload = async (docType: 'customer' | 'store' | 'delivery') => {
     if (!order) return;
-    const adminToken = sessionStorage.getItem('adminToken') || '';
+    const adminToken = getAdminToken() || '';
     setInvoiceLoading(docType);
     try {
       const res = await fetch(apiUrl(`/api/invoices/order/${order.id}/admin/${docType}`), {

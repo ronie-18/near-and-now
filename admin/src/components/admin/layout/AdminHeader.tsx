@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, CheckCheck, FileText, ShieldCheck, Truck } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
+import { clearAdminSession } from '../../../services/adminSession';
 import { getAdminClient } from '../../../services/supabase';
 import { getNotificationLink } from '../../../utils/notificationLink';
 
@@ -139,11 +140,9 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
   const handleLogout = async () => {
     try {
       await secureAdminLogout();
-      sessionStorage.removeItem('adminToken');
-      sessionStorage.removeItem('adminTokenExpiry');
       navigate('/login');
     } catch {
-      sessionStorage.clear();
+      clearAdminSession();
       navigate('/login');
     }
   };

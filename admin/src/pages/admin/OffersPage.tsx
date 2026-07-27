@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getAdminToken } from '../../services/adminSession';
 import { Tag, Search, Plus, CheckCircle, XCircle, Calendar, Users } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -24,7 +25,7 @@ interface Coupon {
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function adminAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

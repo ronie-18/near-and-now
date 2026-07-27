@@ -1,4 +1,5 @@
 import { getAdminClient } from './supabase';
+import { getAdminToken } from './adminSession';
 import { apiUrl } from '../utils/apiBase';
 import { logAdminAction, logSecurityEvent, logFailedLogin } from './auditLog';
 
@@ -14,6 +15,8 @@ export interface Admin {
   last_login_at?: string;
   created_at: string;
   updated_at: string;
+  notification_preferences?: Record<string, boolean> | null;
+  display_preferences?: Record<string, unknown> | null;
 }
 
 export interface CreateAdminData {
@@ -32,6 +35,8 @@ export interface UpdateAdminData {
   role?: Admin['role'];
   permissions?: string[];
   status?: Admin['status'];
+  notification_preferences?: Record<string, boolean>;
+  display_preferences?: Record<string, unknown>;
 }
 
 export interface AuthenticatedAdmin {
@@ -186,7 +191,7 @@ export async function createAdmin(adminData: CreateAdminData): Promise<Admin | n
     console.log('👤 Creating new admin:', adminData.email);
 
     const permissions = adminData.permissions || ROLE_PERMISSIONS[adminData.role];
-    const token = sessionStorage.getItem('adminToken') || '';
+    const token = getAdminToken() || '';
 
     const res = await fetch(apiUrl('/api/admin/create'), {
       method: 'POST',
@@ -226,7 +231,7 @@ export async function updateAdmin(id: string, updates: UpdateAdminData): Promise
   try {
     console.log('✏️ Updating admin:', id);
 
-    const token = sessionStorage.getItem('adminToken') || '';
+    const token = getAdminToken() || '';
     const res = await fetch(apiUrl(`/api/admin/${id}`), {
       method: 'PATCH',
       headers: {
@@ -255,7 +260,7 @@ export async function deleteAdmin(id: string): Promise<boolean> {
   try {
     console.log('🗑️ Deleting admin:', id);
 
-    const token = sessionStorage.getItem('adminToken') || '';
+    const token = getAdminToken() || '';
     const res = await fetch(apiUrl(`/api/admin/${id}`), {
       method: 'DELETE',
       headers: {

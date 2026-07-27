@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { getAdminToken } from '../../services/adminSession';
 import {
   Store,
   Search,
@@ -38,7 +39,7 @@ type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved';
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function adminAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

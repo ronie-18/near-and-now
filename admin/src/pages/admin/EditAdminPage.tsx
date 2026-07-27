@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { getAdminById, updateAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
 import { UpdateAdminSchema } from '../../schemas/admin.schema';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
 
 const EditAdminPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -35,9 +36,7 @@ const EditAdminPage = () => {
     status: 'active' as Admin['status']
   });
 
-  // Get current admin from sessionStorage
-  const currentAdminData = sessionStorage.getItem('adminData');
-  const currentAdmin: Admin | null = currentAdminData ? JSON.parse(currentAdminData) : null;
+  const currentAdmin: Admin | null = getCurrentAdmin();
 
   // Check permission
   const canEdit = currentAdmin && hasPermission(currentAdmin, 'admins.edit');

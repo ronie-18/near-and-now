@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { authenticateAdmin } from '../../services/adminAuthService';
 import { checkRateLimit } from '../../utils/rateLimit';
+import { setAdminSession } from '../../services/adminSession';
 import logoUrl from '../../../../near_now_image.png';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -42,10 +44,9 @@ const AdminLoginPage = () => {
 
       console.log('✅ Admin authenticated:', result.admin.email);
 
-      // Store admin data and token in sessionStorage
-      sessionStorage.setItem('adminData', JSON.stringify(result.admin));
-      sessionStorage.setItem('adminToken', result.token);
-      sessionStorage.setItem('adminTokenExpiry', (Date.now() + 12 * 60 * 60 * 1000).toString()); // 12 hours
+      // Store admin data and token — localStorage if "Remember me" is checked
+      // (survives tab/browser close), sessionStorage otherwise (old behavior).
+      setAdminSession(result.admin, result.token, Date.now() + 12 * 60 * 60 * 1000, rememberMe);
 
       // Redirect to dashboard
       navigate('/');
@@ -128,6 +129,19 @@ const AdminLoginPage = () => {
                   )}
                 </button>
               </div>
+            </div>
+
+            <div className="mb-6 flex items-center">
+              <input
+                id="rememberMe"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary/20"
+              />
+              <label htmlFor="rememberMe" className="ml-2 text-sm text-gray-700">
+                Remember me on this device
+              </label>
             </div>
 
             <button

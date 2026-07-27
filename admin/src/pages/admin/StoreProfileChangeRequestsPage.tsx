@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getAdminToken } from '../../services/adminSession';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { FileText, CheckCircle, XCircle, Loader2, AlertCircle, RefreshCw, Clock } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function adminAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('adminToken') || '';
+  const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
