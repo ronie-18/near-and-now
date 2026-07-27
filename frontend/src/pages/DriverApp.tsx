@@ -541,7 +541,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
     await fetch(`${API}/delivery-partner/location`, {
       method: 'POST', headers,
       body: JSON.stringify({ latitude, longitude }),
-    }).catch(console.error);
+    }).catch((err) => console.error(err));
   }, [token]);
 
   // Start/stop GPS heartbeat based on online state
@@ -550,12 +550,12 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
       // Immediately send current location when going online
       navigator.geolocation.getCurrentPosition(
         (pos) => { latestPos.current = pos; pushLocation(pos); },
-        console.warn,
+        (err) => console.warn(err),
         { enableHighAccuracy: true }
       );
       locationWatchRef.current = navigator.geolocation.watchPosition(
         (p) => { latestPos.current = p; },
-        console.warn,
+        (err) => console.warn(err),
         { enableHighAccuracy: true, maximumAge: 3000 }
       );
       locationIntervalRef.current = setInterval(() => {
@@ -596,7 +596,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
           setIsOnline(d.profile?.is_online ?? false);
         }
       })
-      .catch(console.error)
+      .catch((err) => console.error(err))
       .finally(() => setLoading(false));
   }, [token]);
 

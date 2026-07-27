@@ -77,7 +77,9 @@
       "Bash(git -C \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" log --oneline -5)",
       "Bash(git -C \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" log --oneline -25)",
       "Bash(git -C \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" show --stat cbf001fe)",
-      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\"; grep -n \"^import.*crypto\" {}')"
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\"; grep -n \"^import.*crypto\" {}')",
+      "Bash(cp vite.config.ts /tmp/vite.config.ts.orig3)",
+      "Bash(cp /tmp/vite.config.scratch3.ts vite.config.ts)"
     ],
     "additionalDirectories": [
       "/tmp"

@@ -58,6 +58,14 @@ export default defineConfig(({ mode }) => {
   // Always use absolute path for consistent routing in production
   base: '/',
   envDir: projectRoot, // Load .env from project root
+  // Strip console.*/debugger from the production bundle only — 60+ files across
+  // this app call console.log/error directly (order payloads, user ids/phones
+  // included) with no gating, and no structured error tracking exists to make
+  // gating them individually worthwhile. Dev/test builds keep every call for
+  // debugging; only `vite build`'s output is affected.
+  esbuild: {
+    drop: mode === 'production' ? ['console', 'debugger'] : [],
+  },
   server: {
     proxy: {
       '/api': {
@@ -96,8 +104,10 @@ export default defineConfig(({ mode }) => {
           ui: ['lucide-react'],
           // Split Supabase
           supabase: ['@supabase/supabase-js'],
-          // Split security utilities
-          security: ['dompurify', 'zod', 'crypto-js'],
+          // dompurify/crypto-js removed along with the dead sanitize.ts/csrf.ts
+          // that were their only consumers — zod is still real, used by
+          // src/schemas/*.
+          validation: ['zod'],
           // Split admin components
           admin: [
             './src/pages/admin/AdminDashboardPage.tsx',

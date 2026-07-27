@@ -707,7 +707,7 @@ const OrderTrackingPage = () => {
                   authedFetch(`${apiBase}/api/orders/${orderId}/cancel`, { method: 'POST', headers: getAuthHeaders() })
                     .then((r) => r.json())
                     .then((d) => { if (d.success) navigate('/orders'); })
-                    .catch(console.error);
+                    .catch((err) => console.error(err));
                 }}
                 className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-red-100 hover:border-red-300 hover:bg-red-50 transition-all group"
               >
