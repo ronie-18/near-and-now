@@ -105,40 +105,46 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
 // session token isn't self-issued client-side. See backend/src/controllers/admin.controller.ts.
 export async function authenticateAdmin(email: string, password: string): Promise<AuthenticatedAdmin | null> {
   const normalizedEmail = email.toLowerCase().trim();
-  try {
-    console.log('🔐 Authenticating admin:', normalizedEmail);
 
-    const response = await fetch(apiUrl('/api/admin/login'), {
+  let response: Response;
+  try {
+    response = await fetch(apiUrl('/api/admin/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: normalizedEmail, password }),
     });
-
-    if (!response.ok) {
-      console.error('❌ Admin login failed:', response.status);
-      await logFailedLogin(normalizedEmail);
-      await logSecurityEvent('FAILED_LOGIN', 'medium', `Admin login failed for ${normalizedEmail}`);
-      return null;
-    }
-
-    const { admin, token } = (await response.json()) as { admin: Admin; token: string };
-
-    await logAdminAction({
-      admin_id: admin.id,
-      action: 'LOGIN',
-      resource_type: 'admin_session',
-      status: 'success',
-      new_values: { email: normalizedEmail, role: admin.role }
-    });
-
-    console.log('✅ Admin authenticated:', normalizedEmail, '| role:', admin.role);
-
-    return { admin, token };
   } catch (error) {
-    console.error('❌ Error authenticating admin:', error);
+    // Network-level failure only (DNS/offline/etc) — a real HTTP response,
+    // even a 401/429, is handled below instead of landing here.
+    if (import.meta.env.DEV) console.error('❌ Error authenticating admin:', error);
     await logSecurityEvent('AUTH_ERROR', 'high', `Unexpected error during admin login for ${normalizedEmail}`);
     return null;
   }
+
+  if (!response.ok) {
+    // Surface the server's actual message (e.g. "Too many login attempts.
+    // Please wait 15 minutes." from the real, server-side rate limiter —
+    // previously this was discarded and every failure showed a generic
+    // "Invalid email or password", hiding a rate-limit block behind a
+    // misleading message) instead of a one-size-fits-all fallback.
+    const json = await response.json().catch(() => null) as { error?: string } | null;
+    if (import.meta.env.DEV) console.error('❌ Admin login failed:', response.status, json?.error);
+    await logFailedLogin(normalizedEmail);
+    await logSecurityEvent('FAILED_LOGIN', 'medium', `Admin login failed for ${normalizedEmail}`);
+    throw new Error(json?.error || 'Invalid email or password');
+  }
+
+  const { admin, token } = (await response.json()) as { admin: Admin; token: string };
+
+  await logAdminAction({
+    admin_id: admin.id,
+    action: 'LOGIN',
+    resource_type: 'admin_session',
+    status: 'success',
+    new_values: { email: normalizedEmail, role: admin.role }
+  });
+
+  return { admin, token };
 }
 
 // Get all admins (super_admin only)

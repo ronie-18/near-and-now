@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { authenticateAdmin } from '../../services/adminAuthService';
-import { checkRateLimit } from '../../utils/rateLimit';
 import { setAdminSession } from '../../services/adminSession';
 import logoUrl from '../../../../near_now_image.png';
 
@@ -21,28 +20,20 @@ const AdminLoginPage = () => {
     setLoading(true);
 
     try {
-      console.log('🔐 Attempting admin login for:', email);
-
-      // Check rate limit
-      if (!checkRateLimit('ADMIN_LOGIN', email)) {
-        setError('Too many login attempts. Please try again in 15 minutes.');
-        setLoading(false);
-        return;
-      }
-
-      // Use direct database authentication
-      console.log('📡 Calling authenticateAdmin...');
+      // Rate limiting (including "too many attempts") is enforced server-side
+      // (express-rate-limit on POST /api/admin/login) — a client-side-only
+      // check here was trivially bypassed by a page refresh and gave a false
+      // sense of protection. authenticateAdmin now throws with the server's
+      // real message (including its rate-limit message) on any non-2xx
+      // response, caught below; a `null` result here means an actual network
+      // failure, not a login failure.
       const result = await authenticateAdmin(email, password);
-      console.log('📥 Authentication result:', result ? 'Success' : 'Failed');
 
       if (!result) {
-        console.error('❌ Authentication failed - Invalid credentials');
-        setError('Invalid email or password');
+        setError('Could not reach the server. Please check your connection and try again.');
         setLoading(false);
         return;
       }
-
-      console.log('✅ Admin authenticated:', result.admin.email);
 
       // Store admin data and token — localStorage if "Remember me" is checked
       // (survives tab/browser close), sessionStorage otherwise (old behavior).
@@ -51,12 +42,12 @@ const AdminLoginPage = () => {
       // Redirect to dashboard
       navigate('/');
     } catch (error: any) {
-      console.error('❌ Login error:', error);
-      console.error('Error details:', {
-        message: error.message,
-        stack: error.stack,
-        name: error.name
-      });
+      // Full error (message/stack/email) only ever goes to the dev console —
+      // was previously logged unconditionally on every login attempt/failure,
+      // in production too.
+      if (import.meta.env.DEV) {
+        console.error('❌ Login error:', error);
+      }
       setError(error.message || 'An error occurred. Please try again.');
     } finally {
       setLoading(false);
