@@ -163,34 +163,30 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
   }
 }
 
-// Get current user from session
-export async function getCurrentUserFromSession(userId: string): Promise<{ user: AppUser; customer?: Customer } | null> {
+// Get current user from session — routed through the backend (GET
+// /api/customers/me, requireCustomer-gated) rather than the browser's own
+// anon Supabase client. The anon client is blocked by RLS on both
+// app_users and customers (this app doesn't sign in via supabase.auth, so
+// auth.uid() is always NULL), so this always silently returned null before
+// — masked in the one real caller (AuthContext.tsx's updateUserProfile) by
+// a fallback to an optimistic local update, so a "successful" profile save
+// never actually re-synced with the real server state. The backend derives
+// the caller's identity from the bearer token, so `userId` is no longer
+// meaningful here — kept in the signature only so the existing call site
+// doesn't need touching.
+export async function getCurrentUserFromSession(_userId: string): Promise<{ user: AppUser; customer?: Customer } | null> {
   try {
-    const { data: appUser, error } = await supabase
-      .from('app_users')
-      .select('id, name, email, phone, role, is_activated, created_at, updated_at')
-      .eq('id', userId)
-      .single();
+    const res = await authedFetch(apiUrl('/api/customers/me'), {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) return null;
 
-    if (error || !appUser) {
-      return null;
-    }
-
-    if (appUser.role === 'customer') {
-      const { data: customer } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('user_id', appUser.id)
-        .single();
-
-      return {
-        user: appUser as AppUser,
-        customer: customer || undefined
-      };
-    }
+    const data = await res.json();
+    if (!data?.user) return null;
 
     return {
-      user: appUser as AppUser
+      user: data.user as AppUser,
+      customer: data.customer || undefined,
     };
   } catch (error) {
     console.error('❌ Error getting current user:', error);

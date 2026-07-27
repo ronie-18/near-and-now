@@ -23,8 +23,9 @@ export function getAuthHeaders(): Record<string, string> {
  * manually finding logout. On a 401, clears the same session keys
  * `logoutUser` (AuthContext.tsx) already clears and sends the customer to
  * `/login` — a hard redirect rather than client-side navigation, since this
- * runs outside the React tree and `ProtectedRoute.tsx`'s automatic redirect
- * isn't actually wired into any route today.
+ * runs outside the React tree and no route-level guard component exists to
+ * catch this otherwise (the one that used to exist, `ProtectedRoute.tsx`,
+ * was dead code with zero importers and was deleted).
  */
 export async function authedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);

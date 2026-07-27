@@ -1,198 +1,32 @@
 /**
- * Secure Admin Authentication Service
- * Uses Edge Functions with JWT tokens instead of localStorage
+ * Admin session helpers — session read, logout, and the route-guard check.
+ *
+ * The actual login call lives in adminAuthService.ts's authenticateAdmin()
+ * (POST /api/admin/login on the Express backend). This file previously also
+ * contained a second, entirely separate login/token-refresh path
+ * (secureAdminLogin/refreshAccessToken/getAccessToken/secureAdminFetch)
+ * calling a Supabase Edge Function (supabase/functions/admin-auth) — dead
+ * code with zero real callers (confirmed 2026-07-27: nothing anywhere in
+ * the app ever calls secureAdminLogin, so the sessionStorage keys it would
+ * have written — adminAccessToken/adminRefreshToken/adminTokenExpiry —
+ * are never actually set). Removed rather than left as a trap; the real
+ * session is the one authenticateAdmin writes under 'adminToken'.
  */
 
-import { checkRateLimit } from '../utils/rateLimit';
-import { logFailedLogin, logSecurityEvent, isAccountLocked } from './auditLog';
-import { AdminLoginSchema } from '../schemas/admin.schema';
+import { logSecurityEvent } from './auditLog';
 import { getAdminClient } from './supabase';
-import { z } from 'zod';
-
-const EDGE_FUNCTION_URL = import.meta.env.VITE_SUPABASE_URL + '/functions/v1/admin-auth';
-
-interface AdminAuthResponse {
-  admin: {
-    id: string;
-    email: string;
-    full_name: string;
-    role: string;
-    permissions: string[];
-  };
-  accessToken: string;
-  refreshToken: string;
-}
-
-/**
- * Secure admin login using Edge Function
- */
-export async function secureAdminLogin(email: string, password: string): Promise<AdminAuthResponse | null> {
-  try {
-    // Validate input
-    const validatedInput = AdminLoginSchema.parse({ email, password });
-    
-    // Check rate limit
-    if (!checkRateLimit('ADMIN_LOGIN', validatedInput.email)) {
-      await logSecurityEvent(
-        'RATE_LIMIT_EXCEEDED',
-        'medium',
-        `Admin login rate limit exceeded for ${validatedInput.email}`
-      );
-      throw new Error('Too many login attempts. Please try again in 15 minutes.');
-    }
-    
-    // Check if account is locked
-    const locked = await isAccountLocked(validatedInput.email);
-    if (locked) {
-      await logSecurityEvent(
-        'ACCOUNT_LOCKED',
-        'high',
-        `Login attempt on locked account: ${validatedInput.email}`
-      );
-      throw new Error('Account is locked due to multiple failed login attempts. Please try again in 15 minutes.');
-    }
-    
-    // Call Edge Function for authentication
-    const response = await fetch(EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include', // Important for cookies
-      body: JSON.stringify({
-        action: 'login',
-        email: validatedInput.email,
-        password
-      })
-    });
-    
-    if (!response.ok) {
-      // Log failed login
-      await logFailedLogin(validatedInput.email);
-      
-      await logSecurityEvent(
-        'FAILED_LOGIN',
-        'medium',
-        `Failed admin login attempt for ${validatedInput.email}`
-      );
-      
-      return null;
-    }
-    
-    const data = await response.json();
-    
-    // Store access token in memory (not localStorage!)
-    sessionStorage.setItem('adminAccessToken', data.accessToken);
-    sessionStorage.setItem('adminData', JSON.stringify(data.admin));
-    
-    // Set expiry (15 minutes from now)
-    const expiresAt = Date.now() + (15 * 60 * 1000);
-    sessionStorage.setItem('adminTokenExpiry', expiresAt.toString());
-    
-    await logSecurityEvent(
-      'ADMIN_LOGIN_SUCCESS',
-      'low',
-      `Admin logged in: ${data.admin.email}`
-    );
-    
-    return data;
-  } catch (error: any) {
-    if (error instanceof z.ZodError) {
-      throw new Error('Invalid email or password format');
-    }
-    throw error;
-  }
-}
-
-/**
- * Refresh access token using refresh token
- */
-export async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const refreshToken = sessionStorage.getItem('adminRefreshToken');
-    
-    if (!refreshToken) {
-      return null;
-    }
-    
-    const response = await fetch(EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({
-        action: 'refresh',
-        refreshToken
-      })
-    });
-    
-    if (!response.ok) {
-      // Refresh token invalid, logout
-      await secureAdminLogout();
-      return null;
-    }
-    
-    const data = await response.json();
-    
-    // Update access token
-    sessionStorage.setItem('adminAccessToken', data.accessToken);
-    sessionStorage.setItem('adminData', JSON.stringify(data.admin));
-    
-    const expiresAt = Date.now() + (15 * 60 * 1000);
-    sessionStorage.setItem('adminTokenExpiry', expiresAt.toString());
-    
-    return data.accessToken;
-  } catch (error) {
-    console.error('Error refreshing token:', error);
-    return null;
-  }
-}
-
-/**
- * Get current access token, refresh if expired
- */
-export async function getAccessToken(): Promise<string | null> {
-  const token = sessionStorage.getItem('adminAccessToken');
-  const expiry = sessionStorage.getItem('adminTokenExpiry');
-  
-  if (!token || !expiry) {
-    return null;
-  }
-  
-  // Check if token is expired or about to expire (within 1 minute)
-  if (Date.now() >= parseInt(expiry) - 60000) {
-    return await refreshAccessToken();
-  }
-  
-  return token;
-}
 
 /**
  * Secure admin logout — invalidates the server-side session row and clears local storage.
  */
 export async function secureAdminLogout(): Promise<void> {
   try {
-    // Invalidate the direct-DB session token written by authenticateAdmin.
-    // The token is stored under 'adminToken'; 'adminRefreshToken' is only used
-    // by the (unused) Edge Function path and is never set by the real login flow.
-    const directToken = sessionStorage.getItem('adminToken');
-    if (directToken) {
+    const token = sessionStorage.getItem('adminToken');
+    if (token) {
       await getAdminClient()
         .from('admin_sessions')
         .delete()
-        .eq('session_token', directToken);
-    }
-
-    // Also attempt to invalidate the Edge Function refresh token if it exists.
-    const refreshToken = sessionStorage.getItem('adminRefreshToken');
-    if (refreshToken) {
-      await fetch(EDGE_FUNCTION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ action: 'logout', refreshToken })
-      }).catch(() => { /* non-critical — session row is already deleted above */ });
+        .eq('session_token', token);
     }
 
     await logSecurityEvent('ADMIN_LOGOUT', 'low', 'Admin logged out');
@@ -200,8 +34,6 @@ export async function secureAdminLogout(): Promise<void> {
     console.error('Error during logout:', error);
   } finally {
     // Always clear local storage regardless of server-side success.
-    sessionStorage.removeItem('adminAccessToken');
-    sessionStorage.removeItem('adminRefreshToken');
     sessionStorage.removeItem('adminToken');
     sessionStorage.removeItem('adminData');
     sessionStorage.removeItem('adminTokenExpiry');
@@ -213,11 +45,11 @@ export async function secureAdminLogout(): Promise<void> {
  */
 export function getCurrentAdmin(): any | null {
   const adminData = sessionStorage.getItem('adminData');
-  
+
   if (!adminData) {
     return null;
   }
-  
+
   try {
     return JSON.parse(adminData);
   } catch {
@@ -226,91 +58,63 @@ export function getCurrentAdmin(): any | null {
 }
 
 /**
- * Check if admin is authenticated
- * Supports both secureAdminLogin (adminAccessToken) and authenticateAdmin (adminToken) methods
+ * Check if admin is authenticated — validated against the real session row
+ * `authenticateAdmin` writes (admin_sessions.session_token), not just the
+ * client-side clock.
  */
 export async function isAdminAuthenticated(): Promise<boolean> {
-  // Check for secureAdminLogin token (adminAccessToken)
-  const secureToken = await getAccessToken();
-  if (secureToken) {
-    return true;
-  }
-
-  // Check for authenticateAdmin token (adminToken) - fallback for direct DB auth
   const adminToken = sessionStorage.getItem('adminToken');
   const adminData = sessionStorage.getItem('adminData');
   const adminTokenExpiry = sessionStorage.getItem('adminTokenExpiry');
 
-  if (adminToken && adminData) {
-    // Check if the client-side clock thinks the token is still fresh.
-    if (adminTokenExpiry) {
-      const expiry = parseInt(adminTokenExpiry);
-      if (Date.now() >= expiry) {
-        clearAdminAuthStorage();
-        return false;
-      }
+  if (!adminToken || !adminData) {
+    return false;
+  }
+
+  // Check if the client-side clock thinks the token is still fresh.
+  if (adminTokenExpiry) {
+    const expiry = parseInt(adminTokenExpiry);
+    if (Date.now() >= expiry) {
+      clearAdminAuthStorage();
+      return false;
     }
+  }
 
-    // The client clock alone isn't enough: the server-side admin_sessions row
-    // (which every RLS-gated Supabase query actually checks via
-    // is_admin_authenticated()) can be expired or logged-out independently —
-    // e.g. logged out from another tab, or a shorter server-side expiry.
-    // Without this check, the guard would render the page while every real
-    // data fetch on it silently 401s/empty-results against a dead session.
-    try {
-      const { data, error } = await getAdminClient()
-        .from('admin_sessions')
-        .select('expires_at, logged_out_at')
-        .eq('session_token', adminToken)
-        .maybeSingle();
+  // The client clock alone isn't enough: the server-side admin_sessions row
+  // (which every RLS-gated Supabase query actually checks via
+  // is_admin_authenticated()) can be expired or logged-out independently —
+  // e.g. logged out from another tab, or a shorter server-side expiry.
+  // Without this check, the guard would render the page while every real
+  // data fetch on it silently 401s/empty-results against a dead session.
+  try {
+    const { data, error } = await getAdminClient()
+      .from('admin_sessions')
+      .select('expires_at, logged_out_at')
+      .eq('session_token', adminToken)
+      .maybeSingle();
 
-      if (error) {
-        // Network/transient failure — don't force a logout on a blip.
-        return true;
-      }
-
-      const stillValid =
-        !!data && data.logged_out_at == null && new Date(data.expires_at).getTime() > Date.now();
-
-      if (!stillValid) {
-        clearAdminAuthStorage();
-        return false;
-      }
-    } catch {
-      // Transient failure (offline, etc.) — fail open rather than logging out.
+    if (error) {
+      // Network/transient failure — don't force a logout on a blip.
       return true;
     }
 
+    const stillValid =
+      !!data && data.logged_out_at == null && new Date(data.expires_at).getTime() > Date.now();
+
+    if (!stillValid) {
+      clearAdminAuthStorage();
+      return false;
+    }
+  } catch {
+    // Transient failure (offline, etc.) — fail open rather than logging out.
     return true;
   }
 
-  return false;
+  return true;
 }
 
 function clearAdminAuthStorage(): void {
   sessionStorage.removeItem('adminToken');
   sessionStorage.removeItem('adminData');
   sessionStorage.removeItem('adminTokenExpiry');
-}
-
-/**
- * Secure fetch wrapper for admin API calls
- */
-export async function secureAdminFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const token = await getAccessToken();
-  
-  if (!token) {
-    throw new Error('Not authenticated');
-  }
-  
-  const headers = {
-    ...options.headers,
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
-  };
-  
-  return fetch(url, {
-    ...options,
-    headers
-  });
 }

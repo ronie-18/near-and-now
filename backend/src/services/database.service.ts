@@ -685,9 +685,15 @@ export class DatabaseService {
    * verification.
    */
   async getCustomerProfile(userId: string) {
+    // email_verified_at must be selected — both the website and mobile app's
+    // AppUser type read it directly off this response to show the
+    // verified/unverified badge (found 2026-07-27: previously missing here,
+    // which would silently show an already-verified email as "Unverified"
+    // the moment any consumer actually replaced its whole local user object
+    // with this response instead of merging into it).
     const { data: appUser, error } = await supabaseAdmin
       .from('app_users')
-      .select('id, name, email, phone, role, is_activated, created_at, updated_at, customers(*)')
+      .select('id, name, email, email_verified_at, phone, role, is_activated, created_at, updated_at, customers(*)')
       .eq('id', userId)
       .single();
 
