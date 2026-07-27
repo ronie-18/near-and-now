@@ -38,6 +38,10 @@ const FieldLabel = ({ children }: { children: React.ReactNode }) => (
 );
 
 const inputCls = "w-full px-4 py-3 border border-stone-200 rounded-2xl text-sm text-stone-800 placeholder-stone-300 bg-stone-50 focus:bg-white focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all duration-200";
+
+// Standard 15-char Indian GSTIN format — was previously persisted and
+// printed on the customer's own tax invoice with no format check at all.
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 const textareaCls = `${inputCls} resize-none`;
 
 /** Shape of a coupon row as returned by POST /api/coupons/validate. */
@@ -415,6 +419,10 @@ const CheckoutPage = () => {
     e.preventDefault();
     if (cartItems.length === 0) { showNotification('Your cart is empty', 'error'); return; }
     if (!formData.paymentMethod) { showNotification('Please select a payment method', 'error'); return; }
+    if (gstinEnabled && gstin.trim() && !GSTIN_REGEX.test(gstin.trim())) {
+      showNotification('Please enter a valid 15-character GSTIN, or uncheck "Add GSTIN" to continue without one', 'error');
+      return;
+    }
     try {
       setLoading(true);
       if (saveAddress && showNewAddressForm && !editAddressId && user?.id) {
@@ -1281,9 +1289,17 @@ const CheckoutPage = () => {
                             onChange={(e) => setGstin(e.target.value.toUpperCase())}
                             maxLength={15}
                             placeholder="22AAAAA0000A1Z5"
-                            className={`${inputCls} font-mono tracking-wider`}
+                            className={`${inputCls} font-mono tracking-wider ${gstin.trim().length > 0 && !GSTIN_REGEX.test(gstin.trim()) ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
                           />
-                          <p className="text-xs text-stone-400 mt-1.5">Enter your 15-digit GSTIN</p>
+                          {gstin.trim().length > 0 && !GSTIN_REGEX.test(gstin.trim()) ? (
+                            <p className="text-xs text-red-500 mt-1.5">
+                              {gstin.trim().length < 15
+                                ? `${15 - gstin.trim().length} more character${15 - gstin.trim().length === 1 ? '' : 's'} needed`
+                                : "Doesn't match the GSTIN format (e.g. 22AAAAA0000A1Z5)"}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-stone-400 mt-1.5">Enter your 15-digit GSTIN</p>
+                          )}
                         </div>
                         <div>
                           <FieldLabel>Registered Business Name *</FieldLabel>

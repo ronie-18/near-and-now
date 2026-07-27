@@ -91,7 +91,12 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
 
   const isActive = (path: string) => {
     if (path === '/') {
-      return location.pathname === '/admin';
+      // Dashboard (AdminDashboardPage) is mounted at '/' inside AdminRoutes.tsx
+      // — this app has no '/admin' path anywhere in its own routing (that
+      // would only make sense if this SPA were nested under a shared
+      // basename it isn't). The old check meant Dashboard could never show
+      // as active.
+      return location.pathname === '/';
     }
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };

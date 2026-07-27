@@ -848,17 +848,6 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
   }
 }
 
-export async function updateCustomerStatus(_id: string, _status: Customer['status']): Promise<Customer | null> {
-  try {
-    // Since customers table doesn't exist, this operation is not supported
-    console.warn('updateCustomerStatus: Customers table does not exist. Operation not supported.');
-    return null;
-  } catch (error) {
-    console.error('Error in updateCustomerStatus:', error);
-    throw error;
-  }
-}
-
 // Dashboard Statistics
 export async function getDashboardStats() {
   try {

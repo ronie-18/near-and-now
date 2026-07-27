@@ -9,6 +9,13 @@ import { requireAdmin, requirePermission } from '../middleware/adminAuth.middlew
 const router = Router();
 const ordersController = new OrdersController();
 
+// Standard 15-char Indian GSTIN format (2-digit state code, 10-char PAN,
+// 1-digit entity code, literal 'Z', 1 checksum char). Previously accepted as
+// any string and persisted straight onto the invoice — this is the actual
+// trust boundary (the customer app now also validates client-side, but that
+// alone doesn't stop a modified client or direct API call).
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
 const placeCheckoutSchema = z.object({
   user_id: z.string().uuid('Invalid user ID'),
   customer_name: z.string().min(1, 'Name required'),
@@ -21,7 +28,7 @@ const placeCheckoutSchema = z.object({
   payment_method: z.string().min(1),
   notes: z.string().optional(),
   coupon_id: z.string().uuid().optional(),
-  gstin: z.string().optional(),
+  gstin: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN format').optional().or(z.literal('')),
   gstin_business_name: z.string().optional(),
   receiver_name: z.string().optional(),
   receiver_phone: z.string().optional(),
