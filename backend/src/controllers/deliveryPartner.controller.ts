@@ -862,6 +862,13 @@ export class DeliveryPartnerController {
     }
   }
 
+  /**
+   * Legacy base64-to-backend profile-photo upload. The live app has since
+   * moved to a direct-to-Storage upload (lib/storage.ts -> delivery_partner_image,
+   * followed by PATCH /photo-urls) for consistency with the shopkeeper build,
+   * but this route is kept live (not removed) with a real bucket backing it —
+   * restored 2026-07-27 after the rider-avatars bucket was confirmed created.
+   */
   async updateProfileImage(req: Request, res: Response) {
     try {
       const { image_base64, mime_type } = req.body as { image_base64?: string; mime_type?: string };
