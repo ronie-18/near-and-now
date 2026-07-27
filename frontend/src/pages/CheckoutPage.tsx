@@ -6,7 +6,8 @@ import { useAuth } from '../context/AuthContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
-import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft, Tag, X } from 'lucide-react';
+import { getWalletBalance, payOrderWithWallet } from '../services/walletService';
+import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft, Tag, X, Wallet } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
 import { apiUrl } from '../utils/apiBase';
@@ -101,6 +102,12 @@ const CheckoutPage = () => {
     paymentMethod: '',
     addressName: ''
   });
+
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    getWalletBalance().then(setWalletBalance).catch(() => { /* leave null -> option shows "Unable to load balance" */ });
+  }, [isAuthenticated]);
 
   const [addressLabel, setAddressLabel] = useState<'Home' | 'Work' | 'Other'>('Home');
   const [landmark, setLandmark] = useState('');
@@ -489,7 +496,9 @@ const CheckoutPage = () => {
         shippingLng = pickedLocation.lng;
       }
 
-      let paymentMethodLabel = formData.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment';
+      let paymentMethodLabel =
+        formData.paymentMethod === 'cod' ? 'Cash on Delivery' :
+        formData.paymentMethod === 'wallet' ? 'Wallet' : 'Online Payment';
       if (splitEnabled) {
         const cashAmt = parseFloat(splitCashAmount) || 0;
         const upiAmt = parseFloat(splitUpiAmount) || 0;
@@ -528,12 +537,47 @@ const CheckoutPage = () => {
         ...(tipAmount > 0 && { tip_amount: tipAmount })
       };
 
+      // Re-check the wallet balance right before creating the order, not just
+      // at selection time — the radio being greyed out doesn't clear an
+      // already-selected `formData.paymentMethod`, so a customer who picked
+      // Wallet and then added more to their cart (pushing the total past
+      // their balance) without reselecting a different method could
+      // otherwise still submit with a doomed selection. The backend already
+      // re-validates and would reject it safely either way, but this avoids
+      // creating an order that's already known to fail before even trying.
+      if (formData.paymentMethod === 'wallet' && !splitEnabled &&
+          (walletBalance == null || walletBalance < finalOrderTotal)) {
+        showNotification('Insufficient wallet balance for this order. Please choose another payment method.', 'error');
+        setLoading(false);
+        return;
+      }
+
       const createdOrder = await createOrder(orderData);
+
+      // Split Payment is independent of the payment-method radio group (it's
+      // its own toggle, combinable with cod/online) — the same way `online`
+      // only actually triggers Razorpay when split ISN'T also enabled below,
+      // `wallet` must respect the same rule. Wallet has no "partial" concept,
+      // so if the customer also toggled Split Payment on, split wins (same
+      // precedence split already has over 'online') rather than silently
+      // debiting the wallet in full while the order is labeled as split.
+      const isWalletPayment = formData.paymentMethod === 'wallet' && !splitEnabled;
       const isOnlineRazorpay = formData.paymentMethod === 'online' && !splitEnabled;
       const splitUpiAmountNum = splitEnabled ? (parseFloat(splitUpiAmount) || 0) : 0;
       const isSplitWithUpi = splitEnabled && splitUpiAmountNum > 0;
 
-      if (isOnlineRazorpay || isSplitWithUpi) {
+      if (isWalletPayment) {
+        try {
+          await payOrderWithWallet(createdOrder.id);
+        } catch (walletErr: unknown) {
+          const msg = walletErr instanceof Error ? walletErr.message : String(walletErr);
+          showNotification(`${msg} Your order has been saved — you can retry payment from your Orders.`, 'error');
+          clearCart();
+          lastCreatedAddressRef.current = null;
+          navigate(`/thank-you?orderId=${createdOrder.id}`, { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
+          return;
+        }
+      } else if (isOnlineRazorpay || isSplitWithUpi) {
         const razorpayAmount = isSplitWithUpi ? splitUpiAmountNum : finalOrderTotal;
         const description = isSplitWithUpi
           ? `UPI portion (₹${Math.round(splitUpiAmountNum)} of ₹${finalOrderTotal} order)`
@@ -1061,6 +1105,46 @@ const CheckoutPage = () => {
                         <Shield className="w-4 h-4 text-green-600" />
                       </div>
                     </label>
+
+                    {/* Wallet — real stored-value balance (separate from Razorpay's
+                        own third-party wallet aggregator rail inside "Online Payment") */}
+                    {(() => {
+                      const walletInsufficient = walletBalance != null && walletBalance < finalTotal;
+                      const walletDisabled = walletBalance == null || walletInsufficient;
+                      return (
+                        <label className={`pay-card flex items-center gap-4 p-4 rounded-2xl border-2 ${
+                          walletDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                        } ${
+                          formData.paymentMethod === 'wallet' ? 'border-primary bg-primary/[0.03]' : 'border-stone-100 hover:border-stone-200 bg-stone-50/50'
+                        }`}>
+                          <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${formData.paymentMethod === 'wallet' ? 'border-primary' : 'border-stone-300'}`}>
+                            {formData.paymentMethod === 'wallet' && <div className="w-2.5 h-2.5 rounded-full bg-primary" />}
+                          </div>
+                          <input
+                            type="radio"
+                            name="paymentMethod"
+                            value="wallet"
+                            checked={formData.paymentMethod === 'wallet'}
+                            onChange={handleChange}
+                            disabled={walletDisabled}
+                            className="sr-only"
+                          />
+                          <div className="flex-1">
+                            <p className="font-semibold text-stone-800 text-sm">Near &amp; Now Wallet</p>
+                            <p className="text-xs text-stone-400 mt-0.5">
+                              {walletBalance == null
+                                ? 'Unable to load balance'
+                                : walletInsufficient
+                                  ? `Insufficient balance (₹${walletBalance.toFixed(2)}) — top up to use`
+                                  : `Balance: ₹${walletBalance.toFixed(2)}`}
+                            </p>
+                          </div>
+                          <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center">
+                            <Wallet className="w-4 h-4 text-emerald-600" />
+                          </div>
+                        </label>
+                      );
+                    })()}
 
                     {/* Split Payment */}
                     <div

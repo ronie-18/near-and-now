@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PaymentController } from '../controllers/payment.controller.js';
 import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
+import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 
 const router = Router();
 const paymentController = new PaymentController();
@@ -13,7 +14,13 @@ router.post('/verify', paymentController.verifyPayment.bind(paymentController));
 
 // Saved payment methods for the logged-in user (cards/UPIs). Must be declared
 // before the '/:paymentId' catch-all below or Express will route to it.
-router.get('/methods', paymentController.getSavedMethods.bind(paymentController));
+// requireCustomer gate added 2026-07-27 — this previously trusted a bare
+// ?user_id= query param with no auth at all, returning any user's real
+// saved card network/last4/issuer and UPI VPA to anyone who could guess or
+// enumerate a user id (a live IDOR, unrelated to whether the app's own
+// EXPO_PUBLIC_SAVED_METHODS_ENABLED flag was on — a direct request bypassed
+// the flag entirely).
+router.get('/methods', requireCustomer, paymentController.getSavedMethods.bind(paymentController));
 
 // Get payment details
 router.get('/:paymentId', paymentController.getPaymentDetails.bind(paymentController));

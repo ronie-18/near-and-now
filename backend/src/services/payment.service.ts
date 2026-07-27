@@ -248,6 +248,52 @@ export class PaymentService {
   }
 
   /**
+   * Razorpay order for a wallet top-up. Not tied to any customer_orders
+   * row — uses a distinct `wallet_topup` notes marker (not
+   * `internal_order_id`/`addition_order_id`) for the same reason
+   * createAdditionPaymentOrder does: the shared webhook handler's
+   * payment.authorized/captured/failed handlers key off those exact fields
+   * to mutate customer_orders, and would silently do the wrong thing if a
+   * wallet top-up's events were mistaken for an order's.
+   */
+  async createWalletTopupOrder(userId: string, amountRupees: number) {
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+      throw new Error('Razorpay credentials not configured');
+    }
+    const amountPaise = Math.round(amountRupees * 100);
+    if (!Number.isFinite(amountPaise) || amountPaise <= 0) {
+      const err = new Error('Invalid top-up amount');
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const { data: user } = await supabaseAdmin
+      .from('app_users')
+      .select('id, name, email, phone, razorpay_customer_id')
+      .eq('id', userId)
+      .maybeSingle();
+    const razorpayCustomerId = (user as { razorpay_customer_id?: string | null } | null)?.razorpay_customer_id ?? null;
+
+    const orderBody: Record<string, unknown> = {
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: `wallet_${userId.slice(0, 20)}_${Date.now()}`,
+      notes: { wallet_topup: true, user_id: userId },
+    };
+    if (razorpayCustomerId) orderBody.customer_id = razorpayCustomerId;
+
+    const order = await razorpayRequest('POST', '/orders', orderBody) as any;
+    console.log('[PAYMENT] Wallet top-up Razorpay order created', { userId, razorpayOrderId: order.id, amount: order.amount });
+    return {
+      razorpay_order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key_id: RAZORPAY_KEY_ID,
+      razorpay_mode: RAZORPAY_KEY_ID.startsWith('rzp_test_') ? ('test' as const) : ('live' as const),
+    };
+  }
+
+  /**
    * Saved cards/UPIs for the mobile app "Preferred Payment" section.
    * Shape matches what nearandnowcustomerapp/lib/razorpayService.ts consumes.
    * Returns [] (never throws) when the user has no Razorpay customer yet,

@@ -466,20 +466,28 @@ async function flagUnresolvableItemsForRefund(orderId: string, items: { id: stri
 
   const refundAmount = (lineItems || []).reduce((sum: number, li: any) => sum + Number(li.unit_price) * Number(li.quantity), 0);
   const isOnlinePaid = order?.payment_method !== 'cod' && !!order?.razorpay_payment_id && order?.payment_status === 'paid';
+  // A wallet-paid order has no razorpay_payment_id at all, so the check
+  // above always came back false for it — the admin previously had no way
+  // to refund these unavailable items at all (message literally said "no
+  // online refund to process"), even though the money is sitting right
+  // there in the customer's wallet balance and just needs crediting back.
+  const isWalletPaid = order?.payment_method === 'wallet' && order?.payment_status === 'paid';
+  const isRefundEligible = isOnlinePaid || isWalletPaid;
 
   await supabaseAdmin.from('admin_notifications').insert({
     type: 'refund_required',
     title: 'Item unavailable — refund needed',
-    message: isOnlinePaid
+    message: isRefundEligible
       ? `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. ₹${refundAmount.toFixed(2)} needs a refund.`
-      : `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. Order was paid by ${order?.payment_method || 'unknown method'} — no online refund to process.`,
+      : `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. Order was paid by ${order?.payment_method || 'unknown method'} — no refund to process.`,
     data: {
       order_id: orderId,
       item_ids: ids,
       items: (lineItems || []).map((li: any) => ({ id: li.id, name: li.product_name, unit_price: li.unit_price, quantity: li.quantity })),
       refund_amount: refundAmount,
       payment_id: order?.razorpay_payment_id || null,
-      refund_eligible: isOnlinePaid,
+      refund_method: isWalletPaid ? 'wallet' : 'razorpay',
+      refund_eligible: isRefundEligible,
       resolved: false,
     },
   });

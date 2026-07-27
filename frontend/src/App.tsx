@@ -18,6 +18,7 @@ import ThankYouPage from './pages/ThankYouPage';
 import LoginPage from './pages/LoginPage';
 import SearchPage from './pages/SearchPage';
 import ProfilePage from './pages/ProfilePage';
+import WalletPage from './pages/WalletPage';
 import OrdersPage from './pages/OrdersPage';
 import OrderTrackingPage from './pages/OrderTrackingPage';
 import AddressesPage from './pages/AddressesPage';
@@ -63,6 +64,7 @@ const AppContent: React.FC = () => {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/wallet" element={<WalletPage />} />
             <Route path="/orders" element={<OrdersPage />} />
             <Route path="/track" element={<OrderTrackingPage />} />
             <Route path="/track/:orderId" element={<OrderTrackingPage />} />

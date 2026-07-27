@@ -450,7 +450,7 @@ export class DatabaseService {
     // Fetch customer order to check payment/order status before cancelling
     const { data: customerOrder } = await supabaseAdmin
       .from('customer_orders')
-      .select('status, payment_status, razorpay_payment_id, total_amount')
+      .select('status, payment_status, razorpay_payment_id, total_amount, payment_method, customer_id')
       .eq('id', orderId)
       .single();
 
@@ -515,6 +515,34 @@ export class DatabaseService {
           .eq('id', orderId);
       } catch (refundErr) {
         console.error('Refund failed (order still cancelled):', refundErr);
+      }
+    } else if (
+      // A wallet-paid order has no razorpay_payment_id at all — the branch
+      // above silently no-ops for it, which used to mean the customer's
+      // money just vanished on cancellation with no refund anywhere. The
+      // only place that money can go back to is the same wallet it came
+      // from (there's no external gateway payment to reverse).
+      customerOrder?.payment_status === 'paid' &&
+      customerOrder?.payment_method === 'wallet' &&
+      customerOrder?.customer_id
+    ) {
+      try {
+        const { error: refundRpcErr } = await supabaseAdmin.rpc('credit_wallet', {
+          p_user_id: customerOrder.customer_id,
+          p_amount: Number(customerOrder.total_amount || 0),
+          p_reason: 'refund',
+          p_reference_type: 'order',
+          p_reference_id: orderId,
+          p_razorpay_payment_id: null,
+        });
+        if (refundRpcErr) throw refundRpcErr;
+        console.log('Wallet refund credited for cancelled order:', orderId);
+        await supabaseAdmin
+          .from('customer_orders')
+          .update({ payment_status: 'refunded' })
+          .eq('id', orderId);
+      } catch (refundErr) {
+        console.error('Wallet refund failed (order still cancelled):', refundErr);
       }
     }
 
@@ -1016,7 +1044,16 @@ export class DatabaseService {
     const itemChunks = storeIdsToUse.map((sid) => storeToItems.get(sid)!);
 
     const pm = orderData.payment_method?.toLowerCase() ?? '';
+    // 'wallet' checked first and explicitly — without it, a wallet order's
+    // label would fall through to the 'cod' default (doesn't match
+    // split/online/upi), mislabeling it as cash-on-delivery from the moment
+    // it's created. That's not just cosmetic: pay_order_with_wallet() sets
+    // the real payment_method to 'wallet' only *after* a successful debit —
+    // if the debit fails (e.g. insufficient balance) the order would be left
+    // looking exactly like an ordinary unpaid COD order, with no "pending
+    // online payment, please retry" signal anywhere.
     const paymentMethodEnum =
+      pm.includes('wallet') ? 'wallet' :
       pm.includes('split') || pm.includes('online') || pm.includes('upi') ? 'razorpay' : 'cod';
 
     // Trusted subtotal from catalog prices — replaces client-supplied orderData.subtotal.

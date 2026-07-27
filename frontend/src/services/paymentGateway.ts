@@ -17,7 +17,7 @@ type VerifyPaymentRequest = {
   internalOrderId: string;
 };
 
-type RazorpaySuccessResponse = {
+export type RazorpaySuccessResponse = {
   razorpay_payment_id: string;
   razorpay_order_id: string;
   razorpay_signature: string;
@@ -48,7 +48,7 @@ declare global {
   }
 }
 
-async function loadRazorpayScript(): Promise<void> {
+export async function loadRazorpayScript(): Promise<void> {
   if (window.Razorpay) return;
 
   await new Promise<void>((resolve, reject) => {
@@ -149,6 +149,58 @@ export async function openRazorpayCheckout(params: {
       }
     });
 
+    rzp.open();
+  });
+}
+
+/**
+ * Opens the Razorpay sheet for an already-created payment order (any shape —
+ * order payment, wallet top-up, etc.), rather than creating one itself via
+ * `/api/payment/create` like `openRazorpayCheckout` does. Used by the wallet
+ * top-up flow, whose order comes from `/api/wallet/topup/create` instead.
+ */
+export async function openRazorpayCheckoutForOrder(
+  order: { key_id: string; amount: number; currency: string; razorpay_order_id: string; razorpay_mode?: 'test' | 'live' },
+  params: {
+    name?: string;
+    description?: string;
+    customerName?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+    onDismiss?: () => void;
+  },
+): Promise<RazorpaySuccessResponse> {
+  // Self-contained, like openRazorpayCheckout — a caller forgetting to load
+  // the script first would otherwise hit `new undefined(...)` (a confusing
+  // "not a constructor" rejection) instead of this function's own clear error.
+  await loadRazorpayScript();
+
+  const isTestMode =
+    order.razorpay_mode === 'test' ||
+    (!order.razorpay_mode && order.key_id.startsWith('rzp_test_'));
+
+  return new Promise<RazorpaySuccessResponse>((resolve, reject) => {
+    const rzp = new window.Razorpay!({
+      key: order.key_id,
+      amount: order.amount,
+      currency: order.currency,
+      order_id: order.razorpay_order_id,
+      name: params.name ?? 'Near and Now',
+      description: params.description ?? (isTestMode ? 'Test payment (Razorpay sandbox)' : 'Payment'),
+      prefill: {
+        name: params.customerName,
+        email: params.customerEmail,
+        contact: params.customerPhone,
+      },
+      theme: { color: '#2563eb' },
+      modal: {
+        ondismiss: () => {
+          params.onDismiss?.();
+          reject(new Error('Payment cancelled'));
+        },
+      },
+      handler: (response: RazorpaySuccessResponse) => resolve(response),
+    });
     rzp.open();
   });
 }

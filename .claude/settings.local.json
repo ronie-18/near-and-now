@@ -62,7 +62,11 @@
       "Bash(npm test *)",
       "Bash(grep *)",
       "Bash(npx expo *)",
-      "Bash(node_modules/.bin/tsc --noEmit -p tsconfig.json)"
+      "Bash(node_modules/.bin/tsc --noEmit -p tsconfig.json)",
+      "Bash(npx supabase *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(npx vitest *)",
+      "Bash(npx vite *)"
     ]
   }
 }

@@ -136,8 +136,12 @@ export class PaymentController {
   // Response shape is consumed as-is by nearandnowcustomerapp/lib/razorpayService.ts.
   async getSavedMethods(req: Request, res: Response) {
     try {
-      const userId = String(req.query.user_id || '');
-      if (!userId) return res.status(400).json({ error: 'user_id required' });
+      // Never trust a client-supplied user_id here — the caller must only
+      // ever see their own saved methods, enforced by requireCustomer
+      // (routes/payment.routes.ts), not by whatever id happens to be in
+      // the query string.
+      const userId = req.customerId;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
       const methods = await paymentService.getSavedMethods(userId);
       res.json({ methods });
     } catch (error) {
@@ -200,17 +204,22 @@ export class PaymentController {
       }
       const data = (notif.data || {}) as any;
       if (data.resolved) return res.status(409).json({ error: 'Already refunded' });
-      if (!data.refund_eligible || !data.payment_id) {
+      const refundMethod: 'wallet' | 'razorpay' = data.refund_method === 'wallet' ? 'wallet' : 'razorpay';
+      if (!data.refund_eligible || (refundMethod === 'razorpay' && !data.payment_id)) {
         return res.status(400).json({ error: 'This order has no online payment to refund (COD or unpaid)' });
       }
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
-        .select('id, total_amount, refunded_amount, razorpay_payment_id')
+        .select('id, total_amount, refunded_amount, razorpay_payment_id, payment_method, customer_id')
         .eq('id', data.order_id)
         .maybeSingle();
 
-      if (!order || order.razorpay_payment_id !== data.payment_id) {
+      if (!order) return res.status(409).json({ error: 'Order not found' });
+      if (refundMethod === 'razorpay' && order.razorpay_payment_id !== data.payment_id) {
+        return res.status(409).json({ error: 'Order payment record has changed — refund aborted' });
+      }
+      if (refundMethod === 'wallet' && order.payment_method !== 'wallet') {
         return res.status(409).json({ error: 'Order payment record has changed — refund aborted' });
       }
 
@@ -221,11 +230,25 @@ export class PaymentController {
         return res.status(409).json({ error: 'Refund would exceed the amount paid for this order' });
       }
 
-      const refund = await paymentService.processRefund({
-        paymentId: data.payment_id,
-        amount,
-        reason: 'Item unavailable at any nearby store — admin approved',
-      });
+      let razorpayRefundId: string | null = null;
+      if (refundMethod === 'razorpay') {
+        const refund = await paymentService.processRefund({
+          paymentId: data.payment_id,
+          amount,
+          reason: 'Item unavailable at any nearby store — admin approved',
+        });
+        razorpayRefundId = refund.id;
+      } else {
+        const { error: rpcErr } = await supabaseAdmin.rpc('credit_wallet', {
+          p_user_id: order.customer_id,
+          p_amount: amount,
+          p_reason: 'refund',
+          p_reference_type: 'order',
+          p_reference_id: order.id,
+          p_razorpay_payment_id: null,
+        });
+        if (rpcErr) throw rpcErr;
+      }
 
       const newRefundedTotal = alreadyRefunded + amount;
       await Promise.all([
@@ -234,11 +257,16 @@ export class PaymentController {
           payment_status: newRefundedTotal >= Number(order.total_amount || 0) - 0.01 ? 'refunded' : 'partially_refunded',
         }).eq('id', order.id),
         supabaseAdmin.from('admin_notifications').update({
-          data: { ...data, resolved: true, resolved_at: new Date().toISOString(), razorpay_refund_id: refund.id },
+          data: {
+            ...data,
+            resolved: true,
+            resolved_at: new Date().toISOString(),
+            ...(razorpayRefundId ? { razorpay_refund_id: razorpayRefundId } : { wallet_refund: true }),
+          },
         }).eq('id', notificationId),
       ]);
 
-      res.json({ success: true, refund });
+      res.json({ success: true, refund_method: refundMethod });
     } catch (error) {
       console.error('Error resolving item refund:', error);
       res.status(500).json({ error: 'Failed to process refund' });
