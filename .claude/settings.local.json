@@ -72,7 +72,11 @@
       "Bash(awk '/^## Store-owner app/{f++} f==1' /Users/tiasmondal166/projects/near-and-now/bug_fixes_2026-07-23.md)",
       "Bash(npx jest *)",
       "Bash(awk '/^## Admin panel/{f=1} f{print} /^## Supabase/{if\\(f && NR>1\\) exit}' /Users/tiasmondal166/projects/near-and-now/bug_fixes_2026-07-23.md)",
-      "Bash(awk *)"
+      "Bash(awk *)",
+      "Bash(awk '/^# *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
