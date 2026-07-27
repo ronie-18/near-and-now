@@ -219,10 +219,10 @@ const NotificationsTab = () => {
     try {
       const stored = localStorage.getItem(NOTIF_PREFS_KEY);
       return stored ? JSON.parse(stored) : {
-        newOrders: true, newCustomers: true, lowStock: true,
+        newOrders: true, newCustomers: true,
         orderStatus: true, deliveryUpdates: true, systemAlerts: true,
       };
-    } catch { return { newOrders: true, newCustomers: true, lowStock: true, orderStatus: true, deliveryUpdates: true, systemAlerts: true }; }
+    } catch { return { newOrders: true, newCustomers: true, orderStatus: true, deliveryUpdates: true, systemAlerts: true }; }
   });
   const [saved, setSaved] = useState(false);
 
@@ -243,7 +243,6 @@ const NotificationsTab = () => {
         <div className="divide-y divide-gray-100">
           <Toggle checked={prefs.newOrders} onChange={v => update('newOrders', v)} label="New Orders" description="When a customer places a new order" />
           <Toggle checked={prefs.newCustomers} onChange={v => update('newCustomers', v)} label="New Customers" description="When someone registers on the customer app" />
-          <Toggle checked={prefs.lowStock} onChange={v => update('lowStock', v)} label="Low Stock Alerts" description="When a product's stock falls below the threshold" />
           <Toggle checked={prefs.orderStatus} onChange={v => update('orderStatus', v)} label="Order Status Changes" description="Order accepted, preparing, dispatched, delivered" />
           <Toggle checked={prefs.deliveryUpdates} onChange={v => update('deliveryUpdates', v)} label="Delivery Updates" description="Partner pickup and delivery confirmations" />
           <Toggle checked={prefs.systemAlerts} onChange={v => update('systemAlerts', v)} label="System Alerts" description="Security events and important system notices" />

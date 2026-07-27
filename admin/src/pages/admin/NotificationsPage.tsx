@@ -14,7 +14,7 @@ import { getNotificationLink } from '../../utils/notificationLink';
 
 interface AdminNotification {
   id: string;
-  type: 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required'
+  type: 'new_order' | 'new_user' | 'system' | 'refund_required'
     | 'document_uploaded' | 'document_removed' | 'verification_submitted'
     | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
     | 'product_updated';
@@ -47,7 +47,6 @@ function timeAgo(iso: string): string {
 const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string; bg: string }> = {
   new_order: { icon: ShoppingBag, color: 'text-blue-600', bg: 'bg-blue-100' },
   new_user: { icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  low_stock: { icon: Package, color: 'text-amber-600', bg: 'bg-amber-100' },
   system: { icon: AlertCircle, color: 'text-violet-600', bg: 'bg-violet-100' },
   refund_required: { icon: IndianRupee, color: 'text-red-600', bg: 'bg-red-100' },
   document_uploaded: { icon: FileText, color: 'text-indigo-600', bg: 'bg-indigo-100' },
@@ -232,7 +231,7 @@ const NotificationsPage = () => {
   const isUnread = (n: AdminNotification) => !currentAdmin?.id || !n.read_by.includes(currentAdmin.id);
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'low_stock' | 'system' | 'refund_required'
+  const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'system' | 'refund_required'
     | 'document_uploaded' | 'document_removed' | 'verification_submitted'
     | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
     | 'product_updated'>('all');
@@ -430,7 +429,7 @@ const NotificationsPage = () => {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Filter size={16} className="text-gray-400 flex-shrink-0" />
-              {(['all', 'unread', 'new_order', 'new_user', 'low_stock', 'refund_required', 'verification_submitted', 'document_uploaded', 'document_removed', 'rider_verification_submitted', 'rider_document_uploaded', 'rider_document_removed', 'product_updated', 'system'] as const).map(f => (
+              {(['all', 'unread', 'new_order', 'new_user', 'refund_required', 'verification_submitted', 'document_uploaded', 'document_removed', 'rider_verification_submitted', 'rider_document_uploaded', 'rider_document_removed', 'product_updated', 'system'] as const).map(f => (
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
@@ -440,7 +439,7 @@ const NotificationsPage = () => {
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
-                  {f === 'new_order' ? 'Orders' : f === 'new_user' ? 'Customers' : f === 'low_stock' ? 'Stock' : f === 'refund_required' ? 'Refunds' : f === 'product_updated' ? 'Products' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  {f === 'new_order' ? 'Orders' : f === 'new_user' ? 'Customers' : f === 'refund_required' ? 'Refunds' : f === 'product_updated' ? 'Products' : f.charAt(0).toUpperCase() + f.slice(1)}
                 </button>
               ))}
             </div>
