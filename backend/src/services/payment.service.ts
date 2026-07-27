@@ -211,7 +211,20 @@ export class PaymentService {
       amount: amountPaise,
       currency: 'INR',
       receipt: `addn_${data.additionRequestId.slice(0, 20)}`,
-      notes: { internal_order_id: data.customerOrderId, addition_request_id: data.additionRequestId }
+      // Deliberately NOT internal_order_id — processWebhookEvent's
+      // payment.authorized/payment.captured/payment.failed handlers all key
+      // off that field to update customer_orders, and payment.authorized has
+      // no idempotent-skip guard at all. Reusing it here would let this
+      // addition payment's own webhook events overwrite the *main* order's
+      // payment_status/razorpay_payment_id (e.g. flipping an already-'paid'
+      // order back to 'authorized' with the addition's payment id) on every
+      // real transaction, since Razorpay fires payment.authorized before/
+      // alongside payment.captured for most methods. Addition payments are
+      // verified synchronously (verifyAdditionPayment), not via webhook, so
+      // the webhook has no legitimate reason to touch customer_orders for
+      // these at all — a distinctly-named field ensures every handler's
+      // `if (internalOrderId && ...)` guard just skips them.
+      notes: { addition_order_id: data.customerOrderId, addition_request_id: data.additionRequestId }
     };
     if (razorpayCustomerId) orderBody.customer_id = razorpayCustomerId;
 

@@ -65,14 +65,35 @@ async function resolveTrustedItems(
   if (masterError) throw new Error('Failed to verify product prices');
   const masterById = new Map((masterRows ?? []).map((row: any) => [row.id, row]));
 
-  // Prefer a store this order already has multiple items from, so an item
-  // available at more than one of the order's stores doesn't arbitrarily
-  // split into a third store_order-less allocation.
+  // Prefer a store this order already has more items from, so an item
+  // available at more than one of the order's stores doesn't get assigned to
+  // whichever store_order happens first in an otherwise-arbitrary DB row
+  // order. Existing counts are fixed for the whole batch (fetched once, not
+  // re-read per item), so multiple new items for the same ambiguous product
+  // all land on the same store consistently rather than drifting mid-batch.
+  const { data: existingItemRows } = await supabaseAdmin
+    .from('order_items')
+    .select('store_order_id')
+    .in('store_order_id', [...storeOrderByStoreId.values()]);
+  const existingCountByStoreOrderId = new Map<string, number>();
+  for (const row of existingItemRows ?? []) {
+    const soId = (row as any).store_order_id;
+    existingCountByStoreOrderId.set(soId, (existingCountByStoreOrderId.get(soId) ?? 0) + 1);
+  }
+
   const productOptionsByMaster = new Map<string, Array<{ store_id: string; product_id: string }>>();
   for (const row of productRows ?? []) {
     const list = productOptionsByMaster.get((row as any).master_product_id) ?? [];
     list.push({ store_id: (row as any).store_id, product_id: row.id });
     productOptionsByMaster.set((row as any).master_product_id, list);
+  }
+  for (const options of productOptionsByMaster.values()) {
+    options.sort((a, b) => {
+      const countA = existingCountByStoreOrderId.get(storeOrderByStoreId.get(a.store_id)!) ?? 0;
+      const countB = existingCountByStoreOrderId.get(storeOrderByStoreId.get(b.store_id)!) ?? 0;
+      if (countB !== countA) return countB - countA; // most existing items first
+      return a.store_id.localeCompare(b.store_id); // deterministic tiebreak
+    });
   }
 
   const items: TrustedItem[] = [];
@@ -152,6 +173,21 @@ export async function createAdditionPayment(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'No items to add.' });
     }
 
+    // A pending request already has a live Razorpay order backing it — don't
+    // create a second one for the same customer_order (e.g. a screen remount
+    // re-firing the confirmation screen's once-only effect, or two sessions
+    // on the same account). Reject rather than silently double-charging;
+    // the normal single-attempt path never reaches this branch.
+    const { data: existingPending } = await supabaseAdmin
+      .from('order_addition_requests')
+      .select('id')
+      .eq('customer_order_id', orderId)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (existingPending) {
+      return res.status(409).json({ success: false, error: 'An add-items payment for this order is already in progress.' });
+    }
+
     const { items: trustedItems, error: resolveError } = await resolveTrustedItems(orderId, items);
     if (resolveError) {
       return res.status(400).json({ success: false, error: resolveError });
@@ -167,7 +203,16 @@ export async function createAdditionPayment(req: Request, res: Response) {
       .insert({ customer_order_id: orderId, items: trustedItems, subtotal_amount: subtotalAmount })
       .select()
       .single();
-    if (insertErr) throw insertErr;
+    if (insertErr) {
+      // 23505 = unique_violation on the partial index (migration 20260906000000)
+      // — a concurrent call for this same order won the race between our
+      // SELECT check above and this INSERT. That's the actual race-safe
+      // guard; the earlier check is just a fast-path for the common case.
+      if ((insertErr as any).code === '23505') {
+        return res.status(409).json({ success: false, error: 'An add-items payment for this order is already in progress.' });
+      }
+      throw insertErr;
+    }
 
     const paymentOrder = await paymentService.createAdditionPaymentOrder({
       additionRequestId: request.id,
