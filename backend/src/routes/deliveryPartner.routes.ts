@@ -45,6 +45,8 @@ router.post('/profile-change-request',                            ctrl.requestPr
 router.patch('/profile-image',                                    ctrl.updateProfileImage.bind(ctrl));
 router.patch('/vehicle-type',                                     ctrl.updateVehicleType.bind(ctrl));
 router.patch('/photo-urls',                                       ctrl.updatePhotoUrls.bind(ctrl));
+router.get('/billing-info',                                       ctrl.getBillingInfo.bind(ctrl));
+router.patch('/billing-info',                                     ctrl.saveBillingInfo.bind(ctrl));
 router.get('/verification-documents',                             ctrl.getVerificationDocuments.bind(ctrl));
 router.post('/verification-documents/:docType', docUpload.single('file'), ctrl.saveVerificationDocument.bind(ctrl));
 router.delete('/verification-documents/:docType',                 ctrl.deleteVerificationDocument.bind(ctrl));

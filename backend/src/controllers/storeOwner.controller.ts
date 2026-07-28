@@ -1057,6 +1057,132 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
 }
 
 /**
+ * Get the caller's store's billing info — owner name (from app_users, for
+ * display only), owner photo (already-existing owner_image_url, not a new
+ * field), bank details, and a freshly signed URL for the passbook/cheque
+ * photo (kept out of store_verification_documents/DOC_TYPES on purpose — see
+ * the billing_info migration comment — so it never affects the 7-document
+ * completeness count admins rely on for "ready for review").
+ */
+export async function getBillingInfo(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('owner_id, owner_image_url, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (!store || store.owner_id !== userId) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const { data: owner } = await supabaseAdmin
+      .from('app_users')
+      .select('name')
+      .eq('id', userId)
+      .maybeSingle();
+
+    let passbookUrl: string | null = null;
+    if (store.bank_passbook_storage_path) {
+      const { data: signed } = await supabaseAdmin.storage
+        .from(VERIFICATION_DOCS_BUCKET)
+        .createSignedUrl(store.bank_passbook_storage_path, SIGNED_URL_TTL_SECONDS);
+      passbookUrl = signed?.signedUrl ?? null;
+    }
+
+    res.json({
+      success: true,
+      billingInfo: {
+        ownerName: owner?.name ?? null,
+        ownerImageUrl: store.owner_image_url ?? null,
+        bankAccountNumber: store.bank_account_number ?? null,
+        bankIfscCode: store.bank_ifsc_code ?? null,
+        bankBranchName: store.bank_branch_name ?? null,
+        passbookUrl,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ getBillingInfo error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch billing info' });
+  }
+}
+
+const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+/**
+ * Save bank details and/or the passbook/cheque photo. Freely re-editable
+ * (no submitted-once lock) — same as the other verification fields, a
+ * shopkeeper can correct a typo'd account number at any time.
+ */
+export async function saveBillingInfo(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const storeId = req.params.id;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+
+    const bankAccountNumber = typeof req.body?.bank_account_number === 'string' ? req.body.bank_account_number.trim() : undefined;
+    const bankIfscCode = typeof req.body?.bank_ifsc_code === 'string' ? req.body.bank_ifsc_code.trim().toUpperCase() : undefined;
+    const bankBranchName = typeof req.body?.bank_branch_name === 'string' ? req.body.bank_branch_name.trim() : undefined;
+    const file = (req as Request & { file?: UploadedFile }).file;
+
+    if (bankAccountNumber !== undefined && !/^[0-9]{6,20}$/.test(bankAccountNumber)) {
+      return res.status(400).json({ success: false, error: 'Bank account number must be 6-20 digits' });
+    }
+    if (bankIfscCode !== undefined && bankIfscCode && !IFSC_PATTERN.test(bankIfscCode)) {
+      return res.status(400).json({ success: false, error: 'Invalid IFSC code — expected format e.g. SBIN0001234' });
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (bankAccountNumber !== undefined) patch.bank_account_number = bankAccountNumber || null;
+    if (bankIfscCode !== undefined) patch.bank_ifsc_code = bankIfscCode || null;
+    if (bankBranchName !== undefined) patch.bank_branch_name = bankBranchName || null;
+
+    if (file) {
+      const ext = ALLOWED_DOC_MIME_TYPES[file.mimetype];
+      if (!ext) {
+        return res.status(400).json({ success: false, error: 'Unsupported file type' });
+      }
+      if (file.size > MAX_DOC_SIZE_BYTES) {
+        return res.status(400).json({ success: false, error: `File exceeds ${MAX_DOC_SIZE_BYTES / (1024 * 1024)}MB limit` });
+      }
+      const storagePath = `${storeId}/passbook_cheque.${ext}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from(VERIFICATION_DOCS_BUCKET)
+        .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
+      if (uploadError) {
+        console.error('❌ saveBillingInfo upload error:', uploadError);
+        return res.status(500).json({ success: false, error: uploadError.message });
+      }
+      patch.bank_passbook_storage_path = storagePath;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid fields to update' });
+    }
+
+    patch.updated_at = new Date().toISOString();
+    const { error } = await supabaseAdmin.from('stores').update(patch).eq('id', storeId);
+    if (error) {
+      console.error('❌ saveBillingInfo update error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ saveBillingInfo error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to save billing info' });
+  }
+}
+
+/**
  * Register shopkeeper's Expo push token.
  * Stores the token on all stores owned by the authenticated shopkeeper so the
  * backend can reach them when a new order arrives.

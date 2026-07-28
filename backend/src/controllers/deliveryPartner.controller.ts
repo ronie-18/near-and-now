@@ -1120,6 +1120,62 @@ export class DeliveryPartnerController {
   }
 
   /**
+   * Get the caller's billing info — name and profile photo are read straight
+   * from existing columns (app_users.name, delivery_partners.profile_image_url),
+   * not duplicated into new fields; only upi_id is new.
+   */
+  async getBillingInfo(req: Request, res: Response) {
+    try {
+      const { data: user } = await supabaseAdmin
+        .from('app_users')
+        .select('name')
+        .eq('id', req.riderId!)
+        .maybeSingle();
+
+      const { data: profile } = await supabaseAdmin
+        .from('delivery_partners')
+        .select('profile_image_url, upi_id')
+        .eq('user_id', req.riderId!)
+        .maybeSingle();
+
+      res.json({
+        success: true,
+        billingInfo: {
+          name: user?.name ?? null,
+          profileImageUrl: profile?.profile_image_url ?? null,
+          upiId: profile?.upi_id ?? null,
+        },
+      });
+    } catch (err) {
+      console.error('getBillingInfo error:', err);
+      res.status(500).json({ success: false, error: 'Failed to fetch billing info' });
+    }
+  }
+
+  /** Freely re-editable — no submitted-once lock, same as other profile fields. */
+  async saveBillingInfo(req: Request, res: Response) {
+    try {
+      const upiId = typeof req.body?.upi_id === 'string' ? req.body.upi_id.trim() : undefined;
+      if (upiId !== undefined && upiId && !/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,64}$/.test(upiId)) {
+        return res.status(400).json({ success: false, error: 'Invalid UPI ID — expected format e.g. name@bank' });
+      }
+      if (upiId === undefined) {
+        return res.status(400).json({ success: false, error: 'No valid fields to update' });
+      }
+
+      await supabaseAdmin
+        .from('delivery_partners')
+        .update({ upi_id: upiId || null, updated_at: new Date().toISOString() })
+        .eq('user_id', req.riderId!);
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('saveBillingInfo error:', err);
+      res.status(500).json({ success: false, error: 'Failed to save billing info' });
+    }
+  }
+
+  /**
    * List the required verification documents for the caller (rider), each
    * with a freshly signed URL (never a stored permanent one — the bucket is
    * private). vehicle_registration is included in the list regardless of
