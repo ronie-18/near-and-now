@@ -18,7 +18,15 @@ export const DOC_LABELS: Record<string, string> = {
   driving_license_front: 'Driving License (Front)',
   driving_license_back: 'Driving License (Back)',
   vehicle_registration: 'Vehicle Registration (RC)',
+  vehicle_photo_front: 'Vehicle Photo (Front)',
+  vehicle_photo_side: 'Vehicle Photo (Side)',
+  vehicle_photo_rear: 'Vehicle Photo (Rear)',
 };
+
+// These doc types are plain photos, not identity/legal documents — they have
+// no "number" field at all (see backend's DOC_TYPES_WITH_NO_NUMBER_FIELD), so
+// showing "No number provided" for them would just be confusing noise.
+const NO_NUMBER_DOC_TYPES = new Set(['vehicle_photo_front', 'vehicle_photo_side', 'vehicle_photo_rear']);
 
 interface VerificationDoc {
   doc_type: string;
@@ -186,11 +194,13 @@ export const DeliveryDocumentReviewModal = ({
                     )}
                     <div className="min-w-0">
                       <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
-                      <p className="text-sm text-gray-500 truncate">
-                        {(doc.doc_type.endsWith('_back')
-                          ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
-                          : doc.number) || 'No number provided'}
-                      </p>
+                      {!NO_NUMBER_DOC_TYPES.has(doc.doc_type) && (
+                        <p className="text-sm text-gray-500 truncate">
+                          {(doc.doc_type.endsWith('_back')
+                            ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
+                            : doc.number) || 'No number provided'}
+                        </p>
+                      )}
                       {doc.file_size && (
                         <p className="text-xs text-gray-400 mt-0.5">{doc.file_size}</p>
                       )}

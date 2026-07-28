@@ -3,6 +3,7 @@ export const DOC_TYPES = [
   'pan_front', 'pan_back',
   'driving_license_front', 'driving_license_back',
   'vehicle_registration',
+  'vehicle_photo_front', 'vehicle_photo_side', 'vehicle_photo_rear',
 ] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 
@@ -37,6 +38,9 @@ export const DOC_LABELS: Record<DocType, string> = {
   driving_license_front: 'Driving License (Front)',
   driving_license_back: 'Driving License (Back)',
   vehicle_registration: 'Vehicle Registration (RC)',
+  vehicle_photo_front: 'Vehicle Photo (Front)',
+  vehicle_photo_side: 'Vehicle Photo (Side)',
+  vehicle_photo_rear: 'Vehicle Photo (Rear)',
 };
 
 /**
@@ -44,6 +48,9 @@ export const DOC_LABELS: Record<DocType, string> = {
  * (bike/scooty) — cycle/e-bike riders don't need one. This mirrors the
  * completeness check in the atomic Postgres function
  * (mark_rider_verification_submitted_if_ready) — keep both in sync.
+ *
+ * The 3 vehicle_photo_* documents are NOT gated by this — every vehicle type,
+ * including cycle/e-bike, must upload all 3 vehicle photos.
  */
 export function isVehicleRegistrationRequired(vehicleType: string | null | undefined): boolean {
   return vehicleType !== 'cycle' && vehicleType !== 'e-bike';
@@ -74,7 +81,10 @@ export const DOC_NUMBER_FORMATS: Partial<Record<DocType, { description: string; 
 // treated identically (no pattern in DOC_NUMBER_PATTERNS → accept anything),
 // so a number submitted alongside a back-side upload was silently stored
 // unvalidated instead of rejected.
-const DOC_TYPES_WITH_NO_NUMBER_FIELD = new Set<DocType>(['aadhaar_back', 'pan_back', 'driving_license_back']);
+const DOC_TYPES_WITH_NO_NUMBER_FIELD = new Set<DocType>([
+  'aadhaar_back', 'pan_back', 'driving_license_back',
+  'vehicle_photo_front', 'vehicle_photo_side', 'vehicle_photo_rear',
+]);
 
 export function docNumberErrorMessage(docType: DocType): string {
   if (DOC_TYPES_WITH_NO_NUMBER_FIELD.has(docType)) {

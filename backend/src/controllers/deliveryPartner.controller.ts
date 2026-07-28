@@ -53,7 +53,7 @@ async function suspendRiderIfApprovedAndGetName(riderId: string): Promise<{ susp
 
 /**
  * Atomically flips delivery_partners.verification_submitted_at from NULL to
- * now() the first time all required documents (6 or 7, depending on
+ * now() the first time all required documents (9 or 10, depending on
  * vehicle_type) are uploaded. Backed by a Postgres function
  * (mark_rider_verification_submitted_if_ready, migration 20260805000000) that
  * locks the rider row FOR UPDATE before deciding — safe to call on every save
@@ -1195,6 +1195,17 @@ export class DeliveryPartnerController {
         return res.status(500).json({ success: false, error: error.message });
       }
 
+      // The Vehicle Registration (RC) document's own number field IS the
+      // rider's vehicle registration/plate number — mirror it onto
+      // delivery_partners.vehicle_number so it shows up on the profile page
+      // without a separate, duplicate input anywhere else.
+      if (docType === 'vehicle_registration' && number) {
+        await supabaseAdmin
+          .from('delivery_partners')
+          .update({ vehicle_number: number })
+          .eq('user_id', riderId);
+      }
+
       const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId);
 
       const isFirstUploadForThisSlot = !!file && !existing?.storage_path;
@@ -1269,9 +1280,14 @@ export class DeliveryPartnerController {
       // Removing any document ends the current "submission complete" cycle —
       // clear the flag so a later re-completion fires a fresh "ready for
       // review" notification instead of staying silently suppressed.
+      const partnerUpdate: Record<string, unknown> = { verification_submitted_at: null };
+      // The RC document's number is the only source of vehicle_number (see
+      // saveVerificationDocument) — clear it too so the profile page doesn't
+      // keep showing a number whose backing document no longer exists.
+      if (docType === 'vehicle_registration') partnerUpdate.vehicle_number = null;
       await supabaseAdmin
         .from('delivery_partners')
-        .update({ verification_submitted_at: null })
+        .update(partnerUpdate)
         .eq('user_id', riderId);
 
       const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId);
