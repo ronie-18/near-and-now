@@ -343,6 +343,15 @@ export class DeliveryPartnerController {
         profile: {
           ...user,
           ...profile,
+          // Explicit `user_id` alongside `id` (from the app_users spread
+          // above) — the rider app's own `hasRegisteredRiderProfile()` check
+          // (otp.tsx) reads `profile.user_id` specifically to confirm an
+          // existing account is fully registered, but this response never
+          // actually included that key (delivery_partners' own select never
+          // selects it, only filters by it), so that check silently failed
+          // for every real rider, 100% of the time, incorrectly telling
+          // already-registered riders "not registered" on every login.
+          user_id: req.riderId!,
           total_deliveries: completedCount,
         },
       });
