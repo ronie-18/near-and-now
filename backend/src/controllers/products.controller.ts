@@ -11,21 +11,4 @@ export class ProductsController {
       res.status(500).json({ error: 'Failed to fetch categories' });
     }
   }
-
-  async getMasterProducts(req: Request, res: Response) {
-    try {
-      const { category, search, isActive } = req.query;
-      
-      const products = await databaseService.getMasterProducts({
-        category: category as string,
-        search: search as string,
-        isActive: isActive === 'true'
-      });
-      
-      res.json(products);
-    } catch (error) {
-      console.error('Error fetching master products:', error);
-      res.status(500).json({ error: 'Failed to fetch products' });
-    }
-  }
 }

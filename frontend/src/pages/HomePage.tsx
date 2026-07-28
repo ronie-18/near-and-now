@@ -39,7 +39,7 @@ const HomePage = () => {
           const isUnique = index === self.findIndex(c =>
             c.name.toLowerCase() === category.name.toLowerCase()
           );
-          const hasProducts = products.length === 0 || productCategories.has(category.name);
+          const hasProducts = productCategories.has(category.name);
           return isUnique && hasProducts;
         });
 

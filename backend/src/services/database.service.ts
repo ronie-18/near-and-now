@@ -4,7 +4,6 @@ import { validateQuantity } from '../utils/quantity.js';
 import type {
   CustomerSavedAddress,
   Store,
-  MasterProduct,
   Product,
   Category,
   CustomerOrder,
@@ -217,32 +216,6 @@ export class DatabaseService {
     if (error) throw error;
     return data as Category[];
   }
-
-  async getMasterProducts(filters?: {
-    category?: string;
-    isActive?: boolean;
-    search?: string;
-  }) {
-    let query = supabase.from('master_products').select('*');
-
-    if (filters?.category) {
-      query = query.eq('category', filters.category);
-    }
-
-    if (filters?.isActive !== undefined) {
-      query = query.eq('is_active', filters.isActive);
-    }
-
-    if (filters?.search) {
-      query = query.or(`name.ilike.%${filters.search}%,brand.ilike.%${filters.search}%`);
-    }
-
-    const { data, error } = await query.order('name');
-
-    if (error) throw error;
-    return data as MasterProduct[];
-  }
-
 
   async createCustomerOrder(orderData: {
     customer_id: string;
