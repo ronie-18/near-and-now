@@ -17,7 +17,14 @@ import {
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
-import { DeliveryDocumentReviewModal } from './DeliveryDocumentReviewModal';
+import { DeliveryDocumentReviewModal, DOC_LABELS } from './DeliveryDocumentReviewModal';
+
+// Mirrors the backend's isVehicleRegistrationRequired (deliveryPartnerVerificationDocuments.ts)
+// — cycle/e-bike riders aren't required to upload a vehicle_registration (RC).
+// Keep in sync with that helper.
+function isVehicleRegistrationRequired(vehicleType?: string | null): boolean {
+  return vehicleType !== 'cycle' && vehicleType !== 'e-bike';
+}
 
 interface PartnerData {
   user_id: string;
@@ -91,27 +98,56 @@ const DeliveryPage = () => {
   const [togglingOnlineId, setTogglingOnlineId] = useState<string | null>(null);
   const [reviewingPartner, setReviewingPartner] = useState<PartnerData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
+  const [docStatusByPartner, setDocStatusByPartner] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
   // Most recent submit/edit/approve/reject across each partner's verification
-  // documents — mirrors StoresPage. Non-fatal if this fails.
+  // documents — mirrors StoresPage. Non-fatal if this fails. Also builds
+  // docStatusByPartner, used to gate the Approve action so a rider can't go
+  // live without every required document actually being reviewed and approved.
   const refreshDocsUpdatedAt = async () => {
     try {
       const { data: docRows, error: docsError } = await getAdminClient()
         .from('delivery_partner_verification_documents')
-        .select('partner_id, updated_at');
+        .select('partner_id, updated_at, doc_type, status');
       if (docsError) throw docsError;
       const latest: Record<string, string> = {};
+      const byPartner: Record<string, { doc_type: string; status: string | null }[]> = {};
       for (const row of docRows || []) {
         if (!latest[row.partner_id] || row.updated_at > latest[row.partner_id]) {
           latest[row.partner_id] = row.updated_at;
         }
+        (byPartner[row.partner_id] ||= []).push({ doc_type: row.doc_type, status: row.status });
       }
       setDocsUpdatedAt(latest);
+      setDocStatusByPartner(byPartner);
     } catch (docsErr) {
       console.error('Error fetching verification-document timestamps:', docsErr);
     }
+  };
+
+  // A rider can only be approved once every document required for their
+  // vehicle type has actually been reviewed and approved by an admin —
+  // otherwise "Approve" was previously a no-op check against documents at
+  // all, letting a rider go live with zero or rejected documents.
+  const approvalReadiness = (partner: PartnerData): { ready: boolean; reason?: string } => {
+    const docs = docStatusByPartner[partner.user_id] || [];
+    const requiredTypes = Object.keys(DOC_LABELS).filter(
+      (t) => t !== 'vehicle_registration' || isVehicleRegistrationRequired(partner.vehicle_type)
+    );
+    const missing = requiredTypes.filter((t) => !docs.some((d) => d.doc_type === t));
+    if (missing.length > 0) {
+      return { ready: false, reason: `Missing document(s): ${missing.map((t) => DOC_LABELS[t]).join(', ')}` };
+    }
+    const notApproved = docs.filter((d) => requiredTypes.includes(d.doc_type) && d.status !== 'approved');
+    if (notApproved.length > 0) {
+      return {
+        ready: false,
+        reason: `Not yet approved: ${notApproved.map((d) => DOC_LABELS[d.doc_type] || d.doc_type).join(', ')}`,
+      };
+    }
+    return { ready: true };
   };
 
   const refreshApproverNames = async (partnerList: PartnerData[]) => {
@@ -269,9 +305,18 @@ const DeliveryPage = () => {
   // approval gate. Also syncs status so the rider app can go online after
   // approve (DriverApp requires status === 'active').
   const toggleApproval = async (partner: PartnerData) => {
+    const nextApproved = !partner.is_approved;
+    // Only gate the approve direction — revoking must always be allowed
+    // regardless of document status.
+    if (nextApproved) {
+      const readiness = approvalReadiness(partner);
+      if (!readiness.ready) {
+        setError(`Cannot approve "${partner.name}": ${readiness.reason}. Review documents first.`);
+        return;
+      }
+    }
     setApprovingId(partner.user_id);
     try {
-      const nextApproved = !partner.is_approved;
       const currentAdmin = getCurrentAdmin();
       const patch: Partial<PartnerData> = {
         is_approved: nextApproved,
@@ -558,7 +603,8 @@ const DeliveryPage = () => {
                           )}
                           <button
                             onClick={() => toggleApproval(partner)}
-                            disabled={approvingId === partner.user_id}
+                            disabled={approvingId === partner.user_id || (!partner.is_approved && !approvalReadiness(partner).ready)}
+                            title={!partner.is_approved ? approvalReadiness(partner).reason : undefined}
                             className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
                               partner.is_approved
                                 ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200'

@@ -385,27 +385,55 @@ const StoresPage = () => {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [reviewingStore, setReviewingStore] = useState<StoreData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
+  const [docStatusByStore, setDocStatusByStore] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
 
   // Most recent submit/edit/approve/reject across each store's verification
   // documents — one bulk query instead of a per-store request. Non-fatal: a
   // failure here shouldn't block the main store list from showing.
+  // Also builds docStatusByStore, used to gate the Approve action so a store
+  // can't go live without every required document actually being reviewed
+  // and approved (see approvalReadiness below).
   const refreshDocsUpdatedAt = async () => {
     try {
       const { data: docRows, error: docsError } = await getAdminClient()
         .from('store_verification_documents')
-        .select('store_id, updated_at');
+        .select('store_id, updated_at, doc_type, status');
       if (docsError) throw docsError;
       const latest: Record<string, string> = {};
+      const byStore: Record<string, { doc_type: string; status: string | null }[]> = {};
       for (const row of docRows || []) {
         if (!latest[row.store_id] || row.updated_at > latest[row.store_id]) {
           latest[row.store_id] = row.updated_at;
         }
+        (byStore[row.store_id] ||= []).push({ doc_type: row.doc_type, status: row.status });
       }
       setDocsUpdatedAt(latest);
+      setDocStatusByStore(byStore);
     } catch (docsErr) {
       console.error('Error fetching verification-document timestamps:', docsErr);
     }
+  };
+
+  // A store can only be approved once every required document type
+  // (DOC_LABELS) has actually been reviewed and approved by an admin —
+  // otherwise "Approve" was previously a no-op check against documents at
+  // all, letting a store go live with zero or rejected documents.
+  const approvalReadiness = (storeId: string): { ready: boolean; reason?: string } => {
+    const docs = docStatusByStore[storeId] || [];
+    const requiredTypes = Object.keys(DOC_LABELS);
+    const missing = requiredTypes.filter((t) => !docs.some((d) => d.doc_type === t));
+    if (missing.length > 0) {
+      return { ready: false, reason: `Missing document(s): ${missing.map((t) => DOC_LABELS[t]).join(', ')}` };
+    }
+    const notApproved = docs.filter((d) => requiredTypes.includes(d.doc_type) && d.status !== 'approved');
+    if (notApproved.length > 0) {
+      return {
+        ready: false,
+        reason: `Not yet approved: ${notApproved.map((d) => DOC_LABELS[d.doc_type] || d.doc_type).join(', ')}`,
+      };
+    }
+    return { ready: true };
   };
 
   // Resolves stores.approved_by (an admins.id) to a display name. Non-fatal —
@@ -540,9 +568,18 @@ const StoresPage = () => {
   }, [stores, searchTerm, statFilter, docsUpdatedAt]);
 
   const toggleApproval = async (store: StoreData) => {
+    const nextApproved = !store.is_approved;
+    // Only gate the approve direction — revoking must always be allowed
+    // regardless of document status.
+    if (nextApproved) {
+      const readiness = approvalReadiness(store.id);
+      if (!readiness.ready) {
+        setError(`Cannot approve "${store.name}": ${readiness.reason}. Review documents first.`);
+        return;
+      }
+    }
     setApprovingId(store.id);
     try {
-      const nextApproved = !store.is_approved;
       const currentAdmin = getCurrentAdmin();
       // Revoking clears these — they should reflect the current approval,
       // not stale history from one that's since been revoked.
@@ -732,7 +769,8 @@ const StoresPage = () => {
                           )}
                           <button
                             onClick={() => toggleApproval(store)}
-                            disabled={approvingId === store.id}
+                            disabled={approvingId === store.id || (!store.is_approved && !approvalReadiness(store.id).ready)}
+                            title={!store.is_approved ? approvalReadiness(store.id).reason : undefined}
                             className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
                               store.is_approved
                                 ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200'
