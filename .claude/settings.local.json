@@ -83,7 +83,8 @@
       "Bash(supabase --version)",
       "Bash(env)",
       "Bash(supabase help *)",
-      "Bash(supabase db *)"
+      "Bash(supabase db *)",
+      "Bash(git status *)"
     ],
     "additionalDirectories": [
       "/tmp"

@@ -132,6 +132,27 @@ export class NotificationService {
     return typeof value === 'boolean' ? value : true;
   }
 
+  // Shopkeeper-side twin of isRiderNotificationEnabled — same table/column,
+  // just keyed on the store owner's app_users.id instead of the rider's.
+  // Only 'newOrders' has a real backend-driven push today (see
+  // notifyShopkeeperNewOrder); the mobile app's other three toggles
+  // (dailySummary/payments/systemAlerts) don't correspond to any push this
+  // service currently sends, so there's nothing yet to gate them against.
+  // Missing/unset preferences default to enabled, same "opt-out" convention.
+  private async isShopkeeperNotificationEnabled(
+    ownerId: string,
+    category: 'newOrders'
+  ): Promise<boolean> {
+    const { data } = await supabaseAdmin
+      .from('app_users')
+      .select('notification_preferences')
+      .eq('id', ownerId)
+      .maybeSingle();
+    const prefs = (data as { notification_preferences?: Record<string, unknown> } | null)?.notification_preferences;
+    const value = prefs?.[category];
+    return typeof value === 'boolean' ? value : true;
+  }
+
   // Persists a notification row so the recipient's in-app notifications panel
   // has something to show, independent of whether the push itself succeeds.
   private async persistNotification(
@@ -164,11 +185,11 @@ export class NotificationService {
 
     const { data: store } = await supabaseAdmin
       .from('stores')
-      .select('expo_push_token')
+      .select('expo_push_token, owner_id')
       .eq('id', storeId)
       .maybeSingle();
 
-    if (store?.expo_push_token) {
+    if (store?.expo_push_token && (await this.isShopkeeperNotificationEnabled(store.owner_id, 'newOrders'))) {
       await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'new_order' }, 'order_chime.wav', { table: 'stores', idColumn: 'id', idValue: storeId });
     }
   }

@@ -1,0 +1,50 @@
+-- =============================================================================
+-- Fixes a live, currently-exploitable RLS hole on `stores`: a policy named
+-- "Allow all for service role" (cmd: ALL, qual: true, with_check: true) is
+-- scoped to roles: {public} instead of {service_role}. Its name and `true`
+-- qualifier make the intent obvious (a service-role bypass, the same pattern
+-- Supabase scaffolds by default), but because the role list was never
+-- actually restricted, it grants the same unconditional access to every
+-- role, including anon — meaning anyone holding the public anon key, with no
+-- admin session/login/token at all, could write any row in `stores` directly
+-- (is_approved, is_active, owner_id, etc.), confirmed live via
+-- has_table_privilege('anon', 'public.stores', 'UPDATE') = true. Found
+-- 2026-07-28 during the same admin-panel RLS work that added
+-- 20260919000000's permission-gated policies — this policy was silently
+-- overriding those (Postgres ORs every applicable permissive policy
+-- together), making them moot on `stores` specifically. Same bug class as
+-- the still-open, deliberately-untouched `app_users` instance — see
+-- bug_fixes_2026-07-23.md, Supabase schema & migrations -> Critical, and
+-- Admin panel -> Critical (this entry) for the full writeup.
+--
+-- Verified safe to fix before applying, via a full repo grep across every
+-- app/repo in the monorepo:
+--   - The only anon-key writer of `stores` is the admin panel
+--     (StoresPage.tsx's approval toggle), already correctly gated by
+--     20260919000000's admin_update_requires_permission/
+--     admin_write_requires_permission/admin_delete_requires_permission
+--     policies (store_verification.edit) — this fix makes those the actual
+--     enforcement instead of dead code shadowed by this hole.
+--   - Backend (backend/src) only ever writes `stores` via supabaseAdmin
+--     (service_role), unaffected either way — service_role already bypasses
+--     RLS regardless of policy roles.
+--   - Neither the store-owner app, rider app, customer app, nor the
+--     customer website write to `stores` via an anon-key client at all
+--     (confirmed zero .from('stores').update/.insert/.delete/.upsert call
+--     sites in any of them).
+--   - The two SECURITY DEFINER functions that touch `stores`
+--     (mark_verification_submitted_if_ready, granted to anon/authenticated;
+--     review_store_profile_change_request, service_role only) both run as
+--     their owning role (created via migration as a superuser-equivalent
+--     role, same as is_admin_authenticated()/admin_has_permission() rely on
+--     elsewhere in this codebase) and already bypass RLS internally,
+--     independent of this table policy either way.
+--
+-- Fix: correct the policy's roles to {service_role}, matching its own name
+-- and evident intent — service_role already bypasses RLS via its role
+-- attribute regardless, so this policy becomes a harmless no-op for that
+-- role and, more importantly, stops granting anything to anon/authenticated.
+-- =============================================================================
+
+ALTER POLICY "Allow all for service role" ON public.stores
+  TO service_role;
