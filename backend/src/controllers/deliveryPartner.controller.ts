@@ -17,6 +17,7 @@ import {
   docNumberErrorMessage,
   formatFileSize,
   isDocType,
+  isVehicleRegistrationRequired,
   isVehicleType,
   validateDocNumber,
 } from '../utils/deliveryPartnerVerificationDocuments.js';
@@ -79,6 +80,70 @@ async function notifyAdminsOfRiderDocs(type: string, title: string, message: str
   } catch (error) {
     console.error(`❌ notifyAdminsOfRiderDocs (${type}) error:`, error);
   }
+}
+
+/**
+ * Retroactive enforcement for already-approved riders. mark_rider_verification_submitted_if_ready
+ * only re-checks completeness when a document is uploaded/deleted — a rider
+ * approved *before* a new required document type was introduced (e.g. the 3
+ * vehicle_photo_* docs added after riders were already live) would otherwise
+ * stay "active" forever with no re-check ever firing. Called from getProfile,
+ * which the rider app polls constantly (verification gate, home screen), so
+ * any previously-approved rider who no longer meets the full current
+ * required-doc set gets caught and sent back within one poll cycle.
+ *
+ * Sets the exact same fields as the admin panel's own "Revoke" action
+ * (DeliveryPage.tsx's toggleApproval un-approve branch: is_approved false,
+ * approved_at/by cleared, status back to pending_verification, is_online
+ * false) so admin and rider app never disagree about this rider's state.
+ * Also resets verification_submitted_at so a later re-completion fires a
+ * fresh "ready for review" admin notification instead of staying suppressed.
+ *
+ * Self-limiting: once demoted, is_approved is false, so subsequent calls
+ * bail out on the first check with no further document-count query.
+ * Returns the patch actually applied (or null if nothing changed) so the
+ * caller can merge it into the response it's already building, instead of
+ * re-querying the row.
+ */
+async function demoteRiderIfDocsIncomplete(
+  riderId: string,
+  isApproved: boolean | null | undefined,
+  vehicleType: string | null | undefined
+): Promise<Record<string, unknown> | null> {
+  if (!isApproved) return null;
+
+  const { count } = await supabaseAdmin
+    .from('delivery_partner_verification_documents')
+    .select('id', { count: 'exact', head: true })
+    .eq('partner_id', riderId)
+    .not('storage_path', 'is', null);
+
+  // DOC_TYPES.length derives the required count directly from the shared doc
+  // list (10 today) rather than a hardcoded number, so this stays correct
+  // automatically if more required documents are ever added — only
+  // vehicle_registration is conditionally excluded (cycle/e-bike).
+  const requiredCount = DOC_TYPES.length - (isVehicleRegistrationRequired(vehicleType) ? 0 : 1);
+  if ((count ?? 0) >= requiredCount) return null;
+
+  const patch = {
+    is_approved: false,
+    approved_at: null,
+    approved_by: null,
+    status: 'pending_verification',
+    is_online: false,
+    verification_submitted_at: null,
+    updated_at: new Date().toISOString(),
+  };
+  await supabaseAdmin.from('delivery_partners').update(patch).eq('user_id', riderId);
+
+  await notifyAdminsOfRiderDocs(
+    'rider_verification_incomplete',
+    'Rider sent back for re-verification',
+    'A previously-approved rider no longer meets the full document requirements (a new required document was added) and has been automatically returned to pending verification.',
+    { partner_id: riderId }
+  );
+
+  return patch;
 }
 
 // Throttle: check for missed orders at most once per 5 minutes per driver
@@ -321,6 +386,11 @@ export class DeliveryPartnerController {
         .eq('user_id', req.riderId!)
         .maybeSingle();
 
+      const demotionPatch = profile
+        ? await demoteRiderIfDocsIncomplete(req.riderId!, profile.is_approved, profile.vehicle_type)
+        : null;
+      const effectiveProfile = demotionPatch ? { ...profile, ...demotionPatch } : profile;
+
       // Count completed deliveries
       const { data: storeOrders } = await supabaseAdmin
         .from('store_orders')
@@ -342,7 +412,7 @@ export class DeliveryPartnerController {
         success: true,
         profile: {
           ...user,
-          ...profile,
+          ...effectiveProfile,
           // Explicit `user_id` alongside `id` (from the app_users spread
           // above) — the rider app's own `hasRegisteredRiderProfile()` check
           // (otp.tsx) reads `profile.user_id` specifically to confirm an
