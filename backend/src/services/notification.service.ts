@@ -108,6 +108,30 @@ export class NotificationService {
     }
   }
 
+  // Real preference enforcement for rider push notifications — unlike the
+  // shopkeeper app's per-type toggles (documented elsewhere as saved but
+  // never actually checked server-side), these two categories are the ones
+  // this service can genuinely gate: only the push send, never the in-app
+  // notification-list entry (persistNotification always runs regardless, so
+  // a rider who disabled a push category still sees it next time they open
+  // the app). Missing/unset preferences default to enabled, matching this
+  // app's existing "opt-out, not opt-in" convention elsewhere. `rider_approved`
+  // is deliberately not gated by anything, same as the shopkeeper app's own
+  // `store_approved` — account-approval status isn't optional information.
+  private async isRiderNotificationEnabled(
+    riderId: string,
+    category: 'newOrders' | 'profileUpdates'
+  ): Promise<boolean> {
+    const { data } = await supabaseAdmin
+      .from('app_users')
+      .select('notification_preferences')
+      .eq('id', riderId)
+      .maybeSingle();
+    const prefs = (data as { notification_preferences?: Record<string, unknown> } | null)?.notification_preferences;
+    const value = prefs?.[category];
+    return typeof value === 'boolean' ? value : true;
+  }
+
   // Persists a notification row so the recipient's in-app notifications panel
   // has something to show, independent of whether the push itself succeeds.
   private async persistNotification(
@@ -155,6 +179,8 @@ export class NotificationService {
 
     await this.persistNotification('rider', riderId, 'new_order', title, body, { orderId });
 
+    if (!(await this.isRiderNotificationEnabled(riderId, 'newOrders'))) return;
+
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')
       .select('expo_push_token')
@@ -177,6 +203,8 @@ export class NotificationService {
     const body = `${orderIds.length} order${orderIds.length > 1 ? 's' : ''} available near you!`;
 
     await this.persistNotification('rider', riderId, 'new_order_offer', title, body, { orderIds });
+
+    if (!(await this.isRiderNotificationEnabled(riderId, 'newOrders'))) return;
 
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')
@@ -215,6 +243,8 @@ export class NotificationService {
       : `Your requested profile changes were rejected${rejectionReason ? `: ${rejectionReason}` : '.'}`;
 
     await this.persistNotification('rider', riderId, 'profile_change_reviewed', title, body, { riderId, approved, rejectionReason: rejectionReason ?? null });
+
+    if (!(await this.isRiderNotificationEnabled(riderId, 'profileUpdates'))) return;
 
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')

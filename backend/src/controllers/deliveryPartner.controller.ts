@@ -1304,6 +1304,50 @@ export class DeliveryPartnerController {
     }
   }
 
+  // Server-side source of truth for the rider app's Notification Preferences
+  // screen — mirrors the shopkeeper app's own preferences endpoint shape, but
+  // actually read back on load (GET) rather than relying purely on
+  // AsyncStorage, and actually enforced server-side (see
+  // notification.service.ts's isRiderNotificationEnabled) rather than saved
+  // and silently ignored.
+  async getRiderNotificationPreferences(req: Request, res: Response) {
+    try {
+      const { data } = await supabaseAdmin
+        .from('app_users')
+        .select('notification_preferences')
+        .eq('id', req.riderId!)
+        .maybeSingle();
+      const stored = (data as { notification_preferences?: Record<string, unknown> } | null)?.notification_preferences;
+      res.json({
+        success: true,
+        preferences: {
+          newOrders: true,
+          profileUpdates: true,
+          ...stored,
+        },
+      });
+    } catch (err) {
+      console.error('getRiderNotificationPreferences error:', err);
+      res.status(500).json({ success: false, error: 'Failed to fetch notification preferences' });
+    }
+  }
+
+  async updateRiderNotificationPreferences(req: Request, res: Response) {
+    try {
+      const preferences = req.body as Record<string, unknown>;
+      const { error } = await supabaseAdmin
+        .from('app_users')
+        .update({ notification_preferences: preferences })
+        .eq('id', req.riderId!)
+        .eq('role', 'delivery_partner');
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err) {
+      console.error('updateRiderNotificationPreferences error:', err);
+      res.status(500).json({ success: false, error: 'Failed to update notification preferences' });
+    }
+  }
+
   async getNotifications(req: Request, res: Response) {
     try {
       const { unreadOnly } = req.query;

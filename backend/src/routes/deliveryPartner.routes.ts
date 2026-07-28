@@ -54,6 +54,8 @@ router.patch('/push-token',                                       ctrl.updatePus
 router.get('/notifications',                                      ctrl.getNotifications.bind(ctrl));
 router.put('/notifications/read-all',                             ctrl.markAllNotificationsRead.bind(ctrl));
 router.put('/notifications/:notificationId/read',                 ctrl.markNotificationRead.bind(ctrl));
+router.get('/notifications/preferences',                          ctrl.getRiderNotificationPreferences.bind(ctrl));
+router.post('/notifications/preferences',                         ctrl.updateRiderNotificationPreferences.bind(ctrl));
 
 // Offer broadcast (new order requests)
 router.get('/available-orders',                                   ctrl.getAvailableOrders.bind(ctrl));
