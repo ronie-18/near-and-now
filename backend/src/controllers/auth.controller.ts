@@ -17,16 +17,13 @@ function extractErrorMessage(err: any, fallback: string): string {
   return fallback;
 }
 
-/** Normalize phone to digits only for consistent lookup (e.g. +919876543210 -> 919876543210) */
-function normalizePhone(phone: string): string {
-  return String(phone).replace(/\D/g, '');
-}
-
 /**
  * All plausible stored values for app_users.phone so login matches regardless of +91 / spacing.
- * Prevents duplicate customer rows (and orphaned saved addresses) when OTP uses a different format.
+ * Used by every OTP-login flow (customer, shopkeeper, delivery_partner) — prevents duplicate
+ * rows (and, for role-scoped flows, an existing account being wrongly routed into "new user
+ * registration" just because its stored phone lacks/has a country-code prefix the client didn't).
  */
-function customerPhoneLookupVariants(phone: string): string[] {
+function phoneLookupVariants(phone: string): string[] {
   const raw = String(phone).trim();
   const digits = raw.replace(/\D/g, '');
   const out = new Set<string>();
@@ -161,37 +158,30 @@ export class AuthController {
         console.log(`${roleLabel} flow: looking for ${requestedRole} account`);
 
         // CRITICAL: Must filter by BOTH phone AND role.
-        // Same phone can have multiple users with different roles
+        // Same phone can have multiple users with different roles.
+        //
+        // Previously this only tried 2 formats (exact-as-sent, and digits-only
+        // WITH the 91 country code) — missing the plain 10-digit-no-prefix
+        // format entirely. The app always sends "+91XXXXXXXXXX", but an
+        // account whose stored phone happens to be the bare 10 digits (e.g.
+        // seeded/entered a different way) would never match either format,
+        // so a genuinely existing rider/shopkeeper got silently routed into
+        // "new user registration" instead of logged in. Reusing the same
+        // full variant set the customer flow below already relies on for
+        // exactly this reason.
         let existingUser: any = null;
-
-        // Try exact phone with role filter
-        const { data: byExact } = await supabaseAdmin
+        const roleVariants = phoneLookupVariants(phone);
+        const { data: byVariant } = await supabaseAdmin
           .from('app_users')
           .select('*')
-          .eq('phone', phone)
+          .in('phone', roleVariants)
           .eq('role', requestedRole)
+          .limit(1)
           .maybeSingle();
 
-        if (byExact) {
-          existingUser = byExact;
-          console.log(`✅ Found ${requestedRole} account: ${byExact.name} (${byExact.role})`);
-        } else {
-          // Try normalized phone with role filter
-          const normalized = normalizePhone(phone);
-          if (normalized) {
-            const { data: byNormalized } = await supabaseAdmin
-              .from('app_users')
-              .select('*')
-              .eq('phone', normalized)
-              .eq('role', requestedRole)
-              .maybeSingle();
-            if (byNormalized) {
-              existingUser = byNormalized;
-              console.log(
-                `✅ Found ${requestedRole} account (normalized): ${byNormalized.name} (${byNormalized.role})`
-              );
-            }
-          }
+        if (byVariant) {
+          existingUser = byVariant;
+          console.log(`✅ Found ${requestedRole} account: ${byVariant.name} (${byVariant.role})`);
         }
 
         if (existingUser && existingUser.role === requestedRole) {
@@ -244,7 +234,7 @@ export class AuthController {
       }
 
       // Customer flow: match by any common phone format (stored value may differ from Twilio "to" format)
-      const phoneVariants = customerPhoneLookupVariants(phone);
+      const phoneVariants = phoneLookupVariants(phone);
       const { data: customerRows, error: customerLookupError } = await supabaseAdmin
         .from('app_users')
         .select('*')

@@ -40,28 +40,54 @@ export function createSignupTicket(phone: string, role: SignupTicketRole): strin
   return `${encodedPayload}.${sign(encodedPayload)}`;
 }
 
+// Server-log-only diagnostics (never sent to the client — the 403 response
+// stays the same generic message either way, so this can't be used as an
+// oracle by an attacker probing which check failed). Added to actually
+// pin down a live "signup failed" report instead of guessing between
+// expiry/phone-mismatch/role-mismatch/bad-signature from a bare boolean.
+function logTicketRejection(reason: string, details?: Record<string, unknown>): void {
+  console.warn(`[signupTicket] rejected: ${reason}`, details ?? {});
+}
+
 export function verifySignupTicket(ticket: unknown, phone: string, role: SignupTicketRole): boolean {
-  if (!ticket || typeof ticket !== 'string') return false;
+  if (!ticket || typeof ticket !== 'string') {
+    logTicketRejection('missing_or_non_string_ticket', { ticketType: typeof ticket });
+    return false;
+  }
   const [encodedPayload, signature] = ticket.split('.');
-  if (!encodedPayload || !signature) return false;
+  if (!encodedPayload || !signature) {
+    logTicketRejection('malformed_ticket_shape', { hasEncodedPayload: !!encodedPayload, hasSignature: !!signature });
+    return false;
+  }
 
   const expectedSignature = sign(encodedPayload);
   const sigBuf = Buffer.from(signature, 'hex');
   const expectedBuf = Buffer.from(expectedSignature, 'hex');
   if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+    logTicketRejection('bad_signature');
     return false;
   }
 
   let parsed: { phone: string; role: string; exp: number };
   try {
     parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
-  } catch {
+  } catch (err) {
+    logTicketRejection('payload_parse_failed', { err: String(err) });
     return false;
   }
 
-  if (Date.now() > parsed.exp) return false;
-  if (parsed.role !== role) return false;
-  if (parsed.phone !== digitsOnly(phone)) return false;
+  if (Date.now() > parsed.exp) {
+    logTicketRejection('expired', { expiredMsAgo: Date.now() - parsed.exp });
+    return false;
+  }
+  if (parsed.role !== role) {
+    logTicketRejection('role_mismatch', { ticketRole: parsed.role, expectedRole: role });
+    return false;
+  }
+  if (parsed.phone !== digitsOnly(phone)) {
+    logTicketRejection('phone_mismatch', { ticketPhoneDigits: parsed.phone, submittedPhoneDigits: digitsOnly(phone) });
+    return false;
+  }
 
   return true;
 }
