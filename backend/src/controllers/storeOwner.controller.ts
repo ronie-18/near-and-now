@@ -409,6 +409,15 @@ export async function updateStore(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
+    if (patch.owner_image_url) {
+      await notifyAdmins(
+        'owner_photo_updated',
+        'Store owner photo updated',
+        `${data?.name || 'A store'} updated their owner photo.`,
+        { store_id: storeId }
+      );
+    }
+
     res.json({ success: true, store: data });
   } catch (error: any) {
     console.error('❌ updateStore error:', error);
@@ -664,6 +673,14 @@ export async function addStoreImage(req: Request, res: Response) {
 
     await syncStoreCoverImage(storeId);
 
+    const storeName = await getStoreName(storeId);
+    await notifyAdmins(
+      'store_image_added',
+      'Store photo added',
+      `${storeName} added a new storefront photo.`,
+      { store_id: storeId, image_id: inserted.id }
+    );
+
     res.json({ success: true, image: inserted });
   } catch (error: any) {
     console.error('❌ addStoreImage error:', error);
@@ -714,6 +731,14 @@ export async function deleteStoreImage(req: Request, res: Response) {
     }
 
     await syncStoreCoverImage(storeId);
+
+    const storeName = await getStoreName(storeId);
+    await notifyAdmins(
+      'store_image_removed',
+      'Store photo removed',
+      `${storeName} removed a storefront photo.`,
+      { store_id: storeId, image_id: imageId }
+    );
 
     res.json({ success: true });
   } catch (error: any) {
@@ -781,6 +806,18 @@ async function markVerificationSubmittedIfReady(storeId: string): Promise<boolea
     return false;
   }
   return !!data;
+}
+
+/**
+ * Store name for a notification message, with no suspend side effect —
+ * unlike suspendStoreIfApprovedAndGetName above, which is specifically for
+ * the harsher document-edit-after-approval flow. Image changes (owner photo,
+ * storefront gallery) are lower-stakes by design and shouldn't suspend the
+ * store, just inform admins.
+ */
+async function getStoreName(storeId: string): Promise<string> {
+  const { data } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
+  return data?.name || 'A store';
 }
 
 /** Best-effort — a notification failure should never block the shopkeeper's request. */

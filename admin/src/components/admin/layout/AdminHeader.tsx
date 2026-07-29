@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, CheckCheck, FileText, ShieldCheck, Truck } from 'lucide-react';
+import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, CheckCheck, FileText, ShieldCheck, Truck, Image } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
 import { clearAdminSession } from '../../../services/adminSession';
@@ -72,6 +72,12 @@ function notifStyle(type: string): { iconBg: string; Icon: React.ElementType } {
     case 'rider_document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: Truck };
     case 'rider_document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: Truck };
     case 'rider_verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: Truck };
+    case 'owner_photo_updated':
+    case 'store_image_added':
+    case 'rider_profile_photo_updated':
+    case 'rider_vehicle_photo_updated':
+      return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: Image };
+    case 'store_image_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: Image };
     default: return { iconBg: 'bg-violet-100 text-violet-600', Icon: Package };
   }
 }

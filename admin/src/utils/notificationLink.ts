@@ -19,10 +19,15 @@ export function getNotificationLink(type: string, data: Record<string, any> | nu
     case 'verification_submitted':
     case 'document_uploaded':
     case 'document_removed':
+    case 'owner_photo_updated':
+    case 'store_image_added':
+    case 'store_image_removed':
       return '/stores';
     case 'rider_verification_submitted':
     case 'rider_document_uploaded':
     case 'rider_document_removed':
+    case 'rider_profile_photo_updated':
+    case 'rider_vehicle_photo_updated':
       return '/delivery';
     // Store's requestProfileChange() and the rider's equivalent both fire
     // this same type string (found 2026-07-27, during a deep-dive review —

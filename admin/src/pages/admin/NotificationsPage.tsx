@@ -3,7 +3,7 @@ import { getAdminToken } from '../../services/adminSession';
 import {
   Bell, Check, Search, RefreshCw, ShoppingBag, Users, Package,
   AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter, IndianRupee,
-  FileText, ShieldCheck
+  FileText, ShieldCheck, Image
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -19,6 +19,8 @@ interface AdminNotification {
   type: 'new_order' | 'new_user' | 'system' | 'refund_required'
     | 'document_uploaded' | 'document_removed' | 'verification_submitted'
     | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
+    | 'owner_photo_updated' | 'store_image_added' | 'store_image_removed'
+    | 'rider_profile_photo_updated' | 'rider_vehicle_photo_updated'
     | 'product_updated' | 'admin_review_action';
   title: string;
   message: string;
@@ -57,6 +59,11 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
   rider_document_uploaded: { icon: Truck, color: 'text-indigo-600', bg: 'bg-indigo-100' },
   rider_document_removed: { icon: Truck, color: 'text-gray-600', bg: 'bg-gray-100' },
   rider_verification_submitted: { icon: Truck, color: 'text-teal-600', bg: 'bg-teal-100' },
+  owner_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
+  store_image_added: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
+  store_image_removed: { icon: Image, color: 'text-gray-600', bg: 'bg-gray-100' },
+  rider_profile_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
+  rider_vehicle_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
   product_updated: { icon: Package, color: 'text-orange-600', bg: 'bg-orange-100' },
   admin_review_action: { icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-100' },
 };

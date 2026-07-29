@@ -74,6 +74,17 @@ async function markRiderVerificationSubmittedIfReady(riderId: string): Promise<b
 }
 
 /** Best-effort — a notification failure should never block the rider's request. */
+/**
+ * Rider name for a notification message, with no suspend side effect —
+ * unlike suspendRiderIfApprovedAndGetName, which is specifically for the
+ * harsher document-edit-after-approval flow. Profile/vehicle photo changes
+ * are lower-stakes by design and shouldn't suspend the rider, just inform admins.
+ */
+async function getRiderName(riderId: string): Promise<string> {
+  const { data } = await supabaseAdmin.from('app_users').select('name').eq('id', riderId).maybeSingle();
+  return data?.name || 'A rider';
+}
+
 async function notifyAdminsOfRiderDocs(type: string, title: string, message: string, data: Record<string, unknown>) {
   try {
     await supabaseAdmin.from('admin_notifications').insert({ type, title, message, data });
@@ -1062,6 +1073,14 @@ export class DeliveryPartnerController {
         .update({ profile_image_url })
         .eq('user_id', req.riderId!);
 
+      const riderName = await getRiderName(req.riderId!);
+      await notifyAdminsOfRiderDocs(
+        'rider_profile_photo_updated',
+        'Rider profile photo updated',
+        `${riderName} updated their profile photo.`,
+        { partner_id: req.riderId }
+      );
+
       res.json({ success: true, profile_image_url });
     } catch (err) {
       console.error('updateProfileImage error:', err);
@@ -1112,6 +1131,25 @@ export class DeliveryPartnerController {
 
       updates.updated_at = new Date().toISOString();
       await supabaseAdmin.from('delivery_partners').update(updates).eq('user_id', req.riderId!);
+
+      const riderName = await getRiderName(req.riderId!);
+      if (profile_image_url !== undefined) {
+        await notifyAdminsOfRiderDocs(
+          'rider_profile_photo_updated',
+          'Rider profile photo updated',
+          `${riderName} updated their profile photo.`,
+          { partner_id: req.riderId }
+        );
+      }
+      if (vehicle_image_url !== undefined) {
+        await notifyAdminsOfRiderDocs(
+          'rider_vehicle_photo_updated',
+          'Rider vehicle photo updated',
+          `${riderName} updated their vehicle photo.`,
+          { partner_id: req.riderId }
+        );
+      }
+
       res.json({ success: true });
     } catch (err) {
       console.error('updatePhotoUrls error:', err);
