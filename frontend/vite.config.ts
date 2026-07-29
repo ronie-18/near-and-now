@@ -107,14 +107,7 @@ export default defineConfig(({ mode }) => {
           // dompurify/crypto-js removed along with the dead sanitize.ts/csrf.ts
           // that were their only consumers — zod is still real, used by
           // src/schemas/*.
-          validation: ['zod'],
-          // Split admin components
-          admin: [
-            './src/pages/admin/AdminDashboardPage.tsx',
-            './src/pages/admin/ProductsPage.tsx',
-            './src/pages/admin/OrdersPage.tsx',
-            './src/pages/admin/CustomersPage.tsx'
-          ]
+          validation: ['zod']
         }
       }
     },

@@ -84,7 +84,12 @@
       "Bash(env)",
       "Bash(supabase help *)",
       "Bash(supabase db *)",
-      "Bash(git status *)"
+      "Bash(git status *)",
+      "Bash(npm -v)",
+      "Bash(npm audit *)",
+      "Bash(npm ls *)",
+      "Bash(npm view *)",
+      "Bash(npx depcheck *)"
     ],
     "additionalDirectories": [
       "/tmp"
