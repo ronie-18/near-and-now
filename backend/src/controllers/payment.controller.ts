@@ -14,6 +14,17 @@ export class PaymentController {
         return res.status(400).json({ error: 'Order ID and amount are required' });
       }
 
+      const customerId = req.customerId;
+      if (!customerId) return res.status(401).json({ error: 'Unauthorized' });
+
+      const orderCtx = await databaseService.getOrderPaymentContext(orderId);
+      if (!orderCtx) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (orderCtx.customer_id !== customerId) {
+        return res.status(403).json({ error: 'This order does not belong to you' });
+      }
+
       // Create payment order with payment gateway (Razorpay/Stripe)
       const paymentOrder = await paymentService.createPaymentOrder({
         orderId,
@@ -40,6 +51,13 @@ export class PaymentController {
         return res.status(400).json({ error: 'paymentId, razorpayOrderId, signature, and internalOrderId are required' });
       }
 
+      // Never trust a client-supplied internalOrderId on its own — the caller
+      // must only ever verify payment for their own order, enforced by
+      // requireCustomer (routes/payment.routes.ts) + this ownership check,
+      // not by whatever id happens to be in the request body.
+      const customerId = req.customerId;
+      if (!customerId) return res.status(401).json({ error: 'Unauthorized' });
+
       const isValid = await paymentService.verifyPayment({
         paymentId,
         orderId: razorpayOrderId,
@@ -55,6 +73,10 @@ export class PaymentController {
       const orderCtx = await databaseService.getOrderPaymentContext(internalOrderId);
       if (!orderCtx) {
         return res.status(500).json({ error: 'Failed to verify payment' });
+      }
+      if (orderCtx.customer_id !== customerId) {
+        console.warn('[PAYMENT] Order does not belong to caller', { internalOrderId, customerId, orderOwnerId: orderCtx.customer_id });
+        return res.status(403).json({ success: false, error: 'This order does not belong to you' });
       }
 
       // Explicitly capture authorized payments so dashboard amount/transactions reflect successful payments.
@@ -81,10 +103,21 @@ export class PaymentController {
         ? Math.round(orderCtx.split_upi_amount! * 100)
         : Math.round(Number(orderCtx.total_amount || 0) * 100);
 
+      // payment?.order_id === razorpayOrderId only proves paymentId/razorpayOrderId/
+      // signature are internally consistent with EACH OTHER — it does NOT prove
+      // this specific payment was ever created for internalOrderId. Without the
+      // notes check below, a real captured payment for one order could be replayed
+      // against a different internalOrderId of the same amount (same class of bug
+      // fixed in wallet.controller.ts's verifyTopup — see its own comment for the
+      // full exploit writeup). createPaymentOrder stamps notes.internal_order_id
+      // on the Razorpay order at creation time specifically so this can be checked
+      // against Razorpay's own trusted record, never a client-supplied value.
+      const notes = payment?.notes || {};
       const strictChecksPassed =
         paymentStatus === 'captured' &&
         payment?.order_id === razorpayOrderId &&
-        razorpayAmountPaise === trustedAmountPaise;
+        razorpayAmountPaise === trustedAmountPaise &&
+        notes.internal_order_id === internalOrderId;
 
       if (!strictChecksPassed) {
         console.warn('[PAYMENT] Strict source-of-truth checks failed', {
@@ -93,6 +126,7 @@ export class PaymentController {
           paymentStatus,
           razorpayOrderId,
           paymentOrderId: payment?.order_id,
+          notesInternalOrderId: notes.internal_order_id,
           razorpayAmountPaise,
           trustedAmountPaise,
           isSplit

@@ -6,11 +6,16 @@ import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 const router = Router();
 const paymentController = new PaymentController();
 
-// Create payment order
-router.post('/create', paymentController.createPaymentOrder.bind(paymentController));
+// Create payment order. requireCustomer gate added 2026-07-29 — this and
+// /verify below previously had no auth at all, and /verify separately
+// trusted a client-supplied internalOrderId with no ownership check (see
+// verifyPayment's own comment for the full exploit writeup) — a real
+// captured payment for one order could be replayed to mark ANY other order
+// of the same amount as paid, including someone else's.
+router.post('/create', requireCustomer, paymentController.createPaymentOrder.bind(paymentController));
 
 // Verify payment
-router.post('/verify', paymentController.verifyPayment.bind(paymentController));
+router.post('/verify', requireCustomer, paymentController.verifyPayment.bind(paymentController));
 
 // Saved payment methods for the logged-in user (cards/UPIs). Must be declared
 // before the '/:paymentId' catch-all below or Express will route to it.

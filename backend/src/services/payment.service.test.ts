@@ -69,6 +69,7 @@ describe('PaymentService', () => {
     const { databaseService } = await import('./database.service.js');
     vi.spyOn(databaseService, 'getOrderPaymentContext').mockResolvedValue({
       id: 'order-ctx-id',
+      customer_id: 'customer-ctx-id',
       total_amount: 100,
       payment_status: 'pending',
       razorpay_order_id: null,

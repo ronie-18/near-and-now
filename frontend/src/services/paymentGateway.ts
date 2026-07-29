@@ -1,4 +1,5 @@
 import { apiUrl } from '../utils/apiBase';
+import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 
 type CreatePaymentOrderResponse = {
   razorpay_order_id: string;
@@ -74,9 +75,9 @@ export async function loadRazorpayScript(): Promise<void> {
 }
 
 export async function createPaymentOrder(orderId: string, amount: number): Promise<CreatePaymentOrderResponse> {
-  const response = await fetch(apiUrl('/api/payment/create'), {
+  const response = await authedFetch(apiUrl('/api/payment/create'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ orderId, amount, currency: 'INR' })
   });
 
@@ -89,9 +90,9 @@ export async function createPaymentOrder(orderId: string, amount: number): Promi
 }
 
 export async function verifyPayment(payload: VerifyPaymentRequest): Promise<void> {
-  const response = await fetch(apiUrl('/api/payment/verify'), {
+  const response = await authedFetch(apiUrl('/api/payment/verify'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(payload)
   });
 

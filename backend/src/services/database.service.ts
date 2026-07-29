@@ -84,6 +84,7 @@ export class DatabaseService {
 
   async getOrderPaymentContext(orderId: string): Promise<{
     id: string;
+    customer_id: string;
     total_amount: number;
     payment_status: string;
     razorpay_order_id: string | null;
@@ -92,12 +93,13 @@ export class DatabaseService {
   } | null> {
     const primary = await supabaseAdmin
       .from('customer_orders')
-      .select('id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id, notes')
+      .select('id, customer_id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id, notes')
       .eq('id', orderId)
       .maybeSingle();
     if (!primary.error) {
       const row = primary.data as {
         id: string;
+        customer_id: string;
         total_amount: number;
         payment_status: string;
         razorpay_order_id: string | null;
@@ -118,13 +120,14 @@ export class DatabaseService {
     if (this.isMissingColumnError(primary.error, 'razorpay_order_id')) {
       const fallback = await supabaseAdmin
         .from('customer_orders')
-        .select('id, total_amount, payment_status, razorpay_payment_id')
+        .select('id, customer_id, total_amount, payment_status, razorpay_payment_id')
         .eq('id', orderId)
         .maybeSingle();
       if (fallback.error) throw fallback.error;
       if (!fallback.data) return null;
       return {
         id: (fallback.data as any).id,
+        customer_id: (fallback.data as any).customer_id,
         total_amount: Number((fallback.data as any).total_amount || 0),
         payment_status: String((fallback.data as any).payment_status || 'pending'),
         razorpay_order_id: null,
