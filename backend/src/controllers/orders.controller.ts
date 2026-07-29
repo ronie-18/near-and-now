@@ -43,7 +43,8 @@ export class OrdersController {
         msg.includes('No items') ||
         msg.includes('verify your email') ||
         msg.includes('Invalid quantity') ||
-        msg.includes('Quantity for')
+        msg.includes('Quantity for') ||
+        msg.includes('Split payment amounts')
           ? 400
           : 500;
       res.status(status).json({ error: msg });

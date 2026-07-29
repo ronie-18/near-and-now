@@ -545,6 +545,28 @@ const CheckoutPage = () => {
         ...(tipAmount > 0 && { tip_amount: tipAmount })
       };
 
+      // The "Balanced"/"over"/"short" label near the split inputs (further
+      // down this file) is purely cosmetic — nothing previously stopped
+      // submission with mismatched cash+UPI amounts. A customer could leave
+      // the split fields short of the real total (e.g. after editing UPI
+      // down, or after a coupon/tip change shifted finalOrderTotal without
+      // re-prompting) and the order would still place, charging only the
+      // (smaller) UPI amount via Razorpay while the order recorded a lower
+      // total commitment than what was actually owed. Guard it the same way
+      // as the wallet-balance re-check right below.
+      if (splitEnabled) {
+        const cashAmt = parseFloat(splitCashAmount) || 0;
+        const upiAmt = parseFloat(splitUpiAmount) || 0;
+        if (Math.abs(Math.round(cashAmt + upiAmt) - finalOrderTotal) > 1) {
+          showNotification(
+            `Split amounts don't add up to the order total (₹${finalOrderTotal}). Please adjust the cash/UPI split.`,
+            'error'
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
       // Re-check the wallet balance right before creating the order, not just
       // at selection time — the radio being greyed out doesn't clear an
       // already-selected `formData.paymentMethod`, so a customer who picked

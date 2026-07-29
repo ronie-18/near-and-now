@@ -1027,6 +1027,21 @@ export class DatabaseService {
       throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
     }
 
+    // Split cash/UPI payment: the frontend's own "Balanced"/"over"/"short"
+    // indicator was purely cosmetic — nothing stopped a mismatched split from
+    // reaching here at all, client-side or server-side (see bug_fixes_2026-07-23.md,
+    // Website frontend -> High). Only ever charges split_upi_amount via
+    // Razorpay (payment.service.ts), so a short split would let a customer
+    // commit less than the real order_total while the order still records
+    // the full total as owed.
+    if (orderData.split_upi_amount != null) {
+      const splitCash = Number(orderData.split_cash_amount) || 0;
+      const splitUpi = Number(orderData.split_upi_amount) || 0;
+      if (Math.abs(Math.round(splitCash + splitUpi) - Math.round(orderData.order_total)) > 1) {
+        throw new Error('Split payment amounts do not add up to the order total. Please refresh and try again.');
+      }
+    }
+
     // Idempotency guard: a fast double-tap on "Place Order" (or a client retry
     // after a slow/dropped response) can otherwise create two identical orders.
     // No idempotency key is sent by any client today, so this checks for an

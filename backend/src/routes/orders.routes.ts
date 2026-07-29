@@ -28,6 +28,14 @@ const placeCheckoutSchema = z.object({
   payment_method: z.string().min(1),
   notes: z.string().optional(),
   coupon_id: z.string().uuid().optional(),
+  // Split cash/UPI payment. Previously undeclared here — z.object() strips
+  // unrecognized keys by default, so these were silently dropped by this
+  // schema before ever reaching the controller/placeCheckoutOrder, meaning
+  // the split-payment feature never actually recorded its split amounts
+  // (and the new sum-vs-total check added to placeCheckoutOrder alongside
+  // this fix could never have run either). Found while adding that check.
+  split_cash_amount: z.number().min(0).optional(),
+  split_upi_amount: z.number().min(0).optional(),
   gstin: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN format').optional().or(z.literal('')),
   gstin_business_name: z.string().optional(),
   receiver_name: z.string().optional(),
