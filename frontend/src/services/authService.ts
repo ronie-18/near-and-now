@@ -1,4 +1,3 @@
-import { supabase, supabaseAdmin } from './supabase';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 
@@ -194,10 +193,18 @@ export async function getCurrentUserFromSession(_userId: string): Promise<{ user
   }
 }
 
-// Update customer profile
-export async function updateCustomerProfile(userId: string, updates: {
+// Update customer profile. Routed through the backend's PATCH /api/customers/me
+// (requireCustomer-gated) rather than writing to app_users/customers directly
+// from the browser — the direct-Supabase version this replaced only ever
+// "worked" for name because of a misconfigured RLS policy on app_users that
+// granted anon full read/write (see Supabase schema & migrations → Critical
+// in bug_fixes_2026-07-23.md); its write to `customers` had zero grants at
+// all and always 401'd, silently, since the caller never checked the result.
+// `email` was dropped from the accepted fields — it was already dead here in
+// practice (the only real caller, ProfilePage.tsx, only ever passes `name`;
+// email changes go through the separate OTP-verified changeCustomerEmail flow).
+export async function updateCustomerProfile(_userId: string, updates: {
   name?: string;
-  email?: string;
   surname?: string;
   address?: string;
   city?: string;
@@ -206,41 +213,14 @@ export async function updateCustomerProfile(userId: string, updates: {
   landmark?: string;
   delivery_instructions?: string;
 }): Promise<void> {
-  try {
-    // Update app_users if name or email changed
-    if (updates.name || updates.email) {
-      const appUserUpdates: any = {};
-      if (updates.name) appUserUpdates.name = updates.name;
-      if (updates.email) appUserUpdates.email = updates.email;
-
-      await supabaseAdmin
-        .from('app_users')
-        .update(appUserUpdates)
-        .eq('id', userId);
-    }
-
-    // Update customers table
-    const customerUpdates: any = {};
-    if (updates.name) customerUpdates.name = updates.name;
-    if (updates.surname !== undefined) customerUpdates.surname = updates.surname;
-    if (updates.address !== undefined) customerUpdates.address = updates.address;
-    if (updates.city !== undefined) customerUpdates.city = updates.city;
-    if (updates.state !== undefined) customerUpdates.state = updates.state;
-    if (updates.pincode !== undefined) customerUpdates.pincode = updates.pincode;
-    if (updates.landmark !== undefined) customerUpdates.landmark = updates.landmark;
-    if (updates.delivery_instructions !== undefined) customerUpdates.delivery_instructions = updates.delivery_instructions;
-
-    if (Object.keys(customerUpdates).length > 0) {
-      await supabase
-        .from('customers')
-        .update(customerUpdates)
-        .eq('user_id', userId);
-    }
-
-    console.log('✅ Profile updated successfully');
-  } catch (error) {
-    console.error('❌ Error updating profile:', error);
-    throw error;
+  const response = await authedFetch(apiUrl('/api/customers/me'), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(updates)
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseErrorMessageFromResponse(text, 'Failed to update profile'));
   }
 }
 

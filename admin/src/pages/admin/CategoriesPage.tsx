@@ -199,14 +199,15 @@ const CategoriesPage = () => {
     }
   };
 
-  // Filtered categories - Only show categories that have products
+  // Filtered categories — search only. Previously also hard-filtered out any
+  // category with 0 products, which made a brand-new category (0 products by
+  // definition) vanish from this list the instant it was created, with no
+  // other UI path to reach it again (the only links to /categories/edit/:id
+  // were rendered from this same filtered list). The "products" column
+  // already renders a plain "0 products" badge for this case (see below), so
+  // there's nothing else to fix once the row itself isn't hidden.
   const filteredCategories = useMemo(() => {
     return categories.filter(category => {
-      // Only include categories that have products
-      const productCount = productCounts[category.id] || 0;
-      if (productCount === 0) return false;
-
-      // Apply search filter
       const searchLower = searchTerm.toLowerCase();
       return (
         category.name.toLowerCase().includes(searchLower) ||
@@ -214,19 +215,12 @@ const CategoriesPage = () => {
         category.id.toLowerCase().includes(searchLower)
       );
     });
-  }, [categories, searchTerm, productCounts]);
+  }, [categories, searchTerm]);
 
-  // Stats - Only count categories that have products
-  const stats = useMemo(() => {
-    const categoriesWithProducts = categories.filter(category => {
-      const productCount = productCounts[category.id] || 0;
-      return productCount > 0;
-    });
-    return {
-      totalCategories: categoriesWithProducts.length,
-      totalProducts: Object.values(productCounts).reduce((sum, count) => sum + count, 0),
-    };
-  }, [categories, productCounts]);
+  const stats = useMemo(() => ({
+    totalCategories: categories.length,
+    totalProducts: Object.values(productCounts).reduce((sum, count) => sum + count, 0),
+  }), [categories, productCounts]);
 
   // Pagination
   const totalPages = Math.ceil(filteredCategories.length / ITEMS_PER_PAGE);
