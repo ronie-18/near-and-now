@@ -1580,7 +1580,7 @@ export class DeliveryPartnerController {
 
       const [{ data: orders }, { data: allocations }] = await Promise.all([
         supabaseAdmin.from('customer_orders')
-          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at')
+          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, customer_id, receiver_name, receiver_phone')
           .in('id', orderIds),
         supabaseAdmin.from('order_store_allocations')
           .select('order_id, store_id, sequence_number')
@@ -1592,10 +1592,22 @@ export class DeliveryPartnerController {
       const orderMap: Record<string, any> = {};
       (orders || []).forEach((o: any) => { orderMap[o.id] = o; });
 
-      const storeIds = [...new Set((allocations || []).map((a: any) => a.store_id))];
-      const { data: stores } = storeIds.length
-        ? await supabaseAdmin.from('stores').select('id, name, address, latitude, longitude').in('id', storeIds)
+      const customerIds = [...new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean))];
+      const { data: customers } = customerIds.length
+        ? await supabaseAdmin.from('app_users').select('id, name, phone').in('id', customerIds)
         : { data: [] };
+      const customerMap: Record<string, any> = {};
+      (customers || []).forEach((c: any) => { customerMap[c.id] = c; });
+
+      const storeIds = [...new Set((allocations || []).map((a: any) => a.store_id))];
+      const [{ data: stores }, { data: items }] = await Promise.all([
+        storeIds.length
+          ? supabaseAdmin.from('stores').select('id, name, address, latitude, longitude, phone').in('id', storeIds)
+          : Promise.resolve({ data: [] }),
+        orderIds.length
+          ? supabaseAdmin.from('order_items').select('id, product_name, quantity, unit, assigned_store_id, customer_order_id').in('customer_order_id', orderIds)
+          : Promise.resolve({ data: [] }),
+      ]);
       const storeMap: Record<string, any> = {};
       (stores || []).forEach((s: any) => { storeMap[s.id] = s; });
 
@@ -1605,8 +1617,17 @@ export class DeliveryPartnerController {
         allocsByOrder[a.order_id].push(a);
       });
 
+      const itemsByOrderStore: Record<string, any[]> = {};
+      (items || []).forEach((item: any) => {
+        if (!item.assigned_store_id) return;
+        const key = `${item.customer_order_id}:${item.assigned_store_id}`;
+        if (!itemsByOrderStore[key]) itemsByOrderStore[key] = [];
+        itemsByOrderStore[key].push({ product_name: item.product_name, quantity: item.quantity, unit: item.unit });
+      });
+
       const result = offers.map((offer: any) => {
         const order = orderMap[offer.order_id] || {};
+        const customer = customerMap[order.customer_id] || {};
         const orderAllocs = allocsByOrder[offer.order_id] || [];
         return {
           offer_id: offer.id,
@@ -1616,16 +1637,24 @@ export class DeliveryPartnerController {
           delivery_address: order.delivery_address,
           customer_lat: order.delivery_latitude,
           customer_lng: order.delivery_longitude,
+          customer_name: order.receiver_name || customer.name || null,
+          customer_phone: order.receiver_phone || customer.phone || null,
           placed_at: offer.created_at,
           store_count: orderAllocs.length,
-          stores: orderAllocs.map((a: any) => ({
-            store_id: a.store_id,
-            sequence_number: a.sequence_number,
-            name: storeMap[a.store_id]?.name,
-            address: storeMap[a.store_id]?.address,
-            latitude: storeMap[a.store_id]?.latitude,
-            longitude: storeMap[a.store_id]?.longitude,
-          })),
+          stores: orderAllocs.map((a: any) => {
+            const items = itemsByOrderStore[`${offer.order_id}:${a.store_id}`] || [];
+            return {
+              store_id: a.store_id,
+              sequence_number: a.sequence_number,
+              name: storeMap[a.store_id]?.name,
+              address: storeMap[a.store_id]?.address,
+              latitude: storeMap[a.store_id]?.latitude,
+              longitude: storeMap[a.store_id]?.longitude,
+              phone: storeMap[a.store_id]?.phone,
+              item_count: items.length,
+              items,
+            };
+          }),
         };
       });
 
