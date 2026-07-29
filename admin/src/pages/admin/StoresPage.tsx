@@ -388,31 +388,68 @@ const StoresPage = () => {
   const [docStatusByStore, setDocStatusByStore] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
 
-  // Most recent submit/edit/approve/reject across each store's verification
-  // documents — one bulk query instead of a per-store request. Non-fatal: a
-  // failure here shouldn't block the main store list from showing.
+  // Most recent activity across each store's verification documents, gallery
+  // photos, and profile change requests — one bulk query per source instead
+  // of a per-store request. Previously this only looked at
+  // store_verification_documents, so the "Updated On" column (and the sort
+  // that uses it) stayed frozen at a store's last document edit even after
+  // the shopkeeper changed their storefront photos or submitted a name/
+  // address change request — neither of those touches
+  // store_verification_documents at all. Non-fatal: a failure here shouldn't
+  // block the main store list from showing.
   // Also builds docStatusByStore, used to gate the Approve action so a store
   // can't go live without every required document actually being reviewed
   // and approved (see approvalReadiness below).
-  const refreshDocsUpdatedAt = async () => {
+  const refreshLastActivityAt = async () => {
+    const latest: Record<string, string> = {};
+    const mergeLatest = (rows: { store_id: string; at: string | null }[]) => {
+      for (const row of rows) {
+        if (!row.at) continue;
+        if (!latest[row.store_id] || row.at > latest[row.store_id]) {
+          latest[row.store_id] = row.at;
+        }
+      }
+    };
+
     try {
       const { data: docRows, error: docsError } = await getAdminClient()
         .from('store_verification_documents')
         .select('store_id, updated_at, doc_type, status');
       if (docsError) throw docsError;
-      const latest: Record<string, string> = {};
       const byStore: Record<string, { doc_type: string; status: string | null }[]> = {};
       for (const row of docRows || []) {
-        if (!latest[row.store_id] || row.updated_at > latest[row.store_id]) {
-          latest[row.store_id] = row.updated_at;
-        }
         (byStore[row.store_id] ||= []).push({ doc_type: row.doc_type, status: row.status });
       }
-      setDocsUpdatedAt(latest);
+      mergeLatest((docRows || []).map((row) => ({ store_id: row.store_id, at: row.updated_at })));
       setDocStatusByStore(byStore);
     } catch (docsErr) {
       console.error('Error fetching verification-document timestamps:', docsErr);
     }
+
+    try {
+      const { data: imageRows, error: imagesError } = await getAdminClient()
+        .from('store_images')
+        .select('store_id, created_at');
+      if (imagesError) throw imagesError;
+      mergeLatest((imageRows || []).map((row) => ({ store_id: row.store_id, at: row.created_at })));
+    } catch (imagesErr) {
+      console.error('Error fetching store image timestamps:', imagesErr);
+    }
+
+    try {
+      const { data: changeRows, error: changeError } = await getAdminClient()
+        .from('store_profile_change_requests')
+        .select('store_id, created_at, reviewed_at');
+      if (changeError) throw changeError;
+      mergeLatest((changeRows || []).flatMap((row) => [
+        { store_id: row.store_id, at: row.created_at },
+        { store_id: row.store_id, at: row.reviewed_at },
+      ]));
+    } catch (changeErr) {
+      console.error('Error fetching store profile change request timestamps:', changeErr);
+    }
+
+    setDocsUpdatedAt(latest);
   };
 
   // A store can only be approved once every required document type
@@ -468,7 +505,7 @@ const StoresPage = () => {
       .order('created_at', { ascending: false });
     if (sbError) throw sbError;
     setStores(data || []);
-    await refreshDocsUpdatedAt();
+    await refreshLastActivityAt();
     await refreshApproverNames(data || []);
   };
 
@@ -489,15 +526,17 @@ const StoresPage = () => {
     fetchStores();
 
     // Best-effort live updates: subscribe to changes on
-    // store_verification_documents and stores (approval status/approved_at/
-    // approved_by) so this page reflects a shopkeeper's upload or another
-    // admin's review/approval without a manual refresh. Realtime's RLS check
-    // for these tables depends on the same x-admin-token-based
-    // is_admin_authenticated() policy used for the REST queries above — that
-    // header mechanism is proven to work for PostgREST requests, but it's
-    // unconfirmed whether it's honored the same way over the Realtime
-    // websocket handshake for a non-Supabase-Auth client like this one. The
-    // 20s poll below is a safety net in case the subscriptions never fire.
+    // store_verification_documents, store_images, store_profile_change_requests,
+    // and stores (approval status/approved_at/approved_by) so this page
+    // reflects a shopkeeper's document upload, photo change, or profile edit
+    // request — or another admin's review/approval — without a manual
+    // refresh. Realtime's RLS check for these tables depends on the same
+    // x-admin-token-based is_admin_authenticated() policy used for the REST
+    // queries above — that header mechanism is proven to work for PostgREST
+    // requests, but it's unconfirmed whether it's honored the same way over
+    // the Realtime websocket handshake for a non-Supabase-Auth client like
+    // this one. The 20s poll below is a safety net in case the subscriptions
+    // never fire.
     const client = getAdminClient();
     const channel = client
       .channel('admin-stores-verification-docs')
@@ -505,7 +544,21 @@ const StoresPage = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'store_verification_documents' },
         () => {
-          void refreshDocsUpdatedAt();
+          void refreshLastActivityAt();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'store_images' },
+        () => {
+          void refreshLastActivityAt();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'store_profile_change_requests' },
+        () => {
+          void refreshLastActivityAt();
         }
       )
       .on(
