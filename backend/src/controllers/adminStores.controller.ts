@@ -141,6 +141,100 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
 }
 
 /**
+ * List a store's storefront gallery photos for admin review. Unlike
+ * verification documents (a private bucket needing signed URLs), store-images
+ * is a public bucket, so the stored url is already directly usable.
+ */
+export async function getStoreImages(req: Request, res: Response) {
+  try {
+    const { id: storeId } = req.params;
+
+    const { data: rows, error } = await supabaseAdmin
+      .from('store_images')
+      .select('*')
+      .eq('store_id', storeId)
+      .order('sort_order', { ascending: true });
+
+    if (error) {
+      console.error('❌ getStoreImages error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({ success: true, images: rows ?? [] });
+  } catch (error: any) {
+    console.error('❌ getStoreImages error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch store images' });
+  }
+}
+
+/**
+ * Approve or reject one of a store's storefront gallery photos. This is an
+ * admin-oversight gate, not a customer-visibility gate — store_images has no
+ * customer-facing reader today (confirmed by repo-wide grep) — and deliberately
+ * never touches stores.is_approved or suspends the store, unlike verification
+ * documents; image changes are lower-stakes by design.
+ */
+export async function reviewStoreImage(req: Request, res: Response) {
+  try {
+    const { id: storeId, imageId } = req.params;
+
+    const { status, rejection_reason } = req.body as { status?: string; rejection_reason?: string };
+    if (status !== 'approved' && status !== 'rejected') {
+      return res.status(400).json({ success: false, error: 'status must be "approved" or "rejected"' });
+    }
+    const reason = typeof rejection_reason === 'string' ? rejection_reason.trim() : '';
+    if (status === 'rejected' && !reason) {
+      return res.status(400).json({ success: false, error: 'rejection_reason is required when rejecting an image' });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('store_images')
+      .select('id')
+      .eq('id', imageId)
+      .eq('store_id', storeId)
+      .maybeSingle();
+
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Image not found for this store' });
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('store_images')
+      .update({
+        status,
+        rejection_reason: status === 'rejected' ? reason : null,
+        reviewed_by: req.adminId,
+        reviewed_at: now,
+      })
+      .eq('id', imageId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ reviewStoreImage error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
+    notificationService
+      .notifyAdminsOfReviewAction({
+        actorAdminId: req.adminId!,
+        category: 'store_image',
+        action: status,
+        entityLabel: `Storefront photo — ${store?.name ?? 'Unknown store'}`,
+        rejectionReason: status === 'rejected' ? reason : null,
+      })
+      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+
+    res.json({ success: true, image: data });
+  } catch (error: any) {
+    console.error('❌ reviewStoreImage error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to review image' });
+  }
+}
+
+/**
  * List store profile-change requests for admin review. Defaults to pending
  * only (the review queue); pass ?status=approved|rejected|all for history.
  */

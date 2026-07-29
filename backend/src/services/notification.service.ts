@@ -310,7 +310,7 @@ export class NotificationService {
    */
   async notifyAdminsOfReviewAction(params: {
     actorAdminId: string;
-    category: 'store_profile_change' | 'rider_profile_change' | 'store_verification_doc' | 'rider_verification_doc' | 'product_submission';
+    category: 'store_profile_change' | 'rider_profile_change' | 'store_verification_doc' | 'rider_verification_doc' | 'product_submission' | 'store_image';
     action: 'approved' | 'rejected';
     entityLabel: string;
     rejectionReason?: string | null;
@@ -332,6 +332,7 @@ export class NotificationService {
       store_verification_doc: 'store verification document',
       rider_verification_doc: 'rider verification document',
       product_submission: 'product submission',
+      store_image: 'storefront photo',
     };
 
     const title = `${CATEGORY_LABEL[category]} ${action}`;

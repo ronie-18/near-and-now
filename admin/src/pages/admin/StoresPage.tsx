@@ -71,6 +71,15 @@ interface VerificationDoc {
   file_size: string | null;
 }
 
+interface StoreImage {
+  id: string;
+  url: string;
+  status: 'pending' | 'approved' | 'rejected';
+  rejection_reason: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+}
+
 // ─── Document Review Modal ─────────────────────────────────────────────────
 const DocumentReviewModal = ({
   store,
@@ -79,7 +88,7 @@ const DocumentReviewModal = ({
 }: {
   store: StoreData;
   onClose: () => void;
-  onDocumentUpdated: (storeId: string, updatedAt: string) => void;
+  onDocumentUpdated: (storeId: string, updatedAt: string, docType: string, status: string) => void;
 }) => {
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,6 +97,13 @@ const DocumentReviewModal = ({
   const [rejectingType, setRejectingType] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [reviewerNames, setReviewerNames] = useState<Record<string, string>>({});
+
+  const [images, setImages] = useState<StoreImage[]>([]);
+  const [imagesLoading, setImagesLoading] = useState(true);
+  const [imagesError, setImagesError] = useState<string | null>(null);
+  const [actingImageId, setActingImageId] = useState<string | null>(null);
+  const [rejectingImageId, setRejectingImageId] = useState<string | null>(null);
+  const [imageReason, setImageReason] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -106,18 +122,38 @@ const DocumentReviewModal = ({
     }
   };
 
+  const loadImages = async () => {
+    setImagesLoading(true);
+    setImagesError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/stores/${store.id}/images`, {
+        headers: adminAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load images');
+      setImages(json.images);
+    } catch (err: any) {
+      setImagesError(err.message || 'Failed to load images');
+    } finally {
+      setImagesLoading(false);
+    }
+  };
+
   useEffect(() => {
     load();
+    loadImages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.id]);
 
-  // Resolve reviewed_by/approved_by (both admins.id) to display names.
+  // Resolve reviewed_by/approved_by (both admins.id) to display names —
+  // shared between documents and images, both key off the same admins table.
   useEffect(() => {
     const ids = Array.from(
       new Set(
-        documents
-          .flatMap((d) => [d.reviewed_by, d.approved_by])
-          .filter((id): id is string => !!id)
+        [
+          ...documents.flatMap((d) => [d.reviewed_by, d.approved_by]),
+          ...images.map((img) => img.reviewed_by),
+        ].filter((id): id is string => !!id)
       )
     );
     if (ids.length === 0) return;
@@ -126,10 +162,10 @@ const DocumentReviewModal = ({
       if (data) {
         const map: Record<string, string> = {};
         for (const row of data) map[row.id] = row.full_name;
-        setReviewerNames(map);
+        setReviewerNames((prev) => ({ ...prev, ...map }));
       }
     })();
-  }, [documents]);
+  }, [documents, images]);
 
   const review = async (docType: string, status: 'approved' | 'rejected', rejectionReason?: string) => {
     setActingType(docType);
@@ -154,7 +190,7 @@ const DocumentReviewModal = ({
         prev.map((d) => (d.doc_type === docType ? { ...d, ...json.document } : d))
       );
       if (json.document?.updated_at) {
-        onDocumentUpdated(store.id, json.document.updated_at);
+        onDocumentUpdated(store.id, json.document.updated_at, docType, json.document.status ?? status);
       }
       setRejectingType(null);
       setReason('');
@@ -162,6 +198,33 @@ const DocumentReviewModal = ({
       setError(err.message || 'Failed to update document');
     } finally {
       setActingType(null);
+    }
+  };
+
+  const reviewImage = async (imageId: string, status: 'approved' | 'rejected', rejectionReason?: string) => {
+    setActingImageId(imageId);
+    setImagesError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/admin/stores/${store.id}/images/${imageId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+          body: JSON.stringify({ status, rejection_reason: rejectionReason }),
+        }
+      );
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to update image');
+      setImages((prev) => prev.map((img) => (img.id === imageId ? { ...img, ...json.image } : img)));
+      if (json.image?.reviewed_at) {
+        onDocumentUpdated(store.id, json.image.reviewed_at, 'store_image', json.image.status ?? status);
+      }
+      setRejectingImageId(null);
+      setImageReason('');
+    } catch (err: any) {
+      setImagesError(err.message || 'Failed to update image');
+    } finally {
+      setActingImageId(null);
     }
   };
 
@@ -333,6 +396,123 @@ const DocumentReviewModal = ({
               </div>
             ))
           )}
+
+          <div className="pt-2 border-t border-gray-100">
+            <h3 className="font-semibold text-gray-800 mb-3">Storefront Photos</h3>
+
+            {imagesError && (
+              <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-3">
+                {imagesError}
+              </div>
+            )}
+
+            {imagesLoading ? (
+              <div className="py-8 flex justify-center">
+                <div className="relative w-8 h-8">
+                  <div className="w-8 h-8 border-4 border-violet-200 rounded-full" />
+                  <div className="absolute top-0 left-0 w-8 h-8 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
+                </div>
+              </div>
+            ) : images.length === 0 ? (
+              <p className="text-sm text-gray-400">No storefront photos uploaded yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {images.map((img) => (
+                  <div key={img.id} className="border border-gray-200 rounded-2xl p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <a href={img.url} target="_blank" rel="noreferrer" className="flex-shrink-0">
+                          <img src={img.url} alt="Storefront" className="w-16 h-16 rounded-xl object-cover border border-gray-200" />
+                        </a>
+                        <div className="min-w-0">
+                          {img.status === 'approved' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                              <CheckCircle size={11} /> Approved
+                            </span>
+                          )}
+                          {img.status === 'rejected' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                              <XCircle size={11} /> Rejected
+                            </span>
+                          )}
+                          {img.status === 'pending' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
+                              <AlertCircle size={11} /> Pending review
+                            </span>
+                          )}
+                          {img.status === 'rejected' && img.rejection_reason && (
+                            <p className="text-xs text-red-600 mt-1">Reason: {img.rejection_reason}</p>
+                          )}
+                          {img.reviewed_at && (
+                            <p className="text-xs text-gray-400 mt-1">
+                              Reviewed by {reviewerNames[img.reviewed_by || ''] || 'admin'} on{' '}
+                              {new Date(img.reviewed_at).toLocaleString('en-IN', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => reviewImage(img.id, 'approved')}
+                          disabled={actingImageId === img.id || img.status === 'approved'}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 disabled:opacity-50"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRejectingImageId(img.id);
+                            setImageReason('');
+                          }}
+                          disabled={actingImageId === img.id || img.status === 'rejected'}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 disabled:opacity-50"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+
+                    {rejectingImageId === img.id && (
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        <textarea
+                          value={imageReason}
+                          onChange={(e) => setImageReason(e.target.value)}
+                          placeholder="Reason for rejecting this photo (shown to the shopkeeper)"
+                          className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-red-400 focus:ring-0 text-sm"
+                          rows={2}
+                        />
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={() => {
+                              setRejectingImageId(null);
+                              setImageReason('');
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => reviewImage(img.id, 'rejected', imageReason.trim())}
+                            disabled={!imageReason.trim() || actingImageId === img.id}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                          >
+                            Confirm Rejection
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="px-6 pb-6 pt-2 flex-shrink-0">
@@ -913,9 +1093,21 @@ const StoresPage = () => {
         <DocumentReviewModal
           store={reviewingStore}
           onClose={() => setReviewingStore(null)}
-          onDocumentUpdated={(storeId, updatedAt) =>
-            setDocsUpdatedAt((prev) => ({ ...prev, [storeId]: updatedAt }))
-          }
+          onDocumentUpdated={(storeId, updatedAt, docType, status) => {
+            setDocsUpdatedAt((prev) => ({ ...prev, [storeId]: updatedAt }));
+            // Keep the Approve-button readiness gate's own data fresh
+            // locally too — otherwise it can show a stale "Not yet
+            // approved" reason for up to 20s until the next poll/Realtime
+            // event, even though docsUpdatedAt above already updated.
+            setDocStatusByStore((prev) => {
+              const docs = prev[storeId] || [];
+              const exists = docs.some((d) => d.doc_type === docType);
+              const nextDocs = exists
+                ? docs.map((d) => (d.doc_type === docType ? { ...d, status } : d))
+                : [...docs, { doc_type: docType, status }];
+              return { ...prev, [storeId]: nextDocs };
+            });
+          }}
         />
       )}
     </AdminLayout>

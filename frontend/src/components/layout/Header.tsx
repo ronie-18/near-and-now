@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
 import LocationPicker, { LocationData } from '../location/LocationPicker';
@@ -10,6 +10,7 @@ import {
 import { searchProducts, Product, getUserAddresses, Address as DbAddress } from '../../services/supabase';
 
 const Header = () => {
+  const navigate = useNavigate();
   const { user, customer, isAuthenticated, logoutUser } = useAuth();
   const { cartCount } = useCart();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -117,6 +118,13 @@ const Header = () => {
 
     setSuggestionsLoading(true);
 
+    // Guards against a slower, older suggestion request overwriting a newer
+    // one — same fix as SearchPage.tsx's request-sequence guard. Clearing
+    // the debounce timer alone only stops back-to-back keystrokes *within*
+    // the 300ms window; once a request is actually in flight, an earlier
+    // (now-abandoned) query's response can still resolve after a later one.
+    let cancelled = false;
+
     // Clear previous timeout
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -126,16 +134,17 @@ const Header = () => {
     debounceRef.current = setTimeout(async () => {
       try {
         const products = await searchProducts(searchQuery);
-        setSearchSuggestions(products.slice(0, 8)); // show max 8 suggestions
+        if (!cancelled) setSearchSuggestions(products.slice(0, 8)); // show max 8 suggestions
       } catch (err) {
         console.error('Search error:', err);
-        setSearchSuggestions([]);
+        if (!cancelled) setSearchSuggestions([]);
       } finally {
-        setSuggestionsLoading(false);
+        if (!cancelled) setSuggestionsLoading(false);
       }
     }, 300); // 300ms debounce
 
     return () => {
+      cancelled = true;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
@@ -145,14 +154,14 @@ const Header = () => {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      window.location.href = `/search?q=${encodeURIComponent(searchQuery)}`;
+      navigate(`/search?q=${encodeURIComponent(searchQuery)}`);
       setSearchQuery('');
       setIsSearchFocused(false);
     }
   };
 
   const handleSuggestionClick = (productId: string) => {
-    window.location.href = `/product/${productId}`;
+    navigate(`/product/${productId}`);
     setIsSearchFocused(false);
     setSearchQuery('');
   };

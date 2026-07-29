@@ -662,7 +662,7 @@ export async function addStoreImage(req: Request, res: Response) {
 
     const { data: inserted, error: insertErr } = await supabaseAdmin
       .from('store_images')
-      .insert({ store_id: storeId, url, storage_path: storagePath, sort_order: count ?? 0 })
+      .insert({ store_id: storeId, url, storage_path: storagePath, sort_order: count ?? 0, status: 'pending' })
       .select()
       .single();
 

@@ -718,9 +718,21 @@ const DeliveryPage = () => {
         <DeliveryDocumentReviewModal
           partner={{ id: reviewingPartner.user_id, name: reviewingPartner.name }}
           onClose={() => setReviewingPartner(null)}
-          onDocumentUpdated={(partnerId, updatedAt) =>
-            setDocsUpdatedAt((prev) => ({ ...prev, [partnerId]: updatedAt }))
-          }
+          onDocumentUpdated={(partnerId, updatedAt, docType, status) => {
+            setDocsUpdatedAt((prev) => ({ ...prev, [partnerId]: updatedAt }));
+            // Keep the Approve-button readiness gate's own data fresh
+            // locally too — otherwise it can show a stale "Not yet
+            // approved" reason for up to 20s until the next poll/Realtime
+            // event, even though docsUpdatedAt above already updated.
+            setDocStatusByPartner((prev) => {
+              const docs = prev[partnerId] || [];
+              const exists = docs.some((d) => d.doc_type === docType);
+              const nextDocs = exists
+                ? docs.map((d) => (d.doc_type === docType ? { ...d, status } : d))
+                : [...docs, { doc_type: docType, status }];
+              return { ...prev, [partnerId]: nextDocs };
+            });
+          }}
         />
       )}
     </AdminLayout>

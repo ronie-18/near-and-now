@@ -282,6 +282,11 @@ const AdminRoutes = () => {
           </AdminAuthGuard>
         }
       />
+      {/* Unmatched path (typo, stale bookmark, removed route) — previously
+          rendered nothing at all, not even the AdminLayout shell. Redirect
+          to the dashboard; AdminAuthGuard there still handles an
+          unauthenticated admin by bouncing to /login. */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };

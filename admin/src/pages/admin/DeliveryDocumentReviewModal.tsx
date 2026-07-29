@@ -55,7 +55,7 @@ export const DeliveryDocumentReviewModal = ({
 }: {
   partner: { id: string; name: string };
   onClose: () => void;
-  onDocumentUpdated: (partnerId: string, updatedAt: string) => void;
+  onDocumentUpdated: (partnerId: string, updatedAt: string, docType: string, status: string) => void;
 }) => {
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,7 +124,7 @@ export const DeliveryDocumentReviewModal = ({
         prev.map((d) => (d.doc_type === docType ? { ...d, ...json.document } : d))
       );
       if (json.document?.updated_at) {
-        onDocumentUpdated(partner.id, json.document.updated_at);
+        onDocumentUpdated(partner.id, json.document.updated_at, docType, json.document.status ?? status);
       }
       setRejectingType(null);
       setReason('');

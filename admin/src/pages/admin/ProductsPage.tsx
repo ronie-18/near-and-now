@@ -669,8 +669,8 @@ const ProductCard: React.FC<{
         <button
           onClick={() => onToggleStock(product.id, product.in_stock)}
           disabled={toggleLoading === product.id}
-          className="flex-1 py-2 text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-1.5
-            ${product.in_stock ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
+          className={`flex-1 py-2 text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-1.5
+            ${product.in_stock ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
         >
           {toggleLoading === product.id ? (
             <Loader2 size={14} className="animate-spin" />

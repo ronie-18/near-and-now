@@ -7,6 +7,7 @@ import { GoogleMapsProvider } from './context/GoogleMapsContext';
 import { LocationProvider } from './context/LocationContext';
 import Layout from './components/layout/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
+import ScrollToTop from './components/ScrollToTop';
 
 // Import actual page components
 import HomePage from './pages/HomePage';
@@ -96,6 +97,7 @@ function App() {
   return (
     <ErrorBoundary>
       <Router basename="/">
+        <ScrollToTop />
         <AuthProvider>
           <LocationProvider>
             <CartProvider>
