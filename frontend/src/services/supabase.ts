@@ -75,7 +75,9 @@ function getLocationFromStorage(): ProductFetchOptions | undefined {
     if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
       return { lat: loc.latitude, lng: loc.longitude };
     }
-  } catch {}
+  } catch {
+    // Malformed storage — fall through and treat as no known location.
+  }
   return undefined;
 }
 
