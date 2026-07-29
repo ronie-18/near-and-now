@@ -167,9 +167,18 @@ export class DeliveryController {
         for (const u of users ?? []) nameByRiderId.set((u as any).id, (u as any).name);
       }
 
+      const reviewerIds = [...new Set(rows.map((r: any) => r.reviewed_by).filter(Boolean))];
+      const reviewerById = new Map<string, { full_name: string; role: string }>();
+      if (reviewerIds.length) {
+        const { data: reviewers } = await supabaseAdmin.from('admins').select('id, full_name, role').in('id', reviewerIds);
+        (reviewers ?? []).forEach((a: any) => reviewerById.set(a.id, { full_name: a.full_name, role: a.role }));
+      }
+
       const requests = rows.map((row: any) => ({
         ...row,
         rider_name: nameByRiderId.get(row.rider_id) ?? null,
+        reviewed_by_name: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.full_name ?? null : null,
+        reviewed_by_role: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.role ?? null : null,
       }));
 
       res.json({ success: true, requests });
@@ -221,6 +230,17 @@ export class DeliveryController {
       notificationService
         .notifyRiderProfileChangeReviewed(updated.rider_id, status === 'approved', status === 'rejected' ? reason : null)
         .catch((err) => console.error('notifyRiderProfileChangeReviewed failed:', err));
+
+      const { data: rider } = await supabaseAdmin.from('app_users').select('name').eq('id', updated.rider_id).maybeSingle();
+      notificationService
+        .notifyAdminsOfReviewAction({
+          actorAdminId: req.adminId!,
+          category: 'rider_profile_change',
+          action: status,
+          entityLabel: rider?.name ?? 'Unknown rider',
+          rejectionReason: status === 'rejected' ? reason : null,
+        })
+        .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
       res.json({ success: true, request: updated });
     } catch (error: any) {

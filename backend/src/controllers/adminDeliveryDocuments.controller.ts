@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { notificationService } from '../services/notification.service.js';
 import {
   DOC_TYPES,
   SIGNED_URL_TTL_SECONDS,
@@ -120,6 +121,17 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
       console.error('❌ reviewDeliveryPartnerVerificationDocument error:', error);
       return res.status(500).json({ success: false, error: error.message });
     }
+
+    const { data: rider } = await supabaseAdmin.from('app_users').select('name').eq('id', partnerId).maybeSingle();
+    notificationService
+      .notifyAdminsOfReviewAction({
+        actorAdminId: req.adminId!,
+        category: 'rider_verification_doc',
+        action: status,
+        entityLabel: `${docType} — ${rider?.name ?? 'Unknown rider'}`,
+        rejectionReason: status === 'rejected' ? reason : null,
+      })
+      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, document: data });
   } catch (error: any) {

@@ -24,6 +24,8 @@ interface ChangeRequest {
   rejection_reason: string | null;
   created_at: string;
   reviewed_at: string | null;
+  reviewed_by_name: string | null;
+  reviewed_by_role: string | null;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -241,7 +243,7 @@ const RiderProfileChangeRequestsPage = () => {
                   )
                 ) : (
                   <div className="text-xs text-gray-400 flex flex-wrap items-center gap-x-4 gap-y-1">
-                    {req.reviewed_at && <span>Reviewed {new Date(req.reviewed_at).toLocaleString('en-IN')}</span>}
+                    {req.reviewed_at && <span>Reviewed {new Date(req.reviewed_at).toLocaleString('en-IN')}{req.reviewed_by_name ? ` by ${req.reviewed_by_name} (${req.reviewed_by_role})` : ''}</span>}
                     {req.status === 'rejected' && req.rejection_reason && (
                       <span className="text-gray-500">Reason: {req.rejection_reason}</span>
                     )}

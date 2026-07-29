@@ -257,6 +257,25 @@ export class NotificationService {
     }
   }
 
+  async notifyProductSubmissionReviewed(storeId: string, approved: boolean, productName: string, rejectionReason?: string | null) {
+    const title = approved ? 'Product Approved' : 'Product Submission Rejected';
+    const body = approved
+      ? `"${productName}" was approved and is now live in your store.`
+      : `"${productName}" was rejected${rejectionReason ? `: ${rejectionReason}` : '.'}`;
+
+    await this.persistNotification('store', storeId, 'product_submission_reviewed', title, body, { storeId, productName, approved, rejectionReason: rejectionReason ?? null });
+
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('expo_push_token')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (store?.expo_push_token) {
+      await this.sendExpoPush(store.expo_push_token, title, body, { storeId, type: 'product_submission_reviewed' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });
+    }
+  }
+
   async notifyRiderProfileChangeReviewed(riderId: string, approved: boolean, rejectionReason?: string | null) {
     const title = approved ? 'Profile Change Approved' : 'Profile Change Rejected';
     const body = approved
@@ -276,6 +295,56 @@ export class NotificationService {
     if (partner?.expo_push_token) {
       await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'profile_change_reviewed' }, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
     }
+  }
+
+  /**
+   * Broadcasts one admin's review action (approve/reject on a profile-change
+   * request, verification document, or product submission) to the shared
+   * admin_notifications feed, so other admins see it without having to poll
+   * every review queue themselves. Visibility beyond "every admin" is
+   * enforced by admin_notifications' own RLS policy (20260924000000): a
+   * super-admin actor's rows are only visible to other super admins; this
+   * call just needs to record who acted and at what role so that policy has
+   * something to key off. Attaches actor_id/actor_role via `admins` lookup
+   * rather than trusting a role passed in by the caller.
+   */
+  async notifyAdminsOfReviewAction(params: {
+    actorAdminId: string;
+    category: 'store_profile_change' | 'rider_profile_change' | 'store_verification_doc' | 'rider_verification_doc' | 'product_submission';
+    action: 'approved' | 'rejected';
+    entityLabel: string;
+    rejectionReason?: string | null;
+  }) {
+    const { actorAdminId, category, action, entityLabel, rejectionReason } = params;
+
+    const { data: actor } = await supabaseAdmin
+      .from('admins')
+      .select('full_name, role')
+      .eq('id', actorAdminId)
+      .maybeSingle();
+
+    const actorName = actor?.full_name || 'An admin';
+    const actorRole = actor?.role ?? null;
+
+    const CATEGORY_LABEL: Record<typeof category, string> = {
+      store_profile_change: 'store profile change request',
+      rider_profile_change: 'rider profile change request',
+      store_verification_doc: 'store verification document',
+      rider_verification_doc: 'rider verification document',
+      product_submission: 'product submission',
+    };
+
+    const title = `${CATEGORY_LABEL[category]} ${action}`;
+    const message = `${actorName} ${action} "${entityLabel}"${action === 'rejected' && rejectionReason ? `: ${rejectionReason}` : ''}`;
+
+    await supabaseAdmin.from('admin_notifications').insert({
+      type: 'admin_review_action',
+      title,
+      message,
+      data: { category, action, entityLabel, actorAdminId, actorName, rejectionReason: rejectionReason ?? null },
+      actor_id: actorAdminId,
+      actor_role: actorRole,
+    });
   }
 
   // Admin approval of a store/rider happens as a direct Supabase write from

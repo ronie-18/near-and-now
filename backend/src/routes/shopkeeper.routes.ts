@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { ShopkeeperController, requireShopkeeper, requireShopkeeperAuth } from '../controllers/shopkeeper.controller.js';
+import { submitProductSubmission, listMyProductSubmissions } from '../controllers/productSubmissions.controller.js';
 
 const router = Router();
 const ctrl = new ShopkeeperController();
@@ -13,5 +14,10 @@ router.get('/profile',                               requireShopkeeperAuth, ctrl
 router.get('/orders',                                requireShopkeeper, ctrl.getIncomingOrders.bind(ctrl));
 router.post('/allocations/:allocationId/accept',     requireShopkeeper, ctrl.acceptAllocation.bind(ctrl));
 router.post('/allocations/:allocationId/reject',     requireShopkeeper, ctrl.rejectAllocation.bind(ctrl));
+
+// Custom product submissions — staged for admin review, never written
+// directly to master_products (see backend/src/controllers/productSubmissions.controller.ts).
+router.post('/product-submissions', requireShopkeeper, submitProductSubmission);
+router.get('/product-submissions',  requireShopkeeper, listMyProductSubmissions);
 
 export default router;

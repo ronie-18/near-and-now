@@ -19,7 +19,8 @@ import {
   Plus,
   X,
   Store,
-  FileText
+  FileText,
+  History
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
@@ -133,7 +134,8 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
             { title: 'All Products', path: '/products', icon: <Package size={14} /> },
             { title: 'Add Product', path: '/products/add', icon: <Plus size={14} /> },
             { title: 'Categories', path: '/categories', icon: <Layers size={14} /> },
-            { title: 'Store Inventory', path: '/stores/products', icon: <Store size={14} /> }
+            { title: 'Store Inventory', path: '/stores/products', icon: <Store size={14} /> },
+            { title: 'Product Submissions', path: '/products/submissions', icon: <FileText size={14} /> }
           ]
         }
       ]
@@ -196,6 +198,11 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
     {
       label: 'System',
       items: [
+        {
+          title: 'Activity Log',
+          path: '/activity-log',
+          icon: <History size={18} />
+        },
         {
           title: 'Admin Users',
           path: '/admins',

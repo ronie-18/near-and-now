@@ -34,6 +34,11 @@ export function getNotificationLink(type: string, data: Record<string, any> | nu
       if (d.storeId) return '/stores/profile-change-requests';
       if (d.riderId) return '/delivery/profile-change-requests';
       return null;
+    // Broadcast of another admin's review action (adminActivityLog.controller.ts /
+    // notification.service.ts's notifyAdminsOfReviewAction) — route to the
+    // unified log rather than trying to guess a specific record's page.
+    case 'admin_review_action':
+      return '/activity-log';
     default:
       return null;
   }

@@ -41,8 +41,8 @@ router.get('/partners', requireAdmin, requirePermission('delivery_partners.view'
 // Must come before /partners/:partnerId below — same path depth, and Express
 // matches registration order, so a param route registered first would treat
 // "profile-change-requests" as a :partnerId value otherwise.
-router.get('/partners/profile-change-requests', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.listRiderProfileChangeRequests.bind(deliveryController));
-router.post('/partners/profile-change-requests/:id/review', requireAdmin, requirePermission('delivery_partners.edit'), deliveryController.reviewRiderProfileChangeRequest.bind(deliveryController));
+router.get('/partners/profile-change-requests', requireAdmin, requirePermission('profile_change_requests.view'), deliveryController.listRiderProfileChangeRequests.bind(deliveryController));
+router.post('/partners/profile-change-requests/:id/review', requireAdmin, requirePermission('profile_change_requests.edit'), deliveryController.reviewRiderProfileChangeRequest.bind(deliveryController));
 router.get('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getDeliveryPartnerById.bind(deliveryController));
 router.get('/partners/:partnerId/verification-documents', requireAdmin, requirePermission('delivery_partners.view'), getDeliveryPartnerVerificationDocuments);
 router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmin, requirePermission('delivery_partners.edit'), reviewDeliveryPartnerVerificationDocument);

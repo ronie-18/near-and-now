@@ -25,6 +25,8 @@ import StoresPage from '../pages/admin/StoresPage';
 import StoreProductsPage from '../pages/admin/StoreProductsPage';
 import StoreProfileChangeRequestsPage from '../pages/admin/StoreProfileChangeRequestsPage';
 import RiderProfileChangeRequestsPage from '../pages/admin/RiderProfileChangeRequestsPage';
+import ProductSubmissionsPage from '../pages/admin/ProductSubmissionsPage';
+import ActivityLogPage from '../pages/admin/ActivityLogPage';
 import { isAdminAuthenticated } from '../services/secureAdminAuth';
 
 // Secure admin authentication guard using JWT tokens
@@ -85,6 +87,14 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <EditProductPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/products/submissions"
+        element={
+          <AdminAuthGuard>
+            <ProductSubmissionsPage />
           </AdminAuthGuard>
         }
       />
@@ -261,6 +271,14 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <RiderProfileChangeRequestsPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/activity-log"
+        element={
+          <AdminAuthGuard>
+            <ActivityLogPage />
           </AdminAuthGuard>
         }
       />

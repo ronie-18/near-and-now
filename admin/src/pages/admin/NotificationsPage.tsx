@@ -19,7 +19,7 @@ interface AdminNotification {
   type: 'new_order' | 'new_user' | 'system' | 'refund_required'
     | 'document_uploaded' | 'document_removed' | 'verification_submitted'
     | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
-    | 'product_updated';
+    | 'product_updated' | 'admin_review_action';
   title: string;
   message: string;
   data: Record<string, any>;
@@ -58,6 +58,7 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
   rider_document_removed: { icon: Truck, color: 'text-gray-600', bg: 'bg-gray-100' },
   rider_verification_submitted: { icon: Truck, color: 'text-teal-600', bg: 'bg-teal-100' },
   product_updated: { icon: Package, color: 'text-orange-600', bg: 'bg-orange-100' },
+  admin_review_action: { icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-100' },
 };
 
 // ─── Push Notification Panel ──────────────────────────────────────────────────

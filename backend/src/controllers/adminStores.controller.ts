@@ -122,6 +122,17 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
       return res.status(500).json({ success: false, error: error.message });
     }
 
+    const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
+    notificationService
+      .notifyAdminsOfReviewAction({
+        actorAdminId: req.adminId!,
+        category: 'store_verification_doc',
+        action: status,
+        entityLabel: `${docType} — ${store?.name ?? 'Unknown store'}`,
+        rejectionReason: status === 'rejected' ? reason : null,
+      })
+      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+
     res.json({ success: true, document: data });
   } catch (error: any) {
     console.error('❌ reviewStoreVerificationDocument error:', error);
@@ -153,10 +164,22 @@ export async function listProfileChangeRequests(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
+    // reviewed_by has no FK to admins (added later, nullable, no
+    // relationship for PostgREST to auto-embed) — resolve it with a
+    // second lookup instead, same shape as store_name above.
+    const reviewerIds = [...new Set((data ?? []).map((r: any) => r.reviewed_by).filter(Boolean))];
+    const reviewerById = new Map<string, { full_name: string; role: string }>();
+    if (reviewerIds.length) {
+      const { data: reviewers } = await supabaseAdmin.from('admins').select('id, full_name, role').in('id', reviewerIds);
+      (reviewers ?? []).forEach((a: any) => reviewerById.set(a.id, { full_name: a.full_name, role: a.role }));
+    }
+
     const requests = (data ?? []).map((row: any) => ({
       ...row,
       store_name: row.stores?.name ?? null,
       stores: undefined,
+      reviewed_by_name: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.full_name ?? null : null,
+      reviewed_by_role: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.role ?? null : null,
     }));
 
     res.json({ success: true, requests });
@@ -218,6 +241,17 @@ export async function reviewProfileChangeRequest(req: Request, res: Response) {
     notificationService
       .notifyProfileChangeReviewed(updated.store_id, status === 'approved', status === 'rejected' ? reason : null)
       .catch((err) => console.error('notifyProfileChangeReviewed failed:', err));
+
+    const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', updated.store_id).maybeSingle();
+    notificationService
+      .notifyAdminsOfReviewAction({
+        actorAdminId: req.adminId!,
+        category: 'store_profile_change',
+        action: status,
+        entityLabel: store?.name ?? 'Unknown store',
+        rejectionReason: status === 'rejected' ? reason : null,
+      })
+      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, request: updated });
   } catch (error: any) {
