@@ -1377,17 +1377,38 @@ const CheckoutPage = () => {
                               <p className="text-sm font-semibold text-stone-800 truncate">{item.name}</p>
                               <p className="text-xs text-stone-400">₹{Math.round(item.price)} × {item.quantity}</p>
                             </div>
-                            {/* Qty controls */}
+                            {/* Qty controls — loose items step by 0.25kg with a 0.25 floor before
+                                removal, matching CartItem.tsx/ProductCard.tsx. Previously hardcoded
+                                a whole-number step here regardless of item.isLoose, silently 3x-ing
+                                a 0.5kg loose item to 1.5kg on a single "+" tap, and deleting a
+                                0.75kg item outright on "-" instead of stepping it down to 0.5kg. */}
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => item.quantity > 1 ? updateCartQuantity(item.id, item.quantity - 1, item.isLoose) : removeFromCart(item.id, item.isLoose)}
+                                onClick={() => {
+                                  const minQty = item.isLoose ? 0.25 : 1;
+                                  if (item.quantity > minQty) {
+                                    const decrement = item.isLoose ? 0.25 : 1;
+                                    const newQty = item.isLoose
+                                      ? parseFloat((item.quantity - decrement).toFixed(2))
+                                      : item.quantity - 1;
+                                    updateCartQuantity(item.id, newQty, item.isLoose);
+                                  } else {
+                                    removeFromCart(item.id, item.isLoose);
+                                  }
+                                }}
                                 className="w-7 h-7 rounded-lg border border-stone-200 flex items-center justify-center hover:bg-stone-50 hover:border-stone-300 transition-colors text-stone-500 font-bold text-sm leading-none"
                               >−</button>
-                              <span className="text-sm font-bold text-stone-800 w-5 text-center">{item.quantity}</span>
+                              <span className="text-sm font-bold text-stone-800 w-5 text-center">{item.isLoose ? `${item.quantity}kg` : item.quantity}</span>
                               <button
                                 type="button"
-                                onClick={() => updateCartQuantity(item.id, item.quantity + 1, item.isLoose)}
+                                onClick={() => {
+                                  const increment = item.isLoose ? 0.25 : 1;
+                                  const newQty = item.isLoose
+                                    ? parseFloat((item.quantity + increment).toFixed(2))
+                                    : item.quantity + 1;
+                                  updateCartQuantity(item.id, newQty, item.isLoose);
+                                }}
                                 className="w-7 h-7 rounded-lg border border-stone-200 flex items-center justify-center hover:bg-stone-50 hover:border-stone-300 transition-colors text-stone-500 font-bold text-sm leading-none"
                               >+</button>
                             </div>

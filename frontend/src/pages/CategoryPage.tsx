@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getProductsByCategory, Product } from '../services/supabase';
@@ -307,23 +307,35 @@ const CategoryPage = () => {
   }, []);
 
   /* ── fetch ── */
+  // Guards against a slower, older category fetch overwriting a newer one —
+  // e.g. clicking Vegetables then quickly Fruits before Vegetables' request
+  // resolves; without this, Vegetables' response landing after Fruits'
+  // would show Vegetables products under the "Fruits" hero title while the
+  // URL stays at /category/fruits. Uses a sequence ref (not a plain effect
+  // cancelled-flag) since fetchProducts is also called directly from the
+  // "Try again" button, not just the effect below.
+  const fetchSeqRef = useRef(0);
+
   const fetchProducts = useCallback(async () => {
     if (!categoryId) { setLoading(false); return; }
+    const seq = ++fetchSeqRef.current;
     try {
       setLoading(true);
       setError(null);
       console.log('🔍 CategoryPage - Fetching products for category:', categoryId);
       const categoryProducts = await getProductsByCategory(categoryId);
       console.log('📦 CategoryPage - Products found:', categoryProducts.length);
+      if (fetchSeqRef.current !== seq) return;
       setProducts(categoryProducts);
     } catch (err) {
+      if (fetchSeqRef.current !== seq) return;
       const errorMessage = 'Failed to load products. Please try again.';
       console.error('Error fetching products:', err);
       setError(errorMessage);
       showNotification(errorMessage, 'error');
       setProducts([]);
     } finally {
-      setLoading(false);
+      if (fetchSeqRef.current === seq) setLoading(false);
     }
   }, [categoryId, showNotification]);
 

@@ -202,11 +202,20 @@ const ProductDetailPage = () => {
   const cartQuantity = productInCart?.quantity || 0;
 
   useEffect(() => {
+    // Guards against a slower, older fetch overwriting a newer one — e.g.
+    // clicking through to a related product before this product's own
+    // getAllProducts() call resolves; without this, the slower response
+    // could land after navigation and clobber the new product's state while
+    // the URL/breadcrumb already show the new product. Same pattern as
+    // SearchPage.tsx's fix for the identical race.
+    let cancelled = false;
+
     const fetchProductDetails = async () => {
       if (!productId) return;
       try {
         setLoading(true);
         const allProducts = await getAllProducts();
+        if (cancelled) return;
         const currentProduct = allProducts.find(p => p.id === productId) || null;
         setProduct(currentProduct);
         if (currentProduct) {
@@ -218,10 +227,17 @@ const ProductDetailPage = () => {
       } catch (error) {
         console.error('Error fetching product details:', error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
     fetchProductDetails();
+    // Reset the quantity stepper on every product change — otherwise a
+    // quantity bumped up on one product (e.g. to 3) silently carries over to
+    // "Add to Cart" on the next product navigated to.
+    setQuantity(1);
+    return () => {
+      cancelled = true;
+    };
   }, [productId]);
 
   const incrementQuantity = () => setQuantity(prev => prev + 1);
