@@ -569,7 +569,16 @@ export class PaymentService {
           console.log('[WEBHOOK] Idempotent skip: order already paid', { eventId, paymentId: payment.id, internalOrderId });
           return;
         }
-        const expectedAmountPaise = Math.round(Number(orderCtx.total_amount || 0) * 100);
+        // For split payments the Razorpay order/payment only ever covers the
+        // UPI portion, not the full order total — same adjustment verifyPayment
+        // (above) and createPaymentOrder already apply. Without it, this
+        // fallback always saw a "mismatch" on split-payment orders and never
+        // updated payment_status, relying entirely on the synchronous
+        // /verify call to have already succeeded.
+        const isSplit = orderCtx.split_upi_amount != null && orderCtx.split_upi_amount > 0;
+        const expectedAmountPaise = isSplit
+          ? Math.round(orderCtx.split_upi_amount! * 100)
+          : Math.round(Number(orderCtx.total_amount || 0) * 100);
         const actualAmountPaise = Number(payment?.amount || 0);
         if (actualAmountPaise !== expectedAmountPaise) {
           console.warn('[WEBHOOK] Amount mismatch. Skipping paid update', {
@@ -577,7 +586,8 @@ export class PaymentService {
             paymentId: payment.id,
             internalOrderId,
             expectedAmountPaise,
-            actualAmountPaise
+            actualAmountPaise,
+            isSplit
           });
           return;
         }
