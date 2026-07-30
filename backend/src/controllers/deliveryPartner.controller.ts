@@ -385,11 +385,24 @@ export class DeliveryPartnerController {
 
   async getProfile(req: Request, res: Response) {
     try {
-      const { data: user } = await supabaseAdmin
+      // .maybeSingle() (not .single()) — .single() errors on anything but
+      // exactly one row, and that error was previously discarded by the
+      // destructure below, silently leaving `user` undefined and stripping
+      // name/email/phone from the response with no trace in the logs. Found
+      // 2026-07-31: production was doing exactly this for a real, correctly-
+      // linked rider — delivery_partners' own query (already .maybeSingle())
+      // succeeded every time, only this one failed, so app_users' name was
+      // always missing from getProfile's response despite the account being
+      // completely valid. Logging the error now instead of swallowing it so
+      // a recurrence is actually diagnosable.
+      const { data: user, error: userError } = await supabaseAdmin
         .from('app_users')
         .select('id, name, email, phone, created_at')
         .eq('id', req.riderId!)
-        .single();
+        .maybeSingle();
+      if (userError) {
+        console.error('[getProfile] app_users lookup failed:', userError);
+      }
 
       const { data: profile } = await supabaseAdmin
         .from('delivery_partners')
