@@ -1,17 +1,15 @@
 /**
- * Checkout GST Calculations
- * Matches the invoice service calculation logic exactly
+ * Checkout Bill Calculations
  *
  * CALCULATION FLOW:
- * 1. Taxable value = Base price of product (without GST)
- * 2. GST (5%) = Calculated on taxable value
- * 3. MRP = Taxable value + GST (if no discount)
- * 4. Final amount = MRP - discount
+ * 1. Taxable value = item total (each item's own price already has its real
+ *    per-product GST baked in server-side — no further checkout-page markup)
+ * 2. MRP = Taxable value (no checkout-page GST overlay)
+ * 3. Final amount = MRP - discount
  */
 
 import { PLATFORM_FEE, HANDLING_FEE } from './deliveryFees';
 
-const DEFAULT_GST_RATE = 5; // 5% GST for food items
 const FEE_GST_RATE = 5; // 5% GST on platform and handling fees
 
 interface GSTBreakdown {
@@ -54,22 +52,6 @@ function round2(n: number): number {
 }
 
 /**
- * Calculate GST split for intra-state (CGST + SGST)
- */
-function calcGSTSplit(taxableValue: number, gstPercent: number, isInterState: boolean = false): GSTBreakdown {
-  const half = gstPercent / 2;
-
-  if (isInterState) {
-    const igst = round2(taxableValue * gstPercent / 100);
-    return { cgst: 0, sgst: 0, igst, total: igst };
-  }
-
-  const cgst = round2(taxableValue * half / 100);
-  const sgst = round2(taxableValue * half / 100);
-  return { cgst, sgst, igst: 0, total: cgst + sgst };
-}
-
-/**
  * Calculate complete checkout totals with proper GST breakdown
  * Matches backend invoice.service.ts logic exactly
  */
@@ -79,16 +61,20 @@ export function calculateCheckoutTotals(
   discount: number = 0
 ): CheckoutTotals {
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1: Calculate Items - Taxable value, GST, MRP
+  // STEP 1: Calculate Items - Taxable value, MRP
   // ═══════════════════════════════════════════════════════════════════════════
-  // Cart subtotal is the taxable value (base price without GST)
+  // Cart subtotal is the taxable value. Each item's own price already has its
+  // real per-product GST baked in server-side (master_products.gst_rate, via
+  // transformProductRowToProduct/priceWithGst) — by design, the checkout page
+  // no longer adds a further flat 5% on top of that (that extra line was a
+  // double-count, not a real additional charge). itemsGST is kept at zero
+  // rather than removed from the type so existing callers reading the field
+  // don't break; it plays no part in itemsMRP/itemsTotal/grandTotal below.
   const itemsTaxableValue = round2(cartSubtotal);
+  const itemsGST: GSTBreakdown = { cgst: 0, sgst: 0, igst: 0, total: 0 };
 
-  // GST calculated on taxable value
-  const itemsGST = calcGSTSplit(itemsTaxableValue, DEFAULT_GST_RATE);
-
-  // MRP = Taxable value + GST
-  const itemsMRP = round2(itemsTaxableValue + itemsGST.total);
+  // MRP = Taxable value (no checkout-page GST overlay added)
+  const itemsMRP = itemsTaxableValue;
 
   // Final item total = MRP - discount
   const itemsTotal = round2(itemsMRP - discount);

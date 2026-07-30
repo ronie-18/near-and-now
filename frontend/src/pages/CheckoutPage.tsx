@@ -1464,8 +1464,7 @@ const CheckoutPage = () => {
                       {/* Totals */}
                       <div className="px-6 py-4 space-y-2.5">
                         {[
-                          { label: 'Taxable Value', val: `₹${Math.round(checkoutTotals.itemsTaxableValue)}` },
-                          { label: 'GST (5%)', val: `₹${checkoutTotals.itemsGST.total.toFixed(2)}` },
+                          { label: 'Item Total', val: `₹${Math.round(checkoutTotals.itemsTaxableValue)}` },
                           { label: 'Platform Fee', val: `₹${checkoutTotals.platformFeeTotal.toFixed(2)}` },
                           { label: 'Handling Fee', val: `₹${checkoutTotals.handlingFeeTotal.toFixed(2)}` },
                         ].map(({ label, val }) => (

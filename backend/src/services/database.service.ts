@@ -1013,16 +1013,18 @@ export class DatabaseService {
     // folded anonymously into order_total with no way to verify or pay it out.
     const trustedTipAmount = Math.max(0, Number(orderData.tip_amount) || 0);
 
-    // Floor check on order_total: the frontend's own total = subtotal * 1.05 (its
-    // fixed checkout GST-equivalent markup) + PLATFORM_FEE + HANDLING_FEE +
-    // trustedDeliveryFee (currently always 0) - trustedDiscountAmount + tip_amount.
-    // Now that tip is a real, known field, the floor accounts for it exactly
-    // instead of only checking the portion determined by item prices alone.
-    const CHECKOUT_GST_MULTIPLIER = 1.05;
+    // Floor check on order_total: the frontend's own total = subtotal (each
+    // item's own price already has its real per-product GST baked in — the
+    // checkout page no longer adds a further flat 5% checkout-only markup on
+    // top of that, removed 2026-07-31 as a double-count) + PLATFORM_FEE +
+    // HANDLING_FEE + trustedDeliveryFee (currently always 0) -
+    // trustedDiscountAmount + tip_amount. Now that tip is a real, known
+    // field, the floor accounts for it exactly instead of only checking the
+    // portion determined by item prices alone.
     const PLATFORM_FEE = 9.5;
     const HANDLING_FEE = 5.5;
     const trustedFloor =
-      trustedSubtotal * CHECKOUT_GST_MULTIPLIER + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee - trustedDiscountAmount + trustedTipAmount;
+      trustedSubtotal + PLATFORM_FEE + HANDLING_FEE + trustedDeliveryFee - trustedDiscountAmount + trustedTipAmount;
     if (orderData.order_total < trustedFloor - 1) {
       throw new Error('Order total does not match item prices. Please refresh your cart and try again.');
     }
