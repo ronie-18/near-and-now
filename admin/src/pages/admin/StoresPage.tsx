@@ -14,6 +14,7 @@ import {
   WifiOff,
   FileText,
   FileCheck,
+  Landmark,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
@@ -80,6 +81,15 @@ interface StoreImage {
   reviewed_at: string | null;
 }
 
+interface StoreBillingInfo {
+  ownerName: string | null;
+  ownerImageUrl: string | null;
+  bankAccountNumber: string | null;
+  bankIfscCode: string | null;
+  bankBranchName: string | null;
+  passbookUrl: string | null;
+}
+
 // ─── Document Review Modal ─────────────────────────────────────────────────
 const DocumentReviewModal = ({
   store,
@@ -104,6 +114,10 @@ const DocumentReviewModal = ({
   const [actingImageId, setActingImageId] = useState<string | null>(null);
   const [rejectingImageId, setRejectingImageId] = useState<string | null>(null);
   const [imageReason, setImageReason] = useState('');
+
+  const [billingInfo, setBillingInfo] = useState<StoreBillingInfo | null>(null);
+  const [billingLoading, setBillingLoading] = useState(true);
+  const [billingError, setBillingError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -139,9 +153,27 @@ const DocumentReviewModal = ({
     }
   };
 
+  const loadBilling = async () => {
+    setBillingLoading(true);
+    setBillingError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/stores/${store.id}/billing-info`, {
+        headers: adminAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load billing info');
+      setBillingInfo(json.billingInfo);
+    } catch (err: any) {
+      setBillingError(err.message || 'Failed to load billing info');
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
   useEffect(() => {
     load();
     loadImages();
+    loadBilling();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.id]);
 
@@ -510,6 +542,78 @@ const DocumentReviewModal = ({
                     )}
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2 border-t border-gray-100">
+            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+              <Landmark size={16} className="text-gray-500" />
+              Billing Info
+            </h3>
+
+            {billingError && (
+              <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-3">
+                {billingError}
+              </div>
+            )}
+
+            {billingLoading ? (
+              <div className="py-8 flex justify-center">
+                <div className="relative w-8 h-8">
+                  <div className="w-8 h-8 border-4 border-violet-200 rounded-full" />
+                  <div className="absolute top-0 left-0 w-8 h-8 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
+                </div>
+              </div>
+            ) : !billingInfo || (!billingInfo.bankAccountNumber && !billingInfo.bankIfscCode && !billingInfo.passbookUrl) ? (
+              <p className="text-sm text-gray-400">No billing info submitted yet.</p>
+            ) : (
+              <div className="border border-gray-200 rounded-2xl p-4">
+                <div className="flex items-start gap-3">
+                  {billingInfo.ownerImageUrl ? (
+                    <img
+                      src={billingInfo.ownerImageUrl}
+                      alt={billingInfo.ownerName || 'Owner'}
+                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
+                      <Landmark className="w-6 h-6 text-gray-300" />
+                    </div>
+                  )}
+                  <div className="min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 flex-1">
+                    <div>
+                      <p className="text-xs text-gray-400">Owner name</p>
+                      <p className="text-sm font-medium text-gray-800">{billingInfo.ownerName || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Bank account number</p>
+                      <p className="text-sm font-medium text-gray-800">{billingInfo.bankAccountNumber || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">IFSC code</p>
+                      <p className="text-sm font-medium text-gray-800">{billingInfo.bankIfscCode || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Branch name</p>
+                      <p className="text-sm font-medium text-gray-800">{billingInfo.bankBranchName || '—'}</p>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-gray-400 mb-1">Passbook / cheque photo</p>
+                      {billingInfo.passbookUrl ? (
+                        <a href={billingInfo.passbookUrl} target="_blank" rel="noreferrer">
+                          <img
+                            src={billingInfo.passbookUrl}
+                            alt="Passbook / cheque"
+                            className="w-24 h-24 rounded-xl object-cover border border-gray-200"
+                          />
+                        </a>
+                      ) : (
+                        <p className="text-sm text-gray-400">Not uploaded</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>

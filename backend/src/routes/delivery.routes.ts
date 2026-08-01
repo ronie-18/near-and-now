@@ -7,6 +7,7 @@ import { VEHICLE_TYPES } from '../utils/deliveryPartnerVerificationDocuments.js'
 import {
   getDeliveryPartnerVerificationDocuments,
   reviewDeliveryPartnerVerificationDocument,
+  getDeliveryPartnerBillingInfo,
 } from '../controllers/adminDeliveryDocuments.controller.js';
 
 const router = Router();
@@ -45,6 +46,7 @@ router.get('/partners/profile-change-requests', requireAdmin, requirePermission(
 router.post('/partners/profile-change-requests/:id/review', requireAdmin, requirePermission('profile_change_requests.edit'), deliveryController.reviewRiderProfileChangeRequest.bind(deliveryController));
 router.get('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.view'), deliveryController.getDeliveryPartnerById.bind(deliveryController));
 router.get('/partners/:partnerId/verification-documents', requireAdmin, requirePermission('delivery_partners.view'), getDeliveryPartnerVerificationDocuments);
+router.get('/partners/:partnerId/billing-info', requireAdmin, requirePermission('delivery_partners.view'), getDeliveryPartnerBillingInfo);
 router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmin, requirePermission('delivery_partners.edit'), reviewDeliveryPartnerVerificationDocument);
 router.post('/partners', requireAdmin, requirePermission('delivery_partners.edit'), validate(createDeliveryPartnerSchema), deliveryController.createDeliveryPartner.bind(deliveryController));
 router.put('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.edit'), validate(updateDeliveryPartnerSchema), deliveryController.updateDeliveryPartner.bind(deliveryController));

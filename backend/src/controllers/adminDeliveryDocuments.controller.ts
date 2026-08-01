@@ -63,6 +63,47 @@ export async function getDeliveryPartnerVerificationDocuments(req: Request, res:
 }
 
 /**
+ * Read-only view of a rider's Billing Info (name/photo, UPI ID) for admin
+ * review. Mirrors the rider app's own GET /delivery-partner/billing-info
+ * (deliveryPartner.controller.ts) — same columns, just without the
+ * caller-is-the-rider scoping (admin can view any rider's billing info).
+ */
+export async function getDeliveryPartnerBillingInfo(req: Request, res: Response) {
+  try {
+    const { partnerId } = req.params;
+
+    const { data: user } = await supabaseAdmin
+      .from('app_users')
+      .select('name')
+      .eq('id', partnerId)
+      .maybeSingle();
+
+    const { data: profile, error } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('profile_image_url, upi_id')
+      .eq('user_id', partnerId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ getDeliveryPartnerBillingInfo error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    res.json({
+      success: true,
+      billingInfo: {
+        name: user?.name ?? null,
+        profileImageUrl: profile?.profile_image_url ?? null,
+        upiId: profile?.upi_id ?? null,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ getDeliveryPartnerBillingInfo error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch billing info' });
+  }
+}
+
+/**
  * Approve or reject one of a delivery partner's verification documents.
  * Rejecting requires a reason so the rider app can tell them what to fix.
  * Never touches delivery_partners.is_approved — that stays a separate,

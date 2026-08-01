@@ -3,6 +3,7 @@ import { requireAdmin, requirePermission } from '../middleware/adminAuth.middlew
 import {
   getStoreVerificationDocuments,
   reviewStoreVerificationDocument,
+  getStoreBillingInfo,
   getStoreImages,
   reviewStoreImage,
   notifyStoreApproved,
@@ -13,6 +14,7 @@ import {
 const router = Router();
 
 router.get('/stores/:id/verification-documents', requireAdmin, requirePermission('store_verification.view'), getStoreVerificationDocuments);
+router.get('/stores/:id/billing-info', requireAdmin, requirePermission('store_verification.view'), getStoreBillingInfo);
 router.patch('/stores/:id/verification-documents/:docType', requireAdmin, requirePermission('store_verification.edit'), reviewStoreVerificationDocument);
 router.get('/stores/:id/images', requireAdmin, requirePermission('store_verification.view'), getStoreImages);
 router.patch('/stores/:id/images/:imageId', requireAdmin, requirePermission('store_verification.edit'), reviewStoreImage);

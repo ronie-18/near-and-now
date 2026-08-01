@@ -62,6 +62,62 @@ export async function getStoreVerificationDocuments(req: Request, res: Response)
 }
 
 /**
+ * Read-only view of a store's Billing Info (owner name/photo, bank details,
+ * passbook/cheque photo) for admin review. Mirrors the shopkeeper app's own
+ * GET /store-owner/stores/:id/billing-info (storeOwner.controller.ts) — same
+ * columns, same signed-URL pattern, just without the ownership check (admin
+ * can view any store's billing info, not just their own).
+ */
+export async function getStoreBillingInfo(req: Request, res: Response) {
+  try {
+    const { id: storeId } = req.params;
+
+    const { data: store, error } = await supabaseAdmin
+      .from('stores')
+      .select('owner_id, owner_image_url, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ getStoreBillingInfo error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+    if (!store) {
+      return res.status(404).json({ success: false, error: 'Store not found' });
+    }
+
+    const { data: owner } = await supabaseAdmin
+      .from('app_users')
+      .select('name')
+      .eq('id', store.owner_id)
+      .maybeSingle();
+
+    let passbookUrl: string | null = null;
+    if (store.bank_passbook_storage_path) {
+      const { data: signed } = await supabaseAdmin.storage
+        .from(VERIFICATION_DOCS_BUCKET)
+        .createSignedUrl(store.bank_passbook_storage_path, SIGNED_URL_TTL_SECONDS);
+      passbookUrl = signed?.signedUrl ?? null;
+    }
+
+    res.json({
+      success: true,
+      billingInfo: {
+        ownerName: owner?.name ?? null,
+        ownerImageUrl: store.owner_image_url ?? null,
+        bankAccountNumber: store.bank_account_number ?? null,
+        bankIfscCode: store.bank_ifsc_code ?? null,
+        bankBranchName: store.bank_branch_name ?? null,
+        passbookUrl,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ getStoreBillingInfo error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch billing info' });
+  }
+}
+
+/**
  * Approve or reject one of a store's verification documents. Rejecting
  * requires a reason so the shopkeeper app can tell them what to fix.
  * Never touches stores.is_approved — that stays a separate, manual action.

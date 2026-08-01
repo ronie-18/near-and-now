@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getAdminToken } from '../../services/adminSession';
-import { X, CheckCircle, XCircle, AlertCircle, FileText, FileCheck } from 'lucide-react';
+import { X, CheckCircle, XCircle, AlertCircle, FileText, FileCheck, Landmark } from 'lucide-react';
 import { getAdminClient } from '../../services/supabase';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -42,6 +42,12 @@ interface VerificationDoc {
   file_size: string | null;
 }
 
+interface RiderBillingInfo {
+  name: string | null;
+  profileImageUrl: string | null;
+  upiId: string | null;
+}
+
 /**
  * Delivery-partner equivalent of StoresPage.tsx's DocumentReviewModal — same
  * shape (per-document approve/reject, shared rejectingType/reason state,
@@ -65,6 +71,10 @@ export const DeliveryDocumentReviewModal = ({
   const [reason, setReason] = useState('');
   const [reviewerNames, setReviewerNames] = useState<Record<string, string>>({});
 
+  const [billingInfo, setBillingInfo] = useState<RiderBillingInfo | null>(null);
+  const [billingLoading, setBillingLoading] = useState(true);
+  const [billingError, setBillingError] = useState<string | null>(null);
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -82,8 +92,26 @@ export const DeliveryDocumentReviewModal = ({
     }
   };
 
+  const loadBilling = async () => {
+    setBillingLoading(true);
+    setBillingError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/delivery/partners/${partner.id}/billing-info`, {
+        headers: adminAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load billing info');
+      setBillingInfo(json.billingInfo);
+    } catch (err: any) {
+      setBillingError(err.message || 'Failed to load billing info');
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
   useEffect(() => {
     load();
+    loadBilling();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partner.id]);
 
@@ -305,6 +333,56 @@ export const DeliveryDocumentReviewModal = ({
               </div>
             ))
           )}
+
+          <div className="pt-2 border-t border-gray-100">
+            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+              <Landmark size={16} className="text-gray-500" />
+              Billing Info
+            </h3>
+
+            {billingError && (
+              <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-3">
+                {billingError}
+              </div>
+            )}
+
+            {billingLoading ? (
+              <div className="py-8 flex justify-center">
+                <div className="relative w-8 h-8">
+                  <div className="w-8 h-8 border-4 border-orange-200 rounded-full" />
+                  <div className="absolute top-0 left-0 w-8 h-8 border-4 border-orange-500 rounded-full animate-spin border-t-transparent" />
+                </div>
+              </div>
+            ) : !billingInfo || !billingInfo.upiId ? (
+              <p className="text-sm text-gray-400">No billing info submitted yet.</p>
+            ) : (
+              <div className="border border-gray-200 rounded-2xl p-4">
+                <div className="flex items-start gap-3">
+                  {billingInfo.profileImageUrl ? (
+                    <img
+                      src={billingInfo.profileImageUrl}
+                      alt={billingInfo.name || 'Rider'}
+                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
+                      <Landmark className="w-6 h-6 text-gray-300" />
+                    </div>
+                  )}
+                  <div className="min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 flex-1">
+                    <div>
+                      <p className="text-xs text-gray-400">Rider name</p>
+                      <p className="text-sm font-medium text-gray-800">{billingInfo.name || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">UPI ID</p>
+                      <p className="text-sm font-medium text-gray-800">{billingInfo.upiId || '—'}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="px-6 pb-6 pt-2 flex-shrink-0">
