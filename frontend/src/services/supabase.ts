@@ -162,8 +162,10 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
     for (const ids of storeChunks) {
       const { data, error } = await supabaseAdmin
         .from('products')
-        .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
+        .select('id, store_id, master_product_id, product_name, is_active, master_products(*), stores!inner(is_active, is_approved)')
         .eq('is_active', true)
+        .eq('stores.is_active', true)
+        .eq('stores.is_approved', true)
         .in('store_id', ids);
       if (error) throw new Error(`Database error: ${error.message}`);
       if (data?.length) allRows.push(...(data as unknown as ProductRow[]));
@@ -172,18 +174,20 @@ async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]
   }
 
   // No location filter (fresh session, geolocation denied, or a direct product/search/category
-  // link) -- storeIds is null here, so without an explicit stores.is_active check every product
-  // from every store, including stores toggled offline, would be returned. The location-based
-  // branch above gets this for free from get_nearby_store_ids' own `WHERE is_active = true`.
+  // link) -- storeIds is null here, so without an explicit stores.is_active / is_approved check
+  // every product from every store, including offline or unverified stores, would be returned.
+  // The location-based branch above gets is_active from get_nearby_store_ids; we still enforce
+  // is_approved here (and below on the join) so only verified shopkeepers appear.
   let from = 0;
   const batchSize = 500;
   let hasMore = true;
   while (hasMore) {
     const { data, error } = await supabaseAdmin
       .from('products')
-      .select('id, store_id, master_product_id, product_name, is_active, master_products(*), stores!inner(is_active)')
+      .select('id, store_id, master_product_id, product_name, is_active, master_products(*), stores!inner(is_active, is_approved)')
       .eq('is_active', true)
       .eq('stores.is_active', true)
+      .eq('stores.is_approved', true)
       .range(from, from + batchSize - 1);
     if (error) throw new Error(`Database error: ${error.message}`);
     if (data && data.length > 0) {
