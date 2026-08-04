@@ -18,7 +18,8 @@ import {
   RefreshCw,
   Loader2,
   Calendar,
-  CreditCard
+  CreditCard,
+  Store
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getOrders, updateOrderStatus, Order } from '../../services/adminService';
@@ -323,6 +324,7 @@ const OrdersPage = () => {
                   <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
                     <th className="px-6 py-4">Order ID</th>
                     <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Store / Rider</th>
                     <th className="px-6 py-4">Date</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Items</th>
@@ -346,6 +348,20 @@ const OrdersPage = () => {
                           {order.customer_phone && !order.customer_email && (
                             <p className="text-xs text-gray-500">{order.customer_phone}</p>
                           )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5 text-sm text-gray-700">
+                            <Store size={13} className="text-gray-400 flex-shrink-0" />
+                            {order.stores?.length ? order.stores.map(s => s.name).join(', ') : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                            <Truck size={12} className="text-gray-400 flex-shrink-0" />
+                            {order.delivery_partner?.name || <span className="text-gray-400">Unassigned</span>}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">

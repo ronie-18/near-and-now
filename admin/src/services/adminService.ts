@@ -162,6 +162,10 @@ export interface Order {
   receiver_name?: string | null;
   receiver_phone?: string | null;
   receiver_address?: string | null;
+  /** Store(s) fulfilling this order — usually one, but multi-store dispatch can split an order. */
+  stores?: { id: string; name: string }[];
+  /** Assigned delivery partner, if any (store_orders.delivery_partner_id). */
+  delivery_partner?: { id: string; name: string; phone: string | null } | null;
 }
 
 export interface Customer {
@@ -506,6 +510,7 @@ export async function getOrders(): Promise<Order[]> {
           status,
           subtotal_amount,
           delivery_fee,
+          delivery_partner_id,
           order_items (
             id,
             product_id,
@@ -530,7 +535,7 @@ export async function getOrders(): Promise<Order[]> {
 
     // Get all unique customer IDs
     const customerIds = [...new Set(customerOrders.map(co => co.customer_id).filter(Boolean))];
-    
+
     // Fetch customer info for all orders in one query
     const { data: customers } = await getAdminClient()
       .from('app_users')
@@ -547,17 +552,44 @@ export async function getOrders(): Promise<Order[]> {
       });
     });
 
+    // Which store fulfilled the order, and which rider (if any) is assigned —
+    // previously fetched (store_id) but never exposed on Order/rendered
+    // anywhere, so an admin had no way to see either from Orders/OrderDetail
+    // without manually cross-referencing the Stores/Delivery pages.
+    const storeIds = [...new Set(
+      customerOrders.flatMap(co => (co.store_orders || []).map((so: any) => so.store_id)).filter(Boolean)
+    )];
+    const riderIds = [...new Set(
+      customerOrders.flatMap(co => (co.store_orders || []).map((so: any) => so.delivery_partner_id)).filter(Boolean)
+    )];
+    const [{ data: storeRows }, { data: riderRows }] = await Promise.all([
+      storeIds.length
+        ? getAdminClient().from('stores').select('id, name').in('id', storeIds)
+        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+      riderIds.length
+        ? getAdminClient().from('delivery_partners').select('user_id, name, phone').in('user_id', riderIds)
+        : Promise.resolve({ data: [] as { user_id: string; name: string; phone: string | null }[] }),
+    ]);
+    const storeMap = new Map<string, { id: string; name: string }>();
+    (storeRows || []).forEach((s: any) => storeMap.set(s.id, { id: s.id, name: s.name }));
+    const riderMap = new Map<string, { id: string; name: string; phone: string | null }>();
+    (riderRows || []).forEach((r: any) => riderMap.set(r.user_id, { id: r.user_id, name: r.name, phone: r.phone }));
+
     // Transform to match expected Order format
     const transformedOrders: Order[] = customerOrders.map(co => {
       // Aggregate items from all store_orders
       const allItems: any[] = [];
       let itemsCount = 0;
-      
+      const orderStoreIds = new Set<string>();
+      let deliveryPartnerId: string | null = null;
+
       (co.store_orders || []).forEach((so: any) => {
         if (so.order_items) {
           allItems.push(...so.order_items);
           itemsCount += so.order_items.length;
         }
+        if (so.store_id) orderStoreIds.add(so.store_id);
+        if (so.delivery_partner_id) deliveryPartnerId = so.delivery_partner_id;
       });
 
       // Get customer info from map
@@ -592,7 +624,9 @@ export async function getOrders(): Promise<Order[]> {
         },
         created_at: co.placed_at || co.created_at || '',
         order_number: co.order_code,
-        updated_at: co.updated_at
+        updated_at: co.updated_at,
+        stores: [...orderStoreIds].map(id => storeMap.get(id)).filter((s): s is { id: string; name: string } => !!s),
+        delivery_partner: deliveryPartnerId ? (riderMap.get(deliveryPartnerId) ?? null) : null,
       };
     });
 
@@ -615,6 +649,7 @@ export async function getOrderById(id: string): Promise<Order | null> {
           status,
           subtotal_amount,
           delivery_fee,
+          delivery_partner_id,
           order_items (
             id,
             product_id,
@@ -639,12 +674,16 @@ export async function getOrderById(id: string): Promise<Order | null> {
     // Aggregate items from all store_orders
     const allItems: any[] = [];
     let itemsCount = 0;
-    
+    const orderStoreIds = new Set<string>();
+    let deliveryPartnerId: string | null = null;
+
     (customerOrder.store_orders || []).forEach((so: any) => {
       if (so.order_items) {
         allItems.push(...so.order_items);
         itemsCount += so.order_items.length;
       }
+      if (so.store_id) orderStoreIds.add(so.store_id);
+      if (so.delivery_partner_id) deliveryPartnerId = so.delivery_partner_id;
     });
 
     // Get customer info from app_users
@@ -653,6 +692,17 @@ export async function getOrderById(id: string): Promise<Order | null> {
       .select('id, name, email, phone')
       .eq('id', customerOrder.customer_id)
       .single();
+
+    // Which store(s) fulfilled the order, and which rider (if any) is
+    // assigned — see getOrders() for the fuller writeup of this gap.
+    const [{ data: storeRows }, { data: riderRow }] = await Promise.all([
+      orderStoreIds.size
+        ? getAdminClient().from('stores').select('id, name').in('id', [...orderStoreIds])
+        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+      deliveryPartnerId
+        ? getAdminClient().from('delivery_partners').select('user_id, name, phone').eq('user_id', deliveryPartnerId).maybeSingle()
+        : Promise.resolve({ data: null as { user_id: string; name: string; phone: string | null } | null }),
+    ]);
 
     return {
       id: customerOrder.id,
@@ -688,7 +738,9 @@ export async function getOrderById(id: string): Promise<Order | null> {
       gstin_business_name: customerOrder.gstin_business_name || null,
       receiver_name: customerOrder.receiver_name || null,
       receiver_phone: customerOrder.receiver_phone || null,
-      receiver_address: customerOrder.receiver_address || null
+      receiver_address: customerOrder.receiver_address || null,
+      stores: (storeRows || []).map((s: any) => ({ id: s.id, name: s.name })),
+      delivery_partner: riderRow ? { id: (riderRow as any).user_id, name: (riderRow as any).name, phone: (riderRow as any).phone } : null,
     };
   } catch (error) {
     console.error('Error in getOrderById:', error);

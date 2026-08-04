@@ -85,6 +85,10 @@ const AccountTab = () => {
 
   const changePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!oldPassword) {
+      setResult({ ok: false, msg: 'Enter your current password.' });
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setResult({ ok: false, msg: 'Passwords do not match.' });
       return;
@@ -97,7 +101,11 @@ const AccountTab = () => {
     setResult(null);
     try {
       if (!admin?.id) throw new Error('Not authenticated');
-      await updateAdmin(admin.id, { password: newPassword });
+      // oldPassword is verified server-side against the real password_hash —
+      // this field used to be collected and required non-empty client-side
+      // but never actually sent, so any admin with a valid session could set
+      // a new password with no verification at all.
+      await updateAdmin(admin.id, { password: newPassword, oldPassword });
       setResult({ ok: true, msg: 'Password updated successfully.' });
       setOldPassword(''); setNewPassword(''); setConfirmPassword('');
     } catch (err: any) {

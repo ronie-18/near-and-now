@@ -31,6 +31,8 @@ export interface CreateAdminData {
 export interface UpdateAdminData {
   email?: string;
   password?: string;
+  /** Required by the backend when self-changing your own password (id === caller). */
+  oldPassword?: string;
   full_name?: string;
   role?: Admin['role'];
   permissions?: string[];

@@ -21,7 +21,7 @@ import {
   Filter,
   FileText,
   Layers,
-  Percent,
+  XCircle,
   Eye,
   Clock
 } from 'lucide-react';
@@ -862,9 +862,15 @@ const ReportsPage = () => {
                       <p className="text-sm text-gray-500">{periodLabel}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 px-3 py-1 bg-emerald-50 rounded-full">
-                    <TrendingUp size={14} className="text-emerald-600" />
-                    <span className="text-sm font-semibold text-emerald-600">Growing</span>
+                  <div className={`flex items-center gap-2 px-3 py-1 rounded-full ${stats.revenueGrowth >= 0 ? 'bg-emerald-50' : 'bg-red-50'}`}>
+                    {stats.revenueGrowth >= 0 ? (
+                      <TrendingUp size={14} className="text-emerald-600" />
+                    ) : (
+                      <TrendingDown size={14} className="text-red-600" />
+                    )}
+                    <span className={`text-sm font-semibold ${stats.revenueGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {stats.revenueGrowth >= 0 ? 'Growing' : 'Declining'}
+                    </span>
                   </div>
                 </div>
                 <DailySalesChart data={dailySales} />
@@ -940,37 +946,37 @@ const ReportsPage = () => {
                 icon={TrendingUp}
                 iconBg="bg-emerald-100 text-emerald-600"
                 label="Products In Stock"
-                value={products.filter(p => p.in_stock).length || 198}
+                value={products.filter(p => p.in_stock).length}
               />
               <MetricCard
                 icon={TrendingDown}
                 iconBg="bg-red-100 text-red-600"
                 label="Out of Stock"
-                value={products.filter(p => !p.in_stock).length || 12}
+                value={products.filter(p => !p.in_stock).length}
               />
               <MetricCard
                 icon={FileText}
                 iconBg="bg-blue-100 text-blue-600"
                 label="Categories"
-                value={categories.length || 8}
+                value={categories.length}
               />
               <MetricCard
                 icon={BarChart3}
                 iconBg="bg-violet-100 text-violet-600"
                 label="Delivered"
-                value={filteredOrders.filter(o => o.order_status === 'delivered').length || 87}
+                value={filteredOrders.filter(o => o.order_status === 'delivered').length}
               />
               <MetricCard
                 icon={Clock}
                 iconBg="bg-amber-100 text-amber-600"
                 label="Pending"
-                value={filteredOrders.filter(o => o.order_status === 'placed').length || 23}
+                value={filteredOrders.filter(o => o.order_status === 'placed').length}
               />
               <MetricCard
-                icon={Percent}
+                icon={XCircle}
                 iconBg="bg-pink-100 text-pink-600"
-                label="Conv. Rate"
-                value="4.2%"
+                label="Cancelled"
+                value={filteredOrders.filter(o => o.order_status === 'cancelled').length}
               />
             </div>
 

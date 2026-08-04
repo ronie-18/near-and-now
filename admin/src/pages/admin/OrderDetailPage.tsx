@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getAdminToken } from '../../services/adminSession';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import {
   ArrowLeft,
@@ -18,7 +18,8 @@ import {
   CheckCircle,
   Clock,
   XCircle,
-  RefreshCw
+  RefreshCw,
+  Store
 } from 'lucide-react';
 import { getOrderById, updateOrderStatus, Order } from '../../services/adminService';
 import { apiUrl } from '../../utils/apiBase';
@@ -380,6 +381,47 @@ const OrderDetailPage = () => {
                     </p>
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Fulfillment — which store(s) and which rider, previously not shown
+                anywhere on this page; an admin investigating a late/missing order
+                had to manually cross-reference the Stores/Delivery pages. */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <Store className="w-5 h-5 text-gray-600" />
+                Fulfillment
+              </h2>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm text-gray-500">Store{order.stores && order.stores.length > 1 ? 's' : ''}</p>
+                  {order.stores?.length ? (
+                    order.stores.map(s => (
+                      <p key={s.id} className="font-semibold text-gray-800">{s.name}</p>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-400">—</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Truck size={16} className="text-gray-400" />
+                  <div>
+                    <p className="text-sm text-gray-500">Delivery Partner</p>
+                    {order.delivery_partner ? (
+                      <p className="font-semibold text-gray-800">
+                        {order.delivery_partner.name}
+                        {order.delivery_partner.phone && (
+                          <span className="text-sm text-gray-500 font-normal"> · {order.delivery_partner.phone}</span>
+                        )}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-gray-400">Not yet assigned</p>
+                    )}
+                  </div>
+                </div>
+                <Link to="/delivery" className="inline-block text-xs text-blue-600 hover:text-blue-800 font-medium">
+                  View all delivery partners →
+                </Link>
               </div>
             </div>
 

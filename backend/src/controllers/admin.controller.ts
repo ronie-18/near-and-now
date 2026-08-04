@@ -164,11 +164,12 @@ export class AdminController {
     try {
       const { id } = req.params;
       const {
-        email, password, full_name, role, permissions, status,
+        email, password, oldPassword, full_name, role, permissions, status,
         notification_preferences, display_preferences
       } = req.body as {
         email?: string;
         password?: string;
+        oldPassword?: string;
         full_name?: string;
         role?: string;
         permissions?: string[];
@@ -205,6 +206,31 @@ export class AdminController {
       if (notification_preferences !== undefined) updateData.notification_preferences = notification_preferences;
       if (display_preferences !== undefined) updateData.display_preferences = display_preferences;
       if (password !== undefined) {
+        // Self-service change (id === req.adminId) must prove knowledge of the
+        // current password — the admin panel's "Current Password" field was
+        // previously collected client-side and required non-empty, but never
+        // actually sent or checked anywhere, so any admin with a valid session
+        // could silently set a new password with no verification at all. A
+        // super_admin resetting a DIFFERENT admin's password (id !== req.adminId,
+        // already gated to super_admin above) is a deliberate reset flow and
+        // has no old password to prove — skip the check in that case.
+        if (id === req.adminId) {
+          if (!oldPassword) {
+            return res.status(400).json({ error: 'Current password is required.' });
+          }
+          const { data: target, error: targetError } = await supabaseAdmin
+            .from('admins')
+            .select('password_hash')
+            .eq('id', id)
+            .maybeSingle();
+          if (targetError || !target) {
+            return res.status(401).json({ error: 'Invalid admin session' });
+          }
+          const oldPasswordValid = await bcrypt.compare(oldPassword, (target as any).password_hash);
+          if (!oldPasswordValid) {
+            return res.status(400).json({ error: 'Current password is incorrect.' });
+          }
+        }
         const strengthError = passwordStrengthError(password);
         if (strengthError) {
           return res.status(400).json({ error: strengthError });
