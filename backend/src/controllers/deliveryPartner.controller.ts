@@ -245,13 +245,31 @@ function mapDbStatusToRider(dbStatus: string): string {
  * don't go through acceptOrder/acceptOffer (which already check this) need to
  * check it themselves instead. Mirrors the is_approved check in acceptOrder.
  */
-async function requireApprovedRider(riderId: string): Promise<boolean> {
+/**
+ * Single source of truth for a rider's approval/online eligibility state —
+ * `updateStatus` and `acceptOffer` used to each hand-roll their own separate
+ * `delivery_partners` lookup for overlapping subsets of these same fields,
+ * which could silently drift out of sync on a future edit to one but not the
+ * other. Both now read through this.
+ */
+async function getRiderApprovalState(
+  riderId: string
+): Promise<{ is_approved: boolean; is_online: boolean; status: string | null }> {
   const { data: partner } = await supabaseAdmin
     .from('delivery_partners')
-    .select('is_approved')
+    .select('is_approved, is_online, status')
     .eq('user_id', riderId)
     .maybeSingle();
-  return Boolean((partner as { is_approved?: boolean } | null)?.is_approved);
+  const p = partner as { is_approved?: boolean; is_online?: boolean; status?: string } | null;
+  return {
+    is_approved: Boolean(p?.is_approved),
+    is_online: Boolean(p?.is_online),
+    status: p?.status ?? null,
+  };
+}
+
+async function requireApprovedRider(riderId: string): Promise<boolean> {
+  return (await getRiderApprovalState(riderId)).is_approved;
 }
 
 // Flat per-order rider fee, paid by the platform (not the customer — delivery_fee
@@ -462,15 +480,8 @@ export class DeliveryPartnerController {
         return res.status(400).json({ error: 'is_online must be a boolean' });
       }
 
-      if (is_online) {
-        const { data: partner } = await supabaseAdmin
-          .from('delivery_partners')
-          .select('is_approved')
-          .eq('user_id', req.riderId!)
-          .maybeSingle();
-        if (!(partner as any)?.is_approved) {
-          return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
-        }
+      if (is_online && !(await requireApprovedRider(req.riderId!))) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
 
       const { error } = await supabaseAdmin
@@ -1706,15 +1717,11 @@ export class DeliveryPartnerController {
     try {
       const { offerId } = req.params;
 
-      const { data: partner } = await supabaseAdmin
-        .from('delivery_partners')
-        .select('is_approved, is_online, status')
-        .eq('user_id', req.riderId!)
-        .maybeSingle();
-      if (!(partner as any)?.is_approved) {
+      const riderState = await getRiderApprovalState(req.riderId!);
+      if (!riderState.is_approved) {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
-      if (!(partner as any)?.is_online || (partner as any)?.status !== 'active') {
+      if (!riderState.is_online || riderState.status !== 'active') {
         return res.status(403).json({ error: 'Go online to accept orders.' });
       }
 
