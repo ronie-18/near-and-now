@@ -19,7 +19,7 @@ import {
   UserCheck,
   UserX
 } from 'lucide-react';
-import { getCustomers, Customer } from '../../services/adminService';
+import { getCustomers, setCustomerSuspended, notifyAdminAction, Customer } from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
 
 // Constants
@@ -78,6 +78,8 @@ const CustomersPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedStatus, setSelectedStatus] = useState('All');
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch customers
   const fetchCustomers = async () => {
@@ -89,6 +91,32 @@ const CustomersPage = () => {
       console.error('Error fetching customers:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Suspend/reactivate — matches the online-offline toggle pattern already
+  // used for stores/riders; Customers was previously the only entity type
+  // with no way to block an abusive/fraudulent account at all.
+  const handleToggleSuspend = async (customer: Customer) => {
+    const suspending = customer.status === 'Active';
+    if (suspending && !window.confirm(`Suspend "${customer.name}"? They won't be able to log in or place orders until reactivated.`)) {
+      return;
+    }
+    setTogglingId(customer.id);
+    setError(null);
+    try {
+      await setCustomerSuspended(customer.id, suspending);
+      setCustomers(prev => prev.map(c => c.id === customer.id ? { ...c, status: suspending ? 'Inactive' : 'Active' } : c));
+      await notifyAdminAction(
+        `${suspending ? 'suspended' : 'reactivated'} customer`,
+        customer.name,
+        { customer_id: customer.id, customer_name: customer.name, is_suspended: suspending },
+        'admin_review_action'
+      );
+    } catch (err: any) {
+      setError(`Failed to update customer status: ${err.message}`);
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -146,6 +174,12 @@ const CustomersPage = () => {
             Refresh
           </button>
         </div>
+
+        {error && (
+          <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium">
+            {error}
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -292,13 +326,23 @@ const CustomersPage = () => {
                         <span className="text-lg font-bold text-gray-800">₹{customer.total_spent.toLocaleString()}</span>
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold
-                          ${customer.status === 'Active' 
-                            ? 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700' 
-                            : 'bg-gray-100 text-gray-600'}`}>
-                          {customer.status === 'Active' ? <UserCheck size={14} /> : <UserX size={14} />}
+                        <button
+                          onClick={() => handleToggleSuspend(customer)}
+                          disabled={togglingId === customer.id}
+                          title={customer.status === 'Active' ? 'Suspend customer' : 'Reactivate customer'}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed
+                            ${customer.status === 'Active'
+                              ? 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 hover:bg-emerald-200'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                          {togglingId === customer.id ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                          ) : customer.status === 'Active' ? (
+                            <UserCheck size={14} />
+                          ) : (
+                            <UserX size={14} />
+                          )}
                           {customer.status}
-                        </span>
+                        </button>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex justify-end">

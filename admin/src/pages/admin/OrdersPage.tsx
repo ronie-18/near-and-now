@@ -188,6 +188,19 @@ const OrdersPage = () => {
 
   // Handle status update
   const handleUpdateOrderStatus = async (orderId: string, newStatus: Order['order_status']) => {
+    // Unlike every other destructive action in this codebase (product/category/
+    // admin/coupon delete), this dropdown let an admin jump straight to
+    // "Delivered" or "Cancelled" — the two final, consequence-bearing states
+    // (payout/refund logic keys off them) — in one click with zero confirmation
+    // and no undo. Only gate those two transitions; ordinary in-progress status
+    // changes stay a single click, matching the low-stakes nature of correcting
+    // a status typo.
+    if (newStatus === 'delivered' || newStatus === 'cancelled') {
+      const confirmed = window.confirm(
+        `Mark this order as "${formatStatusLabel(newStatus)}"? This cannot be undone from here.`
+      );
+      if (!confirmed) return;
+    }
     try {
       setUpdatingOrderId(orderId);
       setError(null);

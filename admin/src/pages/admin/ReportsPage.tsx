@@ -18,7 +18,6 @@ import {
   Award,
   AlertCircle,
   X,
-  Filter,
   FileText,
   Layers,
   XCircle,
@@ -991,12 +990,6 @@ const ReportsPage = () => {
                     <h3 className="text-xl font-bold">Data refreshes automatically</h3>
                     <p className="text-white/80 mt-1">All analytics are calculated from your actual store data in real-time</p>
                   </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <button className="px-5 py-2.5 bg-white/20 backdrop-blur-sm rounded-xl hover:bg-white/30 transition-colors font-semibold flex items-center gap-2">
-                    <Filter size={18} />
-                    Advanced Filters
-                  </button>
                 </div>
               </div>
             </div>

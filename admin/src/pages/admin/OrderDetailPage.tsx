@@ -66,6 +66,15 @@ const OrderDetailPage = () => {
   const handleStatusUpdate = async (newStatus: Order['order_status']) => {
     if (!id || !order) return;
 
+    // Same confirmation gate as OrdersPage.tsx's StatusDropdown — "Delivered"
+    // and "Cancelled" are final, consequence-bearing states (payout/refund
+    // logic keys off them), unlike every other destructive action in this
+    // codebase which already requires confirmation.
+    if (newStatus === 'delivered' || newStatus === 'cancelled') {
+      const label = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+      if (!window.confirm(`Mark this order as "${label}"? This cannot be undone from here.`)) return;
+    }
+
     try {
       setUpdating(true);
       setError(null);

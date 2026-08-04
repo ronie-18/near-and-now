@@ -299,7 +299,7 @@ const AdminDashboardPage = () => {
       // need to separately fetch the full master_products catalog (44k+ rows,
       // paginated across 45 requests) just to look up an image for the top 5.
       // Use normalized product names (lowercase, trimmed) as keys for matching.
-      const productSales: Record<string, { name: string; image?: string; sold: number; revenue: number }> = {};
+      const productSales: Record<string, { name: string; image?: string; productId?: string; sold: number; revenue: number }> = {};
 
       orders
         .filter(order => order.order_status !== 'cancelled')
@@ -310,7 +310,7 @@ const AdminDashboardPage = () => {
               const productName = displayName.trim().toLowerCase();
               if (productName) {
                 if (!productSales[productName]) {
-                  productSales[productName] = { name: displayName, image: item.image_url || item.image, sold: 0, revenue: 0 };
+                  productSales[productName] = { name: displayName, image: item.image_url || item.image, productId: item.product_id, sold: 0, revenue: 0 };
                 }
                 const quantity = Number(item.quantity) || 1;
                 const price = Number(item.price) || 0;
@@ -323,7 +323,7 @@ const AdminDashboardPage = () => {
 
       // Sort by revenue and take top 5
       const topProds = Object.values(productSales)
-        .map(p => ({ name: p.name, image: p.image, sold: Math.round(p.sold), revenue: Math.round(p.revenue) }))
+        .map(p => ({ name: p.name, image: p.image, productId: p.productId, sold: Math.round(p.sold), revenue: Math.round(p.revenue) }))
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 5);
 
@@ -596,7 +596,7 @@ const AdminDashboardPage = () => {
                 ) : (
                   <div className="divide-y divide-gray-100">
                     {recentOrders.map((order) => (
-                      <div key={order.id} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
+                      <Link key={order.id} to={`/orders/${order.id}`} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
                         <div className="flex items-center gap-4">
                           <div className="w-10 h-10 bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl flex items-center justify-center">
                             <Package className="w-5 h-5 text-gray-600" />
@@ -613,7 +613,7 @@ const AdminDashboardPage = () => {
                             {order.order_status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
                           </span>
                         </div>
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 )}
@@ -637,7 +637,11 @@ const AdminDashboardPage = () => {
                 ) : (
                   <div className="divide-y divide-gray-100">
                     {topProducts.map((product, index) => (
-                      <div key={index} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
+                      <Link
+                        key={index}
+                        to={product.productId ? `/products/edit/${product.productId}` : '/products'}
+                        className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                      >
                         <div className="flex items-center gap-4">
                           {product.image ? (
                             <img src={product.image} alt={product.name} className="w-12 h-12 rounded-xl object-cover shadow-sm" />
@@ -654,7 +658,7 @@ const AdminDashboardPage = () => {
                         <div className="text-right">
                           <p className="font-bold text-gray-800">₹{product.revenue.toLocaleString()}</p>
                         </div>
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 )}

@@ -39,13 +39,17 @@ export async function requireCustomer(req: Request, res: Response, next: NextFun
 
   const { data: user, error } = await supabaseAdmin
     .from('app_users')
-    .select('id, role, session_token_issued_at')
+    .select('id, role, session_token_issued_at, is_suspended')
     .eq('session_token', token)
     .eq('role', 'customer')
     .maybeSingle();
 
   if (error || !user) {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  if ((user as any).is_suspended) {
+    return res.status(403).json({ error: 'This account has been suspended.' });
   }
 
   const issuedAtRaw = (user as any).session_token_issued_at;

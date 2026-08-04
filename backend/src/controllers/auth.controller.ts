@@ -258,6 +258,9 @@ export class AuthController {
 
       if (existingUser) {
         // Existing customer - login
+        if (existingUser.is_suspended) {
+          return res.status(403).json({ error: 'This account has been suspended.' });
+        }
         console.log('👤 Existing customer, logging in');
         appUser = existingUser;
         const { data: customerData } = await supabaseAdmin

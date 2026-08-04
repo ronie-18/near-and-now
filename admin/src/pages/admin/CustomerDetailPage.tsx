@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, User, Mail, Phone, MapPin, Calendar, ShoppingBag, TrendingUp, Package, CheckCircle, Clock, XCircle } from 'lucide-react';
-import { getCustomerById, Customer, getOrders } from '../../services/adminService';
+import { ArrowLeft, User, Mail, Phone, MapPin, Calendar, ShoppingBag, TrendingUp, Package, CheckCircle, Clock, XCircle, RefreshCw } from 'lucide-react';
+import { getCustomerById, setCustomerSuspended, notifyAdminAction, Customer, getOrders } from '../../services/adminService';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
 
@@ -10,6 +10,8 @@ const CustomerDetailPage = () => {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [toggling, setToggling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -31,6 +33,31 @@ const CustomerDetailPage = () => {
       console.error('Error fetching customer data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Same pattern as CustomersPage's list-view toggle.
+  const handleToggleSuspend = async () => {
+    if (!customer) return;
+    const suspending = customer.status === 'Active';
+    if (suspending && !window.confirm(`Suspend "${customer.name}"? They won't be able to log in or place orders until reactivated.`)) {
+      return;
+    }
+    setToggling(true);
+    setError(null);
+    try {
+      await setCustomerSuspended(customer.id, suspending);
+      setCustomer({ ...customer, status: suspending ? 'Inactive' : 'Active' });
+      await notifyAdminAction(
+        `${suspending ? 'suspended' : 'reactivated'} customer`,
+        customer.name,
+        { customer_id: customer.id, customer_name: customer.name, is_suspended: suspending },
+        'admin_review_action'
+      );
+    } catch (err: any) {
+      setError(`Failed to update customer status: ${err.message}`);
+    } finally {
+      setToggling(false);
     }
   };
 
@@ -113,14 +140,25 @@ const CustomerDetailPage = () => {
                 </div>
               </div>
             </div>
-            <span className={`px-4 py-2 rounded-lg font-medium ${
-              customer.status === 'Active'
-                ? 'bg-green-100 text-green-800'
-                : 'bg-gray-100 text-gray-800'
-            }`}>
+            <button
+              onClick={handleToggleSuspend}
+              disabled={toggling}
+              title={customer.status === 'Active' ? 'Suspend customer' : 'Reactivate customer'}
+              className={`px-4 py-2 rounded-lg font-medium inline-flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                customer.status === 'Active'
+                  ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                  : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+              }`}
+            >
+              {toggling && <RefreshCw size={14} className="animate-spin" />}
               {customer.status}
-            </span>
+            </button>
           </div>
+          {error && (
+            <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-4">
+              {error}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="flex items-center gap-3">

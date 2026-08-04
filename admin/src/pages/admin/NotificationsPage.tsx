@@ -76,7 +76,7 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
 const PushNotificationPanel = () => {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [targetApp, setTargetApp] = useState<'drivers' | 'all'>('all');
+  const [targetApp, setTargetApp] = useState<'drivers' | 'stores' | 'customers' | 'all'>('all');
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -90,7 +90,8 @@ const PushNotificationPanel = () => {
 
       // Fetch push tokens based on target. Previously "All Apps" only ever
       // queried delivery_partners regardless — same as picking "Drivers" — so
-      // shopkeepers never actually received an "all apps" broadcast either.
+      // neither shopkeepers nor customers actually received an "all apps"
+      // broadcast, despite the UI's "Connected Apps" panel implying otherwise.
       let tokens: string[] = [];
 
       if (targetApp === 'drivers' || targetApp === 'all') {
@@ -101,12 +102,24 @@ const PushNotificationPanel = () => {
         tokens = [...tokens, ...(driverData?.map(r => r.expo_push_token).filter(Boolean) || [])];
       }
 
-      if (targetApp === 'all') {
+      if (targetApp === 'stores' || targetApp === 'all') {
         // expo_push_token is no longer anon-readable off stores directly (see
         // 20260830000000 migration, closing a public read of every store's push
         // token) — this admin-gated RPC is the only remaining way to fetch it.
         const { data: storeData } = await db.rpc('admin_get_store_push_tokens');
         tokens = [...tokens, ...((storeData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
+      }
+
+      if (targetApp === 'customers' || targetApp === 'all') {
+        // app_users has no public-facing SELECT policy the way stores.public_read
+        // does, so — unlike stores — no RPC carve-out is needed here; the admin
+        // session's existing admin_full_access RLS policy already covers this.
+        const { data: customerData } = await db
+          .from('app_users')
+          .select('expo_push_token')
+          .eq('role', 'customer')
+          .not('expo_push_token', 'is', null);
+        tokens = [...tokens, ...(customerData?.map(r => r.expo_push_token).filter(Boolean) || [])];
       }
 
       const uniqueTokens = [...new Set(tokens)];
@@ -180,18 +193,18 @@ const PushNotificationPanel = () => {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Target App</label>
-          <div className="grid grid-cols-3 gap-2">
-            {(['all', 'drivers'] as const).map(t => (
+          <div className="grid grid-cols-4 gap-2">
+            {(['all', 'drivers', 'stores', 'customers'] as const).map(t => (
               <button
                 key={t}
-                onClick={() => setTargetApp(t as any)}
+                onClick={() => setTargetApp(t)}
                 className={`py-2 px-3 rounded-xl text-sm font-medium border-2 transition-all ${
                   targetApp === t
                     ? 'border-violet-500 bg-violet-50 text-violet-700'
                     : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
               >
-                {t === 'all' ? 'All Apps' : 'Drivers'}
+                {t === 'all' ? 'All Apps' : t === 'drivers' ? 'Drivers' : t === 'stores' ? 'Stores' : 'Customers'}
               </button>
             ))}
           </div>

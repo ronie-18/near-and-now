@@ -803,7 +803,7 @@ export async function getCustomers(): Promise<Customer[]> {
     // delivery partners, which must not leak into the customer list/count)
     const { data: users, error: usersError } = await getAdminClient()
       .from('app_users')
-      .select('id, name, email, phone, created_at')
+      .select('id, name, email, phone, created_at, is_suspended')
       .eq('role', 'customer')
       .order('created_at', { ascending: false });
 
@@ -843,7 +843,7 @@ export async function getCustomers(): Promise<Customer[]> {
         name: user.name || '',
         email: user.email || '',
         phone: user.phone || '',
-        status: 'Active' as Customer['status'],
+        status: (user as any).is_suspended ? 'Inactive' : 'Active',
         orders_count: stats.count,
         total_spent: Math.round(stats.total),
         created_at: user.created_at || '',
@@ -863,7 +863,7 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
     // Fetch user from app_users, scoped to role = customer (see getCustomers)
     const { data: user, error: userError } = await getAdminClient()
       .from('app_users')
-      .select('id, name, email, phone, created_at')
+      .select('id, name, email, phone, created_at, is_suspended')
       .eq('id', id)
       .eq('role', 'customer')
       .single();
@@ -890,7 +890,7 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
       name: user.name || '',
       email: user.email || '',
       phone: user.phone || '',
-      status: 'Active',
+      status: (user as any).is_suspended ? 'Inactive' : 'Active',
       orders_count: orders?.length || 0,
       total_spent: Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0),
       created_at: user.created_at || '',
@@ -899,6 +899,23 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
   } catch (error) {
     console.error('Error in getCustomerById:', error);
     return null;
+  }
+}
+
+// Suspend/reactivate a customer — app_users.is_suspended, enforced server-side
+// by requireCustomer (blocks all API access) and the OTP-login check (blocks
+// getting a new session in the first place). Direct write, matching the same
+// pattern already used for store/rider online-offline toggles.
+export async function setCustomerSuspended(id: string, suspended: boolean): Promise<void> {
+  const { data, error } = await getAdminClient()
+    .from('app_users')
+    .update({ is_suspended: suspended })
+    .eq('id', id)
+    .eq('role', 'customer')
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('Update was blocked (no admin session or insufficient permissions).');
   }
 }
 

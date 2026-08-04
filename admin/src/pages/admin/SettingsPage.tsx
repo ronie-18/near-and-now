@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import {
-  Shield, Bell, Palette, Monitor, Lock, Eye, EyeOff,
+  Shield, Bell, Monitor, Lock, Eye, EyeOff,
   CheckCircle, AlertCircle, X, Save, RefreshCw, Key,
-  Globe, Database, Wifi, Activity
+  Database, Wifi, Activity
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
@@ -285,86 +285,6 @@ const NotificationsTab = () => {
   );
 };
 
-// ─── Appearance Tab ──────────────────────────────────────────────────────────
-
-const DEFAULT_DISPLAY_PREFS = { compactMode: false, showAnimations: true, language: 'en', timezone: 'Asia/Kolkata', currency: 'INR' };
-
-const AppearanceTab = () => {
-  const admin = getCurrentAdmin();
-  const [prefs, setPrefs] = useState(() => ({ ...DEFAULT_DISPLAY_PREFS, ...(admin?.display_preferences || {}) }));
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const update = (key: string, value: any) => {
-    setPrefs((p: any) => ({ ...p, [key]: value }));
-    setSaved(false);
-  };
-
-  const save = async () => {
-    if (!admin?.id) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const updated = await updateAdmin(admin.id, { display_preferences: prefs });
-      if (updated) updateStoredAdminData(updated);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save settings.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <SectionCard title="Display Preferences" description="Customise how the admin panel looks for you" icon={Palette} iconBg="bg-amber-50 text-amber-600">
-        <div className="divide-y divide-gray-100">
-          <Toggle checked={prefs.compactMode} onChange={v => update('compactMode', v)} label="Compact Mode" description="Reduce spacing for a denser layout" />
-          <Toggle checked={prefs.showAnimations} onChange={v => update('showAnimations', v)} label="Animations" description="Enable UI transition animations" />
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Regional Settings" description="Language, timezone, and currency display" icon={Globe} iconBg="bg-teal-50 text-teal-600">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Language</label>
-            <select value={prefs.language} onChange={e => update('language', e.target.value)} className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-400">
-              <option value="en">English</option>
-              <option value="hi">Hindi</option>
-              <option value="bn">Bengali</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Timezone</label>
-            <select value={prefs.timezone} onChange={e => update('timezone', e.target.value)} className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-400">
-              <option value="Asia/Kolkata">IST (UTC+5:30)</option>
-              <option value="UTC">UTC</option>
-              <option value="Asia/Dubai">UAE (UTC+4)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Currency</label>
-            <select value={prefs.currency} onChange={e => update('currency', e.target.value)} className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-400">
-              <option value="INR">₹ Indian Rupee</option>
-              <option value="USD">$ US Dollar</option>
-              <option value="EUR">€ Euro</option>
-            </select>
-          </div>
-        </div>
-        {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
-        <div className="mt-4 flex items-center gap-3 pt-4 border-t border-gray-100">
-          <button onClick={save} disabled={saving} className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-emerald-600 text-white text-sm font-semibold rounded-xl hover:from-teal-600 hover:to-emerald-700 transition-all disabled:opacity-50">
-            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}Save Settings
-          </button>
-          {saved && <span className="flex items-center gap-1 text-sm text-emerald-600 font-medium"><CheckCircle size={14} /> Saved</span>}
-        </div>
-      </SectionCard>
-    </div>
-  );
-};
-
 // ─── System Tab ───────────────────────────────────────────────────────────────
 
 const SystemTab = () => {
@@ -421,7 +341,6 @@ const SystemTab = () => {
 const TABS = [
   { id: 'account', label: 'Account & Security', icon: Shield },
   { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'system', label: 'System', icon: Database },
 ];
 
@@ -466,7 +385,6 @@ const SettingsPage = () => {
           <div className="flex-1 min-w-0">
             {activeTab === 'account' && <AccountTab />}
             {activeTab === 'notifications' && <NotificationsTab />}
-            {activeTab === 'appearance' && <AppearanceTab />}
             {activeTab === 'system' && <SystemTab />}
           </div>
         </div>
