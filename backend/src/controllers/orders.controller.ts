@@ -77,11 +77,17 @@ export class OrdersController {
       // sellable price = discounted_price + (discounted_price * gst_rate / 100), with
       // loose products (is_loose = true) sold at discounted_price with no per-item GST.
       const productIds = [...new Set(cart_items.map((it: any) => it.product_id))];
+      // Require the parent store to be online (is_active) and admin-approved
+      // (is_approved) — same gate the customer-facing display paths enforce
+      // (frontend/src/services/supabase.ts::fetchProductRows), so an order
+      // can't be created for a store that's offline or was never approved.
       const { data: productRows, error: productsError } = await supabaseAdmin
         .from('products')
-        .select('id, store_id, master_product_id')
+        .select('id, store_id, master_product_id, stores!inner(is_active, is_approved)')
         .in('id', productIds)
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .eq('stores.is_active', true)
+        .eq('stores.is_approved', true);
       if (productsError) {
         throw new Error('Failed to verify product prices');
       }
