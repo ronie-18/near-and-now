@@ -767,6 +767,14 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
  * whether the store was suspended by this call (was approved, now isn't),
  * plus its name — fetched in the same round-trip since every caller needs
  * both (the name for the admin-notification message).
+ *
+ * Also doubles as the thing that keeps `stores.updated_at` honest for a
+ * document event on a store that ISN'T yet approved (the common case during
+ * onboarding) — `stores`'s own `BEFORE UPDATE` trigger only stamps
+ * `updated_at` when a `stores` row is actually written, and neither
+ * `store_verification_documents` inserts/deletes touch that row on their
+ * own. Without this, uploading documents during normal pre-approval
+ * onboarding never bumped `stores.updated_at` at all (found 2026-08-04).
  */
 async function suspendStoreIfApprovedAndGetName(storeId: string): Promise<{ suspended: boolean; name: string }> {
   const { data: store } = await supabaseAdmin
@@ -776,7 +784,16 @@ async function suspendStoreIfApprovedAndGetName(storeId: string): Promise<{ susp
     .maybeSingle();
 
   const name = store?.name || 'A store';
-  if (!store?.is_approved) return { suspended: false, name };
+
+  if (!store?.is_approved) {
+    // Not approved yet — no suspension to do, but still a real "this store
+    // was touched" event worth reflecting in updated_at.
+    await supabaseAdmin
+      .from('stores')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', storeId);
+    return { suspended: false, name };
+  }
 
   await supabaseAdmin
     .from('stores')
