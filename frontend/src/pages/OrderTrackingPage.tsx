@@ -539,7 +539,11 @@ const OrderTrackingPage = () => {
                         <Phone className="w-3 h-3" />{order.delivery_agent.phone}
                       </a>
                     </div>
-                    <button className="flex items-center gap-1 text-yellow-600 text-sm font-medium">
+                    <button
+                      type="button"
+                      onClick={() => showNotification('Rating delivery partners is coming soon!', 'info')}
+                      className="flex items-center gap-1 text-yellow-600 text-sm font-medium"
+                    >
                       <Star className="w-4 h-4" /> Rate
                     </button>
                   </div>
@@ -769,6 +773,7 @@ const OrderTrackingPage = () => {
             {isDelivered && (
               <button
                 type="button"
+                onClick={() => showNotification('Rating your experience is coming soon!', 'info')}
                 className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-yellow-100 hover:border-yellow-300 hover:bg-yellow-50 transition-all group col-span-2"
               >
                 <Star className="w-6 h-6 text-yellow-400" />

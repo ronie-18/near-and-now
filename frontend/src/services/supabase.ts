@@ -57,6 +57,7 @@ export interface Product {
   category: string;
   in_stock: boolean;
   rating?: number;
+  reviewCount?: number;
   size?: string;
   weight?: string;
   created_at?: string;
@@ -152,6 +153,8 @@ interface ProductRow {
     is_active: boolean;
     created_at?: string;
     gst_rate?: number | string | null;
+    rating?: number | string | null;
+    rating_count?: number | null;
     [key: string]: unknown;
   } | null;
 }
@@ -245,6 +248,8 @@ function transformProductRowToProduct(row: ProductRow): Product {
     description: mp.description,
     // New products table no longer stores quantity; active products are treated as in stock.
     in_stock: row.is_active,
+    rating: mp.rating != null ? Number(mp.rating) : undefined,
+    reviewCount: mp.rating_count ?? undefined,
     unit: mp.unit ?? 'piece',
     isLoose,
     created_at: mp.created_at,
