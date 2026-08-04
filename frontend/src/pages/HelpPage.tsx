@@ -74,11 +74,11 @@ const HelpPage = () => {
             <p className="text-gray-600 mb-4">Need more help? Our team is here for you.</p>
             <div className="space-y-2">
               <a
-                href="mailto:support@nearandnow.com"
+                href="mailto:support@nearnow.com"
                 className="flex items-center gap-2 text-primary hover:text-secondary font-medium"
               >
                 <Mail className="w-5 h-5" />
-                support@nearandnow.com
+                support@nearnow.com
               </a>
               <a
                 href="tel:+919876543210"

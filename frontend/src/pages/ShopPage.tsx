@@ -1,23 +1,27 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts, hasNearbyStores, Product } from '../services/supabase';
 import { useLocation } from '../context/LocationContext';
 import { useNotification } from '../context/NotificationContext';
 import { formatCategoryName } from '../utils/formatters';
-import { Search, SlidersHorizontal, X, ChevronDown, Package, MapPin } from 'lucide-react';
+import { Search, SlidersHorizontal, X, ChevronDown, Package, MapPin, Tag } from 'lucide-react';
 
 const ShopPage = () => {
+  const [searchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [noStoresNearby, setNoStoresNearby] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('default');
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 1000]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [maxPrice, setMaxPrice] = useState(1000);
+  const [dealsOnly, setDealsOnly] = useState(searchParams.get('deals') === 'true');
 
   const { userLocation } = useLocation();
   const { showNotification } = useNotification();
@@ -36,6 +40,7 @@ const ShopPage = () => {
     try {
       setLoading(true);
       setNoStoresNearby(false);
+      setFetchError(false);
 
       // If we have a location, check whether any stores are nearby first.
       if (lat != null && lng != null) {
@@ -66,6 +71,9 @@ const ShopPage = () => {
     } catch (error) {
       console.error('Error fetching products:', error);
       showNotification('Failed to load products. Please try again.', 'error');
+      setFetchError(true);
+      setProducts([]);
+      setFilteredProducts([]);
     } finally {
       setLoading(false);
     }
@@ -94,6 +102,12 @@ const ShopPage = () => {
       result = result.filter(product => product.category === selectedCategory);
     }
 
+    if (dealsOnly) {
+      result = result.filter(
+        product => product.original_price != null && product.original_price > product.price
+      );
+    }
+
     result = result.filter(
       product => product.price >= priceRange[0] && product.price <= priceRange[1]
     );
@@ -114,7 +128,7 @@ const ShopPage = () => {
     }
 
     setFilteredProducts(result);
-  }, [products, selectedCategory, sortBy, priceRange, searchQuery]);
+  }, [products, selectedCategory, sortBy, priceRange, searchQuery, dealsOnly]);
 
   const handleCategoryChange = (category: string) => setSelectedCategory(category);
 
@@ -136,13 +150,15 @@ const ShopPage = () => {
     setSortBy('default');
     setPriceRange([0, maxPrice]);
     setSearchQuery('');
+    setDealsOnly(false);
     showNotification('Filters cleared', 'success');
   };
 
   const hasActiveFilters = selectedCategory !== 'all' ||
     priceRange[0] !== 0 ||
     priceRange[1] !== maxPrice ||
-    searchQuery !== '';
+    searchQuery !== '' ||
+    dealsOnly;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
@@ -212,6 +228,21 @@ const ShopPage = () => {
                     </button>
                   )}
                 </div>
+              </div>
+
+              <div className="mb-6">
+                <button
+                  type="button"
+                  onClick={() => setDealsOnly(prev => !prev)}
+                  className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl font-medium border-2 transition-all duration-300 ${
+                    dealsOnly
+                      ? 'bg-primary/10 border-primary text-primary'
+                      : 'bg-white border-gray-200 text-gray-700 hover:border-primary'
+                  }`}
+                >
+                  <Tag className="w-4 h-4" />
+                  Deals Only
+                </button>
               </div>
 
               <div className="mb-6">
@@ -333,8 +364,25 @@ const ShopPage = () => {
               </div>
             </div>
 
+            {/* Fetch failed */}
+            {!loading && fetchError && (
+              <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
+                <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Package className="w-10 h-10 text-red-400" />
+                </div>
+                <h3 className="text-xl font-bold text-gray-800 mb-2">Couldn&apos;t Load Products</h3>
+                <p className="text-gray-600 mb-6">Something went wrong. Please check your connection and try again.</p>
+                <button
+                  onClick={() => fetchProducts(userLocation?.latitude, userLocation?.longitude)}
+                  className="bg-primary hover:bg-secondary text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105"
+                >
+                  Try Again
+                </button>
+              </div>
+            )}
+
             {/* No stores nearby state */}
-            {!loading && noStoresNearby && (
+            {!loading && !fetchError && noStoresNearby && (
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
                 <div className="w-20 h-20 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4">
                   <MapPin className="w-10 h-10 text-amber-400" />
@@ -347,7 +395,7 @@ const ShopPage = () => {
             )}
 
             {/* No results from active filters */}
-            {!loading && !noStoresNearby && filteredProducts.length === 0 && products.length > 0 && (
+            {!loading && !fetchError && !noStoresNearby && filteredProducts.length === 0 && products.length > 0 && (
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
                 <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <Package className="w-10 h-10 text-gray-400" />
@@ -364,7 +412,7 @@ const ShopPage = () => {
             )}
 
             {/* No products at all (no location, empty catalog) */}
-            {!loading && !noStoresNearby && products.length === 0 && !userLocation && (
+            {!loading && !fetchError && !noStoresNearby && products.length === 0 && !userLocation && (
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
                 <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <MapPin className="w-10 h-10 text-gray-400" />

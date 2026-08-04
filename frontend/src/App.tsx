@@ -33,6 +33,7 @@ import TermsOfServicePage from './pages/policies/TermsOfServicePage';
 import ShippingPolicyPage from './pages/policies/ShippingPolicyPage';
 import PrivacyPolicyPage from './pages/policies/PrivacyPolicyPage';
 import RefundPolicyPage from './pages/policies/RefundPolicyPage';
+import PaymentOptionsPage from './pages/policies/PaymentOptionsPage';
 
 // Standalone app pages (no main Layout)
 import DriverApp from './pages/DriverApp';
@@ -73,13 +74,18 @@ const AppContent: React.FC = () => {
             <Route path="/track/:orderId" element={<OrderTrackingPage />} />
             <Route path="/addresses" element={<AddressesPage />} />
             <Route path="/about" element={<AboutPage />} />
+            <Route path="/contact" element={<AboutPage />} />
             <Route path="/help" element={<HelpPage />} />
+            <Route path="/faq" element={<HelpPage />} />
             <Route path="/driver-legacy" element={<DeliveryPartnerPage />} />
             {/* Policy Pages */}
             <Route path="/terms" element={<TermsOfServicePage />} />
             <Route path="/shipping" element={<ShippingPolicyPage />} />
+            <Route path="/delivery-info" element={<ShippingPolicyPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/refund" element={<RefundPolicyPage />} />
+            <Route path="/returns" element={<RefundPolicyPage />} />
+            <Route path="/payment-options" element={<PaymentOptionsPage />} />
           </Routes>
         </Layout>
       } />

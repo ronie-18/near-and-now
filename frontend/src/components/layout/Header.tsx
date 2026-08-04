@@ -719,7 +719,7 @@ const Header = () => {
                   </div>
                   <span className="font-bold text-gray-800">Dairy</span>
                 </Link>
-                <Link to="/offers" className="flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-r from-red-50 to-red-100 hover:from-red-100 hover:to-red-200 transition-all group shadow-sm" onClick={toggleMobileMenu}>
+                <Link to="/shop?deals=true" className="flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-r from-red-50 to-red-100 hover:from-red-100 hover:to-red-200 transition-all group shadow-sm" onClick={toggleMobileMenu}>
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red-200 to-red-300 flex items-center justify-center text-xl group-hover:scale-110 transition-transform shadow-md">
                     🏷️
                   </div>

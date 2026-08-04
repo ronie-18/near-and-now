@@ -12,6 +12,7 @@ import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { geocodeAddress } from '../services/placesService';
 import { fetchOrderTrackingFull } from '../services/trackingApi';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
+import { useNotification } from '../context/NotificationContext';
 
 // DB statuses
 const STATUS_DESCRIPTIONS: Record<string, string> = {
@@ -123,6 +124,7 @@ const OrderTrackingPage = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const trackingNumberParam = searchParams.get('number');
+  const { showNotification } = useNotification();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,6 +136,7 @@ const OrderTrackingPage = () => {
   const [showItems, setShowItems] = useState(true);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   // Resolve order_code → orderId
   useEffect(() => {
@@ -702,17 +705,31 @@ const OrderTrackingPage = () => {
             {orderId && !['order_delivered', 'order_cancelled', 'delivery_partner_assigned', 'order_picked_up', 'in_transit'].includes(order.status) && (
               <button
                 type="button"
-                onClick={() => {
-                  const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
-                  authedFetch(`${apiBase}/api/orders/${orderId}/cancel`, { method: 'POST', headers: getAuthHeaders() })
-                    .then((r) => r.json())
-                    .then((d) => { if (d.success) navigate('/orders'); })
-                    .catch((err) => console.error(err));
+                disabled={cancelling}
+                onClick={async () => {
+                  setCancelling(true);
+                  try {
+                    const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
+                    const r = await authedFetch(`${apiBase}/api/orders/${orderId}/cancel`, { method: 'POST', headers: getAuthHeaders() });
+                    const d = await r.json();
+                    if (d.success) {
+                      navigate('/orders');
+                    } else {
+                      showNotification(d.error || 'Failed to cancel order. Please try again.', 'error');
+                    }
+                  } catch (err) {
+                    console.error(err);
+                    showNotification('Failed to cancel order. Please check your connection and try again.', 'error');
+                  } finally {
+                    setCancelling(false);
+                  }
                 }}
-                className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-red-100 hover:border-red-300 hover:bg-red-50 transition-all group"
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-red-100 hover:border-red-300 hover:bg-red-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <XCircle className="w-6 h-6 text-red-400 group-hover:text-red-600" />
-                <span className="text-xs font-bold text-red-400 group-hover:text-red-600">Cancel Order</span>
+                <span className="text-xs font-bold text-red-400 group-hover:text-red-600">
+                  {cancelling ? 'Cancelling…' : 'Cancel Order'}
+                </span>
               </button>
             )}
             {isDelivered && (

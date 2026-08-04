@@ -1,6 +1,30 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useNotification } from '../context/NotificationContext';
 
 const AboutPage = () => {
+  const { showNotification } = useNotification();
+  const [contactName, setContactName] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactMessage, setContactMessage] = useState('');
+
+  const handleContactSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!contactName.trim() || !contactEmail.trim() || !contactMessage.trim()) {
+      showNotification('Please fill in all fields', 'error');
+      return;
+    }
+    // No backend endpoint exists to receive contact-form submissions — hand
+    // it off as a pre-filled email instead of silently discarding the input.
+    const subject = encodeURIComponent(`Message from ${contactName}`);
+    const body = encodeURIComponent(`${contactMessage}\n\n— ${contactName} (${contactEmail})`);
+    window.location.href = `mailto:support@nearnow.com?subject=${subject}&body=${body}`;
+    showNotification('Opening your email app to send the message...', 'success');
+    setContactName('');
+    setContactEmail('');
+    setContactMessage('');
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
       {/* Hero Section */}
@@ -213,7 +237,7 @@ const AboutPage = () => {
 
             <div>
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Send Us a Message</h3>
-              <form className="space-y-4">
+              <form className="space-y-4" onSubmit={handleContactSubmit}>
                 <div>
                   <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
                     Your Name
@@ -221,6 +245,8 @@ const AboutPage = () => {
                   <input
                     type="text"
                     id="name"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
@@ -232,6 +258,8 @@ const AboutPage = () => {
                   <input
                     type="email"
                     id="email"
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
@@ -243,6 +271,8 @@ const AboutPage = () => {
                   <textarea
                     id="message"
                     rows={4}
+                    value={contactMessage}
+                    onChange={(e) => setContactMessage(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
                   ></textarea>
                 </div>

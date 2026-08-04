@@ -241,25 +241,25 @@ const Footer = () => {
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <MapPin className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">Kolkata, West Bengal</span>
+                    <span className="text-sm">Bangalore, Karnataka</span>
                   </a>
                 </li>
                 <li>
                   <a
-                    href="mailto:snearandnowofficial2025@gmail.com"
+                    href="mailto:support@nearnow.com"
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <Mail className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">nearandnowofficial2025@gmail.com</span>
+                    <span className="text-sm">support@nearnow.com</span>
                   </a>
                 </li>
                 <li>
                   <a
-                    href="tel:+919477035649"
+                    href="tel:+919876543210"
                     className="flex items-start text-gray-300 hover:text-white transition-colors group"
                   >
                     <Phone className="h-5 w-5 mr-3 mt-0.5 text-primary flex-shrink-0 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm">+91 94770 35649</span>
+                    <span className="text-sm">+91 98765 43210</span>
                   </a>
                 </li>
               </ul>
