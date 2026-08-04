@@ -1,0 +1,11 @@
+-- stores has explicit column-level SELECT grants to anon/authenticated (see
+-- 20260830000000_stores_restrict_push_token_exposure.sql — every column
+-- except expo_push_token is individually granted, not the whole table), so
+-- ALTER TABLE ... ADD COLUMN deleted_at (20260930010000) did NOT
+-- automatically grant SELECT on it the way a normal table-level grant would.
+-- The admin panel's StoresPage.tsx selects deleted_at as part of its
+-- everyday stores list query — since Postgres denies an entire SELECT list
+-- if any single requested column is inaccessible, this broke store listing
+-- outright for every admin the moment that column was added to the query,
+-- surfacing as a bare 401/"Error fetching stores" with no obvious cause.
+GRANT SELECT (deleted_at) ON public.stores TO anon, authenticated;
