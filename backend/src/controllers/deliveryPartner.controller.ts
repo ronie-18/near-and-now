@@ -854,6 +854,21 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
 
+      // Require the delivery OTP to have actually been verified server-side
+      // (verifyDeliveryOTP persists delivery_otp_verified_at on success) —
+      // otherwise this endpoint trusted only client-side React state, and a
+      // replayed/direct call could skip OTP verification and still pay out.
+      const { data: otpCheck } = await supabaseAdmin
+        .from('customer_orders')
+        .select('delivery_otp_verified_at')
+        .eq('id', orderId)
+        .eq('assigned_driver_id', riderId)
+        .maybeSingle();
+
+      if (!otpCheck || !(otpCheck as any).delivery_otp_verified_at) {
+        return res.status(400).json({ error: 'Delivery OTP has not been verified for this order yet.' });
+      }
+
       // Ownership-filtered: only the rider assigned to this order can mark it delivered.
       const { data: updated, error } = await supabaseAdmin
         .from('customer_orders')
@@ -926,6 +941,13 @@ export class DeliveryPartnerController {
       if ((order as any).delivery_otp !== otp) {
         return res.status(400).json({ success: false, error: 'Incorrect OTP. Ask customer to check their app.' });
       }
+
+      // Persist verification so markDelivered can require it server-side,
+      // instead of trusting client-side-only React state.
+      await supabaseAdmin
+        .from('customer_orders')
+        .update({ delivery_otp_verified_at: new Date().toISOString() })
+        .eq('id', orderId);
 
       res.json({ success: true });
     } catch (err) {
@@ -1744,7 +1766,7 @@ export class DeliveryPartnerController {
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
-        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address')
+        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address, delivery_otp_verified_at')
         .eq('id', orderId)
         .eq('assigned_driver_id', req.riderId!)
         .maybeSingle();
@@ -1811,6 +1833,7 @@ export class DeliveryPartnerController {
           receiver_name: o.receiver_name || null,
           receiver_phone: o.receiver_phone || null,
           receiver_address: o.receiver_address || null,
+          delivery_otp_verified: !!o.delivery_otp_verified_at,
         },
         stops,
       });
