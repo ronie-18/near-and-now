@@ -5,11 +5,12 @@ import { useNotification } from '../../context/NotificationContext';
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
+  mode?: 'login' | 'signup';
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
+const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
   const [step, setStep] = useState(1);
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
@@ -227,7 +228,9 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
         {/* Header */}
         <div className="bg-primary text-white p-4 flex items-center justify-between">
           <h2 className="text-xl font-bold">
-            {step === 1 ? 'Login / Register' : step === 2 ? 'Verify OTP' : 'Verify Your Email'}
+            {step === 1
+              ? mode === 'signup' ? 'Create Account' : 'Login'
+              : step === 2 ? 'Verify OTP' : 'Verify Your Email'}
           </h2>
           <button 
             onClick={onClose}
@@ -307,9 +310,11 @@ const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
                   isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
                 }`}
               >
-                {isSubmitting ? 'Sending OTP...' : 'Continue'}
+                {isSubmitting
+                  ? 'Sending OTP...'
+                  : mode === 'signup' ? 'Create Account' : 'Continue'}
               </button>
-              
+
               <p className="text-center text-sm text-gray-500 mt-4">
                 By continuing, you agree to our{' '}
                 <a href="/terms" className="text-primary hover:underline">Terms of Service</a> and{' '}

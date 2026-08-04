@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import AuthModal from '../components/auth/AuthModal';
 
-const LoginPage = () => {
+const SignupPage = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(true);
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -18,23 +18,23 @@ const LoginPage = () => {
   return (
     <div className="container mx-auto px-4 py-16">
       <div className="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md">
-        <h1 className="text-2xl font-bold text-gray-800 mb-6">Login</h1>
+        <h1 className="text-2xl font-bold text-gray-800 mb-6">Create Account</h1>
 
         <p className="text-gray-600 mb-6">
-          Welcome back! Login to continue shopping with Near & Now.
+          New to Near & Now? Create an account to start shopping.
         </p>
 
         <button
           onClick={() => setIsAuthModalOpen(true)}
           className="w-full bg-primary hover:bg-secondary text-white py-3 rounded-md transition-colors mb-4"
         >
-          Login with Phone Number
+          Sign Up with Phone Number
         </button>
 
         <div className="text-center text-sm text-gray-600 mb-4">
-          New here?{' '}
-          <Link to="/signup" className="text-primary hover:text-secondary font-medium">
-            Create an account
+          Already have an account?{' '}
+          <Link to="/login" className="text-primary hover:text-secondary font-medium">
+            Login
           </Link>
         </div>
 
@@ -48,10 +48,10 @@ const LoginPage = () => {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        mode="login"
+        mode="signup"
       />
     </div>
   );
 };
 
-export default LoginPage;
+export default SignupPage;

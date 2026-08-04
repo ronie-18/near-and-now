@@ -17,6 +17,7 @@ import ProductDetailPage from './pages/ProductDetailPage';
 import CheckoutPage from './pages/CheckoutPage';
 import ThankYouPage from './pages/ThankYouPage';
 import LoginPage from './pages/LoginPage';
+import SignupPage from './pages/SignupPage';
 import SearchPage from './pages/SearchPage';
 import ProfilePage from './pages/ProfilePage';
 import WalletPage from './pages/WalletPage';
@@ -63,6 +64,7 @@ const AppContent: React.FC = () => {
             <Route path="/checkout" element={<CheckoutPage />} />
             <Route path="/thank-you" element={<ThankYouPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<SignupPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/wallet" element={<WalletPage />} />

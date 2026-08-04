@@ -492,7 +492,7 @@ const Header = () => {
                               <span className="font-semibold">Login</span>
                             </Link>
                             <Link
-                              to="/register"
+                              to="/signup"
                               className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-secondary/10 hover:to-transparent hover:text-secondary transition-all group rounded-xl mx-1"
                               onClick={() => setIsUserMenuOpen(false)}
                             >

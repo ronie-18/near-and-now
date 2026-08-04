@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts, Product } from '../services/supabase';
 import { useCart } from '../context/CartContext';
+import { useNotification } from '../context/NotificationContext';
 import { formatPrice, formatCategoryName } from '../utils/formatters';
 
 /* ─────────────────────────────────────────────
@@ -191,6 +192,7 @@ const ProductDetailPage = () => {
   const [cartPopped, setCartPopped] = useState(false);
 
   const { addToCart, cartItems } = useCart();
+  const { showNotification } = useNotification();
 
   const productInCart = product
     ? cartItems.find(
@@ -413,7 +415,11 @@ const ProductDetailPage = () => {
                 Add to Cart
               </button>
 
-              <button className="pdp-btn-ghost" style={{ width: '100%', padding: '15px 28px' }}>
+              <button
+                className="pdp-btn-ghost"
+                style={{ width: '100%', padding: '15px 28px' }}
+                onClick={() => showNotification('Wishlist is coming soon!', 'info')}
+              >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                 </svg>
