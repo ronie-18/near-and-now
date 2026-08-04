@@ -21,13 +21,14 @@ function adminAuthHeaders(): Record<string, string> {
 export async function notifyAdminAction(
   action: string,
   summary: string,
-  data?: Record<string, unknown>
+  data?: Record<string, unknown>,
+  type: string = 'product_updated'
 ): Promise<void> {
   try {
     const admin = getCurrentAdmin();
     const actor = admin?.full_name || admin?.email || 'An admin';
     await getAdminClient().from('admin_notifications').insert({
-      type: 'product_updated',
+      type,
       title: `${actor} ${action}`,
       message: summary,
       data: data ?? null,

@@ -44,6 +44,12 @@ export function getNotificationLink(type: string, data: Record<string, any> | nu
     // unified log rather than trying to guess a specific record's page.
     case 'admin_review_action':
       return '/activity-log';
+    // Broadcast of an admin toggling a store/rider online/offline (StoresPage/
+    // DeliveryPage) — same list-only routing as the verification types above.
+    case 'store_status_changed':
+      return '/stores';
+    case 'rider_status_changed':
+      return '/delivery';
     default:
       return null;
   }

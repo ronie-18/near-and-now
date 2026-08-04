@@ -3,7 +3,7 @@ import { getAdminToken } from '../../services/adminSession';
 import {
   Bell, Check, Search, RefreshCw, ShoppingBag, Users, Package,
   AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter, IndianRupee,
-  FileText, ShieldCheck, Image
+  FileText, ShieldCheck, Image, Wifi
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -21,7 +21,8 @@ interface AdminNotification {
     | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
     | 'owner_photo_updated' | 'store_image_added' | 'store_image_removed'
     | 'rider_profile_photo_updated' | 'rider_vehicle_photo_updated'
-    | 'product_updated' | 'admin_review_action';
+    | 'product_updated' | 'admin_review_action'
+    | 'store_status_changed' | 'rider_status_changed';
   title: string;
   message: string;
   data: Record<string, any>;
@@ -66,6 +67,8 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
   rider_vehicle_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
   product_updated: { icon: Package, color: 'text-orange-600', bg: 'bg-orange-100' },
   admin_review_action: { icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-100' },
+  store_status_changed: { icon: Wifi, color: 'text-emerald-600', bg: 'bg-emerald-100' },
+  rider_status_changed: { icon: Wifi, color: 'text-emerald-600', bg: 'bg-emerald-100' },
 };
 
 // ─── Push Notification Panel ──────────────────────────────────────────────────

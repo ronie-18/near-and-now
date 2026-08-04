@@ -20,6 +20,7 @@ import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { notifyAdminAction } from '../../services/adminService';
 
 interface StoreData {
   id: string;
@@ -667,6 +668,7 @@ const StoresPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [togglingActiveId, setTogglingActiveId] = useState<string | null>(null);
   const [reviewingStore, setReviewingStore] = useState<StoreData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
   const [docStatusByStore, setDocStatusByStore] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
@@ -949,10 +951,53 @@ const StoresPage = () => {
           headers: adminAuthHeaders(),
         }).catch(() => {});
       }
+      // Store approve/revoke, like online/offline, is a direct browser write
+      // with no backend involvement — unlike document/profile-change review
+      // actions, it never reached admin_notifications, so other admins had no
+      // way to see it without polling StoresPage themselves. Same fix as the
+      // online/offline toggle, reusing the existing review-action icon.
+      await notifyAdminAction(
+        `${nextApproved ? 'approved' : 'revoked approval for'} store`,
+        store.name,
+        { store_id: store.id, store_name: store.name, is_approved: nextApproved },
+        'admin_review_action'
+      );
     } catch (err: any) {
       setError(`Failed to update approval: ${err.message}`);
     } finally {
       setApprovingId(null);
+    }
+  };
+
+  // Mirrors DeliveryPage's rider toggleOnline — stores previously only showed
+  // a read-only Online/Offline badge here with no way for an admin to force a
+  // store offline (e.g. a shopkeeper unreachable/misbehaving) without going
+  // through the shopkeeper app itself. Broadcasts to admin_notifications so
+  // other admins see who took a store offline/online and when.
+  const toggleStoreActive = async (store: StoreData) => {
+    const nextActive = !store.is_active;
+    setTogglingActiveId(store.id);
+    try {
+      const { data, error: sbError } = await getAdminClient()
+        .from('stores')
+        .update({ is_active: nextActive })
+        .eq('id', store.id)
+        .select('id, is_active');
+      if (sbError) throw sbError;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setStores(prev => prev.map(s => (s.id === store.id ? { ...s, is_active: nextActive } : s)));
+      await notifyAdminAction(
+        `set store ${nextActive ? 'online' : 'offline'}`,
+        store.name,
+        { store_id: store.id, store_name: store.name, is_active: nextActive },
+        'store_status_changed'
+      );
+    } catch (err: any) {
+      setError(`Failed to update online status: ${err.message}`);
+    } finally {
+      setTogglingActiveId(null);
     }
   };
 
@@ -1078,18 +1123,33 @@ const StoresPage = () => {
                           <span className="text-gray-400 text-sm">—</span>
                         )}
                       </td>
+                      {/* Status — online / offline toggle, mirrors DeliveryPage's rider toggle */}
                       <td className="px-6 py-4">
-                        {store.is_active ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                        <button
+                          onClick={() => toggleStoreActive(store)}
+                          disabled={togglingActiveId === store.id || (!store.is_approved && !store.is_active)}
+                          title={
+                            !store.is_approved && !store.is_active
+                              ? 'Approve store before setting online'
+                              : store.is_active
+                                ? 'Set offline'
+                                : 'Set online'
+                          }
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
+                            store.is_active
+                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {togglingActiveId === store.id ? (
+                            <RefreshCw size={12} className="animate-spin" />
+                          ) : store.is_active ? (
                             <Wifi size={12} />
-                            Online
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
+                          ) : (
                             <WifiOff size={12} />
-                            Offline
-                          </span>
-                        )}
+                          )}
+                          {store.is_active ? 'Online' : 'Offline'}
+                        </button>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">

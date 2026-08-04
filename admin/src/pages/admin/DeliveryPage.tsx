@@ -17,6 +17,7 @@ import {
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { notifyAdminAction } from '../../services/adminService';
 import { DeliveryDocumentReviewModal, DOC_LABELS } from './DeliveryDocumentReviewModal';
 
 // Mirrors the backend's isVehicleRegistrationRequired (deliveryPartnerVerificationDocuments.ts)
@@ -293,6 +294,12 @@ const DeliveryPage = () => {
       setPartners((prev) =>
         prev.map((p) => (p.user_id === partner.user_id ? { ...p, ...patch } : p))
       );
+      await notifyAdminAction(
+        `set rider ${nextOnline ? 'online' : 'offline'}`,
+        partner.name,
+        { rider_id: partner.user_id, rider_name: partner.name, is_online: nextOnline },
+        'rider_status_changed'
+      );
     } catch (err: any) {
       setError(`Failed to update online status: ${err.message}`);
       setTimeout(() => setError(null), 4000);
@@ -364,6 +371,16 @@ const DeliveryPage = () => {
           headers: adminAuthHeaders(),
         }).catch(() => {});
       }
+      // Rider approve/revoke, like online/offline, is a direct browser write
+      // with no backend involvement — never reached admin_notifications, so
+      // other admins had no way to see it without polling DeliveryPage
+      // themselves. Same fix as the online/offline toggle.
+      await notifyAdminAction(
+        `${nextApproved ? 'approved' : 'revoked approval for'} rider`,
+        partner.name,
+        { rider_id: partner.user_id, rider_name: partner.name, is_approved: nextApproved },
+        'admin_review_action'
+      );
     } catch (err: any) {
       setError(`Failed to update approval: ${err.message}`);
     } finally {
