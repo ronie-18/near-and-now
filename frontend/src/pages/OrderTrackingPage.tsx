@@ -5,7 +5,7 @@ import {
   XCircle, Radio, ChevronDown, ChevronUp, Store, Star,
   RotateCcw, FileText, HeadphonesIcon, Navigation,
 } from 'lucide-react';
-import { supabaseAdmin } from '../services/supabase';
+import { supabaseNoSession } from '../services/supabase';
 import { useOrderTrackingRealtime, type Order, type OrderStatus } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
 import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
@@ -141,7 +141,7 @@ const OrderTrackingPage = () => {
     const resolve = async () => {
       try {
         setLoading(true);
-        const { data, error } = await supabaseAdmin
+        const { data, error } = await supabaseNoSession
           .from('customer_orders').select('id').eq('order_code', trackingNumberParam.trim()).maybeSingle();
         if (!error && data?.id) navigate(`/track/${data.id}`, { replace: true });
       } catch { /* fall through */ } finally { setLoading(false); }

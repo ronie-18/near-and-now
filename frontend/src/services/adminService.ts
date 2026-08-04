@@ -1,4 +1,4 @@
-import { supabaseAdmin } from './supabase';
+import { supabaseNoSession } from './supabase';
 
 // Admin Types
 export interface Category {
@@ -14,7 +14,7 @@ export interface Category {
 
 export async function getCategories(): Promise<Category[]> {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabaseNoSession
       .from('categories')
       .select('*')
       .order('name');

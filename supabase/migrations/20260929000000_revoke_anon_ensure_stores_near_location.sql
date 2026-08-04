@@ -1,0 +1,29 @@
+-- ensure_stores_near_location(lat, lng) was found live (2026-08-04 audit) with
+-- no tracked migration, SECURITY DEFINER, and EXECUTE granted to anon —
+-- same untracked-drift pattern as get_nearby_store_ids/haversine_km (both
+-- now tracked, see 20260926000000/20260927000000), but with a much more
+-- dangerous body: if fewer than 5 real stores exist within 3km of the given
+-- point, it INSERTs 6 fake "Near & Now Store #N" rows (creating a synthetic
+-- shopkeeper app_users row too, if none exists) and stocks them with 100
+-- units of every active master_product. Confirmed via repo-wide grep: zero
+-- call sites anywhere in backend/src or frontend/src — this is unused,
+-- leftover demo/seed-data logic, not a live app dependency.
+--
+-- The fake stores it creates aren't currently customer-visible (stores.
+-- is_approved defaults to false and this function never sets it, so they
+-- fail the approval filter added in 20260927000000), but it remained
+-- callable by anyone holding the public anon key with no auth at all,
+-- letting them spam production stores/app_users/products with garbage rows
+-- on demand for free. Same fix shape as 20260810000000_lock_down_anon_rpc_
+-- grants.sql: revoke rather than drop, since a legitimate future use can't
+-- be ruled out and the function body itself isn't being touched here.
+--
+-- Postgres grants EXECUTE to PUBLIC by default on function creation, and
+-- every role (including anon/authenticated) inherits PUBLIC's privileges
+-- automatically — confirmed live via pg_proc.proacl that this function (and
+-- the three from 20260810000000, which have the same latent gap) still had
+-- an explicit PUBLIC grant. REVOKE ... FROM anon, authenticated alone is a
+-- no-op against that: anon still executes via PUBLIC regardless. Must also
+-- revoke FROM PUBLIC for the anon-forgery path to actually close.
+REVOKE EXECUTE ON FUNCTION public.ensure_stores_near_location(double precision, double precision) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.ensure_stores_near_location(double precision, double precision) FROM anon, authenticated;

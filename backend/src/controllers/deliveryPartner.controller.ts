@@ -566,6 +566,17 @@ export class DeliveryPartnerController {
   async getOrders(req: Request, res: Response) {
     try {
       const statusParam = req.query.status as string;
+      // Opt-in pagination only — earnings.tsx computes a lifetime "Total
+      // Earnings" figure by summing every returned order client-side, so
+      // defaulting to a capped page here would silently under-report it for
+      // any rider with more orders than the cap. orders.tsx (which has no
+      // such aggregate) passes ?limit explicitly to bound its own payload;
+      // omitting it preserves the original unbounded query.
+      const requestedLimit = Number(req.query.limit);
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, 200)
+        : null;
+      const offset = Math.max(0, Number(req.query.offset) || 0);
 
       // Get all store_orders for this rider
       const { data: storeOrders } = await supabaseAdmin
@@ -589,12 +600,14 @@ export class DeliveryPartnerController {
         dbStatuses = ACTIVE_DB_STATUSES;
       }
 
-      const { data: orders } = await supabaseAdmin
+      let ordersQuery = supabaseAdmin
         .from('customer_orders')
         .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, notes')
         .in('id', orderIds)
         .in('status', dbStatuses)
         .order('placed_at', { ascending: false });
+      if (limit != null) ordersQuery = ordersQuery.range(offset, offset + limit - 1);
+      const { data: orders } = await ordersQuery;
 
       if (!orders?.length) {
         return res.json({ success: true, orders: [] });
@@ -659,7 +672,7 @@ export class DeliveryPartnerController {
         };
       });
 
-      res.json({ success: true, orders: mapped });
+      res.json({ success: true, orders: mapped, has_more: limit != null && mapped.length === limit });
     } catch (err) {
       console.error('getOrders error:', err);
       res.status(500).json({ error: 'Failed to fetch orders' });

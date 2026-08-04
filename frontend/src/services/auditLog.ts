@@ -1,4 +1,4 @@
-import { supabaseAdmin } from './supabase';
+import { supabaseNoSession } from './supabase';
 
 /**
  * Audit logging service
@@ -24,7 +24,7 @@ export interface AuditLogEntry {
  */
 export async function logAdminAction(entry: AuditLogEntry): Promise<void> {
   try {
-    await supabaseAdmin.from('audit_logs').insert({
+    await supabaseNoSession.from('audit_logs').insert({
       admin_id: entry.admin_id || null,
       user_id: entry.user_id || null,
       action: entry.action,
@@ -54,7 +54,7 @@ export async function logSecurityEvent(
   metadata?: any
 ): Promise<void> {
   try {
-    await supabaseAdmin.from('security_events').insert({
+    await supabaseNoSession.from('security_events').insert({
       event_type: eventType,
       severity,
       description,
@@ -73,7 +73,7 @@ export async function logSecurityEvent(
  */
 export async function logFailedLogin(email: string): Promise<void> {
   try {
-    await supabaseAdmin.from('failed_login_attempts').insert({
+    await supabaseNoSession.from('failed_login_attempts').insert({
       email: email.toLowerCase().trim(),
       ip_address: null, // Would need server-side to get real IP
       user_agent: navigator.userAgent,
@@ -89,7 +89,7 @@ export async function logFailedLogin(email: string): Promise<void> {
  */
 export async function isAccountLocked(email: string): Promise<boolean> {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabaseNoSession
       .rpc('is_account_locked', { p_email: email.toLowerCase().trim() });
     
     if (error) {
@@ -113,7 +113,7 @@ export async function getAuditLogs(
   limit: number = 100
 ): Promise<any[]> {
   try {
-    let query = supabaseAdmin
+    let query = supabaseNoSession
       .from('audit_logs')
       .select('*')
       .order('created_at', { ascending: false })
@@ -149,7 +149,7 @@ export async function getSecurityEvents(
   limit: number = 100
 ): Promise<any[]> {
   try {
-    let query = supabaseAdmin
+    let query = supabaseNoSession
       .from('security_events')
       .select('*')
       .order('created_at', { ascending: false })

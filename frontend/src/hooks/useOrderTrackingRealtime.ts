@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useMemo, useRef } from 'react';
-import { supabaseAdmin } from '../services/supabase';
+import { supabaseNoSession } from '../services/supabase';
 import { fetchOrderTrackingFull, fetchDriverLocations } from '../services/trackingApi';
 
 export interface Order {
@@ -131,7 +131,7 @@ export function useOrderTrackingRealtime(
     // connection), not a permanent second source of the same data.
     let realtimeHealthy = false;
 
-    const channel = supabaseAdmin
+    const channel = supabaseNoSession
       .channel(`order-tracking-${orderId}`)
       .on(
         'postgres_changes',
@@ -178,7 +178,7 @@ export function useOrderTrackingRealtime(
 
     return () => {
       clearInterval(pollInterval);
-      supabaseAdmin.removeChannel(channel);
+      supabaseNoSession.removeChannel(channel);
     };
   }, [orderId, !!order]);
 
@@ -223,9 +223,9 @@ export function useOrderTrackingRealtime(
     // resolved yet at this point, so realtimeHealthy is still false here.
     pollDriverLocations();
 
-    let channel: ReturnType<typeof supabaseAdmin.channel> | null = null;
+    let channel: ReturnType<typeof supabaseNoSession.channel> | null = null;
     if (driverIds.length > 0) {
-      channel = supabaseAdmin
+      channel = supabaseNoSession
         .channel(`driver-locations-${orderId}`)
         .on(
           'postgres_changes',
@@ -261,7 +261,7 @@ export function useOrderTrackingRealtime(
     const pollInterval = setInterval(pollDriverLocations, 2000);
     return () => {
       clearInterval(pollInterval);
-      if (channel) supabaseAdmin.removeChannel(channel);
+      if (channel) supabaseNoSession.removeChannel(channel);
     };
   }, [orderId, driverIdsKey]);
 }

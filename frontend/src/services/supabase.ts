@@ -30,8 +30,11 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 // Create Supabase client for public operations (anon key, RLS applies)
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Frontend admin client uses anon key — privileged operations go through the backend API
-export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+// Anon key, same as `supabase` above — just without session persistence/auto-refresh,
+// for one-off reads/writes that shouldn't touch the user's auth session state.
+// NOT a service-role/privilege-bypassing client; RLS still applies. Privileged
+// operations go through the backend API.
+export const supabaseNoSession = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     autoRefreshToken: false,
     persistSession: false
@@ -92,7 +95,7 @@ async function getNearbyStoreIds(
   radiusKm: number
 ): Promise<string[]> {
   try {
-    const { data: storeIds, error } = await supabaseAdmin.rpc('get_nearby_store_ids', {
+    const { data: storeIds, error } = await supabaseNoSession.rpc('get_nearby_store_ids', {
       cust_lat: lat,
       cust_lng: lng,
       radius_km: radiusKm
@@ -153,49 +156,50 @@ interface ProductRow {
   } | null;
 }
 
-// Fetch product rows (products joined with master_products), optionally filtered by store IDs
+// Snapshot of every store currently online (is_active) and admin-approved
+// (is_approved). Used as the "no location filter" branch's eligible-store
+// set below — resolved ONCE per fetchProductRows call rather than via a
+// live stores join re-evaluated on every paginated products query, so a
+// store's approval flipping mid-scan can't produce an inconsistent result
+// set across pages (the live-join version could).
+async function getApprovedActiveStoreIds(): Promise<string[]> {
+  const { data, error } = await supabaseNoSession
+    .from('stores')
+    .select('id')
+    .eq('is_active', true)
+    .eq('is_approved', true);
+  if (error) throw new Error(`Database error: ${error.message}`);
+  return (data ?? []).map((s: { id: string }) => s.id);
+}
+
+// Fetch product rows (products joined with master_products), optionally filtered by store IDs.
+// `storeIds` null means "no location filter" — resolves the full approved+active store set as a
+// single snapshot instead, then reuses the same chunked+paginated query path below for both cases.
 async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]> {
+  const eligibleStoreIds = storeIds != null ? storeIds : await getApprovedActiveStoreIds();
+  if (eligibleStoreIds.length === 0) return [];
+
   const allRows: ProductRow[] = [];
-
-  if (storeIds != null && storeIds.length > 0) {
-    const storeChunks = chunk(storeIds, IN_FILTER_CHUNK_SIZE);
-    for (const ids of storeChunks) {
-      const { data, error } = await supabaseAdmin
+  const storeChunks = chunk(eligibleStoreIds, IN_FILTER_CHUNK_SIZE);
+  for (const ids of storeChunks) {
+    let from = 0;
+    const batchSize = 500;
+    let hasMore = true;
+    while (hasMore) {
+      const { data, error } = await supabaseNoSession
         .from('products')
-        .select('id, store_id, master_product_id, product_name, is_active, master_products(*), stores!inner(is_active, is_approved)')
+        .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
         .eq('is_active', true)
-        .eq('stores.is_active', true)
-        .eq('stores.is_approved', true)
-        .in('store_id', ids);
+        .in('store_id', ids)
+        .range(from, from + batchSize - 1);
       if (error) throw new Error(`Database error: ${error.message}`);
-      if (data?.length) allRows.push(...(data as unknown as ProductRow[]));
-    }
-    return allRows;
-  }
-
-  // No location filter (fresh session, geolocation denied, or a direct product/search/category
-  // link) -- storeIds is null here, so without an explicit stores.is_active / is_approved check
-  // every product from every store, including offline or unverified stores, would be returned.
-  // The location-based branch above gets is_active from get_nearby_store_ids; we still enforce
-  // is_approved here (and below on the join) so only verified shopkeepers appear.
-  let from = 0;
-  const batchSize = 500;
-  let hasMore = true;
-  while (hasMore) {
-    const { data, error } = await supabaseAdmin
-      .from('products')
-      .select('id, store_id, master_product_id, product_name, is_active, master_products(*), stores!inner(is_active, is_approved)')
-      .eq('is_active', true)
-      .eq('stores.is_active', true)
-      .eq('stores.is_approved', true)
-      .range(from, from + batchSize - 1);
-    if (error) throw new Error(`Database error: ${error.message}`);
-    if (data && data.length > 0) {
-      allRows.push(...(data as unknown as ProductRow[]));
-      from += batchSize;
-      hasMore = data.length === batchSize;
-    } else {
-      hasMore = false;
+      if (data && data.length > 0) {
+        allRows.push(...(data as unknown as ProductRow[]));
+        from += batchSize;
+        hasMore = data.length === batchSize;
+      } else {
+        hasMore = false;
+      }
     }
   }
   return allRows;
@@ -534,7 +538,7 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
       return [];
     }
 
-    const { data: customerOrders, error } = await supabaseAdmin
+    const { data: customerOrders, error } = await supabaseNoSession
       .from('customer_orders')
       .select(
         `
@@ -565,7 +569,7 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
     }
 
     const orderIds = customerOrders.map((co) => co.id);
-    const { data: storeOrders } = await supabaseAdmin
+    const { data: storeOrders } = await supabaseNoSession
       .from('store_orders')
       .select('id, customer_order_id')
       .in('customer_order_id', orderIds);
@@ -578,7 +582,7 @@ export async function getUserOrders(userId?: string, userPhone?: string, userEma
       coToStoreOrders.set(so.customer_order_id, list);
     }
 
-    const { data: items } = await supabaseAdmin
+    const { data: items } = await supabaseNoSession
       .from('order_items')
       .select('store_order_id, product_id, product_name, unit, image_url, unit_price, quantity')
       .in('store_order_id', storeOrderIds);
@@ -902,7 +906,7 @@ export async function getUserAddresses(
     if (userPhone) {
       const normalizedPhone = userPhone.trim();
       if (normalizedPhone) {
-        const { data: usersByPhone, error: usersByPhoneError } = await supabaseAdmin
+        const { data: usersByPhone, error: usersByPhoneError } = await supabaseNoSession
           .from('app_users')
           .select('id')
           .eq('phone', normalizedPhone)
@@ -920,7 +924,7 @@ export async function getUserAddresses(
       return [];
     }
 
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabaseNoSession
       .from('customer_saved_addresses')
       .select('*')
       .in('customer_id', Array.from(customerIds))
@@ -989,13 +993,13 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
 
     // If this is set as default, unset all other default addresses for this user
     if (addressData.is_default) {
-      await supabaseAdmin
+      await supabaseNoSession
         .from('customer_saved_addresses')
         .update({ is_default: false })
         .eq('customer_id', addressData.user_id);
     }
 
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabaseNoSession
       .from('customer_saved_addresses')
       .insert([payload])
       .select()
