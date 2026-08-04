@@ -180,9 +180,19 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
 
   const handleNotifClick = async (notif: DbNotification) => {
     setShowNotifications(false);
+    // Awaited + error-checked, matching NotificationsPage.tsx's markOneRead —
+    // this was previously void'd with no await/.catch, so local "read" state
+    // updated unconditionally even if the RPC was silently blocked (stale
+    // session, RLS denial), leaving this dropdown out of sync with
+    // NotificationsPage.tsx on next load.
     if (currentAdmin?.id && isUnread(notif)) {
-      void getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: notif.id });
-      setNotifications(prev => prev.map(n => (n.id === notif.id ? { ...n, read_by: [...n.read_by, currentAdmin.id] } : n)));
+      try {
+        const { error } = await getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: notif.id });
+        if (error) throw error;
+        setNotifications(prev => prev.map(n => (n.id === notif.id ? { ...n, read_by: [...n.read_by, currentAdmin.id] } : n)));
+      } catch (err) {
+        console.error('Failed to mark notification as read:', err);
+      }
     }
     const link = getNotificationLink(notif.type, notif.data);
     if (link) navigate(link);

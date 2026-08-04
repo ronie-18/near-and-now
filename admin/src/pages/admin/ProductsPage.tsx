@@ -282,6 +282,19 @@ const QuickAddModal = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // This modal stays mounted at all times (conditional render inside itself,
+  // not a conditional mount in the parent — see `if (!isOpen) return null`
+  // below), and formData previously only reset after a successful submit —
+  // Cancel/X/backdrop-click just closed it, leaving whatever was typed
+  // showing again the next time it opened. Reset on every open instead, so
+  // it doesn't matter which of those three ways the previous attempt ended.
+  useEffect(() => {
+    if (isOpen) {
+      setFormData({ name: "", category: "", price: "", in_stock: true, description: "" });
+      setError(null);
+    }
+  }, [isOpen]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);

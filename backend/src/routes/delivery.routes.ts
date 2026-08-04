@@ -51,6 +51,7 @@ router.patch('/partners/:partnerId/verification-documents/:docType', requireAdmi
 router.post('/partners', requireAdmin, requirePermission('delivery_partners.edit'), validate(createDeliveryPartnerSchema), deliveryController.createDeliveryPartner.bind(deliveryController));
 router.put('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.edit'), validate(updateDeliveryPartnerSchema), deliveryController.updateDeliveryPartner.bind(deliveryController));
 router.delete('/partners/:partnerId', requireAdmin, requirePermission('delivery_partners.edit'), deliveryController.deleteDeliveryPartner.bind(deliveryController));
+router.post('/partners/:partnerId/restore', requireAdmin, requirePermission('delivery_partners.edit'), deliveryController.restoreDeliveryPartner.bind(deliveryController));
 router.post('/partners/:partnerId/notify-approved', requireAdmin, requirePermission('delivery_partners.edit'), deliveryController.notifyPartnerApproved.bind(deliveryController));
 
 // Dispatch actions operate on orders, not partner accounts — gated on the

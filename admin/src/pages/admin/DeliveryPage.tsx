@@ -13,6 +13,7 @@ import {
   Truck,
   Wifi,
   WifiOff,
+  RotateCcw,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
@@ -42,9 +43,10 @@ interface PartnerData {
   updated_at?: string;
   approved_at?: string | null;
   approved_by?: string | null;
+  deleted_at?: string | null;
 }
 
-type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved';
+type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved' | 'deleted';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -230,13 +232,20 @@ const DeliveryPage = () => {
     };
   }, []);
 
-  const stats = useMemo(() => ({
-    total: partners.length,
-    online: partners.filter((p) => p.is_online).length,
-    offline: partners.filter((p) => !p.is_online).length,
-    pending: partners.filter((p) => !p.is_approved).length,
-    approved: partners.filter((p) => p.is_approved).length,
-  }), [partners]);
+  // "Total"/online/offline/pending/approved all deliberately exclude deleted
+  // (soft-removed) partners — they're viewed via the separate "Deleted" tab,
+  // not mixed into the normal roster counts.
+  const stats = useMemo(() => {
+    const live = partners.filter((p) => !p.deleted_at);
+    return {
+      total: live.length,
+      online: live.filter((p) => p.is_online).length,
+      offline: live.filter((p) => !p.is_online).length,
+      pending: live.filter((p) => !p.is_approved).length,
+      approved: live.filter((p) => p.is_approved).length,
+      deleted: partners.filter((p) => p.deleted_at).length,
+    };
+  }, [partners]);
 
   const filteredPartners = useMemo(() => {
     return partners
@@ -251,6 +260,8 @@ const DeliveryPage = () => {
           (partner.vehicle_number || '').toLowerCase().includes(q)
         );
         const matchesStat =
+          statFilter === 'deleted' ? !!partner.deleted_at :
+          partner.deleted_at ? false :
           statFilter === 'all' ? true :
           statFilter === 'online' ? partner.is_online :
           statFilter === 'offline' ? !partner.is_online :
@@ -388,8 +399,11 @@ const DeliveryPage = () => {
     }
   };
 
+  // Soft delete (backend: deleteDeliveryPartner sets status='offboarded' +
+  // deleted_at, never a real row delete) — order/payout/document history for
+  // this rider is fully preserved, just hidden from the default roster.
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    if (!confirm(`Remove "${name}"? Their order and payout history is kept — this can be undone from the Deleted tab.`)) return;
     try {
       setDeleteLoading(id);
       const res = await fetch(`${API_BASE}/api/delivery/partners/${id}`, {
@@ -397,11 +411,36 @@ const DeliveryPage = () => {
         headers: adminAuthHeaders(),
       });
       if (!res.ok) throw new Error('Failed to delete');
-      setPartners((prev) => prev.filter((p) => p.user_id !== id));
+      setPartners((prev) => prev.map((p) => (
+        p.user_id === id ? { ...p, status: 'offboarded', is_online: false, is_approved: false, deleted_at: new Date().toISOString() } : p
+      )));
+      await notifyAdminAction(`removed rider`, name, { rider_id: id, rider_name: name }, 'admin_review_action');
       setSuccess(`"${name}" has been removed.`);
       setTimeout(() => setSuccess(null), 3000);
     } catch {
       setError('Failed to delete delivery partner.');
+      setTimeout(() => setError(null), 4000);
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
+  const handleRestore = async (id: string, name: string) => {
+    try {
+      setDeleteLoading(id);
+      const res = await fetch(`${API_BASE}/api/delivery/partners/${id}/restore`, {
+        method: 'POST',
+        headers: adminAuthHeaders(),
+      });
+      if (!res.ok) throw new Error('Failed to restore');
+      setPartners((prev) => prev.map((p) => (
+        p.user_id === id ? { ...p, status: 'pending_verification', deleted_at: null } : p
+      )));
+      await notifyAdminAction(`restored rider`, name, { rider_id: id, rider_name: name }, 'admin_review_action');
+      setSuccess(`"${name}" has been restored — they'll need re-approval before going online.`);
+      setTimeout(() => setSuccess(null), 4000);
+    } catch {
+      setError('Failed to restore delivery partner.');
       setTimeout(() => setError(null), 4000);
     } finally {
       setDeleteLoading(null);
@@ -449,6 +488,7 @@ const DeliveryPage = () => {
           <StatCard icon={WifiOff} gradient="bg-gradient-to-br from-gray-500 to-gray-600" label="Offline" value={stats.offline} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
           <StatCard icon={AlertCircle} gradient="bg-gradient-to-br from-amber-500 to-orange-600" label="Pending Approval" value={stats.pending} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
           <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-sky-500 to-blue-600" label="Approved" value={stats.approved} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
+          <StatCard icon={Trash2} gradient="bg-gradient-to-br from-slate-500 to-gray-600" label="Deleted" value={stats.deleted} active={statFilter === 'deleted'} onClick={() => setStatFilter('deleted')} />
         </div>
 
         {/* Search */}
@@ -689,18 +729,31 @@ const DeliveryPage = () => {
                         </span>
                       </td>
 
-                      {/* Delete */}
+                      {/* Delete / Restore */}
                       <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => handleDelete(partner.user_id, partner.name)}
-                          disabled={deleteLoading === partner.user_id}
-                          className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
-                          title="Delete"
-                        >
-                          {deleteLoading === partner.user_id
-                            ? <RefreshCw size={16} className="animate-spin" />
-                            : <Trash2 size={16} />}
-                        </button>
+                        {partner.deleted_at ? (
+                          <button
+                            onClick={() => handleRestore(partner.user_id, partner.name)}
+                            disabled={deleteLoading === partner.user_id}
+                            className="p-2.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all disabled:opacity-50"
+                            title="Restore"
+                          >
+                            {deleteLoading === partner.user_id
+                              ? <RefreshCw size={16} className="animate-spin" />
+                              : <RotateCcw size={16} />}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDelete(partner.user_id, partner.name)}
+                            disabled={deleteLoading === partner.user_id}
+                            className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
+                            title="Delete"
+                          >
+                            {deleteLoading === partner.user_id
+                              ? <RefreshCw size={16} className="animate-spin" />
+                              : <Trash2 size={16} />}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

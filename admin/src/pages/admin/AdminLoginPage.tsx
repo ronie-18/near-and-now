@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { authenticateAdmin } from '../../services/adminAuthService';
 import { setAdminSession } from '../../services/adminSession';
+import { isAdminAuthenticated } from '../../services/secureAdminAuth';
 import logoUrl from '../../../../near_now_image.png';
 
 const AdminLoginPage = () => {
@@ -13,6 +14,17 @@ const AdminLoginPage = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  // Previously only redirected post-submit — an already-logged-in admin
+  // navigating back here (browser back, stale tab, bookmark) saw the login
+  // form again instead of being bounced to the dashboard.
+  useEffect(() => {
+    let cancelled = false;
+    isAdminAuthenticated().then((authed) => {
+      if (authed && !cancelled) navigate('/', { replace: true });
+    });
+    return () => { cancelled = true; };
+  }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

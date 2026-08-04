@@ -78,7 +78,7 @@ export class DeliveryController {
     }
   }
 
-  // Delete delivery partner
+  // Delete delivery partner (soft delete — see databaseService.deleteDeliveryPartner)
   async deleteDeliveryPartner(req: Request, res: Response) {
     try {
       const { partnerId } = req.params;
@@ -87,6 +87,18 @@ export class DeliveryController {
     } catch (error) {
       console.error('Error deleting delivery partner:', error);
       res.status(500).json({ error: 'Failed to delete delivery partner' });
+    }
+  }
+
+  // Undo of the above
+  async restoreDeliveryPartner(req: Request, res: Response) {
+    try {
+      const { partnerId } = req.params;
+      const result = await databaseService.restoreDeliveryPartner(partnerId);
+      res.json(result);
+    } catch (error) {
+      console.error('Error restoring delivery partner:', error);
+      res.status(500).json({ error: 'Failed to restore delivery partner' });
     }
   }
 

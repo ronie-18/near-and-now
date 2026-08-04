@@ -1720,12 +1720,37 @@ export class DatabaseService {
     return { success: true };
   }
 
+  // Soft delete — a real hard delete is impossible once a rider has any real
+  // history: delivery_partners_payouts RESTRICTs on delete, and
+  // driver_order_offers/customer_orders.assigned_driver_id both NO ACTION on
+  // delivery_partners. The previous hard-delete attempt here didn't even
+  // check the first delete's error, so that failure mode was silent. Marks
+  // 'offboarded' (the status enum's existing, previously-unused value for
+  // exactly this) and stamps deleted_at so the admin panel can filter it out
+  // of the default list — the row itself, and every order/payout/document
+  // referencing it, is left fully intact.
   async deleteDeliveryPartner(partnerId: string) {
-    // Delete from delivery_partners first (foreign key constraint)
-    await supabaseAdmin.from('delivery_partners').delete().eq('user_id', partnerId);
-    // Delete from app_users (cascade will handle related records)
-    const { error } = await supabaseAdmin.from('app_users').delete().eq('id', partnerId);
+    const { data, error } = await supabaseAdmin
+      .from('delivery_partners')
+      .update({ status: 'offboarded', is_online: false, is_approved: false, deleted_at: new Date().toISOString() })
+      .eq('user_id', partnerId)
+      .select('user_id');
     if (error) throw error;
+    if (!data || data.length === 0) throw new Error('Delivery partner not found');
+    return { success: true };
+  }
+
+  // Undo of the above — does not restore approval (an offboarded/removed
+  // rider must go through the normal approval gate again before working),
+  // only clears deleted_at/offboarded so they reappear in the admin list.
+  async restoreDeliveryPartner(partnerId: string) {
+    const { data, error } = await supabaseAdmin
+      .from('delivery_partners')
+      .update({ status: 'pending_verification', deleted_at: null })
+      .eq('user_id', partnerId)
+      .select('user_id');
+    if (error) throw error;
+    if (!data || data.length === 0) throw new Error('Delivery partner not found');
     return { success: true };
   }
 

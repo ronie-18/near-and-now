@@ -15,6 +15,8 @@ import {
   FileText,
   FileCheck,
   Landmark,
+  Trash2,
+  RotateCcw,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
@@ -34,9 +36,10 @@ interface StoreData {
   updated_at?: string;
   approved_at?: string | null;
   approved_by?: string | null;
+  deleted_at?: string | null;
 }
 
-type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved';
+type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved' | 'deleted';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -669,6 +672,7 @@ const StoresPage = () => {
   const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [togglingActiveId, setTogglingActiveId] = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [reviewingStore, setReviewingStore] = useState<StoreData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
   const [docStatusByStore, setDocStatusByStore] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
@@ -787,7 +791,7 @@ const StoresPage = () => {
     // column is inaccessible, rather than silently omitting it.
     const { data, error: sbError } = await getAdminClient()
       .from('stores')
-      .select('id, owner_id, name, phone, address, latitude, longitude, is_active, created_at, updated_at, image_url, owner_image_url, is_approved, approved_at, approved_by, verification_submitted_at')
+      .select('id, owner_id, name, phone, address, latitude, longitude, is_active, created_at, updated_at, image_url, owner_image_url, is_approved, approved_at, approved_by, verification_submitted_at, deleted_at')
       .order('created_at', { ascending: false });
     if (sbError) throw sbError;
     setStores(data || []);
@@ -868,13 +872,19 @@ const StoresPage = () => {
     };
   }, []);
 
-  const stats = useMemo(() => ({
-    total: stores.length,
-    online: stores.filter(s => s.is_active).length,
-    offline: stores.filter(s => !s.is_active).length,
-    pending: stores.filter(s => !s.is_approved).length,
-    approved: stores.filter(s => s.is_approved).length,
-  }), [stores]);
+  // "Total"/online/offline/pending/approved all deliberately exclude deleted
+  // (soft-removed) stores — they're viewed via the separate "Deleted" tab.
+  const stats = useMemo(() => {
+    const live = stores.filter(s => !s.deleted_at);
+    return {
+      total: live.length,
+      online: live.filter(s => s.is_active).length,
+      offline: live.filter(s => !s.is_active).length,
+      pending: live.filter(s => !s.is_approved).length,
+      approved: live.filter(s => s.is_approved).length,
+      deleted: stores.filter(s => s.deleted_at).length,
+    };
+  }, [stores]);
 
   const filteredStores = useMemo(() => {
     return stores
@@ -886,6 +896,8 @@ const StoresPage = () => {
           store.phone?.includes(q)
         );
         const matchesStat =
+          statFilter === 'deleted' ? !!store.deleted_at :
+          store.deleted_at ? false :
           statFilter === 'all' ? true :
           statFilter === 'online' ? store.is_active :
           statFilter === 'offline' ? !store.is_active :
@@ -1001,6 +1013,58 @@ const StoresPage = () => {
     }
   };
 
+  // Soft delete — a real hard delete is impossible once a store has any real
+  // history: store_orders/store_payouts/delivery_partners_payouts all
+  // RESTRICT on delete. Sets deleted_at (and forces offline/unapproved) so
+  // order/payout/product history for this store is fully preserved, just
+  // hidden from the default roster — same pattern as the rider "Delete"
+  // above, which had the identical constraint and is fixed the same way.
+  const handleDeleteStore = async (store: StoreData) => {
+    if (!confirm(`Remove "${store.name}"? Its order and payout history is kept — this can be undone from the Deleted tab.`)) return;
+    setDeleteLoading(store.id);
+    setError(null);
+    try {
+      const patch = { is_active: false, is_approved: false, deleted_at: new Date().toISOString() };
+      const { data, error: sbError } = await getAdminClient()
+        .from('stores')
+        .update(patch)
+        .eq('id', store.id)
+        .select('id');
+      if (sbError) throw sbError;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setStores(prev => prev.map(s => (s.id === store.id ? { ...s, ...patch } : s)));
+      await notifyAdminAction('removed store', store.name, { store_id: store.id, store_name: store.name }, 'admin_review_action');
+    } catch (err: any) {
+      setError(`Failed to delete store: ${err.message}`);
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
+  const handleRestoreStore = async (store: StoreData) => {
+    setDeleteLoading(store.id);
+    setError(null);
+    try {
+      const { data, error: sbError } = await getAdminClient()
+        .from('stores')
+        .update({ deleted_at: null })
+        .eq('id', store.id)
+        .select('id');
+      if (sbError) throw sbError;
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked (no admin session or insufficient permissions).');
+      }
+      setStores(prev => prev.map(s => (s.id === store.id ? { ...s, deleted_at: null } : s)));
+      await notifyAdminAction('restored store', store.name, { store_id: store.id, store_name: store.name }, 'admin_review_action');
+    } catch (err: any) {
+      setError(`Failed to restore store: ${err.message}`);
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -1037,6 +1101,7 @@ const StoresPage = () => {
           <StatCard icon={WifiOff} gradient="bg-gradient-to-br from-gray-500 to-gray-600" label="Offline" value={stats.offline} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
           <StatCard icon={AlertCircle} gradient="bg-gradient-to-br from-amber-500 to-orange-500" label="Pending Approval" value={stats.pending} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
           <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-sky-500 to-blue-600" label="Approved" value={stats.approved} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
+          <StatCard icon={Trash2} gradient="bg-gradient-to-br from-slate-500 to-gray-600" label="Deleted" value={stats.deleted} active={statFilter === 'deleted'} onClick={() => setStatFilter('deleted')} />
         </div>
 
         {/* Search */}
@@ -1094,6 +1159,7 @@ const StoresPage = () => {
                     <th className="px-6 py-4">Approved On</th>
                     <th className="px-6 py-4">Updated On</th>
                     <th className="px-6 py-4">Joined</th>
+                    <th className="px-6 py-4 text-right">Delete</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1223,6 +1289,32 @@ const StoresPage = () => {
                             ? new Date(store.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
                             : '—'}
                         </span>
+                      </td>
+                      {/* Delete / Restore */}
+                      <td className="px-6 py-4 text-right">
+                        {store.deleted_at ? (
+                          <button
+                            onClick={() => handleRestoreStore(store)}
+                            disabled={deleteLoading === store.id}
+                            className="p-2.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all disabled:opacity-50"
+                            title="Restore"
+                          >
+                            {deleteLoading === store.id
+                              ? <RefreshCw size={16} className="animate-spin" />
+                              : <RotateCcw size={16} />}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteStore(store)}
+                            disabled={deleteLoading === store.id}
+                            className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
+                            title="Delete"
+                          >
+                            {deleteLoading === store.id
+                              ? <RefreshCw size={16} className="animate-spin" />
+                              : <Trash2 size={16} />}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
