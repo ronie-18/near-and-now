@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, CheckCheck, FileText, ShieldCheck, Truck, Image, Wifi } from 'lucide-react';
+import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, CheckCheck, FileText, ShieldCheck, Truck, Image, Wifi, MessageCircle } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
 import { clearAdminSession } from '../../../services/adminSession';
@@ -81,6 +81,8 @@ function notifStyle(type: string): { iconBg: string; Icon: React.ElementType } {
     case 'store_status_changed':
     case 'rider_status_changed':
       return { iconBg: 'bg-emerald-100 text-emerald-600', Icon: Wifi };
+    case 'support_message':
+      return { iconBg: 'bg-blue-100 text-blue-600', Icon: MessageCircle };
     default: return { iconBg: 'bg-violet-100 text-violet-600', Icon: Package };
   }
 }

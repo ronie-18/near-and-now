@@ -1360,3 +1360,56 @@ export async function markAllStoreNotificationsRead(req: Request, res: Response)
     res.status(500).json({ success: false, error: error?.message || 'Failed to mark all notifications as read' });
   }
 }
+
+/**
+ * Persists a shopkeeper's Help & Support message and broadcasts it to the
+ * admin_notifications feed (the same channel already used for approve/reject/
+ * review actions, so it shows up on admins' existing bell/NotificationsPage
+ * in real time, no new polling mechanism needed) — previously this screen's
+ * "Send" button was a fake `setTimeout`, and nothing was ever transmitted
+ * anywhere.
+ */
+export async function createSupportMessage(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { message } = req.body as { message?: string };
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Message is required' });
+    }
+
+    const [{ data: user }, { data: stores }] = await Promise.all([
+      supabaseAdmin.from('app_users').select('name, phone').eq('id', userId).maybeSingle(),
+      supabaseAdmin.from('stores').select('id, name').eq('owner_id', userId).limit(1),
+    ]);
+    const store = stores?.[0];
+
+    const { data: inserted, error } = await supabaseAdmin
+      .from('support_messages')
+      .insert({
+        sender_role: 'shopkeeper',
+        sender_id: userId,
+        sender_name: (user as any)?.name || null,
+        sender_phone: (user as any)?.phone || null,
+        store_id: store?.id || null,
+        message: message.trim(),
+      })
+      .select('id')
+      .single();
+    if (error) throw error;
+
+    const senderLabel = (user as any)?.name || store?.name || 'A shopkeeper';
+    await supabaseAdmin.from('admin_notifications').insert({
+      type: 'support_message',
+      title: `Support message from ${senderLabel}`,
+      message: message.trim().slice(0, 200),
+      data: { support_message_id: inserted.id, store_id: store?.id || null, store_name: store?.name || null, sender_phone: (user as any)?.phone || null },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ createSupportMessage error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to send message' });
+  }
+}
