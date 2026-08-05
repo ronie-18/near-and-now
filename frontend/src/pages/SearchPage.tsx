@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { searchProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
 import ProductGrid from '../components/products/ProductGrid';
@@ -11,6 +11,7 @@ const SearchPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const { showNotification } = useNotification();
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
@@ -49,13 +50,7 @@ const SearchPage = () => {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchTerm.trim()) {
-      window.history.pushState(
-        {},
-        '',
-        `/search?q=${encodeURIComponent(searchTerm)}`
-      );
-      // Force a re-render
-      window.dispatchEvent(new PopStateEvent('popstate'));
+      navigate(`/search?q=${encodeURIComponent(searchTerm)}`);
     }
   };
 

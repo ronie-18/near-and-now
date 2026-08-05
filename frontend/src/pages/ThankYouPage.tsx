@@ -39,7 +39,7 @@ const ThankYouPage = () => {
   const [cancelSuccess, setCancelSuccess] = useState<boolean>(false);
   const [hasDeliveryPartner, setHasDeliveryPartner] = useState<boolean>(false);
 
-  // Auto-redirect to track page after 7 seconds
+  // Auto-redirect to track page after THANK_YOU_DISPLAY_SEC seconds
   useEffect(() => {
     if (!orderId) return;
 

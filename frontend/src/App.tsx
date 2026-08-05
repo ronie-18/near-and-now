@@ -14,6 +14,7 @@ import HomePage from './pages/HomePage';
 import ShopPage from './pages/ShopPage';
 import CategoryPage from './pages/CategoryPage';
 import ProductDetailPage from './pages/ProductDetailPage';
+import CartPage from './pages/CartPage';
 import CheckoutPage from './pages/CheckoutPage';
 import ThankYouPage from './pages/ThankYouPage';
 import LoginPage from './pages/LoginPage';
@@ -62,6 +63,7 @@ const AppContent: React.FC = () => {
             <Route path="/shop" element={<ShopPage />} />
             <Route path="/category/:categoryId" element={<CategoryPage />} />
             <Route path="/product/:productId" element={<ProductDetailPage />} />
+            <Route path="/cart" element={<CartPage />} />
             <Route path="/checkout" element={<CheckoutPage />} />
             <Route path="/thank-you" element={<ThankYouPage />} />
             <Route path="/login" element={<LoginPage />} />

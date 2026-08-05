@@ -510,7 +510,7 @@ const Header = () => {
 
                 {/* Cart Button - Enhanced */}
                 <Link
-                  to="/checkout"
+                  to="/cart"
                   className="hidden md:flex flex-col items-center text-gray-600 hover:text-primary transition-all duration-300 relative group px-2 py-1 rounded-xl hover:bg-primary/5"
                 >
                   <div className="relative">
@@ -565,7 +565,7 @@ const Header = () => {
                     </Link>
                   )}
 
-                  <Link to="/checkout" className="relative active:scale-95 transition-transform">
+                  <Link to="/cart" className="relative active:scale-95 transition-transform">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center hover:from-primary hover:to-secondary hover:text-white transition-all">
                       <ShoppingCart className="w-5 h-5" />
                     </div>
