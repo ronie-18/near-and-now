@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
-import { getWalletBalance, createWalletTopupOrder, verifyWalletTopup } from '../services/walletService';
+import {
+  getWalletBalance,
+  createWalletTopupOrder,
+  verifyWalletTopup,
+  getWalletTransactions,
+  WalletTransaction,
+} from '../services/walletService';
 import { openRazorpayCheckoutForOrder } from '../services/paymentGateway';
 
 const QUICK_AMOUNTS = [100, 250, 500, 1000];
@@ -48,7 +54,24 @@ const globalStyles = `
     cursor: pointer; margin-top: 16px;
   }
   .wp-add-btn:disabled { background: #d1d5db; color: #9ca3af; cursor: not-allowed; }
+  .wp-tx-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 0; border-bottom: 1px solid #f0f0f0;
+  }
+  .wp-tx-row:last-child { border-bottom: none; }
+  .wp-tx-retry {
+    padding: 8px 18px; border-radius: 100px; border: 1.5px solid #2D7A4F;
+    background: transparent; color: #2D7A4F; font-size: 13px; font-weight: 600;
+    cursor: pointer;
+  }
+  .wp-tx-retry:hover { background: #2D7A4F; color: #fff; }
 `;
+
+const TX_REASON_LABEL: Record<WalletTransaction['reason'], string> = {
+  topup: 'Wallet Top-up',
+  order_payment: 'Order Payment',
+  refund: 'Refund',
+};
 
 const WalletPage = () => {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -62,6 +85,10 @@ const WalletPage = () => {
   const [phase, setPhase] = useState<TopupPhase>('idle');
   const inFlight = useRef(false);
 
+  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [txLoading, setTxLoading] = useState(true);
+  const [txError, setTxError] = useState(false);
+
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate('/login');
   }, [isAuthenticated, isLoading, navigate]);
@@ -73,6 +100,18 @@ const WalletPage = () => {
       .catch(() => { /* leave null -> renders "—" instead of a misleading ₹0.00 */ })
       .finally(() => setLoadingBalance(false));
   }, [isAuthenticated]);
+
+  const fetchTransactions = useCallback(() => {
+    if (!isAuthenticated) return;
+    setTxLoading(true);
+    setTxError(false);
+    getWalletTransactions()
+      .then(setTransactions)
+      .catch(() => setTxError(true))
+      .finally(() => setTxLoading(false));
+  }, [isAuthenticated]);
+
+  useEffect(() => { fetchTransactions(); }, [fetchTransactions]);
 
   const finalAmount = custom.trim() !== '' ? Number(custom) : selected;
   const isValid = finalAmount != null && finalAmount > 0 && Number.isFinite(finalAmount);
@@ -104,6 +143,7 @@ const WalletPage = () => {
       setSelected(null);
       setCustom('');
       showNotification(`₹${finalAmount} added to your wallet`, 'success');
+      fetchTransactions();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
       if (message !== 'Payment cancelled') {
@@ -182,6 +222,48 @@ const WalletPage = () => {
               {phase !== 'idle' ? PHASE_LABEL[phase] : isValid ? `Add ₹${finalAmount}` : 'Add Money'}
             </button>
           </div>
+        </div>
+
+        <div className="wp-card" style={{ marginTop: 20, padding: 28 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px 0', color: '#1a1a2e' }}>Transaction History</h2>
+
+          {txLoading ? (
+            <div style={{ color: '#9ca3af', fontSize: 14, textAlign: 'center', padding: '24px 0' }}>Loading…</div>
+          ) : txError ? (
+            <div style={{ textAlign: 'center', padding: '24px 0' }}>
+              <p style={{ color: '#9ca3af', fontSize: 14, margin: '0 0 12px 0' }}>Couldn't load transaction history.</p>
+              <button className="wp-tx-retry" onClick={fetchTransactions}>Try again</button>
+            </div>
+          ) : transactions.length === 0 ? (
+            <div style={{ color: '#9ca3af', fontSize: 14, textAlign: 'center', padding: '24px 0' }}>
+              No transactions yet.
+            </div>
+          ) : (
+            <div>
+              {transactions.map((tx) => (
+                <div key={tx.id} className="wp-tx-row">
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a2e' }}>
+                      {TX_REASON_LABEL[tx.reason] || tx.reason}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                      {new Date(tx.created_at).toLocaleDateString('en-IN', {
+                        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 14, fontWeight: 700,
+                      color: tx.type === 'credit' ? '#2D7A4F' : '#dc2626',
+                    }}
+                  >
+                    {tx.type === 'credit' ? '+' : '-'}₹{Number(tx.amount).toFixed(2)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

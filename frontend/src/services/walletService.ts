@@ -37,6 +37,24 @@ export async function getWalletBalance(): Promise<number> {
   return Number(res?.balance ?? 0);
 }
 
+export interface WalletTransaction {
+  id: string;
+  type: 'credit' | 'debit';
+  reason: 'topup' | 'order_payment' | 'refund';
+  amount: number;
+  balance_after: number;
+  reference_type: string | null;
+  reference_id: string | null;
+  created_at: string;
+}
+
+export async function getWalletTransactions(limit = 20, offset = 0): Promise<WalletTransaction[]> {
+  const res = await walletFetch<{ transactions: WalletTransaction[] }>(
+    `/api/wallet/transactions?limit=${limit}&offset=${offset}`,
+  );
+  return res?.transactions ?? [];
+}
+
 export async function createWalletTopupOrder(amountRupees: number): Promise<WalletTopupOrder> {
   return walletFetch<WalletTopupOrder>('/api/wallet/topup/create', {
     method: 'POST',

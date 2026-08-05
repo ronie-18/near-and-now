@@ -28,6 +28,33 @@ export class WalletController {
   }
 
   /**
+   * GET /api/wallet/transactions — paginated ledger for the authenticated
+   * customer, most recent first. Backs the wallet UI's transaction history
+   * (previously nothing read wallet_transactions at all outside the
+   * credit/debit RPCs that write it).
+   */
+  async getTransactions(req: Request, res: Response) {
+    try {
+      const userId = req.customerId;
+      const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+      const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+      const { data, error } = await supabaseAdmin
+        .from('wallet_transactions')
+        .select('id, type, reason, amount, balance_after, reference_type, reference_id, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+      if (error) throw error;
+
+      res.json({ success: true, transactions: data ?? [] });
+    } catch (error: any) {
+      console.error('❌ getTransactions error:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Failed to fetch wallet transactions' });
+    }
+  }
+
+  /**
    * POST /api/wallet/topup/create — opens a Razorpay order for the requested
    * top-up amount. Deliberately NOT keyed to any customer_orders row (this
    * isn't an order payment) — uses its own `wallet_topup` notes marker so

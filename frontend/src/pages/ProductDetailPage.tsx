@@ -311,7 +311,7 @@ const ProductDetailPage = () => {
           <span>/</span>
           <Link to="/shop">Shop</Link>
           <span>/</span>
-          <Link to={`/category/${product.category}`}>{formatCategoryName(product.category)}</Link>
+          <Link to={`/category/${encodeURIComponent(product.category)}`}>{formatCategoryName(product.category)}</Link>
           <span>/</span>
           <span className="pdp-bc-current" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {product.name}
