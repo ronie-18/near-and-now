@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { getAllProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
@@ -16,42 +16,45 @@ const HomePage = () => {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const { showNotification } = useNotification();
   const { userLocation } = useLocation();
   const lastLocationKeyRef = useRef<string | null>(null);
 
+  const fetchData = useCallback(async (lat?: number, lng?: number) => {
+    try {
+      setLoading(true);
+      setFetchError(false);
+
+      const opts = lat != null && lng != null ? { lat, lng } : undefined;
+      const [products, categoriesData] = await Promise.all([
+        getAllProducts(opts),
+        getCategories()
+      ]);
+
+      setAllProducts(products);
+
+      const productCategories = new Set(products.map(p => p.category).filter(Boolean));
+
+      const uniqueCategories = categoriesData.filter((category, index, self) => {
+        const isUnique = index === self.findIndex(c =>
+          c.name.toLowerCase() === category.name.toLowerCase()
+        );
+        const hasProducts = productCategories.has(category.name);
+        return isUnique && hasProducts;
+      });
+
+      setCategories(uniqueCategories);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      setFetchError(true);
+      showNotification('Failed to load data. Please try again.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [showNotification]);
+
   useEffect(() => {
-    const fetchData = async (lat?: number, lng?: number) => {
-      try {
-        setLoading(true);
-
-        const opts = lat != null && lng != null ? { lat, lng } : undefined;
-        const [products, categoriesData] = await Promise.all([
-          getAllProducts(opts),
-          getCategories()
-        ]);
-
-        setAllProducts(products);
-
-        const productCategories = new Set(products.map(p => p.category).filter(Boolean));
-
-        const uniqueCategories = categoriesData.filter((category, index, self) => {
-          const isUnique = index === self.findIndex(c =>
-            c.name.toLowerCase() === category.name.toLowerCase()
-          );
-          const hasProducts = productCategories.has(category.name);
-          return isUnique && hasProducts;
-        });
-
-        setCategories(uniqueCategories);
-      } catch (error) {
-        console.error('Error fetching data:', error);
-        showNotification('Failed to load data. Please try again.', 'error');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     // Re-fetch whenever the user's delivery location changes (rounded to a
     // ~110m grid to avoid re-fetching on GPS jitter) — matches ShopPage's
     // pattern. Previously this ran once on mount only, so switching delivery
@@ -66,8 +69,9 @@ const HomePage = () => {
     lastLocationKeyRef.current = key;
 
     fetchData(lat, lng);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userLocation?.latitude, userLocation?.longitude]);
+  }, [userLocation?.latitude, userLocation?.longitude, fetchData]);
+
+  const handleRetry = () => fetchData(userLocation?.latitude, userLocation?.longitude);
 
   return (
     <>
@@ -311,6 +315,26 @@ const HomePage = () => {
               })}
             </div>
 
+          ) : fetchError ? (
+            /* ── Fetch error state ── */
+            <div className="section-card text-center py-20 px-6">
+              <div className="w-20 h-20 rounded-3xl bg-red-50 flex items-center justify-center mx-auto mb-5">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-red-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <circle cx="12" cy="12" r="10" strokeWidth={1.5} />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4m0 4h.01" />
+                </svg>
+              </div>
+              <h3 className="font-display text-xl font-black text-gray-700 mb-2">Couldn't Load Products</h3>
+              <p className="text-gray-400 text-sm leading-relaxed max-w-xs mx-auto mb-5">
+                Something went wrong while loading products. Please try again.
+              </p>
+              <button
+                onClick={handleRetry}
+                className="inline-flex items-center gap-2 rounded-full border-2 border-primary text-primary font-bold text-sm px-6 py-2.5 hover:bg-primary hover:text-white transition-colors"
+              >
+                Try Again
+              </button>
+            </div>
           ) : (
             /* ── Empty state ── */
             <div className="section-card text-center py-20 px-6">

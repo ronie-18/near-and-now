@@ -137,6 +137,7 @@ const OrderTrackingPage = () => {
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   // Resolve order_code → orderId
   useEffect(() => {
@@ -152,53 +153,54 @@ const OrderTrackingPage = () => {
     resolve();
   }, [orderId, trackingNumberParam, navigate]);
 
-  useEffect(() => {
+  const fetchTracking = useCallback(async () => {
     if (!orderId) return;
-    const fetch = async () => {
-      try {
-        setLoading(true);
-        const data = await fetchOrderTrackingFull(orderId);
-        if (!data) { setLoading(false); return; }
-        const { order: orderData, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
-        const orderIdVal = orderData.id ?? orderId ?? '';
-        const transformed: Order = {
-          id: orderIdVal,
-          order_number: orderData.order_code || orderIdVal.substring(0, 8).toUpperCase(),
-          status: orderData.status || 'pending_at_store',
-          created_at: orderData.placed_at || orderData.created_at || '',
-          delivery_address: orderData.delivery_address || '',
-          total_amount: orderData.total_amount || 0,
-          payment_method: orderData.payment_method || 'COD',
-          items: orderData.store_orders?.flatMap((so: any) => so.order_items || []) || [],
-          estimated_delivery: orderData.estimated_delivery_time,
-          delivery_latitude: orderData.delivery_latitude,
-          delivery_longitude: orderData.delivery_longitude,
-          store_locations: storeLocations,
-          store_orders: orderData.store_orders,
-          delivery_agent: deliveryAgent,
-          delivery_agents: deliveryAgents,
-        };
-        setOrder(transformed);
-        setTrackingHistory(buildTrackingHistory(transformed, statusHistory || []));
+    try {
+      setLoading(true);
+      setFetchError(false);
+      const data = await fetchOrderTrackingFull(orderId);
+      if (!data) { setLoading(false); return; }
+      const { order: orderData, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
+      const orderIdVal = orderData.id ?? orderId ?? '';
+      const transformed: Order = {
+        id: orderIdVal,
+        order_number: orderData.order_code || orderIdVal.substring(0, 8).toUpperCase(),
+        status: orderData.status || 'pending_at_store',
+        created_at: orderData.placed_at || orderData.created_at || '',
+        delivery_address: orderData.delivery_address || '',
+        total_amount: orderData.total_amount || 0,
+        payment_method: orderData.payment_method || 'COD',
+        items: orderData.store_orders?.flatMap((so: any) => so.order_items || []) || [],
+        estimated_delivery: orderData.estimated_delivery_time,
+        delivery_latitude: orderData.delivery_latitude,
+        delivery_longitude: orderData.delivery_longitude,
+        store_locations: storeLocations,
+        store_orders: orderData.store_orders,
+        delivery_agent: deliveryAgent,
+        delivery_agents: deliveryAgents,
+      };
+      setOrder(transformed);
+      setTrackingHistory(buildTrackingHistory(transformed, statusHistory || []));
 
-        // Use server ETA if available, otherwise estimate from step
-        if (!['order_delivered', 'order_cancelled'].includes(transformed.status)) {
-          if ((orderData as any).eta_minutes) {
-            setEtaMinutes((orderData as any).eta_minutes);
-          } else {
-            const stepIdx = getStepIndex(transformed.status);
-            const remaining = Math.max(3, (PROGRESS_STEPS.length - 1 - stepIdx) * 7 + 5);
-            setEtaMinutes(remaining);
-          }
+      // Use server ETA if available, otherwise estimate from step
+      if (!['order_delivered', 'order_cancelled'].includes(transformed.status)) {
+        if ((orderData as any).eta_minutes) {
+          setEtaMinutes((orderData as any).eta_minutes);
+        } else {
+          const stepIdx = getStepIndex(transformed.status);
+          const remaining = Math.max(3, (PROGRESS_STEPS.length - 1 - stepIdx) * 7 + 5);
+          setEtaMinutes(remaining);
         }
-      } catch (err) {
-        console.error('Error fetching order tracking:', err);
-      } finally {
-        setLoading(false);
       }
-    };
-    fetch();
+    } catch (err) {
+      console.error('Error fetching order tracking:', err);
+      setFetchError(true);
+    } finally {
+      setLoading(false);
+    }
   }, [orderId]);
+
+  useEffect(() => { fetchTracking(); }, [fetchTracking]);
 
   // Geocode address when coords missing
   useEffect(() => {
@@ -302,6 +304,27 @@ const OrderTrackingPage = () => {
               View My Orders →
             </Link>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!order && fetchError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+        <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 text-center">
+          <Package className="w-14 h-14 text-red-300 mx-auto mb-4" />
+          <h1 className="text-xl font-bold text-gray-800 mb-2">Couldn't Load Order</h1>
+          <p className="text-gray-500 mb-6 text-sm">Something went wrong while fetching this order. Please try again.</p>
+          <button
+            onClick={() => fetchTracking()}
+            className="w-full bg-primary text-white rounded-lg py-2.5 text-sm font-medium hover:bg-secondary transition-colors mb-4"
+          >
+            Try Again
+          </button>
+          <Link to="/orders" className="inline-block text-primary hover:text-secondary text-sm font-medium">
+            View All Orders →
+          </Link>
         </div>
       </div>
     );

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice } from '../utils/formatters';
@@ -144,6 +144,14 @@ const globalStyles = `
     color: #dc2626; font-size: 14px;
     margin-bottom: 24px;
   }
+  .op-error-retry {
+    margin-left: auto; flex-shrink: 0;
+    padding: 6px 14px; border-radius: 100px;
+    border: 1.5px solid #dc2626; background: transparent;
+    font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+    color: #dc2626; cursor: pointer; transition: all .2s;
+  }
+  .op-error-retry:hover { background: #dc2626; color: #fff; }
 
   /* Empty state */
   .op-empty {
@@ -212,22 +220,23 @@ const OrdersPage = () => {
     if (!isLoading && !isAuthenticated) navigate('/login');
   }, [isAuthenticated, isLoading, navigate]);
 
-  useEffect(() => {
-    const fetchOrders = async () => {
-      if (!isAuthenticated || !user?.id) { setLoading(false); return; }
-      try {
-        setLoading(true); setError(null);
-        const userOrders = await fetchCustomerOrders(user.id);
-        setOrders(userOrders);
-      } catch (err: any) {
-        console.error('Error fetching orders:', err);
-        setError('Failed to load orders. Please try again.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    if (isAuthenticated && user?.id) fetchOrders();
+  const fetchOrders = useCallback(async () => {
+    if (!isAuthenticated || !user?.id) { setLoading(false); return; }
+    try {
+      setLoading(true); setError(null);
+      const userOrders = await fetchCustomerOrders(user.id);
+      setOrders(userOrders);
+    } catch (err: any) {
+      console.error('Error fetching orders:', err);
+      setError('Failed to load orders. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   }, [isAuthenticated, user?.id, user?.phone, user?.email]);
+
+  useEffect(() => {
+    if (isAuthenticated && user?.id) fetchOrders();
+  }, [fetchOrders, isAuthenticated, user?.id]);
 
   const toggleOrderDetails = (orderId: string) =>
     setExpandedOrder(prev => (prev === orderId ? null : orderId));
@@ -320,6 +329,7 @@ const OrdersPage = () => {
               <circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" />
             </svg>
             {error}
+            <button className="op-error-retry" onClick={fetchOrders}>Try again</button>
           </div>
         )}
 
