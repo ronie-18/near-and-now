@@ -7,8 +7,10 @@ import {
   DOC_LABELS,
   DOC_TYPES,
   MAX_DOC_SIZE_BYTES,
+  ONBOARDING_REQUIRED_DOC_TYPES,
   SIGNED_URL_TTL_SECONDS,
   VERIFICATION_DOCS_BUCKET,
+  type DocType,
   docNumberErrorMessage,
   formatFileSize,
   isDocType,
@@ -760,13 +762,18 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
 }
 
 /**
- * Editing or removing a verification document after the store has already
- * been approved sends it back for full re-verification — same as a manual
- * admin revoke (is_approved false, approved_at/approved_by cleared) — since
- * the documents admin signed off on are no longer what's on file. Returns
- * whether the store was suspended by this call (was approved, now isn't),
- * plus its name — fetched in the same round-trip since every caller needs
- * both (the name for the admin-notification message).
+ * Editing or removing an *onboarding-required* verification document
+ * (Aadhaar/PAN — see ONBOARDING_REQUIRED_DOC_TYPES) after the store has
+ * already been approved sends it back for full re-verification — same as a
+ * manual admin revoke (is_approved false, approved_at/approved_by cleared) —
+ * since the identity documents admin signed off on are no longer what's on
+ * file. Trade License/GST/FSSAI are optional and post-approval-only by
+ * design (collected from the profile screen once the shopkeeper is already
+ * live), so editing *those* never suspends the store — admin never reviewed
+ * them as a condition of approval in the first place. Returns whether the
+ * store was suspended by this call (was approved, now isn't), plus its name
+ * — fetched in the same round-trip since every caller needs both (the name
+ * for the admin-notification message).
  *
  * Also doubles as the thing that keeps `stores.updated_at` honest for a
  * document event on a store that ISN'T yet approved (the common case during
@@ -776,7 +783,10 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
  * own. Without this, uploading documents during normal pre-approval
  * onboarding never bumped `stores.updated_at` at all (found 2026-08-04).
  */
-async function suspendStoreIfApprovedAndGetName(storeId: string): Promise<{ suspended: boolean; name: string }> {
+async function suspendStoreIfApprovedAndGetName(
+  storeId: string,
+  docType: DocType
+): Promise<{ suspended: boolean; name: string }> {
   const { data: store } = await supabaseAdmin
     .from('stores')
     .select('name, is_approved')
@@ -785,9 +795,10 @@ async function suspendStoreIfApprovedAndGetName(storeId: string): Promise<{ susp
 
   const name = store?.name || 'A store';
 
-  if (!store?.is_approved) {
-    // Not approved yet — no suspension to do, but still a real "this store
-    // was touched" event worth reflecting in updated_at.
+  if (!store?.is_approved || !ONBOARDING_REQUIRED_DOC_TYPES.has(docType)) {
+    // Not approved yet, or this is an optional post-approval-only document
+    // type — no suspension to do, but still a real "this store was touched"
+    // event worth reflecting in updated_at.
     await supabaseAdmin
       .from('stores')
       .update({ updated_at: new Date().toISOString() })
@@ -805,13 +816,16 @@ async function suspendStoreIfApprovedAndGetName(storeId: string): Promise<{ susp
 
 /**
  * Atomically flips stores.verification_submitted_at from NULL to now() the
- * first time all 7 required documents are uploaded, returning true only for
+ * first time all required onboarding documents (Aadhaar front/back + PAN
+ * front/back — Trade License/GST/FSSAI are optional and post-approval-only,
+ * see ONBOARDING_REQUIRED_DOC_TYPES) are uploaded, returning true only for
  * whichever call actually performed that flip. Backed by a Postgres function
- * (mark_verification_submitted_if_ready, migration 20260803000000) that locks
- * the store row FOR UPDATE before deciding — this is what makes it safe to
- * call on every save without a "was this the first upload for this slot"
- * check in Node: two concurrent requests completing the last 2 empty slots
- * both call this, but only one can win the row lock first and see
+ * (mark_verification_submitted_if_ready, migration 20260803000000, updated
+ * 20260930060000 to count 4 instead of 7) that locks the store row FOR
+ * UPDATE before deciding — this is what makes it safe to call on every save
+ * without a "was this the first upload for this slot" check in Node: two
+ * concurrent requests completing the last 2 empty slots both call this, but
+ * only one can win the row lock first and see
  * `verification_submitted_at IS NULL`, so only one ever gets `true` back.
  */
 async function markVerificationSubmittedIfReady(storeId: string): Promise<boolean> {
@@ -1007,7 +1021,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId);
+    const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId, docType);
 
     const isFirstUploadForThisSlot = !!file && !existing?.storage_path;
     await notifyAdmins(
@@ -1086,15 +1100,19 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    // Removing any document ends the current "all 7 complete" submission
-    // cycle — clear the flag so a later re-completion fires a fresh
-    // "ready for review" notification instead of staying silently suppressed.
-    await supabaseAdmin
-      .from('stores')
-      .update({ verification_submitted_at: null })
-      .eq('id', storeId);
+    // Removing an onboarding-required document (Aadhaar/PAN) ends the current
+    // "all required docs complete" submission cycle — clear the flag so a
+    // later re-completion fires a fresh "ready for review" notification
+    // instead of staying silently suppressed. Trade/GST/FSSAI are optional
+    // and never part of that cycle, so removing one leaves the flag alone.
+    if (ONBOARDING_REQUIRED_DOC_TYPES.has(docType)) {
+      await supabaseAdmin
+        .from('stores')
+        .update({ verification_submitted_at: null })
+        .eq('id', storeId);
+    }
 
-    const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId);
+    const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId, docType);
 
     await notifyAdmins(
       'document_removed',

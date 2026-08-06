@@ -58,6 +58,12 @@ const DOC_LABELS: Record<string, string> = {
   fssai: 'FSSAI License',
 };
 
+// Only these gate first-time approval — Trade License/GST/FSSAI are optional
+// and collected later from the shopkeeper's post-approval profile screen, so
+// approvalReadiness() below no longer requires them. Mirrors
+// ONBOARDING_REQUIRED_DOC_TYPES in backend/src/utils/verificationDocuments.ts.
+const ONBOARDING_REQUIRED_DOC_TYPES = ['aadhaar_front', 'aadhaar_back', 'pan_front', 'pan_back'];
+
 interface VerificationDoc {
   doc_type: string;
   number: string | null;
@@ -742,13 +748,16 @@ const StoresPage = () => {
     setDocsUpdatedAt(latest);
   };
 
-  // A store can only be approved once every required document type
-  // (DOC_LABELS) has actually been reviewed and approved by an admin —
-  // otherwise "Approve" was previously a no-op check against documents at
-  // all, letting a store go live with zero or rejected documents.
+  // A store can only be approved once every onboarding-required document
+  // type (Aadhaar + PAN, ONBOARDING_REQUIRED_DOC_TYPES) has actually been
+  // reviewed and approved by an admin — otherwise "Approve" was previously a
+  // no-op check against documents at all, letting a store go live with zero
+  // or rejected documents. Trade License/GST/FSSAI are optional and
+  // collected later from the shopkeeper's post-approval profile, so they
+  // never block approval here even if missing.
   const approvalReadiness = (storeId: string): { ready: boolean; reason?: string } => {
     const docs = docStatusByStore[storeId] || [];
-    const requiredTypes = Object.keys(DOC_LABELS);
+    const requiredTypes = ONBOARDING_REQUIRED_DOC_TYPES;
     const missing = requiredTypes.filter((t) => !docs.some((d) => d.doc_type === t));
     if (missing.length > 0) {
       return { ready: false, reason: `Missing document(s): ${missing.map((t) => DOC_LABELS[t]).join(', ')}` };

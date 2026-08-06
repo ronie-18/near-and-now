@@ -5,6 +5,17 @@ export const DOC_TYPES = [
 ] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 
+/**
+ * Only these gate first-time store approval — Aadhaar + PAN establish
+ * identity, which is what admin review actually requires today. Trade
+ * License/GST/FSSAI are collected later from the post-approval profile
+ * screen and never block onboarding or trigger the suspend-on-edit path
+ * below (see ONBOARDING_REQUIRED_DOC_TYPES.has() in storeOwner.controller.ts).
+ */
+export const ONBOARDING_REQUIRED_DOC_TYPES = new Set<DocType>([
+  'aadhaar_front', 'aadhaar_back', 'pan_front', 'pan_back',
+]);
+
 export const VERIFICATION_DOCS_BUCKET = 'store-documents';
 
 export const MAX_DOC_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
