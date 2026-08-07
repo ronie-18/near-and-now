@@ -27,8 +27,17 @@ router.post('/verify', requireCustomer, paymentController.verifyPayment.bind(pay
 // the flag entirely).
 router.get('/methods', requireCustomer, paymentController.getSavedMethods.bind(paymentController));
 
-// Get payment details
-router.get('/:paymentId', paymentController.getPaymentDetails.bind(paymentController));
+// Get payment details — admin-only. Previously had no auth at all (found
+// 2026-08-07): anyone who obtained a Razorpay payment ID (pay_...) could
+// pull the full payment record — amount, method, masked card/UPI, customer
+// email/phone, and our own notes.internal_order_id — with no login. Neither
+// the website, customer app, nor admin panel actually call this route (all
+// confirmed via grep), so it's dead from every first-party client's
+// perspective but was still live and reachable. Gated the same way the rest
+// of this router treats read access to payment data (payments.view, shared
+// by admin/manager/viewer — see /refund's own comment for why .edit stays
+// admin/super_admin-only).
+router.get('/:paymentId', requireAdmin, requirePermission('payments.view'), paymentController.getPaymentDetails.bind(paymentController));
 
 // Process refund — admin-only: refunds move real money and must not be
 // triggerable by anyone who merely knows a Razorpay payment ID. payments.edit
