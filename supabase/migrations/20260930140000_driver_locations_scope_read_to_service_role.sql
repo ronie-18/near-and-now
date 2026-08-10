@@ -1,0 +1,28 @@
+-- driver_locations' "Allow read for tracking" policy (SELECT, USING(true),
+-- roles: {anon, authenticated}) let any client holding the public anon key
+-- subscribe to or query every rider's live GPS coordinates, not just the
+-- one assigned to an order they're actually tracking. Neither customers nor
+-- (for this read direction) riders have a usable auth.uid() to scope a
+-- narrower per-row policy against — customers never use Supabase Auth at
+-- all in this app (custom phone-OTP JWT via the backend instead), so
+-- properly scoping this to "only the driver on my own active order" would
+-- need a customer-side auth-bridge project on the scale of the one already
+-- built for riders (delivery_partners.auth_user_id, used by
+-- driver_order_offers' RLS) — out of scope for this pass. Closing the read
+-- entirely, verified safe first.
+--
+-- Verified safe before applying: both the website's and customer app's
+-- live-tracking hooks (useOrderTrackingRealtime.ts, useOrderTracking.ts)
+-- already have a working, backend-routed polling fallback
+-- (fetchDriverLocations() -> GET /api/tracking/orders/:orderId/driver-locations,
+-- ownership-checked via requireCustomer + databaseService.getDriverLocationsForOrder,
+-- entirely independent of anon-key RLS) that already runs whenever the
+-- direct realtime subscription isn't confirmed connected — same "backend
+-- fallback already proven, safe to close the anon hole" pattern used
+-- earlier this session for order_items/store_orders/otp_sessions/app_users.
+-- The trade-off: the direct Supabase realtime subscription to this table
+-- will now silently receive no events (RLS-filtered), so live driver-pin
+-- movement degrades from instant push to the existing 2s poll interval —
+-- not a functional loss, just a smaller one than the near-instant push.
+
+ALTER POLICY "Allow read for tracking" ON public.driver_locations TO service_role;

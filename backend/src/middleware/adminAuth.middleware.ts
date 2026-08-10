@@ -27,12 +27,21 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
   const now = new Date().toISOString();
   const { data: session, error } = await supabaseAdmin
     .from('admin_sessions')
-    .select('admin_id, expires_at')
+    .select('admin_id, expires_at, logged_out_at')
     .eq('session_token', token)
     .gt('expires_at', now)
     .maybeSingle();
 
-  if (error || !session) {
+  // Every RLS-level session check (is_admin_authenticated(), admin_has_permission())
+  // already requires logged_out_at IS NULL too — this Express layer was the
+  // one place that didn't, previously checking only expires_at. Not
+  // exploitable today (the only logout path deletes the session row outright
+  // rather than setting logged_out_at), but a future "revoke this session"
+  // feature that sets it instead would otherwise keep this layer accepting
+  // an admin-revoked token for up to the full session TTL while Supabase
+  // calls correctly reject it. Found 2026-08-10 during an admin-panel
+  // auth/permissions audit.
+  if (error || !session || session.logged_out_at) {
     return res.status(401).json({ error: 'Invalid or expired admin session' });
   }
 

@@ -295,8 +295,12 @@ export async function getProductsByCategory(
     const rowsInCategory = rows.filter((r) => r.master_products?.category === categoryName);
     return productRowsToProducts(rowsInCategory);
   } catch (error) {
+    // Previously swallowed to [] here (unlike getAllProducts, which rethrows)
+    // — a real DB failure rendered identical to "no products in this
+    // category," and CategoryPage.tsx's own error/retry UI could never fire
+    // for it. Rethrow so the caller's real error handling actually runs.
     console.error('Error in getProductsByCategory:', error);
-    return [];
+    throw error;
   }
 }
 
@@ -312,13 +316,27 @@ export async function searchProducts(query: string, options?: ProductFetchOption
 
     const rows = await fetchProductRows(storeIdsToUse);
     const q = query.trim().toLowerCase();
+    // Previously matched product name only — a search for a term that only
+    // appears in a product's category or description (e.g. "dairy") returned
+    // 0 results here even though ShopPage.tsx's own filter and the mobile
+    // app's searchProducts() both already match name OR category.
     const matching = q
-      ? rows.filter((r) => r.master_products?.name?.toLowerCase().includes(q))
+      ? rows.filter((r) => {
+          const mp = r.master_products;
+          return (
+            mp?.name?.toLowerCase().includes(q) ||
+            mp?.category?.toLowerCase().includes(q) ||
+            mp?.description?.toLowerCase().includes(q)
+          );
+        })
       : rows;
     return productRowsToProducts(matching);
   } catch (error) {
+    // Previously swallowed to [] here — a real DB failure rendered identical
+    // to "no results found," and SearchPage.tsx's own error toast could
+    // never fire for it. Rethrow so the caller's real error handling runs.
     console.error('Error in searchProducts:', error);
-    return [];
+    throw error;
   }
 }
 

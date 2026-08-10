@@ -1234,7 +1234,12 @@ export async function saveBillingInfo(req: Request, res: Response) {
     const bankBranchName = typeof req.body?.bank_branch_name === 'string' ? req.body.bank_branch_name.trim() : undefined;
     const file = (req as Request & { file?: UploadedFile }).file;
 
-    if (bankAccountNumber !== undefined && !/^[0-9]{6,20}$/.test(bankAccountNumber)) {
+    // Unlike the IFSC check right below (which has a `&& bankIfscCode` truthy
+    // guard), this one previously fired even on an empty string — blocking a
+    // shopkeeper who only wants to upload the passbook photo first (leaving
+    // account number/IFSC/branch blank, intending to add them later) with a
+    // confusing "must be 6-20 digits" error on a field they never touched.
+    if (bankAccountNumber !== undefined && bankAccountNumber && !/^[0-9]{6,20}$/.test(bankAccountNumber)) {
       return res.status(400).json({ success: false, error: 'Bank account number must be 6-20 digits' });
     }
     if (bankIfscCode !== undefined && bankIfscCode && !IFSC_PATTERN.test(bankIfscCode)) {

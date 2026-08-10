@@ -10,7 +10,7 @@ const couponsController = new CouponsController();
 
 const couponTypeEnum = z.enum(['flat', 'percent', 'first_order_discount']);
 
-const createCouponSchema = z.object({
+const couponBaseSchema = z.object({
   code: z.string().min(1, 'Code is required'),
   description: z.string().optional(),
   coupon_type: couponTypeEnum,
@@ -25,7 +25,21 @@ const createCouponSchema = z.object({
   is_active: z.boolean().optional()
 });
 
-const updateCouponSchema = createCouponSchema.partial();
+// Previously unvalidated — a coupon could be published with valid_until
+// before valid_from and no error shown to the admin. validateCoupon()
+// (database.service.ts) already independently enforces both bounds at
+// redemption time, so such a coupon was never actually exploitable — just
+// silently dead-on-arrival, a confusing trap for whoever published it.
+const dateOrderCheck = (data: { valid_from?: string; valid_until?: string }) =>
+  !data.valid_until || !data.valid_from || new Date(data.valid_until) >= new Date(data.valid_from);
+const dateOrderIssue = { message: 'valid_until must be on or after valid_from', path: ['valid_until'] as (string | number)[] };
+
+const createCouponSchema = couponBaseSchema.refine(dateOrderCheck, dateOrderIssue);
+// Only cross-validated when *both* dates are present in the same request —
+// a partial update touching just one side can't be checked here without
+// fetching the coupon's existing other value first, which this validation
+// middleware layer doesn't do.
+const updateCouponSchema = couponBaseSchema.partial().refine(dateOrderCheck, dateOrderIssue);
 
 // Public read (customers need to browse/validate)
 router.get('/active', couponsController.getActiveCoupons.bind(couponsController));

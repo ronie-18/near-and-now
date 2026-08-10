@@ -44,9 +44,15 @@ export async function suspendRiderIfApprovedAndGetName(riderId: string): Promise
   const name = partner?.name || 'A delivery partner';
   if (!partner?.is_approved) return { suspended: false, name };
 
+  // is_online: false too — broadcastToNearbyDrivers (shopkeeper.controller.ts)
+  // only filters on is_online/status, not is_approved, so a rider suspended
+  // while still marked online kept receiving order-offer pushes they were
+  // already blocked from accepting (accept_driver_offer re-checks is_approved
+  // atomically) — a stray, confusing notification with no way to act on it.
+  // Found 2026-08-10 during a rider-app double-submit-guard audit.
   await supabaseAdmin
     .from('delivery_partners')
-    .update({ is_approved: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
+    .update({ is_approved: false, is_online: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
     .eq('user_id', riderId);
 
   return { suspended: true, name };
@@ -1605,8 +1611,17 @@ export class DeliveryPartnerController {
 
   async updatePushToken(req: Request, res: Response) {
     try {
-      const { expo_push_token } = req.body;
-      if (!expo_push_token) {
+      // expo_push_token: null explicitly clears the stored token (called on
+      // logout, so a shared device doesn't keep delivering this rider's order
+      // offers/status pushes to whoever logs in next) — distinct from
+      // omitting the field, which is still rejected as a client error.
+      // Mirrors storeOwner.controller.ts's registerPushToken — this app was
+      // previously the one app of the three with no clear path at all: the
+      // customer and store-owner apps already had this fix, but this
+      // endpoint rejected any falsy value with a 400, and no client call
+      // site ever tried to clear it on logout either.
+      const { expo_push_token } = req.body as { expo_push_token?: string | null };
+      if (expo_push_token === undefined) {
         return res.status(400).json({ error: 'expo_push_token required' });
       }
       await supabaseAdmin.from('delivery_partners').update({ expo_push_token }).eq('user_id', req.riderId!);

@@ -139,6 +139,27 @@ export class NotificationService {
   // (dailySummary/payments/systemAlerts) don't correspond to any push this
   // service currently sends, so there's nothing yet to gate them against.
   // Missing/unset preferences default to enabled, same "opt-out" convention.
+  // Customer-side twin of isRiderNotificationEnabled/isShopkeeperNotificationEnabled
+  // — same table/column/opt-out-by-default convention, keyed on the
+  // customer's own app_users.id. The backend GET/PUT /users/:userId/preferences
+  // endpoint (notifications.routes.ts) already persisted this shape but had
+  // no gate anywhere reading it, and no UI on the customer app called it
+  // either — a fully-built, IDOR-safe feature with nothing wired to it on
+  // either end. Found 2026-08-10 during a notification-system audit.
+  private async isCustomerNotificationEnabled(
+    customerId: string,
+    category: 'orderUpdates'
+  ): Promise<boolean> {
+    const { data } = await supabaseAdmin
+      .from('app_users')
+      .select('notification_preferences')
+      .eq('id', customerId)
+      .maybeSingle();
+    const prefs = (data as { notification_preferences?: Record<string, unknown> } | null)?.notification_preferences;
+    const value = prefs?.[category];
+    return typeof value === 'boolean' ? value : true;
+  }
+
   private async isShopkeeperNotificationEnabled(
     ownerId: string,
     category: 'newOrders'
@@ -284,8 +305,12 @@ export class NotificationService {
 
     await this.persistNotification('rider', riderId, 'profile_change_reviewed', title, body, { riderId, approved, rejectionReason: rejectionReason ?? null });
 
-    if (!(await this.isRiderNotificationEnabled(riderId, 'profileUpdates'))) return;
-
+    // Deliberately ungated, matching notifyProfileChangeReviewed (store) and
+    // notifyStoreApproved/rider_approved — account-status outcomes aren't
+    // optional, same documented precedent this codebase already established.
+    // This rider-side call was the one inconsistent with that precedent
+    // (found 2026-08-10 during a notification-system audit), not the other
+    // way around.
     const { data: partner } = await supabaseAdmin
       .from('delivery_partners')
       .select('expo_push_token')
@@ -462,7 +487,7 @@ export class NotificationService {
 
     await this.persistNotification('customer', order.customer_id, type, title, body, { orderId });
 
-    if (customer.expo_push_token) {
+    if (customer.expo_push_token && (await this.isCustomerNotificationEnabled(order.customer_id, 'orderUpdates'))) {
       await this.sendExpoPush(customer.expo_push_token, title, body, { orderId, type: 'order_status' }, 'order_chime.wav', { table: 'app_users', idColumn: 'id', idValue: order.customer_id });
     }
 
