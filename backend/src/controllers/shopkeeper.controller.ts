@@ -615,6 +615,48 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
   }
 }
 
+const STUCK_READY_ORDER_MS = 3 * 60 * 1000; // 3 minutes
+const lastReBroadcast = new Map<string, number>();
+
+// Called opportunistically from the order-tracking endpoint (mirrors
+// expireStaleAllocations above, but for the driver-dispatch stage instead of
+// the store-acceptance stage). broadcastToNearbyDrivers only offers an order
+// to the MAX_DRIVERS_PER_BROADCAST nearest drivers online *at that instant*;
+// after that, the only way a *different* driver gets offered it is reactively
+// — dispatchReadyOrdersToDriver runs when a driver goes online or sends a
+// location update. A driver who simply wasn't online yet when the order
+// became ready, and stays put once they do come online (no location delta,
+// no online/offline toggle), never gets reconsidered — the order can sit in
+// ready_for_pickup indefinitely with no cron/watchdog anywhere in this
+// backend to catch it. Re-running the same broadcast against whoever is
+// online *now* closes that gap; it's safe to call repeatedly (the
+// driver_order_offers upsert already no-ops for drivers already offered), so
+// only the push-notification burst needs throttling here.
+export async function reBroadcastIfStuck(orderId: string) {
+  const { data: order } = await supabaseAdmin
+    .from('customer_orders')
+    .select('status, assigned_driver_id')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order || (order as any).status !== 'ready_for_pickup' || (order as any).assigned_driver_id) return;
+
+  const last = lastReBroadcast.get(orderId);
+  if (last && Date.now() - last < STUCK_READY_ORDER_MS) return;
+
+  const { data: readyRow } = await supabaseAdmin
+    .from('order_status_history')
+    .select('created_at')
+    .eq('customer_order_id', orderId)
+    .eq('status', 'ready_for_pickup')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!readyRow || Date.now() - new Date((readyRow as any).created_at).getTime() < STUCK_READY_ORDER_MS) return;
+
+  lastReBroadcast.set(orderId, Date.now());
+  await broadcastToNearbyDrivers(orderId);
+}
+
 async function broadcastToNearbyDrivers(orderId: string) {
   // Search center should be where the driver actually needs to go first — the
   // pickup store, not the customer's drop-off — otherwise a driver right next

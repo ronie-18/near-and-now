@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
-import { expireStaleAllocations } from './shopkeeper.controller.js';
+import { expireStaleAllocations, reBroadcastIfStuck } from './shopkeeper.controller.js';
 import type { OrderStatus } from '../types/database.types.js';
 
 const VALID_ORDER_STATUSES: OrderStatus[] = [
@@ -42,6 +42,7 @@ export class TrackingController {
       // on for too long, before reading tracking data, so a silent store doesn't
       // leave the order stuck — see expireStaleAllocations for details.
       await expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err));
+      await reBroadcastIfStuck(orderId).catch((err) => console.error('reBroadcastIfStuck:', err));
       const data = await databaseService.getOrderTrackingFull(orderId, req.customerId!);
 
       if (!data) {

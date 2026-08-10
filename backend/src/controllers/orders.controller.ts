@@ -103,6 +103,7 @@ export class OrdersController {
       }
       const trustedPriceByMaster = new Map<string, number>();
       const boundsByMaster = new Map<string, { min_quantity: number | null; max_quantity: number | null }>();
+      const isLooseByMaster = new Map<string, boolean>();
       for (const row of masterPriceRows || []) {
         const preTax = Number((row as any).discounted_price) || 0;
         const isLoose = Boolean((row as any).is_loose);
@@ -117,6 +118,7 @@ export class OrdersController {
           min_quantity: (row as any).min_quantity ?? null,
           max_quantity: (row as any).max_quantity ?? null,
         });
+        isLooseByMaster.set(row.id, isLoose);
       }
 
       const trustedCartItems = cart_items.map((item: any) => {
@@ -131,7 +133,8 @@ export class OrdersController {
         const quantity = validateQuantity(
           item.quantity,
           boundsByMaster.get(product.master_product_id) ?? undefined,
-          item.product_name
+          item.product_name,
+          isLooseByMaster.get(product.master_product_id) ?? false
         );
         return { ...item, unit_price: trustedPrice, quantity };
       });

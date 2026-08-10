@@ -1,6 +1,7 @@
 import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../config/database.js';
 import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
 import { validateQuantity } from '../utils/quantity.js';
+import { notificationService } from './notification.service.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -873,6 +874,7 @@ export class DatabaseService {
 
     const trustedPriceByMaster = new Map<string, number>();
     const boundsByMaster = new Map<string, { min_quantity: number | null; max_quantity: number | null }>();
+    const isLooseByMaster = new Map<string, boolean>();
     for (const row of masterPriceRows || []) {
       const preTax = Number((row as any).discounted_price) || 0;
       const isLoose = Boolean((row as any).is_loose);
@@ -888,6 +890,7 @@ export class DatabaseService {
         min_quantity: (row as any).min_quantity ?? null,
         max_quantity: (row as any).max_quantity ?? null,
       });
+      isLooseByMaster.set(row.id, isLoose);
     }
 
     items = items.map((it) => {
@@ -896,7 +899,12 @@ export class DatabaseService {
       if (trustedPrice == null) {
         throw new Error(`Product "${it.name}" is not available.`);
       }
-      const quantity = validateQuantity(it.quantity, masterId ? boundsByMaster.get(masterId) : undefined, it.name);
+      const quantity = validateQuantity(
+        it.quantity,
+        masterId ? boundsByMaster.get(masterId) : undefined,
+        it.name,
+        masterId ? isLooseByMaster.get(masterId) ?? false : false
+      );
       return { ...it, price: trustedPrice, quantity };
     });
 
@@ -944,22 +952,21 @@ export class DatabaseService {
 
     const unassignedIndices = items.map((_, i) => i).filter((i) => !assigned.has(i));
     if (unassignedIndices.length > 0) {
-      // Fallback: assign unmatched items to the first available store so the
-      // order can still be placed. The shopkeeper can mark them unavailable.
-      const fallbackStore = storeIds[0];
-      if (fallbackStore) {
-        const fallbackList = storeToItems.get(fallbackStore) || [];
-        storeToItems.set(fallbackStore, [...fallbackList, ...unassignedIndices.map((i) => items[i])]);
-        unassignedIndices.forEach((i) => assigned.add(i));
-        console.warn(
-          `[placeCheckoutOrder] ${unassignedIndices.length} item(s) had no master_product_id match — assigned to fallback store ${fallbackStore}:`,
-          unassignedIndices.map((i) => items[i].name)
-        );
-      } else {
-        throw new Error(
-          `Product(s) not available from any store near you: ${unassignedIndices.map((i) => items[i].name).join(', ')}`
-        );
-      }
+      // These items matched no nearby store at all (byMaster has no entry for
+      // them among storeIds) — previously "fixed" by dumping them onto
+      // storeIds[0] regardless of whether that store actually carries the
+      // product. Since it provably doesn't (that's exactly why the item ended
+      // up here), the later per-store product_id lookup always came up empty
+      // too, and the code fell back to using the master_product_id itself as
+      // order_items.product_id — which FK-references products(id), not
+      // master_products(id), so the insert threw a foreign-key violation
+      // after customer_orders and any earlier stores' store_orders/order_items
+      // were already committed (no transaction wraps this function). Fail
+      // before any writes happen instead, with the same clear message already
+      // used when there's no nearby store at all.
+      throw new Error(
+        `Product(s) not available from any store near you: ${unassignedIndices.map((i) => items[i].name).join(', ')}`
+      );
     }
 
     const storeIdsToUse = Array.from(storeToItems.keys());
@@ -1212,6 +1219,12 @@ export class DatabaseService {
       }
 
       // Create order_store_allocation for this store so shopkeeper can see & accept it.
+      // This row is what the entire accept/reject/timeout/driver-dispatch system is
+      // built on (shopkeeper.controller.ts) — if it fails to write, the store never
+      // gets an offer and the order silently stalls with no way to ever fulfill it.
+      // Previously logged as "non-fatal" and swallowed; now throws like every other
+      // write in this loop, so the customer sees a real failure instead of a false
+      // "order placed" for an order no store will ever see.
       const { error: allocErr } = await supabaseAdmin.from('order_store_allocations').insert({
         order_id: customerOrder.id,
         store_id: storeId,
@@ -1220,8 +1233,19 @@ export class DatabaseService {
       });
       // Note: pickup_code is set when shopkeeper accepts, not at creation time.
       if (allocErr) {
-        console.error('[order placement] Failed to create store allocation (non-fatal):', allocErr.message);
+        throw new Error(allocErr.message || 'Failed to create store allocation');
       }
+
+      // Notify the shopkeeper a new order is waiting. Previously this call only
+      // existed on the legacy, unused /api/orders/create path (orders.controller.ts) —
+      // the real checkout path (this function, backing /api/orders/place, which is
+      // what both the website and customer app actually call) never notified anyone,
+      // so shopkeepers only ever found out about new orders via a 10s foreground poll.
+      notificationService
+        .notifyShopkeeperNewOrder(storeId, customerOrder.id, customerOrder.order_code ?? customerOrder.id)
+        .catch((err) => {
+          console.error('[order placement] Failed to notify shopkeeper of new order:', err);
+        });
     }
 
     await supabaseAdmin.from('order_status_history').insert({

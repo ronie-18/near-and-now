@@ -893,17 +893,38 @@ export class DeliveryPartnerController {
         return res.status(400).json({ error: 'Delivery OTP has not been verified for this order yet.' });
       }
 
-      // Ownership-filtered: only the rider assigned to this order can mark it delivered.
+      // Ownership-filtered, and gated on the order actually being picked up
+      // already. The `.eq('status', 'order_picked_up')` clause does double
+      // duty: it's the pickup-before-delivered check, and — since a Postgres
+      // UPDATE...WHERE is atomic — it also closes a double-payout race. Two
+      // concurrent markDelivered calls (double-tap, client retry) previously
+      // could both pass the update with no status guard and both trigger
+      // payRiderForDeliveredOrder below; now only whichever request the DB
+      // serializes first can match `status = 'order_picked_up'` and actually
+      // flip the row — the loser sees 0 rows affected and is handled as an
+      // idempotent no-op (already delivered) rather than paying out twice.
       const { data: updated, error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'order_delivered', updated_at: new Date().toISOString() })
         .eq('id', orderId)
         .eq('assigned_driver_id', riderId)
+        .eq('status', 'order_picked_up')
         .select('id');
 
       if (error) throw error;
       if (!updated || updated.length === 0) {
-        return res.status(403).json({ error: 'This order is not assigned to you.' });
+        const { data: current } = await supabaseAdmin
+          .from('customer_orders')
+          .select('status, assigned_driver_id')
+          .eq('id', orderId)
+          .maybeSingle();
+        if (!current || (current as any).assigned_driver_id !== riderId) {
+          return res.status(403).json({ error: 'This order is not assigned to you.' });
+        }
+        if ((current as any).status === 'order_delivered') {
+          return res.json({ success: true, already_done: true });
+        }
+        return res.status(400).json({ error: 'Order must be picked up before it can be marked delivered.' });
       }
 
       await supabaseAdmin
