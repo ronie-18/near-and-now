@@ -32,6 +32,7 @@ const FIELD_LABELS: Record<string, string> = {
   name: 'Name',
   email: 'Email',
   address: 'Address',
+  upi_id: 'UPI ID',
 };
 
 /**

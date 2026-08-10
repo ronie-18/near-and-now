@@ -962,7 +962,7 @@ export async function getDashboardStats() {
     // Get total orders from customer_orders
     const { data: orders, error: ordersError } = await getAdminClient()
       .from('customer_orders')
-      .select('id, status, total_amount, customer_id');
+      .select('id, status, total_amount, customer_id, payment_status, payment_method');
 
     if (ordersError) throw ordersError;
 
@@ -975,7 +975,20 @@ export async function getDashboardStats() {
     // Calculate statistics
     const totalOrders = orders?.length || 0;
     const totalCustomers = uniqueCustomers.size;
-    const totalSales = Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0);
+    // Previously summed every order's total_amount with no filtering at
+    // all — not even excluding cancelled orders, let alone unpaid ones.
+    // Online-payment (razorpay/wallet) orders are created before the
+    // customer has actually finished paying (see shopkeeper.controller.ts's
+    // getIncomingOrders for the same gate); an order abandoned mid-payment
+    // that never got auto-cancelled stayed non-cancelled indefinitely and
+    // was counted as real revenue forever. This is the headline dashboard
+    // KPI, so the most-viewed number in the admin panel was wrong.
+    const countableOrders = orders?.filter(
+      (order) =>
+        order.status !== 'order_cancelled' &&
+        (order.payment_method === 'cod' || order.payment_status === 'paid')
+    ) ?? [];
+    const totalSales = Math.round(countableOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0));
 
     // Order status counts (mapping database statuses to frontend statuses)
     // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup',

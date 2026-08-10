@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getAdminToken } from '../../services/adminSession';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
@@ -33,35 +33,50 @@ const OrderDetailPage = () => {
   const [order, setOrder] = useState<Order | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchOrder = async () => {
-      if (!id) {
-        setError('Order ID is missing');
-        setLoading(false);
+  // silent=true is used by the background poll below — it must not flash
+  // the full-page loading spinner or clobber an in-progress error state
+  // check on every 15s tick, only on a genuine mount/id-change load.
+  const fetchOrder = useCallback(async (silent = false) => {
+    if (!id) {
+      setError('Order ID is missing');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      if (!silent) setLoading(true);
+      const orderData = await getOrderById(id);
+
+      if (!orderData) {
+        if (!silent) setError('Order not found');
         return;
       }
 
-      try {
-        setLoading(true);
-        const orderData = await getOrderById(id);
-
-        if (!orderData) {
-          setError('Order not found');
-          setLoading(false);
-          return;
-        }
-
-        setOrder(orderData);
-      } catch (err) {
-        console.error('Error fetching order:', err);
-        setError('Failed to load order. Please try again.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchOrder();
+      setOrder(orderData);
+      if (!silent) setError(null);
+    } catch (err) {
+      console.error('Error fetching order:', err);
+      if (!silent) setError('Failed to load order. Please try again.');
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }, [id]);
+
+  useEffect(() => {
+    fetchOrder();
+  }, [fetchOrder]);
+
+  // OrderDetailPage exists specifically to answer "is this order stuck?" —
+  // previously it fetched once on mount with no polling or realtime
+  // subscription at all, so an admin investigating exactly that question
+  // while leaving the tab open kept looking at the state as of page-load
+  // (store acceptance, rider assignment, ready_for_pickup, delivery — none
+  // of it would ever appear without a manual full-page reload). Found
+  // 2026-08-10 during an admin-panel order-management audit.
+  useEffect(() => {
+    const interval = setInterval(() => fetchOrder(true), 15_000);
+    return () => clearInterval(interval);
+  }, [fetchOrder]);
 
   const handleStatusUpdate = async (newStatus: Order['order_status']) => {
     if (!id || !order) return;
@@ -203,7 +218,7 @@ const OrderDetailPage = () => {
               <p className="text-gray-500 mt-1">Order #{order.order_number || order.id.substring(0, 8)}</p>
             </div>
             <button
-              onClick={() => window.location.reload()}
+              onClick={() => fetchOrder()}
               className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
               title="Refresh"
             >
@@ -410,6 +425,13 @@ const OrderDetailPage = () => {
                     ))
                   ) : (
                     <p className="text-sm text-gray-400">—</p>
+                  )}
+                  {/* Online-payment orders are deliberately hidden from the
+                      shopkeeper's incoming list until payment_status is
+                      'paid' — without this note, "no store shown yet" here
+                      looks identical to a genuinely stuck/delayed order. */}
+                  {!order.stores?.length && order.payment_method !== 'cod' && order.payment_status !== 'paid' && (
+                    <p className="text-xs text-amber-600 mt-1">Waiting on payment — hidden from the store until paid, not delayed.</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">

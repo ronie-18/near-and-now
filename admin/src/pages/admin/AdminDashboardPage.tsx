@@ -259,6 +259,16 @@ const SalesChart: React.FC<SalesChartProps> = ({ data }) => {
   );
 };
 
+// Online-payment (razorpay/wallet) orders are created before the customer
+// has actually finished paying — same gate shopkeeper.controller.ts's
+// getIncomingOrders already applies. An order abandoned mid-payment (no
+// auto-cancel ever ran because the customer never reopened their tracking
+// page) stays non-cancelled indefinitely and was previously counted as real
+// revenue/sales forever. Mirrors ReportsPage.tsx's identical fix.
+const isPaymentReady = (order: Order) =>
+  order.payment_method === 'cod' || order.payment_status === 'paid';
+const isCountable = (order: Order) => order.order_status !== 'cancelled' && isPaymentReady(order);
+
 const AdminDashboardPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -302,7 +312,7 @@ const AdminDashboardPage = () => {
       const productSales: Record<string, { name: string; image?: string; productId?: string; sold: number; revenue: number }> = {};
 
       orders
-        .filter(order => order.order_status !== 'cancelled')
+        .filter(isCountable)
         .forEach(order => {
           if (order.items && order.items.length > 0) {
             order.items.forEach((item: any) => {
@@ -355,7 +365,7 @@ const AdminDashboardPage = () => {
       startDate.setHours(0, 0, 0, 0);
 
       allOrders.forEach(order => {
-        if (order.order_status === 'cancelled') return;
+        if (!isCountable(order)) return;
         const orderDate = new Date(order.created_at);
         if (orderDate >= startDate && orderDate <= now) {
           const dateKey = orderDate.toDateString();

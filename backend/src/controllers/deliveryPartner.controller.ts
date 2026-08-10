@@ -34,7 +34,7 @@ type UploadedFile = { buffer: Buffer; mimetype: string; size: number };
  * both (the name for the admin-notification message). Mirrors
  * storeOwner.controller.ts's suspendStoreIfApprovedAndGetName.
  */
-async function suspendRiderIfApprovedAndGetName(riderId: string): Promise<{ suspended: boolean; name: string }> {
+export async function suspendRiderIfApprovedAndGetName(riderId: string): Promise<{ suspended: boolean; name: string }> {
   const { data: partner } = await supabaseAdmin
     .from('delivery_partners')
     .select('name, is_approved')
@@ -1030,6 +1030,69 @@ export class DeliveryPartnerController {
   }
 
   /**
+   * Submit (or merge into an existing pending) a rider_profile_change_requests
+   * row. Shared by requestProfileChange (name/email/address) and
+   * saveBillingInfo (upi_id) — both now go through this same review queue
+   * instead of one of them writing to delivery_partners directly. Merges
+   * into an existing pending row's `changes` rather than overwriting it
+   * wholesale, so submitting a billing change while an identity change is
+   * still pending (or vice versa) can't silently drop the other's pending
+   * fields. Mirrors storeOwner.controller.ts's submitProfileChangeRequest.
+   */
+  async submitProfileChangeRequestInternal(
+    riderId: string,
+    newChanges: Record<string, { old: string | null; new: string }>
+  ) {
+    const now = new Date().toISOString();
+
+    const { data: existing } = await supabaseAdmin
+      .from('rider_profile_change_requests')
+      .select('id, changes')
+      .eq('rider_id', riderId)
+      .eq('status', 'pending')
+      .maybeSingle();
+
+    if (existing) {
+      const mergedChanges = { ...(existing.changes as Record<string, unknown>), ...newChanges };
+      const { data: updated, error: updateErr } = await supabaseAdmin
+        .from('rider_profile_change_requests')
+        .update({ changes: mergedChanges, created_at: now })
+        .eq('id', existing.id)
+        .eq('status', 'pending')
+        .select()
+        .maybeSingle();
+      if (updateErr) throw updateErr;
+      if (updated) return updated;
+    }
+
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from('rider_profile_change_requests')
+      .insert({ rider_id: riderId, changes: newChanges })
+      .select()
+      .single();
+
+    if (!insertErr) return inserted;
+    if (insertErr.code !== '23505') throw insertErr;
+
+    const { data: retried } = await supabaseAdmin
+      .from('rider_profile_change_requests')
+      .select('id, changes')
+      .eq('rider_id', riderId)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (!retried) throw insertErr;
+    const mergedChanges = { ...(retried.changes as Record<string, unknown>), ...newChanges };
+    const { data: finalRow, error: finalErr } = await supabaseAdmin
+      .from('rider_profile_change_requests')
+      .update({ changes: mergedChanges, created_at: now })
+      .eq('id', retried.id)
+      .select()
+      .single();
+    if (finalErr) throw finalErr;
+    return finalRow;
+  }
+
+  /**
    * Submit a change to name/email/address for admin review — does NOT apply
    * anything directly. name lives on app_users, email/address on
    * delivery_partners, so the diff is built against both. Resubmitting
@@ -1067,42 +1130,7 @@ export class DeliveryPartnerController {
         return res.status(400).json({ success: false, error: 'No changes to submit' });
       }
 
-      const now = new Date().toISOString();
-      const { data: updatedExisting, error: updateErr } = await supabaseAdmin
-        .from('rider_profile_change_requests')
-        .update({ changes, created_at: now })
-        .eq('rider_id', riderId)
-        .eq('status', 'pending')
-        .select()
-        .maybeSingle();
-      if (updateErr) throw updateErr;
-
-      let saved = updatedExisting;
-      if (!saved) {
-        const { data: inserted, error: insertErr } = await supabaseAdmin
-          .from('rider_profile_change_requests')
-          .insert({ rider_id: riderId, changes })
-          .select()
-          .single();
-
-        if (insertErr) {
-          if (insertErr.code === '23505') {
-            const { data: retried, error: retryErr } = await supabaseAdmin
-              .from('rider_profile_change_requests')
-              .update({ changes, created_at: now })
-              .eq('rider_id', riderId)
-              .eq('status', 'pending')
-              .select()
-              .single();
-            if (retryErr) throw retryErr;
-            saved = retried;
-          } else {
-            throw insertErr;
-          }
-        } else {
-          saved = inserted;
-        }
-      }
+      const saved = await this.submitProfileChangeRequestInternal(riderId, changes);
 
       const fieldList = Object.keys(changes).join(', ');
       await notifyAdminsOfRiderDocs(
@@ -1270,7 +1298,16 @@ export class DeliveryPartnerController {
     }
   }
 
-  /** Freely re-editable — no submitted-once lock, same as other profile fields. */
+  /**
+   * Submit a UPI ID change for admin review — does NOT apply directly to
+   * delivery_partners. UPI ID determines where a rider's payouts actually
+   * go, higher-stakes than the name/email/address fields that already went
+   * through this same review queue — previously a rider (or a compromised
+   * rider session) could silently redirect their own payout account with
+   * zero admin visibility. Freely resubmittable while a request is still
+   * pending — same as the identity fields, a rider can correct a typo'd UPI
+   * ID before it's reviewed.
+   */
   async saveBillingInfo(req: Request, res: Response) {
     try {
       const upiId = typeof req.body?.upi_id === 'string' ? req.body.upi_id.trim() : undefined;
@@ -1281,15 +1318,31 @@ export class DeliveryPartnerController {
         return res.status(400).json({ success: false, error: 'No valid fields to update' });
       }
 
-      await supabaseAdmin
-        .from('delivery_partners')
-        .update({ upi_id: upiId || null, updated_at: new Date().toISOString() })
-        .eq('user_id', req.riderId!);
+      const riderId = req.riderId!;
+      const [{ data: user }, { data: partner }] = await Promise.all([
+        supabaseAdmin.from('app_users').select('name').eq('id', riderId).maybeSingle(),
+        supabaseAdmin.from('delivery_partners').select('upi_id').eq('user_id', riderId).maybeSingle(),
+      ]);
 
-      res.json({ success: true });
+      const currentUpi = partner?.upi_id ?? '';
+      if (upiId === currentUpi) {
+        return res.status(400).json({ success: false, error: 'No changes to submit' });
+      }
+      const changes = { upi_id: { old: partner?.upi_id ?? null, new: upiId } };
+
+      const saved = await this.submitProfileChangeRequestInternal(riderId, changes);
+
+      await notifyAdminsOfRiderDocs(
+        'profile_change_request',
+        'Rider Billing Change Requested',
+        `${user?.name || 'A rider'} requested a change to: UPI ID`,
+        { riderId, requestId: saved.id, changes }
+      );
+
+      res.json({ success: true, request: saved });
     } catch (err) {
       console.error('saveBillingInfo error:', err);
-      res.status(500).json({ success: false, error: 'Failed to save billing info' });
+      res.status(500).json({ success: false, error: 'Failed to submit billing change' });
     }
   }
 

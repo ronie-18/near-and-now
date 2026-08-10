@@ -431,6 +431,72 @@ const PROFILE_CHANGE_FIELDS = ['name', 'address', 'phone'] as const;
 type ProfileChangeField = typeof PROFILE_CHANGE_FIELDS[number];
 
 /**
+ * Submit (or merge into an existing pending) a store_profile_change_requests
+ * row. Shared by requestProfileChange (name/address/phone) and
+ * saveBillingInfo (bank_* fields) — both now go through this same review
+ * queue instead of one of them writing to `stores` directly. Merges into an
+ * existing pending row's `changes` rather than overwriting it wholesale, so
+ * submitting a billing change while an identity change is still pending
+ * (or vice versa) can't silently drop the other's pending fields.
+ */
+async function submitProfileChangeRequest(
+  storeId: string,
+  newChanges: Record<string, { old: string | null; new: string }>
+) {
+  const now = new Date().toISOString();
+
+  const { data: existing } = await supabaseAdmin
+    .from('store_profile_change_requests')
+    .select('id, changes')
+    .eq('store_id', storeId)
+    .eq('status', 'pending')
+    .maybeSingle();
+
+  if (existing) {
+    const mergedChanges = { ...(existing.changes as Record<string, unknown>), ...newChanges };
+    const { data: updated, error: updateErr } = await supabaseAdmin
+      .from('store_profile_change_requests')
+      .update({ changes: mergedChanges, created_at: now })
+      .eq('id', existing.id)
+      .eq('status', 'pending')
+      .select()
+      .maybeSingle();
+    if (updateErr) throw updateErr;
+    if (updated) return updated;
+    // Resolved by a concurrent review between the select above and here —
+    // fall through to the insert path below as if no pending row existed.
+  }
+
+  const { data: inserted, error: insertErr } = await supabaseAdmin
+    .from('store_profile_change_requests')
+    .insert({ store_id: storeId, changes: newChanges })
+    .select()
+    .single();
+
+  if (!insertErr) return inserted;
+  if (insertErr.code !== '23505') throw insertErr;
+
+  // Lost the race to a concurrent insert (e.g. a second tab submitting at
+  // the same instant) — retry as a merge-update against whatever just won.
+  const { data: retried } = await supabaseAdmin
+    .from('store_profile_change_requests')
+    .select('id, changes')
+    .eq('store_id', storeId)
+    .eq('status', 'pending')
+    .maybeSingle();
+  if (!retried) throw insertErr;
+  const mergedChanges = { ...(retried.changes as Record<string, unknown>), ...newChanges };
+  const { data: finalRow, error: finalErr } = await supabaseAdmin
+    .from('store_profile_change_requests')
+    .update({ changes: mergedChanges, created_at: now })
+    .eq('id', retried.id)
+    .select()
+    .single();
+  if (finalErr) throw finalErr;
+  return finalRow;
+}
+
+/**
  * Get the caller's store's current pending profile-change request, if any —
  * so the profile screen can show a "pending review" banner across sessions
  * instead of only right after submitting.
@@ -501,50 +567,7 @@ export async function requestProfileChange(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'No changes to submit' });
     }
 
-    const now = new Date().toISOString();
-
-    // Update-first, not select-then-branch: the WHERE clause on the UPDATE
-    // itself (not a prior SELECT) is what makes the "replace vs. create"
-    // decision race-safe — two concurrent submissions can't both see "no
-    // existing pending row" and both INSERT, because the partial unique
-    // index (migration 20260901000000, one pending row per store) turns the
-    // loser's INSERT into a clean 23505 that's retried as an UPDATE below.
-    const { data: updatedExisting, error: updateErr } = await supabaseAdmin
-      .from('store_profile_change_requests')
-      .update({ changes, created_at: now })
-      .eq('store_id', storeId)
-      .eq('status', 'pending')
-      .select()
-      .maybeSingle();
-
-    if (updateErr) throw updateErr;
-
-    let saved = updatedExisting;
-    if (!saved) {
-      const { data: inserted, error: insertErr } = await supabaseAdmin
-        .from('store_profile_change_requests')
-        .insert({ store_id: storeId, changes })
-        .select()
-        .single();
-
-      if (insertErr) {
-        if (insertErr.code === '23505') {
-          const { data: retried, error: retryErr } = await supabaseAdmin
-            .from('store_profile_change_requests')
-            .update({ changes, created_at: now })
-            .eq('store_id', storeId)
-            .eq('status', 'pending')
-            .select()
-            .single();
-          if (retryErr) throw retryErr;
-          saved = retried;
-        } else {
-          throw insertErr;
-        }
-      } else {
-        saved = inserted;
-      }
-    }
+    const saved = await submitProfileChangeRequest(storeId, changes);
 
     const fieldList = Object.keys(changes).join(', ');
     await notifyAdmins(
@@ -783,7 +806,7 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
  * own. Without this, uploading documents during normal pre-approval
  * onboarding never bumped `stores.updated_at` at all (found 2026-08-04).
  */
-async function suspendStoreIfApprovedAndGetName(
+export async function suspendStoreIfApprovedAndGetName(
   storeId: string,
   docType: DocType
 ): Promise<{ suspended: boolean; name: string }> {
@@ -1186,9 +1209,15 @@ export async function getBillingInfo(req: Request, res: Response) {
 const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
 /**
- * Save bank details and/or the passbook/cheque photo. Freely re-editable
- * (no submitted-once lock) — same as the other verification fields, a
- * shopkeeper can correct a typo'd account number at any time.
+ * Submit a change to the store's bank/payout details for admin review — does
+ * NOT apply anything to `stores` directly. Bank account number and IFSC
+ * determine where payouts actually go, higher-stakes than the name/address/
+ * phone fields that already went through this same review queue — a
+ * shopkeeper (or a compromised shopkeeper session) could previously
+ * redirect their own payout account with zero admin visibility. Freely
+ * resubmittable while a request is still pending (merges into it via
+ * submitProfileChangeRequest) — same as name/address/phone, a shopkeeper
+ * can correct a typo'd account number before it's reviewed.
  */
 export async function saveBillingInfo(req: Request, res: Response) {
   try {
@@ -1212,10 +1241,23 @@ export async function saveBillingInfo(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'Invalid IFSC code — expected format e.g. SBIN0001234' });
     }
 
-    const patch: Record<string, unknown> = {};
-    if (bankAccountNumber !== undefined) patch.bank_account_number = bankAccountNumber || null;
-    if (bankIfscCode !== undefined) patch.bank_ifsc_code = bankIfscCode || null;
-    if (bankBranchName !== undefined) patch.bank_branch_name = bankBranchName || null;
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('name, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path')
+      .eq('id', storeId)
+      .maybeSingle();
+    if (!store) return res.status(404).json({ success: false, error: 'Store not found' });
+
+    const changes: Record<string, { old: string | null; new: string }> = {};
+    if (bankAccountNumber !== undefined && bankAccountNumber !== (store.bank_account_number ?? '')) {
+      changes.bank_account_number = { old: store.bank_account_number ?? null, new: bankAccountNumber };
+    }
+    if (bankIfscCode !== undefined && bankIfscCode !== (store.bank_ifsc_code ?? '')) {
+      changes.bank_ifsc_code = { old: store.bank_ifsc_code ?? null, new: bankIfscCode };
+    }
+    if (bankBranchName !== undefined && bankBranchName !== (store.bank_branch_name ?? '')) {
+      changes.bank_branch_name = { old: store.bank_branch_name ?? null, new: bankBranchName };
+    }
 
     if (file) {
       const ext = ALLOWED_DOC_MIME_TYPES[file.mimetype];
@@ -1225,7 +1267,13 @@ export async function saveBillingInfo(req: Request, res: Response) {
       if (file.size > MAX_DOC_SIZE_BYTES) {
         return res.status(400).json({ success: false, error: `File exceeds ${MAX_DOC_SIZE_BYTES / (1024 * 1024)}MB limit` });
       }
-      const storagePath = `${storeId}/passbook_cheque.${ext}`;
+      // Uploaded immediately (same as before) — the file sitting in storage is
+      // harmless on its own; only pointing stores.bank_passbook_storage_path
+      // at it needs review, same treatment as the account number/IFSC above.
+      // A fresh timestamped path (not the old fixed "passbook_cheque.<ext>")
+      // so a pending-but-not-yet-approved upload can never silently replace
+      // whatever the currently-approved passbook photo points to.
+      const storagePath = `${storeId}/passbook_cheque_${Date.now()}.${ext}`;
       const { error: uploadError } = await supabaseAdmin.storage
         .from(VERIFICATION_DOCS_BUCKET)
         .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
@@ -1233,24 +1281,27 @@ export async function saveBillingInfo(req: Request, res: Response) {
         console.error('❌ saveBillingInfo upload error:', uploadError);
         return res.status(500).json({ success: false, error: uploadError.message });
       }
-      patch.bank_passbook_storage_path = storagePath;
+      changes.bank_passbook_storage_path = { old: store.bank_passbook_storage_path ?? null, new: storagePath };
     }
 
-    if (Object.keys(patch).length === 0) {
-      return res.status(400).json({ success: false, error: 'No valid fields to update' });
+    if (Object.keys(changes).length === 0) {
+      return res.status(400).json({ success: false, error: 'No changes to submit' });
     }
 
-    patch.updated_at = new Date().toISOString();
-    const { error } = await supabaseAdmin.from('stores').update(patch).eq('id', storeId);
-    if (error) {
-      console.error('❌ saveBillingInfo update error:', error);
-      return res.status(500).json({ success: false, error: error.message });
-    }
+    const saved = await submitProfileChangeRequest(storeId, changes);
 
-    res.json({ success: true });
+    const fieldList = Object.keys(changes).join(', ');
+    await notifyAdmins(
+      'profile_change_request',
+      'Store Billing Change Requested',
+      `${store.name || 'A store'} requested a change to: ${fieldList}`,
+      { storeId, requestId: saved.id, changes }
+    );
+
+    res.json({ success: true, request: saved });
   } catch (error: any) {
     console.error('❌ saveBillingInfo error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to save billing info' });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to submit billing change' });
   }
 }
 

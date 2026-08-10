@@ -32,13 +32,20 @@ const FIELD_LABELS: Record<string, string> = {
   name: 'Store Name',
   address: 'Address',
   phone: 'Phone',
+  bank_account_number: 'Bank Account Number',
+  bank_ifsc_code: 'IFSC Code',
+  bank_branch_name: 'Bank Branch',
+  bank_passbook_storage_path: 'Passbook/Cheque Photo',
 };
 
 /**
- * Admin review queue for store profile-change requests (name/address/phone
- * edits from the shopkeeper app's profile screen). Previously these edits
- * applied immediately with zero admin visibility — this page is the review
- * step for backend/storeOwner.controller.ts's requestProfileChange().
+ * Admin review queue for store profile-change requests — name/address/phone
+ * edits from the shopkeeper app's profile screen, and (since 2026-08-10)
+ * bank/payout detail changes from the billing-info screen, which previously
+ * bypassed this review entirely despite being higher-stakes than an
+ * identity field. Previously these edits applied immediately with zero
+ * admin visibility — this page is the review step for
+ * backend/storeOwner.controller.ts's requestProfileChange()/saveBillingInfo().
  */
 type Tab = 'pending' | 'approved' | 'rejected' | 'all';
 const TABS: { key: Tab; label: string }[] = [
@@ -110,7 +117,7 @@ const StoreProfileChangeRequestsPage = () => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Store Profile Change Requests</h1>
-            <p className="text-gray-500 mt-1">Shopkeeper-submitted store name/address/phone changes awaiting review</p>
+            <p className="text-gray-500 mt-1">Shopkeeper-submitted store name/address/phone/bank-detail changes awaiting review</p>
           </div>
           <button
             onClick={() => load(tab)}
@@ -191,9 +198,19 @@ const StoreProfileChangeRequestsPage = () => {
                   {Object.entries(req.changes).map(([field, diff]) => (
                     <div key={field} className="grid grid-cols-[120px_1fr_auto_1fr] items-center gap-2 text-sm bg-gray-50 rounded-xl px-4 py-3">
                       <span className="font-semibold text-gray-600">{FIELD_LABELS[field] || field}</span>
-                      <span className="text-gray-400 line-through truncate">{diff.old || '(empty)'}</span>
-                      <span className="text-gray-300">→</span>
-                      <span className="text-gray-900 font-medium truncate">{diff.new}</span>
+                      {field === 'bank_passbook_storage_path' ? (
+                        <>
+                          <span className="text-gray-400 truncate">{diff.old ? 'existing photo on file' : '(none)'}</span>
+                          <span className="text-gray-300">→</span>
+                          <span className="text-gray-900 font-medium truncate">new photo uploaded</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-gray-400 line-through truncate">{diff.old || '(empty)'}</span>
+                          <span className="text-gray-300">→</span>
+                          <span className="text-gray-900 font-medium truncate">{diff.new}</span>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>

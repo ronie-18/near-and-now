@@ -7,6 +7,7 @@ import {
   VERIFICATION_DOCS_BUCKET,
   isDocType,
 } from '../utils/deliveryPartnerVerificationDocuments.js';
+import { suspendRiderIfApprovedAndGetName } from './deliveryPartner.controller.js';
 
 /**
  * List a delivery partner's verification documents for admin review, each
@@ -163,18 +164,37 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    const { data: rider } = await supabaseAdmin.from('app_users').select('name').eq('id', partnerId).maybeSingle();
+    // Rejecting a document on an already-approved rider previously had no
+    // effect on that rider's live approval status — is_approved stayed
+    // true and they kept receiving order offers, even though the document
+    // card showed "Rejected". The rider's *own* re-upload/delete path
+    // already calls this same suspend check
+    // (suspendRiderIfApprovedAndGetName) — an admin actively rejecting a
+    // document deserves the same treatment. Approving is untouched.
+    let riderName: string | undefined;
+    let riderSuspended = false;
+    if (status === 'rejected') {
+      const result = await suspendRiderIfApprovedAndGetName(partnerId);
+      riderName = result.name;
+      riderSuspended = result.suspended;
+    } else {
+      const { data: rider } = await supabaseAdmin.from('app_users').select('name').eq('id', partnerId).maybeSingle();
+      riderName = rider?.name;
+    }
+
     notificationService
       .notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'rider_verification_doc',
         action: status,
-        entityLabel: `${docType} — ${rider?.name ?? 'Unknown rider'}`,
+        entityLabel: riderSuspended
+          ? `${docType} — ${riderName ?? 'Unknown rider'} (approval revoked)`
+          : `${docType} — ${riderName ?? 'Unknown rider'}`,
         rejectionReason: status === 'rejected' ? reason : null,
       })
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
-    res.json({ success: true, document: data });
+    res.json({ success: true, document: data, riderSuspended });
   } catch (error: any) {
     console.error('❌ reviewDeliveryPartnerVerificationDocument error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to review document' });

@@ -5,6 +5,21 @@ import { notificationService } from '../services/notification.service.js';
 import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
 import { validateQuantity } from '../utils/quantity.js';
 
+// Normal forward order-of-progress, excluding order_cancelled (which is a
+// valid transition from any non-terminal status, not a sequence position).
+// Used by updateOrderStatus to reject a backward move.
+const ORDER_STATUS_SEQUENCE = [
+  'pending_at_store',
+  'store_accepted',
+  'preparing_order',
+  'ready_for_pickup',
+  'delivery_partner_assigned',
+  'picking_up',
+  'order_picked_up',
+  'in_transit',
+  'order_delivered',
+] as const;
+
 /** Maps an order status to the customer-facing push notification type, if any. */
 function mapOrderStatusToNotificationType(status: string): string | null {
   switch (status) {
@@ -352,6 +367,29 @@ export class OrdersController {
         return res.status(409).json({
           error: `Order is already ${existing.status === 'order_delivered' ? 'delivered' : 'cancelled'} and its status cannot be changed.`,
         });
+      }
+
+      // Beyond the terminal-state guard above, there was previously no check
+      // that a transition actually moved the order forward — an admin could
+      // move e.g. in_transit back to pending_at_store, or any non-terminal
+      // status directly to order_cancelled (a real, intentional escape hatch,
+      // left unrestricted below). Each transition unconditionally re-fires a
+      // customer push notification and, for order_delivered specifically,
+      // triggers a rider payout — a backward move re-sends a stale
+      // notification for a stage the order already passed. Found 2026-08-10
+      // during an admin-panel order-management audit. Skip-ahead (e.g.
+      // pending_at_store straight to preparing_order) is deliberately still
+      // allowed — admins need that flexibility for real data-entry
+      // corrections, and the frontend already gates the two genuinely
+      // consequential destinations (delivered/cancelled) behind a confirm().
+      if (status !== 'order_cancelled') {
+        const currentIdx = ORDER_STATUS_SEQUENCE.indexOf(existing.status as typeof ORDER_STATUS_SEQUENCE[number]);
+        const newIdx = ORDER_STATUS_SEQUENCE.indexOf(status as typeof ORDER_STATUS_SEQUENCE[number]);
+        if (currentIdx !== -1 && newIdx !== -1 && newIdx < currentIdx) {
+          return res.status(409).json({
+            error: `Cannot move order backward from "${existing.status}" to "${status}".`,
+          });
+        }
       }
 
       const { data, error } = await supabaseAdmin

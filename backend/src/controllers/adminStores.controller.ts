@@ -7,6 +7,7 @@ import {
   VERIFICATION_DOCS_BUCKET,
   isDocType,
 } from '../utils/verificationDocuments.js';
+import { suspendStoreIfApprovedAndGetName } from './storeOwner.controller.js';
 
 /**
  * List a store's verification documents for admin review, each with a
@@ -178,18 +179,40 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
+    // Rejecting a document on an already-approved store previously had no
+    // effect on that store's live approval status at all — is_approved
+    // stayed true, the store kept receiving orders, and StoresPage.tsx's
+    // badge still showed "Approved" while the document card showed
+    // "Rejected". The shopkeeper's *own* re-upload/delete path already
+    // calls this same suspend check (suspendStoreIfApprovedAndGetName) —
+    // an admin actively rejecting a document for fraud/expiry reasons is at
+    // least as strong a signal and deserves the same treatment. Approving a
+    // document is untouched — that never suspends anything, matching the
+    // existing behavior.
+    let storeName: string | undefined;
+    let storeSuspended = false;
+    if (status === 'rejected') {
+      const result = await suspendStoreIfApprovedAndGetName(storeId, docType);
+      storeName = result.name;
+      storeSuspended = result.suspended;
+    } else {
+      const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
+      storeName = store?.name;
+    }
+
     notificationService
       .notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'store_verification_doc',
         action: status,
-        entityLabel: `${docType} — ${store?.name ?? 'Unknown store'}`,
+        entityLabel: storeSuspended
+          ? `${docType} — ${storeName ?? 'Unknown store'} (store approval revoked)`
+          : `${docType} — ${storeName ?? 'Unknown store'}`,
         rejectionReason: status === 'rejected' ? reason : null,
       })
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
-    res.json({ success: true, document: data });
+    res.json({ success: true, document: data, storeSuspended });
   } catch (error: any) {
     console.error('❌ reviewStoreVerificationDocument error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to review document' });

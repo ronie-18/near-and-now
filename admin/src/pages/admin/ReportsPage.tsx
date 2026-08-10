@@ -430,6 +430,19 @@ const LoadingSpinner = () => (
   </div>
 );
 
+// Online-payment (razorpay/wallet) orders are created immediately at
+// checkout, before the customer has actually finished paying — the same
+// gate shopkeeper.controller.ts's getIncomingOrders already applies before
+// a store can even see an order. Reports previously only excluded
+// order_status === 'cancelled', never checking payment_status at all: an
+// order abandoned mid-payment (customer closes the Razorpay sheet, never
+// reopens their tracking page so cancelIfPaymentAbandoned's 15-minute TTL
+// never runs) stays non-cancelled indefinitely and was counted as real
+// revenue forever, even though the customer was never actually charged.
+const isPaymentReady = (order: Order) =>
+  order.payment_method === 'cod' || order.payment_status === 'paid';
+const isCountable = (order: Order) => order.order_status !== 'cancelled' && isPaymentReady(order);
+
 const ReportsPage = () => {
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -492,7 +505,7 @@ const ReportsPage = () => {
 
   // Calculate stats - using actual data from database
   const stats = useMemo((): ReportStats => {
-    const completedOrders = filteredOrders.filter(o => o.order_status !== 'cancelled');
+    const completedOrders = filteredOrders.filter(isCountable);
     const totalRevenue = completedOrders.reduce((sum, o) => sum + (o.order_total || 0), 0);
     const totalOrders = completedOrders.length;
     const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
@@ -515,7 +528,7 @@ const ReportsPage = () => {
 
     const previousOrders = orders.filter(o => {
       const date = new Date(o.created_at);
-      return date >= previousPeriodStart && date <= previousPeriodEnd && o.order_status !== 'cancelled';
+      return date >= previousPeriodStart && date <= previousPeriodEnd && isCountable(o);
     });
     const previousRevenue = previousOrders.reduce((sum, o) => sum + (o.order_total || 0), 0);
 
@@ -549,7 +562,7 @@ const ReportsPage = () => {
     });
 
     filteredOrders.forEach(order => {
-      if (order.items && order.order_status !== 'cancelled') {
+      if (order.items && isCountable(order)) {
         order.items.forEach((item: any) => {
           // Try to find category: first by 'id' (cart item structure), then 'product_id', then by name
           let category = 'Uncategorized';
@@ -612,7 +625,7 @@ const ReportsPage = () => {
       startDate.setHours(0, 0, 0, 0);
 
       orders.forEach(order => {
-        if (order.order_status === 'cancelled') return;
+        if (!isCountable(order)) return;
         const orderDate = new Date(order.created_at);
         if (orderDate >= startDate && orderDate <= now) {
           const dateKey = orderDate.toDateString();
@@ -662,7 +675,7 @@ const ReportsPage = () => {
     });
 
     filteredOrders.forEach(order => {
-      if (order.items && order.order_status !== 'cancelled') {
+      if (order.items && isCountable(order)) {
         order.items.forEach((item: any) => {
           // CartItem uses 'id' for product ID, fallback to product_id then name
           const itemId = item.id || item.product_id || item.name;
