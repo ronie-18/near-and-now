@@ -229,9 +229,11 @@ export class DatabaseService {
     notes?: string;
     coupon_id?: string;
   }) {
-    if (!(await this.isCustomerEmailVerified(orderData.customer_id))) {
-      throw new Error('Please verify your email before placing an order');
-    }
+    // Email verification gate disabled for now — email is captured (mandatory) at signup
+    // but not verified. Re-enable by uncommenting this block once verification is needed again.
+    // if (!(await this.isCustomerEmailVerified(orderData.customer_id))) {
+    //   throw new Error('Please verify your email before placing an order');
+    // }
 
     const { data, error } = await supabaseAdmin
       .from('customer_orders')
@@ -798,9 +800,11 @@ export class DatabaseService {
     let items = orderData.items;
     if (!items?.length) throw new Error('No items in order');
 
-    if (!(await this.isCustomerEmailVerified(orderData.user_id))) {
-      throw new Error('Please verify your email before placing an order');
-    }
+    // Email verification gate disabled for now — email is captured (mandatory) at signup
+    // but not verified. Re-enable by uncommenting this block once verification is needed again.
+    // if (!(await this.isCustomerEmailVerified(orderData.user_id))) {
+    //   throw new Error('Please verify your email before placing an order');
+    // }
 
     const fullAddress = [
       orderData.shipping_address.address,

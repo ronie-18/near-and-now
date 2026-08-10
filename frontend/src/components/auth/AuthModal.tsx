@@ -143,21 +143,23 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
     
     try {
       setIsSubmitting(true);
-      const { isNewUser } = await verifyOTPCode('+91' + phone, otp.trim(), {
+      await verifyOTPCode('+91' + phone, otp.trim(), {
         name: name || 'Customer',
         email: email.trim(),
         landmark: 'To be updated',
         delivery_instructions: 'To be updated'
       });
       showNotification('Login successful!', 'success');
-      if (isNewUser) {
-        // New signups already have a code emailed to them (sent by the backend
-        // as part of account creation) — just collect it. Skippable; checkout
-        // is what actually enforces verification.
-        setStep(3);
-      } else {
-        onClose();
-      }
+      // Email verification step disabled for now — email is captured (mandatory) at
+      // signup but not verified. Re-enable by uncommenting this block once verification
+      // is needed again; it also requires re-enabling the checkout gate in the backend
+      // (isCustomerEmailVerified checks in database.service.ts).
+      // if (isNewUser) {
+      //   setStep(3);
+      // } else {
+      //   onClose();
+      // }
+      onClose();
     } catch (error) {
       console.error('Error verifying OTP:', error);
       showNotification('Invalid OTP. Please try again.', 'error');
@@ -299,7 +301,7 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
                   required
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Used for order receipts. You'll verify it after logging in — no rush.
+                  Used for order receipts. You can change it later from your profile.
                 </p>
               </div>
 
