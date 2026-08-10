@@ -4,7 +4,7 @@
  * and driver_locations for live updates on the tracking page.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabaseNoSession } from '../services/supabase';
 import { fetchOrderTrackingFull, fetchDriverLocations } from '../services/trackingApi';
 
@@ -60,6 +60,14 @@ export function useOrderTrackingRealtime(
 ) {
   const buildRef = useRef(buildTrackingHistory);
   buildRef.current = buildTrackingHistory;
+
+  // Exposed to the caller so the tracking page can show a real "reconnecting"
+  // state instead of a hardcoded "Live Tracking" badge that stays lit even
+  // when the channel silently drops — subscribe() only reports handshake
+  // success, not whether individual row events are actually being delivered,
+  // but it's still the closest real signal available and matches what the
+  // polling-skip logic below already uses internally.
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
 
   // Effects below intentionally depend on [orderId, !!order] rather than
   // [orderId, order] — subscribing/re-subscribing the realtime channel on
@@ -165,6 +173,7 @@ export function useOrderTrackingRealtime(
       )
       .subscribe((status) => {
         realtimeHealthy = status === 'SUBSCRIBED';
+        setIsRealtimeConnected(realtimeHealthy);
         if (status === 'SUBSCRIBED') {
           console.log('📡 Realtime tracking subscribed for order', orderId);
         }
@@ -179,6 +188,7 @@ export function useOrderTrackingRealtime(
     return () => {
       clearInterval(pollInterval);
       supabaseNoSession.removeChannel(channel);
+      setIsRealtimeConnected(false);
     };
   }, [orderId, !!order]);
 
@@ -264,4 +274,6 @@ export function useOrderTrackingRealtime(
       if (channel) supabaseNoSession.removeChannel(channel);
     };
   }, [orderId, driverIdsKey]);
+
+  return { isRealtimeConnected };
 }

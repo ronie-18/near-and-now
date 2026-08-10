@@ -39,9 +39,14 @@ const ThankYouPage = () => {
   const [cancelSuccess, setCancelSuccess] = useState<boolean>(false);
   const [hasDeliveryPartner, setHasDeliveryPartner] = useState<boolean>(false);
 
-  // Auto-redirect to track page after THANK_YOU_DISPLAY_SEC seconds
+  // Auto-redirect to track page after THANK_YOU_DISPLAY_SEC seconds. Stops
+  // once a cancel succeeds — otherwise this timer and handleCancelOrder's own
+  // "navigate to /orders after 2s" run independently, and a cancel that
+  // completes near/after the countdown hits 0 causes both navigations to
+  // fire: a flash to the tracking page for the order just cancelled, then a
+  // second bounce to /orders.
   useEffect(() => {
-    if (!orderId) return;
+    if (!orderId || cancelSuccess) return;
 
     setRedirectCountdown(THANK_YOU_DISPLAY_SEC);
     redirectTimerRef.current = setInterval(() => {
@@ -54,17 +59,17 @@ const ThankYouPage = () => {
         redirectTimerRef.current = null;
       }
     };
-  }, [orderId]);
+  }, [orderId, cancelSuccess]);
 
   useEffect(() => {
-    if (redirectCountdown === 0 && orderId) {
+    if (redirectCountdown === 0 && orderId && !cancelSuccess) {
       if (redirectTimerRef.current) {
         clearInterval(redirectTimerRef.current);
         redirectTimerRef.current = null;
       }
       navigate(`/track/${orderId}`, { replace: true });
     }
-  }, [redirectCountdown, orderId, navigate]);
+  }, [redirectCountdown, orderId, navigate, cancelSuccess]);
 
   useEffect(() => {
     if (!orderId) return;

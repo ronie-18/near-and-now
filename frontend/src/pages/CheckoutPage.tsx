@@ -423,6 +423,14 @@ const CheckoutPage = () => {
       showNotification('Please enter a valid 15-character GSTIN, or uncheck "Add GSTIN" to continue without one', 'error');
       return;
     }
+    // "Registered Business Name" is labeled required (*) next to the GSTIN
+    // field but was never actually enforced — a customer could submit a
+    // valid GSTIN with no business name, producing an invoice with a GSTIN
+    // but no business name despite the field claiming to be mandatory.
+    if (gstinEnabled && gstin.trim() && !businessName.trim()) {
+      showNotification('Please enter your registered business name, or uncheck "Add GSTIN" to continue without one', 'error');
+      return;
+    }
     try {
       setLoading(true);
       if (saveAddress && showNewAddressForm && !editAddressId && user?.id) {

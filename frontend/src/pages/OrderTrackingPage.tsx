@@ -249,7 +249,7 @@ const OrderTrackingPage = () => {
     return history;
   }, [formatStatusForDisplay]);
 
-  useOrderTrackingRealtime(orderId, order, setOrder, setTrackingHistory, setDriverLocation, setDriverLocations, buildTrackingHistory);
+  const { isRealtimeConnected } = useOrderTrackingRealtime(orderId, order, setOrder, setTrackingHistory, setDriverLocation, setDriverLocations, buildTrackingHistory);
 
   const formatDate = (s: string) => new Date(s).toLocaleString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -386,11 +386,20 @@ const OrderTrackingPage = () => {
               ) : (
                 <>
                   <p className="text-white/80 text-sm font-medium mb-1 flex items-center gap-1">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
-                    </span>
-                    Live Tracking
+                    {isRealtimeConnected ? (
+                      <>
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+                        </span>
+                        Live Tracking
+                      </>
+                    ) : (
+                      <>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-300" />
+                        Updating…
+                      </>
+                    )}
                   </p>
                   <h1 className="text-2xl font-black text-white">#{order.order_number}</h1>
                 </>

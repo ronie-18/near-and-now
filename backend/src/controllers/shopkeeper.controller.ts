@@ -358,6 +358,23 @@ const STALE_ALLOCATION_MS = 5 * 60 * 1000; // 5 minutes
 // re-offered to the next nearest store via the same reallocateMissingItems() path,
 // so a store that never responds can't stall the order indefinitely.
 export async function expireStaleAllocations(orderId: string) {
+  // Online-payment orders are hidden from the shopkeeper's incoming list
+  // until payment_status is 'paid' (getIncomingOrders/acceptAllocation) — a
+  // store literally cannot have "not responded" to an order it was never
+  // shown. Without this guard, an order stuck mid-payment for >5 minutes
+  // would get auto-rejected and bounced through every nearby store none of
+  // which can see it either, right up until cancelIfPaymentAbandoned's own
+  // 15-minute TTL cancels it outright — wasted reassignment churn and a
+  // misleading rejection history for stores that were never actually asked.
+  const { data: order } = await supabaseAdmin
+    .from('customer_orders')
+    .select('payment_status, payment_method')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (order && (order as any).payment_method !== 'cod' && (order as any).payment_status !== 'paid') {
+    return;
+  }
+
   const cutoff = new Date(Date.now() - STALE_ALLOCATION_MS).toISOString();
 
   const { data: staleAllocs } = await supabaseAdmin
