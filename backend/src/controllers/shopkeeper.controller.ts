@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { haversineKm } from '../utils/geo.js';
 import { notificationService } from '../services/notification.service.js';
+import { databaseService } from '../services/database.service.js';
 
 declare module 'express' {
   interface Request {
@@ -138,7 +139,7 @@ export class ShopkeeperController {
 
       const [{ data: orders }, { data: items }, { data: storeRows }] = await Promise.all([
         supabaseAdmin.from('customer_orders')
-          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, receiver_name, receiver_phone, receiver_address')
+          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, receiver_name, receiver_phone, receiver_address, payment_status, payment_method')
           .in('id', orderIds),
         supabaseAdmin.from('order_items')
           .select('id, customer_order_id, product_name, quantity, unit, unit_price, image_url, item_status, assigned_store_id')
@@ -163,7 +164,16 @@ export class ShopkeeperController {
       const storeCoordsMap: Record<string, { latitude: number; longitude: number }> = {};
       (storeRows || []).forEach((s: any) => { storeCoordsMap[s.id] = s; });
 
-      const result = allocations.map((alloc: any) => {
+      // Online-payment orders (razorpay/wallet) are created immediately at
+      // checkout, before the customer has actually finished paying — hide
+      // them from the shopkeeper's incoming list until payment_status is
+      // 'paid', so a store never preps/accepts an order that turns out to be
+      // abandoned. COD has no payment-gateway step, so it's unaffected.
+      const isPaymentReady = (order: any) => order.payment_method === 'cod' || order.payment_status === 'paid';
+
+      const result = allocations
+        .filter((alloc: any) => isPaymentReady(orderMap[alloc.order_id] || {}))
+        .map((alloc: any) => {
         const order = orderMap[alloc.order_id] || {};
         const storeCoords = storeCoordsMap[alloc.store_id];
         let distance: string | null = null;
@@ -219,6 +229,18 @@ export class ShopkeeperController {
       if (!alloc) return res.status(404).json({ error: 'Allocation not found' });
       if (alloc.status !== 'pending_acceptance') {
         return res.status(409).json({ error: `Already responded: ${alloc.status}` });
+      }
+
+      // Same payment-readiness guard as getIncomingOrders — belt-and-suspenders
+      // in case a shopkeeper had this allocation open before it dropped out of
+      // their list, or hit the endpoint directly.
+      const { data: parentOrder } = await supabaseAdmin
+        .from('customer_orders')
+        .select('payment_status, payment_method')
+        .eq('id', alloc.order_id)
+        .maybeSingle();
+      if (parentOrder && parentOrder.payment_method !== 'cod' && parentOrder.payment_status !== 'paid') {
+        return res.status(409).json({ error: 'Payment has not been completed for this order yet.' });
       }
 
       // Get all items assigned to this store for this order
@@ -612,6 +634,47 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
       .catch((err) => console.error('notifyRiderOrderOffer failed:', err));
   } catch (err) {
     console.error('dispatchReadyOrdersToDriver error:', err);
+  }
+}
+
+const UNPAID_ORDER_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+// Called opportunistically from the order-tracking endpoint, same pattern as
+// expireStaleAllocations/reBroadcastIfStuck. placeCheckoutOrder creates the
+// full order — including the store_orders/order_store_allocations a
+// shopkeeper can see and accept — immediately at checkout, before an
+// online-payment (razorpay/wallet) customer has actually finished paying.
+// If they abandon the Razorpay sheet or a wallet debit fails, the order was
+// previously left at payment_status 'pending'/'failed' forever, visible to
+// and acceptable by the shopkeeper (see getIncomingOrders/acceptAllocation's
+// payment-status guard) with no cleanup. Auto-cancels it once it's been
+// unpaid for too long, reusing cancelOrder() (which already correctly
+// no-ops if a driver is already assigned or it's reached a terminal state)
+// rather than duplicating its cancellation logic here.
+export async function cancelIfPaymentAbandoned(orderId: string) {
+  const { data: order } = await supabaseAdmin
+    .from('customer_orders')
+    .select('status, payment_status, payment_method, placed_at, created_at')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order) return;
+  const o = order as any;
+  // COD has no payment-gateway step to abandon — payment_status is expected
+  // to stay 'pending' until delivery, that's not a stuck order.
+  if (o.payment_method === 'cod') return;
+  if (o.payment_status === 'paid') return;
+  if (o.status === 'order_delivered' || o.status === 'order_cancelled') return;
+
+  const placedAt = new Date(o.placed_at || o.created_at).getTime();
+  if (!Number.isFinite(placedAt) || Date.now() - placedAt < UNPAID_ORDER_TTL_MS) return;
+
+  try {
+    await databaseService.cancelOrder(orderId);
+  } catch (err) {
+    // Throws if a delivery partner is already assigned or the order reached
+    // a terminal state between the check above and now — either way it's no
+    // longer safe or necessary to auto-cancel here.
+    console.error('[cancelIfPaymentAbandoned] cancelOrder failed (order left as-is):', err);
   }
 }
 

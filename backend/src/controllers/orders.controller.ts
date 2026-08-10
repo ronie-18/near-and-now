@@ -222,18 +222,43 @@ export class OrdersController {
 
       // Back-fill the computed totals that createCustomerOrder wrote as zeros.
       const totalDeliveryFee = storeOrdersMap.size * PER_STORE_DELIVERY_FEE;
-      const totalAmount = totalSubtotal + totalDeliveryFee;
+
+      // Coupon: validate + compute the actual discount server-side, mirroring
+      // placeCheckoutOrder's pattern exactly. Previously this endpoint hardcoded
+      // discount_amount: 0 and never called validateCoupon at all — no expiry
+      // check, no usage-limit check, no min-order-value check — yet still called
+      // recordCouponUsage unconditionally below, silently burning a customer's
+      // coupon redemption for zero actual discount. If the coupon is invalid,
+      // fail the whole order rather than silently dropping the discount, same
+      // reasoning placeCheckoutOrder already documents for the same decision.
+      let discountAmount = 0;
+      let validatedCouponId: string | null = null;
+      if (coupon_id && customer_id) {
+        const { data: couponRow } = await supabaseAdmin
+          .from('coupons')
+          .select('code')
+          .eq('id', coupon_id)
+          .maybeSingle();
+        if (couponRow?.code) {
+          const coupon = await databaseService.validateCoupon(couponRow.code, customer_id, totalSubtotal);
+          discountAmount = databaseService.computeCouponDiscount(coupon, totalSubtotal);
+          validatedCouponId = coupon.id;
+        }
+      }
+
+      const totalAmount = totalSubtotal + totalDeliveryFee - discountAmount;
       await supabaseAdmin
         .from('customer_orders')
         .update({
           subtotal_amount: totalSubtotal,
           delivery_fee: totalDeliveryFee,
+          discount_amount: discountAmount,
           total_amount: totalAmount,
         })
         .eq('id', customerOrder.id);
 
-      if (coupon_id && customer_id) {
-        databaseService.recordCouponUsage(coupon_id, customer_id, customerOrder.id).catch((err) => {
+      if (validatedCouponId && customer_id) {
+        databaseService.recordCouponUsage(validatedCouponId, customer_id, customerOrder.id).catch((err) => {
           console.error('[COUPON] recordCouponUsage failed (non-fatal)', { coupon_id, orderId: customerOrder.id, err });
         });
       }

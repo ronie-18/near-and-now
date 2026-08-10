@@ -1,0 +1,23 @@
+-- driver_locations has the same misconfigured-policy-scope bug already found
+-- and fixed on app_users (20260925000000), stores (20260921000000), and
+-- order_items/store_orders (20260930070000): a policy named "Allow all for
+-- service role" (cmd: ALL, qual: true) scoped to `roles: {public}` instead of
+-- `{service_role}`. Since `roles: {public}` means every role including
+-- `anon`, this let any client holding the public anon key write (not just
+-- read) any row directly — including spoofing another rider's live GPS
+-- coordinates, bypassing the backend's own updateLocation ownership check
+-- entirely.
+--
+-- Verified safe before applying: grepped every app (rider, customer, website,
+-- store-owner) for direct `.from('driver_locations')` calls — zero hits. The
+-- rider app always posts location via the backend's
+-- POST /delivery-partner/location endpoint (service_role write); no client
+-- ever touches this table directly.
+--
+-- The table's separate "Allow read for tracking" policy (anon/authenticated,
+-- USING (true)) is intentionally left as-is here — same broadly-open pattern
+-- already accepted on order_status_history for the same reason (live
+-- tracking has no per-customer auth bridge to scope reads against yet); this
+-- migration only closes the write hole, which has no legitimate use at all.
+
+ALTER POLICY "Allow all for service role" ON public.driver_locations TO service_role;

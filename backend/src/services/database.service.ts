@@ -1306,7 +1306,7 @@ export class DatabaseService {
    * Clamped to [0, subtotal] so a coupon can never discount more than the
    * order is actually worth.
    */
-  private computeCouponDiscount(coupon: Coupon, subtotal: number): number {
+  computeCouponDiscount(coupon: Coupon, subtotal: number): number {
     let discount: number;
     if (coupon.coupon_type === 'flat') {
       discount = coupon.discount_value;
