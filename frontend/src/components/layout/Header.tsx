@@ -335,7 +335,7 @@ const Header = () => {
                             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
                               <Search className="w-8 h-8 text-gray-400" />
                             </div>
-                            <p className="text-gray-600 font-medium">No exact matches found for "{searchQuery}"</p>
+                            <p className="text-gray-600 font-medium">No exact matches found for &quot;{searchQuery}&quot;</p>
                             <p className="text-xs text-gray-400 mt-1">Try these alternative searches:</p>
                           </div>
                           <div className="space-y-2">
@@ -346,7 +346,7 @@ const Header = () => {
                                 onClick={() => setSearchQuery(searchQuery.split(' ')[0])}
                                 className="px-3 py-2 bg-gradient-to-br from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 text-sm font-medium rounded-xl transition-all border border-blue-200 hover:shadow-md"
                               >
-                                Search "{searchQuery.split(' ')[0]}"
+                                Search &quot;{searchQuery.split(' ')[0]}&quot;
                               </button>
                               {popularSearches.slice(0, 4).map((term) => (
                                 <button
@@ -363,7 +363,7 @@ const Header = () => {
                           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
                             <p className="text-xs text-amber-800 flex items-center gap-2">
                               <Sparkles className="w-4 h-4" />
-                              <span><strong>Tip:</strong> Try searching by category like "Vegetables", "Fruits", "Dairy" or brand names</span>
+                              <span><strong>Tip:</strong> Try searching by category like &quot;Vegetables&quot;, &quot;Fruits&quot;, &quot;Dairy&quot; or brand names</span>
                             </p>
                           </div>
                         </div>
@@ -646,7 +646,7 @@ const Header = () => {
                     ) : (
                       <div className="py-4">
                         <div className="text-center mb-3">
-                          <p className="text-gray-600 text-sm font-medium">No matches for "{searchQuery}"</p>
+                          <p className="text-gray-600 text-sm font-medium">No matches for &quot;{searchQuery}&quot;</p>
                           <p className="text-xs text-gray-400 mt-1">Try these suggestions:</p>
                         </div>
                         <div className="flex flex-wrap gap-2 justify-center">

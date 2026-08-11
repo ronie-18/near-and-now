@@ -61,7 +61,7 @@ const AboutPage = () => {
                 What began as a small operation in Bangalore has now expanded to multiple cities across India. We work directly with farmers, local manufacturers, and neighborhood stores to bring you the freshest products at the best prices.
               </p>
               <p className="text-gray-600">
-                Our focus has always been on quality, convenience, and supporting local businesses. We believe that shopping for groceries shouldn't be a chore, but a delightful experience that connects you with the best products from your community.
+                Our focus has always been on quality, convenience, and supporting local businesses. We believe that shopping for groceries shouldn&apos;t be a chore, but a delightful experience that connects you with the best products from your community.
               </p>
             </div>
           </div>
@@ -92,7 +92,7 @@ const AboutPage = () => {
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Community Support</h3>
             <p className="text-gray-600">
-              We believe in supporting local businesses and farmers. By shopping with us, you're helping sustain your local economy.
+              We believe in supporting local businesses and farmers. By shopping with us, you&apos;re helping sustain your local economy.
             </p>
           </div>
 
@@ -104,7 +104,7 @@ const AboutPage = () => {
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Sustainability</h3>
             <p className="text-gray-600">
-              We're committed to reducing our environmental impact through eco-friendly packaging and optimized delivery routes.
+              We&apos;re committed to reducing our environmental impact through eco-friendly packaging and optimized delivery routes.
             </p>
           </div>
         </div>

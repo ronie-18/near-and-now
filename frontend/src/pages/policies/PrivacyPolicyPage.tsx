@@ -133,7 +133,7 @@ const PrivacyPolicyPage = () => {
                   <div>
                     <h3 className="font-semibold text-gray-800 mb-2">Communication</h3>
                     <p className="text-gray-600">
-                      To send transactional emails, order updates, promotional offers, and newsletters (if you've opted in).
+                      To send transactional emails, order updates, promotional offers, and newsletters (if you&apos;ve opted in).
                     </p>
                   </div>
                 </div>
@@ -332,7 +332,7 @@ const PrivacyPolicyPage = () => {
             <div className="bg-yellow-50 border-l-4 border-yellow-400 p-6 rounded-r-lg">
               <h3 className="font-semibold text-gray-800 mb-2">Changes to This Privacy Policy</h3>
               <p className="text-gray-700">
-                We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page and updating the "Last Updated" date. You are advised to review this Privacy Policy periodically for any changes.
+                We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page and updating the &quot;Last Updated&quot; date. You are advised to review this Privacy Policy periodically for any changes.
               </p>
             </div>
           </section>

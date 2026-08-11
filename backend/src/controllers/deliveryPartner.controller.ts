@@ -662,8 +662,8 @@ export class DeliveryPartnerController {
       // with nothing server-side backing it. payRiderForDeliveredOrder (see
       // markDelivered) writes one row per order once delivered; orders
       // delivered before that existed have no payout row (payout_amount null).
-      let payoutByOrder: Record<string, number> = {};
-      let payoutCreatedAtByOrder: Record<string, string> = {};
+      const payoutByOrder: Record<string, number> = {};
+      const payoutCreatedAtByOrder: Record<string, string> = {};
       if (statusParam === 'completed') {
         const { data: payouts } = await supabaseAdmin
           .from('delivery_partners_payouts')
@@ -1065,11 +1065,22 @@ export class DeliveryPartnerController {
    * wholesale, so submitting a billing change while an identity change is
    * still pending (or vice versa) can't silently drop the other's pending
    * fields. Mirrors storeOwner.controller.ts's submitProfileChangeRequest.
+   *
+   * `ownedFields` is the full set of fields this caller manages (identity
+   * vs. billing) — used to reconcile the merge correctly: a field in
+   * `ownedFields` absent from `newChanges` means the caller just resubmitted
+   * with that field back at its committed value, so any stale pending entry
+   * for it is DROPPED, not left behind. If reconciling drops every field the
+   * pending row had, the whole row is deleted (withdrawn) instead of left as
+   * a zero-key pending request nothing can review — what a reverted field
+   * previously left behind forever, with no cancel endpoint to remove it
+   * (found 2026-08-11).
    */
   async submitProfileChangeRequestInternal(
     riderId: string,
+    ownedFields: readonly string[],
     newChanges: Record<string, { old: string | null; new: string }>
-  ) {
+  ): Promise<{ saved: Record<string, unknown> | null; cancelled: boolean }> {
     const now = new Date().toISOString();
 
     const { data: existing } = await supabaseAdmin
@@ -1080,7 +1091,21 @@ export class DeliveryPartnerController {
       .maybeSingle();
 
     if (existing) {
-      const mergedChanges = { ...(existing.changes as Record<string, unknown>), ...newChanges };
+      const mergedChanges: Record<string, unknown> = { ...(existing.changes as Record<string, unknown>) };
+      for (const field of ownedFields) {
+        if (field in newChanges) mergedChanges[field] = newChanges[field];
+        else delete mergedChanges[field];
+      }
+
+      if (Object.keys(mergedChanges).length === 0) {
+        await supabaseAdmin
+          .from('rider_profile_change_requests')
+          .delete()
+          .eq('id', existing.id)
+          .eq('status', 'pending');
+        return { saved: null, cancelled: true };
+      }
+
       const { data: updated, error: updateErr } = await supabaseAdmin
         .from('rider_profile_change_requests')
         .update({ changes: mergedChanges, created_at: now })
@@ -1089,7 +1114,11 @@ export class DeliveryPartnerController {
         .select()
         .maybeSingle();
       if (updateErr) throw updateErr;
-      if (updated) return updated;
+      if (updated) return { saved: updated, cancelled: false };
+    }
+
+    if (Object.keys(newChanges).length === 0) {
+      return { saved: null, cancelled: false };
     }
 
     const { data: inserted, error: insertErr } = await supabaseAdmin
@@ -1098,7 +1127,7 @@ export class DeliveryPartnerController {
       .select()
       .single();
 
-    if (!insertErr) return inserted;
+    if (!insertErr) return { saved: inserted, cancelled: false };
     if (insertErr.code !== '23505') throw insertErr;
 
     const { data: retried } = await supabaseAdmin
@@ -1116,7 +1145,7 @@ export class DeliveryPartnerController {
       .select()
       .single();
     if (finalErr) throw finalErr;
-    return finalRow;
+    return { saved: finalRow, cancelled: false };
   }
 
   /**
@@ -1153,21 +1182,23 @@ export class DeliveryPartnerController {
         }
       }
 
-      if (Object.keys(changes).length === 0) {
+      const result = await this.submitProfileChangeRequestInternal(riderId, ['name', 'email', 'address'], changes);
+      if (result.cancelled) {
+        return res.json({ success: true, cancelled: true, request: null });
+      }
+      if (!result.saved) {
         return res.status(400).json({ success: false, error: 'No changes to submit' });
       }
-
-      const saved = await this.submitProfileChangeRequestInternal(riderId, changes);
 
       const fieldList = Object.keys(changes).join(', ');
       await notifyAdminsOfRiderDocs(
         'profile_change_request',
         'Rider Profile Change Requested',
         `${user.name || 'A rider'} requested a change to: ${fieldList}`,
-        { riderId, requestId: saved.id, changes }
+        { riderId, requestId: result.saved.id, changes }
       );
 
-      res.json({ success: true, request: saved });
+      res.json({ success: true, request: result.saved });
     } catch (err: any) {
       console.error('❌ requestProfileChange error:', err);
       res.status(500).json({ success: false, error: err?.message || 'Failed to submit change request' });
@@ -1352,21 +1383,25 @@ export class DeliveryPartnerController {
       ]);
 
       const currentUpi = partner?.upi_id ?? '';
-      if (upiId === currentUpi) {
+      const changes: Record<string, { old: string | null; new: string }> =
+        upiId === currentUpi ? {} : { upi_id: { old: partner?.upi_id ?? null, new: upiId } };
+
+      const result = await this.submitProfileChangeRequestInternal(riderId, ['upi_id'], changes);
+      if (result.cancelled) {
+        return res.json({ success: true, cancelled: true, request: null });
+      }
+      if (!result.saved) {
         return res.status(400).json({ success: false, error: 'No changes to submit' });
       }
-      const changes = { upi_id: { old: partner?.upi_id ?? null, new: upiId } };
-
-      const saved = await this.submitProfileChangeRequestInternal(riderId, changes);
 
       await notifyAdminsOfRiderDocs(
         'profile_change_request',
         'Rider Billing Change Requested',
         `${user?.name || 'A rider'} requested a change to: UPI ID`,
-        { riderId, requestId: saved.id, changes }
+        { riderId, requestId: result.saved.id, changes }
       );
 
-      res.json({ success: true, request: saved });
+      res.json({ success: true, request: result.saved });
     } catch (err) {
       console.error('saveBillingInfo error:', err);
       res.status(500).json({ success: false, error: 'Failed to submit billing change' });

@@ -74,7 +74,7 @@ const RefundPolicyPage = () => {
                   <div>
                     <h3 className="font-semibold text-gray-800 mb-2">Incorrect Items</h3>
                     <p className="text-gray-600">
-                      If you receive items that don't match your order, we'll arrange for a return and correct replacement.
+                      If you receive items that don&apos;t match your order, we&apos;ll arrange for a return and correct replacement.
                     </p>
                   </div>
                 </div>
@@ -86,7 +86,7 @@ const RefundPolicyPage = () => {
                   <div>
                     <h3 className="font-semibold text-gray-800 mb-2">Missing Items</h3>
                     <p className="text-gray-600">
-                      If items are missing from your order, we'll either deliver the missing items or provide a refund.
+                      If items are missing from your order, we&apos;ll either deliver the missing items or provide a refund.
                     </p>
                   </div>
                 </div>
@@ -98,7 +98,7 @@ const RefundPolicyPage = () => {
                   <div>
                     <h3 className="font-semibold text-gray-800 mb-2">Quality Issues</h3>
                     <p className="text-gray-600">
-                      Products that don't meet our quality standards are eligible for return and refund.
+                      Products that don&apos;t meet our quality standards are eligible for return and refund.
                     </p>
                   </div>
                 </div>
@@ -162,7 +162,7 @@ const RefundPolicyPage = () => {
 
             <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-100">
               <p className="text-gray-600 mb-6">
-                Here's how our refund process works:
+                Here&apos;s how our refund process works:
               </p>
 
               <div className="space-y-4">
@@ -190,7 +190,7 @@ const RefundPolicyPage = () => {
                   </div>
                   <div className="flex-grow">
                     <h3 className="font-semibold text-gray-800 mb-1">Return Pickup (if applicable)</h3>
-                    <p className="text-sm text-gray-600">For eligible items, we'll arrange a pickup at no additional cost</p>
+                    <p className="text-sm text-gray-600">For eligible items, we&apos;ll arrange a pickup at no additional cost</p>
                   </div>
                 </div>
                 <div className="flex items-start">
@@ -303,7 +303,7 @@ const RefundPolicyPage = () => {
                 </li>
                 <li className="flex items-start">
                   <span className="mr-2">•</span>
-                  <span>Once an order is marked "Processing" or "Out for Delivery," it cannot be cancelled</span>
+                  <span>Once an order is marked &quot;Processing&quot; or &quot;Out for Delivery,&quot; it cannot be cancelled</span>
                 </li>
                 <li className="flex items-start">
                   <span className="mr-2">•</span>

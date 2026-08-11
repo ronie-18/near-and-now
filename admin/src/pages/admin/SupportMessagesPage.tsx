@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import { getAdminToken } from '../../services/adminSession';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { MessageCircle, CheckCircle, Loader2, AlertCircle, RefreshCw, Send } from 'lucide-react';
@@ -36,12 +37,22 @@ const ROLE_LABEL: Record<SupportMessage['sender_role'], string> = {
  * respond. Found 2026-08-11 during a support-flow audit.
  */
 const SupportMessagesPage = () => {
+  // A support_message admin notification links here with a specific :id —
+  // previously this page ignored it entirely and just showed the default
+  // "open" list, so clicking a notification about an already-resolved (and
+  // so filtered-out) message landed on a page with no sign the message ever
+  // existed. Found 2026-08-11.
+  const { id: targetId } = useParams<{ id?: string }>();
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | 'all'>('open');
+  // A deep-linked id must never be hidden by the default "open" filter — a
+  // resolved message linked from a notification needs "all" to be visible.
+  const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | 'all'>(targetId ? 'all' : 'open');
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const targetRef = useRef<HTMLDivElement | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(targetId ?? null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,15 +62,42 @@ const SupportMessagesPage = () => {
       const res = await fetch(`${API_BASE}/api/admin/support-messages${qs}`, { headers: adminAuthHeaders() });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load support messages');
-      setMessages(json.messages);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load support messages');
+      let list: SupportMessage[] = json.messages;
+      // The general list only ever returns messages matching statusFilter —
+      // even 'all' could theoretically miss a message under some future
+      // status this page doesn't know about, so fall back to fetching the
+      // single target directly rather than assuming it's always present.
+      if (targetId && !list.some((m) => m.id === targetId)) {
+        try {
+          const detailRes = await fetch(`${API_BASE}/api/admin/support-messages/${targetId}`, { headers: adminAuthHeaders() });
+          const detailJson = await detailRes.json();
+          if (detailRes.ok && detailJson.success && detailJson.message) {
+            list = [detailJson.message, ...list];
+          }
+        } catch {
+          /* non-fatal — the rest of the list still renders */
+        }
+      }
+      setMessages(list);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load support messages');
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, targetId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Scroll the deep-linked message into view and briefly highlight it once
+  // it's actually on screen, then clear the highlight so it doesn't linger
+  // through subsequent reloads/replies.
+  useEffect(() => {
+    if (!targetId || messages.length === 0) return;
+    targetRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightId(null), 2500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId, messages.length]);
 
   const handleReply = async (id: string) => {
     const reply = (replyDrafts[id] || '').trim();
@@ -75,8 +113,8 @@ const SupportMessagesPage = () => {
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to send reply');
       setReplyDrafts((prev) => ({ ...prev, [id]: '' }));
       load();
-    } catch (err: any) {
-      setError(err.message || 'Failed to send reply');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send reply');
     } finally {
       setActionLoading(null);
     }
@@ -92,8 +130,8 @@ const SupportMessagesPage = () => {
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to resolve message');
       load();
-    } catch (err: any) {
-      setError(err.message || 'Failed to resolve message');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resolve message');
     } finally {
       setActionLoading(null);
     }
@@ -153,7 +191,13 @@ const SupportMessagesPage = () => {
         ) : (
           <div className="space-y-4">
             {messages.map((m) => (
-              <div key={m.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <div
+                key={m.id}
+                ref={m.id === targetId ? targetRef : undefined}
+                className={`bg-white rounded-2xl shadow-sm border p-6 transition-colors ${
+                  m.id === highlightId ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-100'
+                }`}
+              >
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2">

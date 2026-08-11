@@ -1,6 +1,6 @@
 /** Backend API origin for checkout, payments, and other server-side Supabase operations. */
 export function getApiBase(): string {
-  let base = (import.meta.env.VITE_API_URL || '')
+  const base = (import.meta.env.VITE_API_URL || '')
     .toString()
     .replace(/\/$/, '');
   if (import.meta.env.DEV && base.startsWith('https://')) {

@@ -20,8 +20,18 @@ const HomePage = () => {
   const { showNotification } = useNotification();
   const { userLocation } = useLocation();
   const lastLocationKeyRef = useRef<string | null>(null);
+  // Guards against a slower, older fetch overwriting a newer one — e.g. the
+  // user picks location A then immediately corrects to location B; A's
+  // response can resolve after B's and must not clobber it. fetchData is
+  // called both from the location-change effect and the manual Retry
+  // button, so a sequence counter (bumped per-call, checked before each
+  // state write) covers both call sites, unlike a single effect-scoped
+  // `cancelled` flag. Same race already fixed on ProductDetailPage/
+  // CategoryPage/SearchPage.
+  const fetchSeqRef = useRef(0);
 
   const fetchData = useCallback(async (lat?: number, lng?: number) => {
+    const seq = ++fetchSeqRef.current;
     try {
       setLoading(true);
       setFetchError(false);
@@ -31,6 +41,7 @@ const HomePage = () => {
         getAllProducts(opts),
         getCategories()
       ]);
+      if (seq !== fetchSeqRef.current) return;
 
       setAllProducts(products);
 
@@ -46,11 +57,12 @@ const HomePage = () => {
 
       setCategories(uniqueCategories);
     } catch (error) {
+      if (seq !== fetchSeqRef.current) return;
       console.error('Error fetching data:', error);
       setFetchError(true);
       showNotification('Failed to load data. Please try again.', 'error');
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   }, [showNotification]);
 
@@ -324,7 +336,7 @@ const HomePage = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4m0 4h.01" />
                 </svg>
               </div>
-              <h3 className="font-display text-xl font-black text-gray-700 mb-2">Couldn't Load Products</h3>
+              <h3 className="font-display text-xl font-black text-gray-700 mb-2">Couldn&apos;t Load Products</h3>
               <p className="text-gray-400 text-sm leading-relaxed max-w-xs mx-auto mb-5">
                 Something went wrong while loading products. Please try again.
               </p>
@@ -345,7 +357,7 @@ const HomePage = () => {
               </div>
               <h3 className="font-display text-xl font-black text-gray-700 mb-2">No Products Yet</h3>
               <p className="text-gray-400 text-sm leading-relaxed max-w-xs mx-auto">
-                We're stocking up! Fresh products are on their way — check back soon.
+                We&apos;re stocking up! Fresh products are on their way — check back soon.
               </p>
             </div>
           )}

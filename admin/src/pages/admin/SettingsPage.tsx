@@ -179,7 +179,7 @@ const AccountTab = () => {
             </button>
             <div className="text-xs text-gray-500">
               {newPassword && newPassword.length < 8 && <span className="text-red-500">Too short</span>}
-              {newPassword && newPassword.length >= 8 && confirmPassword && newPassword !== confirmPassword && <span className="text-red-500">Passwords don't match</span>}
+              {newPassword && newPassword.length >= 8 && confirmPassword && newPassword !== confirmPassword && <span className="text-red-500">Passwords don&apos;t match</span>}
               {newPassword && newPassword.length >= 8 && confirmPassword && newPassword === confirmPassword && <span className="text-emerald-600 flex items-center gap-1"><CheckCircle size={12} /> Looks good</span>}
             </div>
           </div>

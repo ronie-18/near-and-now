@@ -87,14 +87,15 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
     setQuantity(prev => (prev > 1 ? prev - 1 : 1));
   };
 
-  // Calculate discount percentage if original price is available
-  const calculateDiscount = () => {
-    const originalPrice = product.original_price || (product.price * 1.35); // If no original price, estimate it
-    const discount = Math.round(((originalPrice - product.price) / originalPrice) * 100);
-    return discount;
-  };
-
-  const discount = calculateDiscount();
+  // Discount is only ever computed off a real original_price — no synthetic
+  // "estimate it" fallback. That fallback previously made every product with
+  // no real discount (the overwhelming majority) show a fake "-26%" badge,
+  // strikethrough price, and "Save ₹Y" line, identical in shape to the fake
+  // star-rating bug already fixed elsewhere; ProductCard.tsx already gates
+  // its own discount off product.original_price the same way.
+  const discount = product.original_price
+    ? Math.max(0, Math.round(((product.original_price - product.price) / product.original_price) * 100))
+    : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay bg-black bg-opacity-50 backdrop-blur-sm">
@@ -150,8 +151,12 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
             <div className="mb-6">
               <div className="flex items-center">
                 <span className="text-2xl font-bold text-gray-800">₹{Math.round(product.price)}</span>
-                <span className="text-gray-500 text-lg line-through ml-2">₹{Math.round(product.original_price || (product.price * 1.35))}</span>
-                <span className="ml-2 text-green-600 font-medium">Save ₹{Math.round((product.original_price || (product.price * 1.35)) - product.price)}</span>
+                {discount > 0 && (
+                  <>
+                    <span className="text-gray-500 text-lg line-through ml-2">₹{Math.round(product.original_price!)}</span>
+                    <span className="ml-2 text-green-600 font-medium">Save ₹{Math.round(product.original_price! - product.price)}</span>
+                  </>
+                )}
               </div>
             </div>
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
@@ -10,7 +10,7 @@ import {
   setDefaultAddress
 } from '../services/supabase';
 import { geocodeAddress } from '../services/placesService';
-import { Home, Briefcase, MapPin } from 'lucide-react';
+import { Home, Briefcase, MapPin, AlertCircle } from 'lucide-react';
 
 /* ─────────────────────────────────────────────
    Types
@@ -226,27 +226,31 @@ const AddressesPage = () => {
   }, [isAuthenticated, isLoading, navigate]);
 
   /* ── Fetch addresses ── */
-  useEffect(() => {
-    const fetchAddresses = async () => {
-      if (!user?.id) { setLoading(false); return; }
-      try {
-        setLoading(true);
-        const data = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
-        setAddresses(data.map(addr => ({
-          id: addr.id, name: addr.name, label: addr.label,
-          addressLine1: addr.address_line_1, addressLine2: addr.address_line_2,
-          city: addr.city, state: addr.state, pincode: addr.pincode,
-          phone: addr.phone, isDefault: addr.is_default
-        })));
-      } catch (error) {
-        console.error('Error fetching addresses:', error);
-        showNotification('Failed to load addresses', 'error');
-      } finally {
-        setLoading(false);
-      }
-    };
-    if (user?.id) fetchAddresses();
+  const [fetchError, setFetchError] = useState(false);
+  const fetchAddresses = useCallback(async () => {
+    if (!user?.id) { setLoading(false); return; }
+    try {
+      setLoading(true);
+      setFetchError(false);
+      const data = await getUserAddresses(user.id, user.phone || undefined, customer?.phone);
+      setAddresses(data.map(addr => ({
+        id: addr.id, name: addr.name, label: addr.label,
+        addressLine1: addr.address_line_1, addressLine2: addr.address_line_2,
+        city: addr.city, state: addr.state, pincode: addr.pincode,
+        phone: addr.phone, isDefault: addr.is_default
+      })));
+    } catch (error) {
+      console.error('Error fetching addresses:', error);
+      setFetchError(true);
+      showNotification('Failed to load addresses', 'error');
+    } finally {
+      setLoading(false);
+    }
   }, [user?.id, user?.phone, customer?.phone, showNotification]);
+
+  useEffect(() => {
+    if (user?.id) fetchAddresses();
+  }, [user?.id, fetchAddresses]);
 
   /* ── Sync form when editing ── */
   useEffect(() => {
@@ -560,14 +564,27 @@ const AddressesPage = () => {
         )}
 
         {/* ── Address List ── */}
-        {addresses.length === 0 ? (
+        {fetchError ? (
+          <div className="ap-card ap-fade-up">
+            <div className="ap-empty">
+              <div className="ap-empty-icon" style={{ background: '#fee2e2' }}>
+                <AlertCircle size={28} color="#dc2626" />
+              </div>
+              <h2>Couldn&apos;t Load Addresses</h2>
+              <p>Something went wrong while loading your addresses. Please try again.</p>
+              <button className="ap-btn-primary" onClick={() => fetchAddresses()}>
+                Try Again
+              </button>
+            </div>
+          </div>
+        ) : addresses.length === 0 ? (
           <div className="ap-card ap-fade-up">
             <div className="ap-empty">
               <div className="ap-empty-icon">
                 <MapPin size={28} color="#4f46e5" />
               </div>
               <h2>No Addresses Yet</h2>
-              <p>You haven't added any delivery addresses yet.</p>
+              <p>You haven&apos;t added any delivery addresses yet.</p>
               <button className="ap-btn-primary" onClick={() => setShowAddForm(true)}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M12 5v14M5 12h14" />

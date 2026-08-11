@@ -2194,7 +2194,7 @@ export class DatabaseService {
     // directly instead of re-checking via the public getTrackingHistory.
     const statusHistory = await this.getTrackingHistoryRaw(orderId);
     const storeIds = [...new Set((order.store_orders || []).map((so: { store_id: string }) => so.store_id).filter(Boolean))];
-    let storeLocations: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[] = [];
+    const storeLocations: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[] = [];
     if (storeIds.length > 0) {
       const { data: stores } = await supabaseAdmin
         .from('stores')

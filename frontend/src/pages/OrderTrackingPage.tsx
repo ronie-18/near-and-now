@@ -314,7 +314,7 @@ const OrderTrackingPage = () => {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 text-center">
           <Package className="w-14 h-14 text-red-300 mx-auto mb-4" />
-          <h1 className="text-xl font-bold text-gray-800 mb-2">Couldn't Load Order</h1>
+          <h1 className="text-xl font-bold text-gray-800 mb-2">Couldn&apos;t Load Order</h1>
           <p className="text-gray-500 mb-6 text-sm">Something went wrong while fetching this order. Please try again.</p>
           <button
             onClick={() => fetchTracking()}
@@ -336,7 +336,7 @@ const OrderTrackingPage = () => {
         <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 text-center">
           <Package className="w-14 h-14 text-gray-300 mx-auto mb-4" />
           <h1 className="text-xl font-bold text-gray-800 mb-2">Order Not Found</h1>
-          <p className="text-gray-500 mb-6 text-sm">We couldn't find this order. Check the order number and try again.</p>
+          <p className="text-gray-500 mb-6 text-sm">We couldn&apos;t find this order. Check the order number and try again.</p>
           <TrackByNumberForm loading={false} initialNumber="" />
           <Link to="/orders" className="mt-4 inline-block text-primary hover:text-secondary text-sm font-medium">
             View All Orders →

@@ -832,7 +832,7 @@ const ProductsPage = () => {
 
   // Filtered and sorted products
   const filteredProducts = useMemo(() => {
-    let result = products.filter((product) => {
+    const result = products.filter((product) => {
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch =
         product.name.toLowerCase().includes(searchLower) ||

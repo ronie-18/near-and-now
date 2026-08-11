@@ -339,7 +339,7 @@ const CheckoutPage = () => {
     try {
       setLoadingAddresses(true);
       await deleteAddress(addressId, user.id);
-      let addresses = await getUserAddresses(user.id, user.phone || undefined);
+      const addresses = await getUserAddresses(user.id, user.phone || undefined);
       setSavedAddresses(addresses);
       if (addresses.length > 0) {
         const defaultAddr = addresses.find(a => a.is_default) || addresses[0];
@@ -393,7 +393,7 @@ const CheckoutPage = () => {
         if (geocoded) { updatePayload.latitude = geocoded.lat; updatePayload.longitude = geocoded.lng; }
         await updateAddress(editAddressId, user.id, updatePayload);
         const updatedAddressId = editAddressId;
-        let addresses = await getUserAddresses(user.id, user.phone || undefined);
+        const addresses = await getUserAddresses(user.id, user.phone || undefined);
         setSavedAddresses(addresses);
         setEditAddressId(null);
         setShowNewAddressForm(false);

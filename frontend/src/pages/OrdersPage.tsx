@@ -343,7 +343,7 @@ const OrdersPage = () => {
                 </svg>
               </div>
               <h2>No Orders Yet</h2>
-              <p>You haven't placed any orders yet.<br />Start shopping to place your first order!</p>
+              <p>You haven&apos;t placed any orders yet.<br />Start shopping to place your first order!</p>
               <Link to="/shop" className="op-btn-primary" style={{ textDecoration: 'none' }}>
                 Browse Products
               </Link>

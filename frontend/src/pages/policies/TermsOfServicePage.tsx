@@ -165,7 +165,7 @@ const TermsOfServicePage = () => {
                                 </div>
                                 <div className="flex items-start">
                                     <span className="text-red-500 font-bold mr-3">✗</span>
-                                    <span className="text-gray-700">Attempt to gain unauthorized access to our systems or other users' accounts</span>
+                                    <span className="text-gray-700">Attempt to gain unauthorized access to our systems or other users&apos; accounts</span>
                                 </div>
                                 <div className="flex items-start">
                                     <span className="text-red-500 font-bold mr-3">✗</span>
@@ -220,7 +220,7 @@ const TermsOfServicePage = () => {
                         <div className="bg-orange-50 border border-orange-200 rounded-lg p-6">
                             <div className="space-y-4 text-gray-700">
                                 <p>
-                                    <strong className="text-orange-800">Disclaimer:</strong> Our services are provided "as is" without warranties of any kind, either express or implied.
+                                    <strong className="text-orange-800">Disclaimer:</strong> Our services are provided &quot;as is&quot; without warranties of any kind, either express or implied.
                                 </p>
                                 <p>
                                     Near & Now shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use of or inability to use the service.
@@ -283,7 +283,7 @@ const TermsOfServicePage = () => {
                         <div className="bg-yellow-50 border-l-4 border-yellow-400 p-6 rounded-r-lg">
                             <h3 className="font-semibold text-gray-800 mb-2">Changes to These Terms</h3>
                             <p className="text-gray-700">
-                                We reserve the right to modify these Terms of Service at any time. We will notify you of any material changes by posting the new terms on this page and updating the "Last Updated" date. Your continued use of the service after such changes constitutes acceptance of the new terms.
+                                We reserve the right to modify these Terms of Service at any time. We will notify you of any material changes by posting the new terms on this page and updating the &quot;Last Updated&quot; date. Your continued use of the service after such changes constitutes acceptance of the new terms.
                             </p>
                         </div>
                     </section>

@@ -172,7 +172,7 @@ const HelpPage = () => {
           {filteredFaqs.length === 0 ? (
             <div className="text-center py-12 rounded-2xl bg-gray-50 border border-gray-100">
               <FileText size={32} className="text-gray-300 mx-auto mb-3" />
-              <p className="text-sm font-medium text-gray-500">No results for "{search}"</p>
+              <p className="text-sm font-medium text-gray-500">No results for &quot;{search}&quot;</p>
               <p className="text-xs text-gray-400 mt-1">Try a different search term</p>
             </div>
           ) : (

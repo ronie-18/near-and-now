@@ -262,7 +262,7 @@ const WalletPage = () => {
             <div style={{ color: '#9ca3af', fontSize: 14, textAlign: 'center', padding: '24px 0' }}>Loading…</div>
           ) : txError ? (
             <div style={{ textAlign: 'center', padding: '24px 0' }}>
-              <p style={{ color: '#9ca3af', fontSize: 14, margin: '0 0 12px 0' }}>Couldn't load transaction history.</p>
+              <p style={{ color: '#9ca3af', fontSize: 14, margin: '0 0 12px 0' }}>Couldn&apos;t load transaction history.</p>
               <button className="wp-tx-retry" onClick={fetchTransactions}>Try again</button>
             </div>
           ) : transactions.length === 0 ? (

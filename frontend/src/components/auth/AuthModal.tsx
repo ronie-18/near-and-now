@@ -269,7 +269,7 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
                   />
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
-                  We'll send you a one-time password (OTP)
+                  We&apos;ll send you a one-time password (OTP)
                 </p>
               </div>
               
@@ -438,7 +438,7 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
               </div>
 
               <p className="text-center text-xs text-gray-500 mt-4">
-                You can browse without verifying, but you'll need to verify your email before placing an order.
+                You can browse without verifying, but you&apos;ll need to verify your email before placing an order.
               </p>
             </form>
           )}

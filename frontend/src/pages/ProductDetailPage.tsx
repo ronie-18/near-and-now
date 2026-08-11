@@ -289,7 +289,7 @@ const ProductDetailPage = () => {
         <div className="pdp-not-found">
           <div style={{ fontSize: 56, marginBottom: 16 }}>🔍</div>
           <h1>Product Not Found</h1>
-          <p>The product you're looking for doesn't exist or has been removed.</p>
+          <p>The product you&apos;re looking for doesn&apos;t exist or has been removed.</p>
           <Link to="/shop" className="pdp-btn-primary" style={{ display: 'inline-flex', textDecoration: 'none' }}>
             Continue Shopping
           </Link>

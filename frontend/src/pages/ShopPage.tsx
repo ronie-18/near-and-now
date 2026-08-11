@@ -26,6 +26,14 @@ const ShopPage = () => {
   const { userLocation } = useLocation();
   const { showNotification } = useNotification();
   const lastLocationKeyRef = useRef<string | null>(null);
+  // Guards against a slower, older fetch overwriting a newer one — e.g. the
+  // user picks location A then immediately corrects to location B; A's
+  // response can resolve after B's and must not clobber it. fetchProducts is
+  // called both from the location-change effect and the manual Retry
+  // button, so a sequence counter (bumped per-call, checked before each
+  // state write) covers both call sites. Same race already fixed on
+  // ProductDetailPage/CategoryPage/SearchPage.
+  const fetchSeqRef = useRef(0);
 
   const shuffleArray = <T,>(array: T[]): T[] => {
     const newArray = [...array];
@@ -37,6 +45,7 @@ const ShopPage = () => {
   };
 
   const fetchProducts = async (lat?: number, lng?: number) => {
+    const seq = ++fetchSeqRef.current;
     try {
       setLoading(true);
       setNoStoresNearby(false);
@@ -45,6 +54,7 @@ const ShopPage = () => {
       // If we have a location, check whether any stores are nearby first.
       if (lat != null && lng != null) {
         const storesExist = await hasNearbyStores(lat, lng);
+        if (seq !== fetchSeqRef.current) return;
         if (!storesExist) {
           setNoStoresNearby(true);
           setProducts([]);
@@ -56,6 +66,7 @@ const ShopPage = () => {
 
       const opts = lat != null && lng != null ? { lat, lng } : undefined;
       const allProducts = await getAllProducts(opts);
+      if (seq !== fetchSeqRef.current) return;
       const randomizedProducts = shuffleArray(allProducts);
       setProducts(randomizedProducts);
       setFilteredProducts(randomizedProducts);
@@ -69,13 +80,14 @@ const ShopPage = () => {
       setMaxPrice(calculatedMaxPrice);
       setPriceRange([0, calculatedMaxPrice]);
     } catch (error) {
+      if (seq !== fetchSeqRef.current) return;
       console.error('Error fetching products:', error);
       showNotification('Failed to load products. Please try again.', 'error');
       setFetchError(true);
       setProducts([]);
       setFilteredProducts([]);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   };
 
@@ -389,7 +401,7 @@ const ShopPage = () => {
                 </div>
                 <h3 className="text-xl font-bold text-gray-800 mb-2">No Stores Near You</h3>
                 <p className="text-gray-600 mb-6">
-                  We don't have a delivery store within 4 km of your location yet. Try a different address.
+                  We don&apos;t have a delivery store within 4 km of your location yet. Try a different address.
                 </p>
               </div>
             )}
@@ -418,7 +430,7 @@ const ShopPage = () => {
                   <MapPin className="w-10 h-10 text-gray-400" />
                 </div>
                 <h3 className="text-xl font-bold text-gray-800 mb-2">Set Your Location</h3>
-                <p className="text-gray-600">Share your location to see what's available near you.</p>
+                <p className="text-gray-600">Share your location to see what&apos;s available near you.</p>
               </div>
             )}
 

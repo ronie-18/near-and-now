@@ -101,7 +101,7 @@ const SearchPage = () => {
               </div>
               <h2 className="text-xl font-semibold text-gray-800 mb-2">No results found</h2>
               <p className="text-gray-600 max-w-md mx-auto">
-                We couldn't find any products matching "{searchTerm}". Try using different keywords or check for typos.
+                We couldn&apos;t find any products matching &quot;{searchTerm}&quot;. Try using different keywords or check for typos.
               </p>
             </div>
           )}

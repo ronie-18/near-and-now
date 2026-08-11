@@ -55,6 +55,12 @@ function describeSignupDbError(step: 'account' | 'store', error: { code?: string
   );
 }
 
+// Matches requireShopkeeperAuth's TTL (shopkeeper.controller.ts) — same
+// session_token/session_token_issued_at columns, same role, so a token
+// issued for this app's /store-owner routes must expire on the same
+// schedule as its sibling /shopkeeper routes, not live forever.
+const SHOPKEEPER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -64,7 +70,7 @@ async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<
   const token = authHeader.slice(7).trim();
   const { data: user } = await supabaseAdmin
     .from('app_users')
-    .select('id')
+    .select('id, session_token_issued_at')
     .eq('session_token', token)
     .eq('role', 'shopkeeper')
     .maybeSingle();
@@ -72,6 +78,19 @@ async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<
     res.status(401).json({ success: false, error: 'Invalid or expired token' });
     return null;
   }
+
+  if (user.session_token_issued_at) {
+    const issuedAt = new Date(user.session_token_issued_at).getTime();
+    if (Date.now() - issuedAt > SHOPKEEPER_SESSION_TTL_MS) {
+      await supabaseAdmin
+        .from('app_users')
+        .update({ session_token: null, session_token_issued_at: null })
+        .eq('session_token', token);
+      res.status(401).json({ success: false, error: 'Session expired — please log in again' });
+      return null;
+    }
+  }
+
   return user.id;
 }
 
@@ -430,6 +449,11 @@ export async function updateStore(req: Request, res: Response) {
 
 const PROFILE_CHANGE_FIELDS = ['name', 'address', 'phone'] as const;
 type ProfileChangeField = typeof PROFILE_CHANGE_FIELDS[number];
+const BILLING_CHANGE_FIELDS = ['bank_account_number', 'bank_ifsc_code', 'bank_branch_name', 'bank_passbook_storage_path'] as const;
+
+type ProfileChangeSubmitResult =
+  | { saved: Record<string, unknown>; cancelled: false }
+  | { saved: null; cancelled: boolean };
 
 /**
  * Submit (or merge into an existing pending) a store_profile_change_requests
@@ -439,11 +463,22 @@ type ProfileChangeField = typeof PROFILE_CHANGE_FIELDS[number];
  * existing pending row's `changes` rather than overwriting it wholesale, so
  * submitting a billing change while an identity change is still pending
  * (or vice versa) can't silently drop the other's pending fields.
+ *
+ * `ownedFields` is the full set of fields this caller manages (identity vs.
+ * billing) — used to reconcile the merge correctly: a field in `ownedFields`
+ * that's absent from `newChanges` means the caller just resubmitted with
+ * that field back at its committed value, so any stale pending entry for it
+ * must be DROPPED, not left behind. If reconciling drops every field the
+ * pending row had, the whole row is deleted (withdrawn) instead of being
+ * left as a zero-key pending request with nothing left to review — this is
+ * what a reverted-then-resubmitted field previously left behind forever,
+ * with no cancel endpoint anywhere to remove it (found 2026-08-11).
  */
 async function submitProfileChangeRequest(
   storeId: string,
+  ownedFields: readonly string[],
   newChanges: Record<string, { old: string | null; new: string }>
-) {
+): Promise<ProfileChangeSubmitResult> {
   const now = new Date().toISOString();
 
   const { data: existing } = await supabaseAdmin
@@ -454,7 +489,21 @@ async function submitProfileChangeRequest(
     .maybeSingle();
 
   if (existing) {
-    const mergedChanges = { ...(existing.changes as Record<string, unknown>), ...newChanges };
+    const mergedChanges: Record<string, unknown> = { ...(existing.changes as Record<string, unknown>) };
+    for (const field of ownedFields) {
+      if (field in newChanges) mergedChanges[field] = newChanges[field];
+      else delete mergedChanges[field];
+    }
+
+    if (Object.keys(mergedChanges).length === 0) {
+      await supabaseAdmin
+        .from('store_profile_change_requests')
+        .delete()
+        .eq('id', existing.id)
+        .eq('status', 'pending');
+      return { saved: null, cancelled: true };
+    }
+
     const { data: updated, error: updateErr } = await supabaseAdmin
       .from('store_profile_change_requests')
       .update({ changes: mergedChanges, created_at: now })
@@ -463,9 +512,15 @@ async function submitProfileChangeRequest(
       .select()
       .maybeSingle();
     if (updateErr) throw updateErr;
-    if (updated) return updated;
+    if (updated) return { saved: updated, cancelled: false };
     // Resolved by a concurrent review between the select above and here —
     // fall through to the insert path below as if no pending row existed.
+  }
+
+  if (Object.keys(newChanges).length === 0) {
+    // Nothing pending to reconcile (or it just got fully withdrawn above)
+    // and nothing new to submit either — genuinely nothing to do.
+    return { saved: null, cancelled: false };
   }
 
   const { data: inserted, error: insertErr } = await supabaseAdmin
@@ -474,7 +529,7 @@ async function submitProfileChangeRequest(
     .select()
     .single();
 
-  if (!insertErr) return inserted;
+  if (!insertErr) return { saved: inserted, cancelled: false };
   if (insertErr.code !== '23505') throw insertErr;
 
   // Lost the race to a concurrent insert (e.g. a second tab submitting at
@@ -494,7 +549,7 @@ async function submitProfileChangeRequest(
     .select()
     .single();
   if (finalErr) throw finalErr;
-  return finalRow;
+  return { saved: finalRow, cancelled: false };
 }
 
 /**
@@ -564,21 +619,23 @@ export async function requestProfileChange(req: Request, res: Response) {
       }
     }
 
-    if (Object.keys(changes).length === 0) {
+    const result = await submitProfileChangeRequest(storeId, PROFILE_CHANGE_FIELDS, changes);
+    if (result.cancelled) {
+      return res.json({ success: true, cancelled: true, request: null });
+    }
+    if (!result.saved) {
       return res.status(400).json({ success: false, error: 'No changes to submit' });
     }
-
-    const saved = await submitProfileChangeRequest(storeId, changes);
 
     const fieldList = Object.keys(changes).join(', ');
     await notifyAdmins(
       'profile_change_request',
       'Store Profile Change Requested',
       `${store.name || 'A store'} requested a change to: ${fieldList}`,
-      { storeId, requestId: saved.id, changes }
+      { storeId, requestId: result.saved.id, changes }
     );
 
-    res.json({ success: true, request: saved });
+    res.json({ success: true, request: result.saved });
   } catch (error: any) {
     console.error('❌ requestProfileChange error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to submit change request' });
@@ -1296,21 +1353,23 @@ export async function saveBillingInfo(req: Request, res: Response) {
       changes.bank_passbook_storage_path = { old: store.bank_passbook_storage_path ?? null, new: storagePath };
     }
 
-    if (Object.keys(changes).length === 0) {
+    const result = await submitProfileChangeRequest(storeId, BILLING_CHANGE_FIELDS, changes);
+    if (result.cancelled) {
+      return res.json({ success: true, cancelled: true, request: null });
+    }
+    if (!result.saved) {
       return res.status(400).json({ success: false, error: 'No changes to submit' });
     }
-
-    const saved = await submitProfileChangeRequest(storeId, changes);
 
     const fieldList = Object.keys(changes).join(', ');
     await notifyAdmins(
       'profile_change_request',
       'Store Billing Change Requested',
       `${store.name || 'A store'} requested a change to: ${fieldList}`,
-      { storeId, requestId: saved.id, changes }
+      { storeId, requestId: result.saved.id, changes }
     );
 
-    res.json({ success: true, request: saved });
+    res.json({ success: true, request: result.saved });
   } catch (error: any) {
     console.error('❌ saveBillingInfo error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to submit billing change' });

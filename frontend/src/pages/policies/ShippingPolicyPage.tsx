@@ -211,7 +211,7 @@ const ShippingPolicyPage = () => {
                   </div>
                   <div className="flex-grow">
                     <h3 className="font-semibold text-gray-800 mb-1">Order Confirmation</h3>
-                    <p className="text-sm text-gray-600">You'll receive a confirmation email with your order details and tracking number</p>
+                    <p className="text-sm text-gray-600">You&apos;ll receive a confirmation email with your order details and tracking number</p>
                   </div>
                 </div>
                 <div className="flex items-start">
@@ -229,7 +229,7 @@ const ShippingPolicyPage = () => {
                   </div>
                   <div className="flex-grow">
                     <h3 className="font-semibold text-gray-800 mb-1">Out for Delivery</h3>
-                    <p className="text-sm text-gray-600">Your order is on its way! Track your delivery partner's location</p>
+                    <p className="text-sm text-gray-600">Your order is on its way! Track your delivery partner&apos;s location</p>
                   </div>
                 </div>
                 <div className="flex items-start">

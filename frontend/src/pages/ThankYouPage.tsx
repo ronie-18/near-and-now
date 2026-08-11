@@ -161,7 +161,7 @@ const ThankYouPage = () => {
           <h1 className="text-3xl font-bold text-gray-800 mb-4">Thank You for Your Order!</h1>
 
           <p className="text-gray-600 mb-6">
-            Your order has been placed successfully. We've sent a confirmation email with your order details.
+            Your order has been placed successfully. We&apos;ve sent a confirmation email with your order details.
           </p>
 
           {orderId && redirectCountdown > 0 && (

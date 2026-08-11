@@ -90,7 +90,8 @@
       "Bash(npm ls *)",
       "Bash(npm view *)",
       "Bash(npx depcheck *)",
-      "Bash(supabase link *)"
+      "Bash(supabase link *)",
+      "Bash(xargs -I{} echo {})"
     ],
     "additionalDirectories": [
       "/tmp"
