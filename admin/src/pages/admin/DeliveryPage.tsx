@@ -19,6 +19,7 @@ import {
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { hasPermission } from '../../services/adminAuthService';
 import { notifyAdminAction } from '../../services/adminService';
 import { DeliveryDocumentReviewModal, DOC_LABELS } from './DeliveryDocumentReviewModal';
 
@@ -106,6 +107,38 @@ const DeliveryPage = () => {
   const [docStatusByPartner, setDocStatusByPartner] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
+  const [pendingUpiByRider, setPendingUpiByRider] = useState<Record<string, string>>({});
+
+  const currentAdmin = getCurrentAdmin();
+  const canViewChangeRequests = Boolean(
+    currentAdmin && hasPermission(currentAdmin, 'profile_change_requests.view')
+  );
+
+  // Pending UPI submissions live only in rider_profile_change_requests until
+  // an admin approves them (see adminDeliveryDocuments.controller.ts's
+  // getDeliveryPartnerBillingInfo fix, 2026-08-11) — this table has zero
+  // anon/authenticated grants, so it must go through the backend rather than
+  // getAdminClient() directly. Non-fatal if it fails or the admin lacks the
+  // separate profile_change_requests.view permission (list access alone is
+  // gated on delivery_partners.view).
+  const refreshPendingUpi = async () => {
+    if (!canViewChangeRequests) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/delivery/partners/profile-change-requests?status=pending`, {
+        headers: adminAuthHeaders(),
+      });
+      if (!res.ok) throw new Error('Failed to fetch pending change requests');
+      const json = await res.json();
+      const byRider: Record<string, string> = {};
+      for (const row of json.requests || []) {
+        const pendingUpi = row.changes?.upi_id?.new;
+        if (pendingUpi) byRider[row.rider_id] = pendingUpi;
+      }
+      setPendingUpiByRider(byRider);
+    } catch (err) {
+      console.error('Error fetching pending rider UPI change requests:', err);
+    }
+  };
 
   // Most recent submit/edit/approve/reject across each partner's verification
   // documents — mirrors StoresPage. Non-fatal if this fails. Also builds
@@ -183,6 +216,7 @@ const DeliveryPage = () => {
     setPartners(data || []);
     await refreshDocsUpdatedAt();
     await refreshApproverNames(data || []);
+    await refreshPendingUpi();
   };
 
   const fetchPartners = async () => {
@@ -605,6 +639,16 @@ const DeliveryPage = () => {
                           </div>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>
+                        )}
+                        {pendingUpiByRider[partner.user_id] && (
+                          <button
+                            onClick={() => setReviewingPartner(partner)}
+                            className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+                            title={`Pending review: ${pendingUpiByRider[partner.user_id]}`}
+                          >
+                            <AlertCircle size={10} />
+                            Pending review
+                          </button>
                         )}
                       </td>
 

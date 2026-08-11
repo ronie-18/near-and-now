@@ -101,6 +101,31 @@ export async function getStoreBillingInfo(req: Request, res: Response) {
       passbookUrl = signed?.signedUrl ?? null;
     }
 
+    // Submitted bank fields don't land on `stores` until an admin approves
+    // the pending store_profile_change_requests row (see saveBillingInfo) —
+    // until then this endpoint read only the committed columns, so a
+    // shopkeeper's first-ever (or most recent) bank-detail submission was
+    // completely invisible on this exact review screen. Same gap, same fix,
+    // as the rider side (adminDeliveryDocuments.controller.ts) — found
+    // 2026-08-11, reported directly by the user.
+    const { data: pendingRequest } = await supabaseAdmin
+      .from('store_profile_change_requests')
+      .select('changes')
+      .eq('store_id', storeId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const pendingChanges = (pendingRequest?.changes as Record<string, { new: string }> | undefined) ?? {};
+    const pendingPassbookPath = pendingChanges.bank_passbook_storage_path?.new ?? null;
+    let pendingPassbookUrl: string | null = null;
+    if (pendingPassbookPath) {
+      const { data: signedPending } = await supabaseAdmin.storage
+        .from(VERIFICATION_DOCS_BUCKET)
+        .createSignedUrl(pendingPassbookPath, SIGNED_URL_TTL_SECONDS);
+      pendingPassbookUrl = signedPending?.signedUrl ?? null;
+    }
+
     res.json({
       success: true,
       billingInfo: {
@@ -110,6 +135,10 @@ export async function getStoreBillingInfo(req: Request, res: Response) {
         bankIfscCode: store.bank_ifsc_code ?? null,
         bankBranchName: store.bank_branch_name ?? null,
         passbookUrl,
+        pendingBankAccountNumber: pendingChanges.bank_account_number?.new ?? null,
+        pendingBankIfscCode: pendingChanges.bank_ifsc_code?.new ?? null,
+        pendingBankBranchName: pendingChanges.bank_branch_name?.new ?? null,
+        pendingPassbookUrl,
       },
     });
   } catch (error: any) {

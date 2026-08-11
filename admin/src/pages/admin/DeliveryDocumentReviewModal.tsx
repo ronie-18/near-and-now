@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getAdminToken } from '../../services/adminSession';
 import { X, CheckCircle, XCircle, AlertCircle, FileText, FileCheck, Landmark } from 'lucide-react';
 import { getAdminClient } from '../../services/supabase';
@@ -46,6 +47,8 @@ interface RiderBillingInfo {
   name: string | null;
   profileImageUrl: string | null;
   upiId: string | null;
+  /** Submitted but not yet approved — sits in rider_profile_change_requests until an admin reviews it. */
+  pendingUpiId: string | null;
 }
 
 /**
@@ -63,6 +66,7 @@ export const DeliveryDocumentReviewModal = ({
   onClose: () => void;
   onDocumentUpdated: (partnerId: string, updatedAt: string, docType: string, status: string) => void;
 }) => {
+  const navigate = useNavigate();
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -353,7 +357,7 @@ export const DeliveryDocumentReviewModal = ({
                   <div className="absolute top-0 left-0 w-8 h-8 border-4 border-orange-500 rounded-full animate-spin border-t-transparent" />
                 </div>
               </div>
-            ) : !billingInfo || !billingInfo.upiId ? (
+            ) : !billingInfo || (!billingInfo.upiId && !billingInfo.pendingUpiId) ? (
               <p className="text-sm text-gray-400">No billing info submitted yet.</p>
             ) : (
               <div className="border border-gray-200 rounded-2xl p-4">
@@ -380,6 +384,26 @@ export const DeliveryDocumentReviewModal = ({
                     </div>
                   </div>
                 </div>
+                {billingInfo.pendingUpiId && (
+                  <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center gap-2">
+                    <AlertCircle size={14} className="text-amber-600 flex-shrink-0" />
+                    <p className="text-xs text-amber-800">
+                      <span className="font-semibold">Pending review:</span> {billingInfo.pendingUpiId}
+                      {' — review in '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          navigate('/delivery/profile-change-requests');
+                        }}
+                        className="underline font-medium"
+                      >
+                        Rider Profile Change Requests
+                      </button>
+                      {' to approve or reject.'}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>

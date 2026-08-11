@@ -91,12 +91,33 @@ export async function getDeliveryPartnerBillingInfo(req: Request, res: Response)
       return res.status(500).json({ success: false, error: error.message });
     }
 
+    // A submitted UPI ID doesn't land in delivery_partners.upi_id until an
+    // admin approves the pending rider_profile_change_requests row (see
+    // requestProfileChange/saveBillingInfo) — until then this endpoint was
+    // reading only the committed column, so a rider's first-ever (or most
+    // recent) UPI submission was completely invisible on this exact review
+    // screen, the one place an admin is supposed to see it in order to
+    // decide whether to approve it. Found 2026-08-11, reported directly by
+    // the user comparing two riders' rows ("one has UPI, another doesn't")
+    // and traced to a genuinely pending, unreviewed submission.
+    const { data: pendingRequest } = await supabaseAdmin
+      .from('rider_profile_change_requests')
+      .select('changes')
+      .eq('rider_id', partnerId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const pendingUpiId =
+      (pendingRequest?.changes as Record<string, { new: string }> | undefined)?.upi_id?.new ?? null;
+
     res.json({
       success: true,
       billingInfo: {
         name: user?.name ?? null,
         profileImageUrl: profile?.profile_image_url ?? null,
         upiId: profile?.upi_id ?? null,
+        pendingUpiId,
       },
     });
   } catch (error: any) {

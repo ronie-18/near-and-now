@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getAdminToken } from '../../services/adminSession';
 import {
   Store,
@@ -98,6 +99,11 @@ interface StoreBillingInfo {
   bankIfscCode: string | null;
   bankBranchName: string | null;
   passbookUrl: string | null;
+  /** Submitted but not yet approved — sit in store_profile_change_requests until an admin reviews them. */
+  pendingBankAccountNumber: string | null;
+  pendingBankIfscCode: string | null;
+  pendingBankBranchName: string | null;
+  pendingPassbookUrl: string | null;
 }
 
 // ─── Document Review Modal ─────────────────────────────────────────────────
@@ -110,6 +116,7 @@ const DocumentReviewModal = ({
   onClose: () => void;
   onDocumentUpdated: (storeId: string, updatedAt: string, docType: string, status: string) => void;
 }) => {
+  const navigate = useNavigate();
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -575,7 +582,11 @@ const DocumentReviewModal = ({
                   <div className="absolute top-0 left-0 w-8 h-8 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
                 </div>
               </div>
-            ) : !billingInfo || (!billingInfo.bankAccountNumber && !billingInfo.bankIfscCode && !billingInfo.passbookUrl) ? (
+            ) : !billingInfo || (
+                !billingInfo.bankAccountNumber && !billingInfo.bankIfscCode && !billingInfo.passbookUrl &&
+                !billingInfo.pendingBankAccountNumber && !billingInfo.pendingBankIfscCode &&
+                !billingInfo.pendingBankBranchName && !billingInfo.pendingPassbookUrl
+              ) ? (
               <p className="text-sm text-gray-400">No billing info submitted yet.</p>
             ) : (
               <div className="border border-gray-200 rounded-2xl p-4">
@@ -624,6 +635,45 @@ const DocumentReviewModal = ({
                     </div>
                   </div>
                 </div>
+                {(billingInfo.pendingBankAccountNumber || billingInfo.pendingBankIfscCode ||
+                  billingInfo.pendingBankBranchName || billingInfo.pendingPassbookUrl) && (
+                  <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-xs text-amber-800">
+                        <p className="font-semibold mb-1">Pending review:</p>
+                        {billingInfo.pendingBankAccountNumber && (
+                          <p>Account number: {billingInfo.pendingBankAccountNumber}</p>
+                        )}
+                        {billingInfo.pendingBankIfscCode && <p>IFSC: {billingInfo.pendingBankIfscCode}</p>}
+                        {billingInfo.pendingBankBranchName && (
+                          <p>Branch: {billingInfo.pendingBankBranchName}</p>
+                        )}
+                        {billingInfo.pendingPassbookUrl && (
+                          <p>
+                            <a href={billingInfo.pendingPassbookUrl} target="_blank" rel="noreferrer" className="underline">
+                              View pending passbook photo
+                            </a>
+                          </p>
+                        )}
+                        <p className="mt-1">
+                          Review in{' '}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onClose();
+                              navigate('/stores/profile-change-requests');
+                            }}
+                            className="underline font-medium"
+                          >
+                            Store Profile Change Requests
+                          </button>
+                          {' '}to approve or reject.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
