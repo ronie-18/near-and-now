@@ -14,6 +14,7 @@ import {
   Wifi,
   WifiOff,
   RotateCcw,
+  CreditCard,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
@@ -34,6 +35,7 @@ interface PartnerData {
   email?: string | null;
   phone?: string | null;
   address?: string | null;
+  upi_id?: string | null;
   vehicle_type?: string | null;
   vehicle_number?: string | null;
   is_online: boolean;
@@ -538,6 +540,7 @@ const DeliveryPage = () => {
                     <th className="px-6 py-4">Name</th>
                     <th className="px-6 py-4">Contact</th>
                     <th className="px-6 py-4">Address</th>
+                    <th className="px-6 py-4">UPI ID</th>
                     <th className="px-6 py-4">Vehicle Type</th>
                     <th className="px-6 py-4">Vehicle Number</th>
                     <th className="px-6 py-4">Status</th>
@@ -587,6 +590,18 @@ const DeliveryPage = () => {
                           <div className="flex items-start gap-2 text-sm text-gray-600 min-w-[14rem] max-w-sm">
                             <MapPin size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
                             <span className="whitespace-normal break-words">{partner.address}</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-sm">—</span>
+                        )}
+                      </td>
+
+                      {/* UPI ID */}
+                      <td className="px-6 py-4">
+                        {partner.upi_id ? (
+                          <div className="flex items-center gap-1.5 text-sm text-gray-700">
+                            <CreditCard size={13} className="text-gray-400 flex-shrink-0" />
+                            <span className="break-all">{partner.upi_id}</span>
                           </div>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>
