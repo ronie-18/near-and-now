@@ -365,7 +365,7 @@ export class DatabaseService {
     // Fetch customer order to check payment/order status before cancelling
     const { data: customerOrder } = await supabaseAdmin
       .from('customer_orders')
-      .select('status, payment_status, razorpay_payment_id, total_amount, payment_method, customer_id')
+      .select('status, payment_status, razorpay_payment_id, total_amount, refunded_amount, payment_method, customer_id, order_code')
       .eq('id', orderId)
       .single();
 
@@ -383,13 +383,14 @@ export class DatabaseService {
       .eq('order_id', orderId);
 
     console.log('Updating store orders status...');
-    const { error: updateStoreOrdersError } = await supabaseAdmin
+    const { data: cancelledStoreOrders, error: updateStoreOrdersError } = await supabaseAdmin
       .from('store_orders')
       .update({
         status: 'order_cancelled',
         cancelled_at: new Date().toISOString()
       })
-      .eq('customer_order_id', orderId);
+      .eq('customer_order_id', orderId)
+      .select('store_id');
 
     if (updateStoreOrdersError) {
       console.error('Error updating store orders:', updateStoreOrdersError);
@@ -397,6 +398,12 @@ export class DatabaseService {
     }
 
     console.log('Updating customer order status...');
+    // The WHERE-clause status guard (not just the earlier read-then-check
+    // above) is what actually closes the double-cancel/double-refund race —
+    // two concurrent cancel requests can both pass the read-time check above,
+    // but only one can match this update's status filter; the other affects
+    // zero rows and throws, never reaching the refund logic below. Same
+    // pattern as markDelivered's atomic status guard.
     const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .update({
@@ -404,29 +411,38 @@ export class DatabaseService {
         cancelled_at: new Date().toISOString()
       })
       .eq('id', orderId)
+      .not('status', 'in', '(order_delivered,order_cancelled)')
       .select()
       .single();
 
     if (error) {
-      console.error('Error updating customer order:', error);
-      throw error;
+      console.error('Error updating customer order (already cancelled/delivered by a concurrent request?):', error);
+      throw new Error('Order is already cancelled or was just delivered');
     }
 
-    // Trigger refund if the order was paid online
-    if (
-      customerOrder?.payment_status === 'paid' &&
-      customerOrder?.razorpay_payment_id
-    ) {
+    // Refund whatever's still owed — total_amount minus anything already
+    // refunded (e.g. a prior per-item "unavailable" refund, which sets
+    // payment_status to 'partially_refunded', not 'paid'; the old check only
+    // matched 'paid' so cancelling after a partial refund silently refunded
+    // nothing for the remainder).
+    const alreadyRefunded = Number(customerOrder?.refunded_amount || 0);
+    const remainingToRefund = Number(customerOrder?.total_amount || 0) - alreadyRefunded;
+    const hasRefundableBalance =
+      remainingToRefund > 0.01 &&
+      (customerOrder?.payment_status === 'paid' || customerOrder?.payment_status === 'partially_refunded');
+
+    if (hasRefundableBalance && customerOrder?.razorpay_payment_id) {
       try {
         const { paymentService } = await import('./payment.service.js');
         await paymentService.processRefund({
           paymentId: customerOrder.razorpay_payment_id,
+          amount: remainingToRefund,
           reason: 'Order cancelled by customer'
         });
         console.log('Refund initiated for payment:', customerOrder.razorpay_payment_id);
         await supabaseAdmin
           .from('customer_orders')
-          .update({ payment_status: 'refunded' })
+          .update({ payment_status: 'refunded', refunded_amount: alreadyRefunded + remainingToRefund })
           .eq('id', orderId);
       } catch (refundErr) {
         console.error('Refund failed (order still cancelled):', refundErr);
@@ -437,14 +453,14 @@ export class DatabaseService {
       // money just vanished on cancellation with no refund anywhere. The
       // only place that money can go back to is the same wallet it came
       // from (there's no external gateway payment to reverse).
-      customerOrder?.payment_status === 'paid' &&
+      hasRefundableBalance &&
       customerOrder?.payment_method === 'wallet' &&
       customerOrder?.customer_id
     ) {
       try {
         const { error: refundRpcErr } = await supabaseAdmin.rpc('credit_wallet', {
           p_user_id: customerOrder.customer_id,
-          p_amount: Number(customerOrder.total_amount || 0),
+          p_amount: remainingToRefund,
           p_reason: 'refund',
           p_reference_type: 'order',
           p_reference_id: orderId,
@@ -454,11 +470,34 @@ export class DatabaseService {
         console.log('Wallet refund credited for cancelled order:', orderId);
         await supabaseAdmin
           .from('customer_orders')
-          .update({ payment_status: 'refunded' })
+          .update({ payment_status: 'refunded', refunded_amount: alreadyRefunded + remainingToRefund })
           .eq('id', orderId);
       } catch (refundErr) {
         console.error('Wallet refund failed (order still cancelled):', refundErr);
       }
+    }
+
+    // Restore any coupon usage this order consumed — it was never fulfilled.
+    try {
+      await supabaseAdmin.rpc('release_coupon_usage_for_order', { p_order_id: orderId });
+    } catch (couponErr) {
+      console.error('Failed to release coupon usage on cancel (non-fatal):', couponErr);
+    }
+
+    // Notify the customer and every store that had allocations on this order
+    // — previously nobody was told, so a shopkeeper could keep prepping a
+    // cancelled order until their own screen happened to re-poll.
+    try {
+      const { notificationService } = await import('./notification.service.js');
+      await notificationService.sendOrderNotification(orderId, 'order_cancelled');
+      const storeIds = [...new Set((cancelledStoreOrders || []).map((so: any) => so.store_id).filter(Boolean))];
+      await Promise.all(
+        storeIds.map((storeId) =>
+          notificationService.notifyShopkeeperOrderCancelled(storeId, orderId, customerOrder?.order_code || orderId)
+        )
+      );
+    } catch (notifyErr) {
+      console.error('Failed to send cancellation notifications (non-fatal):', notifyErr);
     }
 
     console.log('Order cancelled successfully:', data);

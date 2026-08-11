@@ -215,6 +215,28 @@ export class NotificationService {
     }
   }
 
+  // Customer-initiated cancellation used to leave the shopkeeper with no
+  // signal beyond their own order list eventually re-polling — they could
+  // keep prepping a cancelled order until that happened to refetch. Mirrors
+  // notifyShopkeeperNewOrder's shape/gating (reuses the 'newOrders'
+  // preference category rather than adding a new one for a single push type).
+  async notifyShopkeeperOrderCancelled(storeId: string, orderId: string, orderCode: string) {
+    const title = 'Order Cancelled';
+    const body = `Order #${orderCode} was cancelled by the customer — no need to prepare it.`;
+
+    await this.persistNotification('store', storeId, 'order_cancelled', title, body, { orderId, storeId });
+
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('expo_push_token, owner_id')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (store?.expo_push_token && (await this.isShopkeeperNotificationEnabled(store.owner_id, 'newOrders'))) {
+      await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'order_cancelled' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });
+    }
+  }
+
   async notifyRiderNewOrder(riderId: string, orderId: string, orderCode: string, storeName: string) {
     const title = 'New Order!';
     const body = `Order #${orderCode} from ${storeName} is waiting for you.`;
