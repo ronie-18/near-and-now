@@ -197,6 +197,19 @@ export class AdminController {
         return res.status(403).json({ error: 'Only super admins can edit other admin accounts, or change role/permissions/status.' });
       }
 
+      // deleteAdmin already blocks self-delete; this closes the equivalent
+      // self-demote/self-deactivate path, which had no recovery route (no
+      // other super_admin needed to exist, so a lone super_admin could lock
+      // themselves out entirely).
+      if (id === req.adminId) {
+        if (role !== undefined && role !== 'super_admin') {
+          return res.status(400).json({ error: 'You cannot change your own role away from super_admin.' });
+        }
+        if (status !== undefined && status !== 'active') {
+          return res.status(400).json({ error: 'You cannot deactivate your own admin account.' });
+        }
+      }
+
       const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (email !== undefined) updateData.email = email.toLowerCase().trim();
       if (full_name !== undefined) updateData.full_name = full_name;

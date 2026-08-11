@@ -34,12 +34,21 @@ const dateOrderCheck = (data: { valid_from?: string; valid_until?: string }) =>
   !data.valid_until || !data.valid_from || new Date(data.valid_until) >= new Date(data.valid_from);
 const dateOrderIssue = { message: 'valid_until must be on or after valid_from', path: ['valid_until'] as (string | number)[] };
 
-const createCouponSchema = couponBaseSchema.refine(dateOrderCheck, dateOrderIssue);
+// discount_value is a percentage for 'percent'/'first_order_discount' types
+// (see computeDiscount() in database.service.ts) — nothing previously capped
+// it at 100, so a typo could publish a >100%-off coupon.
+const percentCheck = (data: { coupon_type?: string; discount_value?: number }) =>
+  (data.coupon_type !== 'percent' && data.coupon_type !== 'first_order_discount') ||
+  data.discount_value == null ||
+  data.discount_value <= 100;
+const percentIssue = { message: 'Percentage discount cannot exceed 100', path: ['discount_value'] as (string | number)[] };
+
+const createCouponSchema = couponBaseSchema.refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
 // Only cross-validated when *both* dates are present in the same request —
 // a partial update touching just one side can't be checked here without
 // fetching the coupon's existing other value first, which this validation
 // middleware layer doesn't do.
-const updateCouponSchema = couponBaseSchema.partial().refine(dateOrderCheck, dateOrderIssue);
+const updateCouponSchema = couponBaseSchema.partial().refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
 
 // Public read (customers need to browse/validate)
 router.get('/active', couponsController.getActiveCoupons.bind(couponsController));

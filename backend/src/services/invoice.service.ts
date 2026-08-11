@@ -185,9 +185,12 @@ async function fetchOrderData(orderId: string) {
   if (storeOrderIds.length) {
     const { data: oi } = await supabaseAdmin
       .from('order_items')
-      .select('id, store_order_id, product_id, product_name, unit, unit_price, quantity')
+      .select('id, store_order_id, product_id, product_name, unit, unit_price, quantity, item_status')
       .in('store_order_id', storeOrderIds);
-    items = oi || [];
+    // Items the shopkeeper marked unavailable were never fulfilled/charged —
+    // excluding them here (rather than at the caller) keeps every invoice
+    // total (subtotal/GST/grand total) consistent by construction.
+    items = (oi || []).filter((it: any) => it.item_status !== 'unavailable');
 
     // Real per-product GST rate for accurate line-item tax reporting (see
     // "Pricing model / GST reference" in bug_fixes_2026-07-16.md). order_items

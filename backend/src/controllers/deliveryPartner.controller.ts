@@ -651,13 +651,17 @@ export class DeliveryPartnerController {
       // markDelivered) writes one row per order once delivered; orders
       // delivered before that existed have no payout row (payout_amount null).
       let payoutByOrder: Record<string, number> = {};
+      let payoutCreatedAtByOrder: Record<string, string> = {};
       if (statusParam === 'completed') {
         const { data: payouts } = await supabaseAdmin
           .from('delivery_partners_payouts')
-          .select('customer_order_id, amount')
+          .select('customer_order_id, amount, created_at')
           .eq('partner_user_id', req.riderId!)
           .in('customer_order_id', orders.map((o: any) => o.id));
-        (payouts || []).forEach((p: any) => { payoutByOrder[p.customer_order_id] = Number(p.amount); });
+        (payouts || []).forEach((p: any) => {
+          payoutByOrder[p.customer_order_id] = Number(p.amount);
+          payoutCreatedAtByOrder[p.customer_order_id] = p.created_at;
+        });
       }
 
       const mapped = orders.map((o: any) => {
@@ -675,6 +679,11 @@ export class DeliveryPartnerController {
           } : null,
           order_items: itemsByOrder[o.id] || [],
           payout_amount: statusParam === 'completed' ? (payoutByOrder[o.id] ?? null) : undefined,
+          // When the payout was actually recorded (i.e. delivery/settlement
+          // time) — distinct from placed_at, which is when the customer
+          // ordered. Used by earnings.tsx to bucket Today/This Week by the
+          // day the rider was actually paid, not order-placement day.
+          payout_created_at: statusParam === 'completed' ? (payoutCreatedAtByOrder[o.id] ?? null) : undefined,
         };
       });
 

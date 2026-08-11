@@ -12,6 +12,9 @@ import {
 import { openRazorpayCheckoutForOrder } from '../services/paymentGateway';
 
 const QUICK_AMOUNTS = [100, 250, 500, 1000];
+// Must match MIN_TOPUP_RUPEES/MAX_TOPUP_RUPEES in backend/src/controllers/wallet.controller.ts
+const MIN_TOPUP = 10;
+const MAX_TOPUP = 50_000;
 
 type TopupPhase = 'idle' | 'preparing' | 'awaiting_gateway' | 'verifying';
 
@@ -85,9 +88,12 @@ const WalletPage = () => {
   const [phase, setPhase] = useState<TopupPhase>('idle');
   const inFlight = useRef(false);
 
+  const TX_PAGE_SIZE = 20;
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(true);
+  const [txLoadingMore, setTxLoadingMore] = useState(false);
   const [txError, setTxError] = useState(false);
+  const [txHasMore, setTxHasMore] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate('/login');
@@ -105,16 +111,36 @@ const WalletPage = () => {
     if (!isAuthenticated) return;
     setTxLoading(true);
     setTxError(false);
-    getWalletTransactions()
-      .then(setTransactions)
+    getWalletTransactions(TX_PAGE_SIZE, 0)
+      .then((txs) => {
+        setTransactions(txs);
+        setTxHasMore(txs.length === TX_PAGE_SIZE);
+      })
       .catch(() => setTxError(true))
       .finally(() => setTxLoading(false));
   }, [isAuthenticated]);
 
+  const loadMoreTransactions = useCallback(() => {
+    setTxLoadingMore(true);
+    getWalletTransactions(TX_PAGE_SIZE, transactions.length)
+      .then((txs) => {
+        setTransactions((prev) => [...prev, ...txs]);
+        setTxHasMore(txs.length === TX_PAGE_SIZE);
+      })
+      .catch(() => setTxError(true))
+      .finally(() => setTxLoadingMore(false));
+  }, [transactions.length]);
+
   useEffect(() => { fetchTransactions(); }, [fetchTransactions]);
 
   const finalAmount = custom.trim() !== '' ? Number(custom) : selected;
-  const isValid = finalAmount != null && finalAmount > 0 && Number.isFinite(finalAmount);
+  const isValid =
+    finalAmount != null &&
+    Number.isFinite(finalAmount) &&
+    finalAmount >= MIN_TOPUP &&
+    finalAmount <= MAX_TOPUP;
+  const customOutOfRange =
+    custom.trim() !== '' && Number.isFinite(Number(custom)) && !isValid;
 
   const handleAddMoney = async () => {
     if (!isValid || inFlight.current) return;
@@ -213,6 +239,11 @@ const WalletPage = () => {
                 maxLength={6}
               />
             </div>
+            {customOutOfRange && (
+              <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>
+                Amount must be between ₹{MIN_TOPUP} and ₹{MAX_TOPUP.toLocaleString('en-IN')}
+              </div>
+            )}
 
             <button
               className="wp-add-btn"
@@ -262,6 +293,13 @@ const WalletPage = () => {
                   </div>
                 </div>
               ))}
+              {txHasMore && (
+                <div style={{ textAlign: 'center', marginTop: 16 }}>
+                  <button className="wp-tx-retry" onClick={loadMoreTransactions} disabled={txLoadingMore}>
+                    {txLoadingMore ? 'Loading…' : 'Load more'}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

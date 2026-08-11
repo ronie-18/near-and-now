@@ -48,8 +48,8 @@ function validateSubmissionFields(body: SubmitBody): { ok: true; fields: Validat
   if (!category) return { ok: false, error: 'Category is required' };
   if (!imageUrl) return { ok: false, error: 'Product image is required' };
   if (!unit) return { ok: false, error: 'Unit is required' };
-  if (!Number.isFinite(basePrice) || basePrice < 0) return { ok: false, error: 'Enter a valid base (MRP) price' };
-  if (!Number.isFinite(discountedPrice) || discountedPrice < 0) return { ok: false, error: 'Enter a valid selling price' };
+  if (!Number.isFinite(basePrice) || basePrice <= 0) return { ok: false, error: 'Enter a valid base (MRP) price' };
+  if (!Number.isFinite(discountedPrice) || discountedPrice <= 0) return { ok: false, error: 'Enter a valid selling price' };
   if (discountedPrice > basePrice) return { ok: false, error: 'Selling price cannot be higher than base price' };
 
   const minQuantity = Number.isFinite(Number(body.min_quantity)) ? Number(body.min_quantity) : 1;

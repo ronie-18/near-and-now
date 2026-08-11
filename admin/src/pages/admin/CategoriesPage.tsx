@@ -173,11 +173,20 @@ const CategoriesPage = () => {
   // Handle category deletion
   const handleDeleteCategory = async (id: string, categoryName: string) => {
     const hasProducts = productCounts[id] > 0;
-    const confirmMessage = hasProducts
-      ? `This category "${categoryName}" has ${productCounts[id]} product(s). Are you sure you want to delete it?`
-      : `Are you sure you want to delete "${categoryName}"?`;
 
-    if (confirm(confirmMessage)) {
+    // The DB FK (master_products.category -> categories.name) is ON DELETE
+    // CASCADE, so deleting a non-empty category permanently deletes every
+    // product in it, not just orphans them. Block outright rather than
+    // warning-and-proceeding — there's no undo.
+    if (hasProducts) {
+      setError(
+        `Cannot delete "${categoryName}": it still has ${productCounts[id]} product(s). ` +
+          `Move or delete those products first, then delete the category.`
+      );
+      return;
+    }
+
+    if (confirm(`Are you sure you want to delete "${categoryName}"?`)) {
       try {
         setDeleteLoading(id);
         setError(null);
