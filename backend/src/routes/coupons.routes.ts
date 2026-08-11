@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { CouponsController } from '../controllers/coupons.controller.js';
 import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
@@ -50,9 +51,23 @@ const createCouponSchema = couponBaseSchema.refine(dateOrderCheck, dateOrderIssu
 // middleware layer doesn't do.
 const updateCouponSchema = couponBaseSchema.partial().refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
 
+// This was the only auth-gated write/lookup endpoint in the codebase with no
+// throttle at all — a scripted loop from any authenticated customer session
+// could brute-force-guess coupon codes with no rate limit, and the response
+// (coupon object vs 400) is a clean success/fail oracle. Found 2026-08-11
+// during a rate-limiting audit.
+const couponValidateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  keyGenerator: (req) => req.customerId || req.ip || 'unknown',
+  message: { error: 'Too many attempts. Please wait a few minutes before trying again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Public read (customers need to browse/validate)
 router.get('/active', couponsController.getActiveCoupons.bind(couponsController));
-router.post('/validate', requireCustomer, couponsController.validateCoupon.bind(couponsController));
+router.post('/validate', requireCustomer, couponValidateLimiter, couponsController.validateCoupon.bind(couponsController));
 
 // Admin-only: full CRUD
 router.get('/', requireAdmin, requirePermission('coupons.view'), couponsController.getCoupons.bind(couponsController));

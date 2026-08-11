@@ -6,12 +6,15 @@ import { databaseService } from '../services/database.service.js';
 import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
+import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
   DOC_TYPES,
+  type DocType,
   MAX_DOC_SIZE_BYTES,
   SIGNED_URL_TTL_SECONDS,
+  SUSPENSION_TRIGGER_DOC_TYPES,
   VEHICLE_TYPES,
   VERIFICATION_DOCS_BUCKET,
   docNumberErrorMessage,
@@ -34,7 +37,10 @@ type UploadedFile = { buffer: Buffer; mimetype: string; size: number };
  * both (the name for the admin-notification message). Mirrors
  * storeOwner.controller.ts's suspendStoreIfApprovedAndGetName.
  */
-export async function suspendRiderIfApprovedAndGetName(riderId: string): Promise<{ suspended: boolean; name: string }> {
+export async function suspendRiderIfApprovedAndGetName(
+  riderId: string,
+  docType?: DocType
+): Promise<{ suspended: boolean; name: string }> {
   const { data: partner } = await supabaseAdmin
     .from('delivery_partners')
     .select('name, is_approved')
@@ -42,7 +48,13 @@ export async function suspendRiderIfApprovedAndGetName(riderId: string): Promise
     .maybeSingle();
 
   const name = partner?.name || 'A delivery partner';
-  if (!partner?.is_approved) return { suspended: false, name };
+  // docType is optional for callers with no single document in play (e.g. a
+  // bulk/manual admin action) — those still suspend unconditionally. Callers
+  // that DO know the doc type (document save/delete) only suspend for
+  // identity documents, matching the store side's pattern.
+  if (!partner?.is_approved || (docType && !SUSPENSION_TRIGGER_DOC_TYPES.has(docType))) {
+    return { suspended: false, name };
+  }
 
   // is_online: false too — broadcastToNearbyDrivers (shopkeeper.controller.ts)
   // only filters on is_online/status, not is_approved, so a rider suspended
@@ -1454,6 +1466,9 @@ export class DeliveryPartnerController {
         if (!ext) {
           return res.status(400).json({ success: false, error: 'Unsupported file type' });
         }
+        if (!fileMatchesDeclaredExt(file.buffer, ext)) {
+          return res.status(400).json({ success: false, error: 'File content does not match its declared type' });
+        }
         if (file.size > MAX_DOC_SIZE_BYTES) {
           return res.status(400).json({
             success: false,
@@ -1518,7 +1533,33 @@ export class DeliveryPartnerController {
           .eq('user_id', riderId);
       }
 
-      const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId);
+      const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId, docType);
+
+      // No uniqueness constraint exists on identity-document numbers across
+      // partners — a rider rejected/offboarded for a suspicious Aadhaar/PAN
+      // could otherwise sign up again under a new phone/email and resubmit
+      // the identical document number with nothing flagging it to admins.
+      // This doesn't block the save (a false positive — e.g. a genuine typo
+      // colliding with an unrelated real number — shouldn't lock a rider out
+      // of onboarding); it just surfaces the collision for admin review, same
+      // "flag, don't block" posture as this codebase's other soft-signal
+      // notifications. Found 2026-08-11 during a rider-onboarding audit.
+      if (number && (docType === 'aadhaar_front' || docType === 'pan_front')) {
+        const { data: duplicates } = await supabaseAdmin
+          .from('delivery_partner_verification_documents')
+          .select('partner_id')
+          .eq('doc_type', docType)
+          .eq('number', number)
+          .neq('partner_id', riderId);
+        if (duplicates && duplicates.length > 0) {
+          await notifyAdminsOfRiderDocs(
+            'rider_document_number_duplicate',
+            'Possible duplicate document number',
+            `${riderName}'s ${DOC_LABELS[docType]} number matches ${duplicates.length} other rider account(s) already on file — please review before approving.`,
+            { partner_id: riderId, doc_type: docType, duplicate_partner_ids: duplicates.map((d: any) => d.partner_id) }
+          );
+        }
+      }
 
       const isFirstUploadForThisSlot = !!file && !existing?.storage_path;
       await notifyAdminsOfRiderDocs(
@@ -1602,7 +1643,7 @@ export class DeliveryPartnerController {
         .update(partnerUpdate)
         .eq('user_id', riderId);
 
-      const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId);
+      const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId, docType);
 
       await notifyAdminsOfRiderDocs(
         'rider_document_removed',

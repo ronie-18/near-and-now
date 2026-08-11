@@ -32,8 +32,23 @@ const emailCodeLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// The 4-digit code (10,000 possibilities) had no failed-attempt lockout at
+// all — only the send step was limited — so a scripted loop could plausibly
+// brute-force it inside its own 5-minute TTL and mark an email the attacker
+// doesn't own as verified. Same skipSuccessfulRequests shape as the rider
+// app's verifyDeliveryOtpLimiter. Found 2026-08-11 during a rate-limiting audit.
+const verifyEmailLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 5,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => req.customerId || req.ip || 'unknown',
+  message: { error: 'Too many incorrect attempts. Please request a new code.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 router.post('/email/change', requireCustomer, emailCodeLimiter, (req, res) => customersController.changeEmail(req, res));
 router.post('/email/resend', requireCustomer, emailCodeLimiter, (req, res) => customersController.resendEmailVerification(req, res));
-router.post('/email/verify', requireCustomer, (req, res) => customersController.verifyEmail(req, res));
+router.post('/email/verify', requireCustomer, verifyEmailLimiter, (req, res) => customersController.verifyEmail(req, res));
 
 export default router;

@@ -57,6 +57,21 @@ export function isVehicleRegistrationRequired(vehicleType: string | null | undef
 }
 
 /**
+ * Which document types re-suspend an already-approved rider when edited.
+ * Previously ANY document edit — including a low-stakes vehicle photo —
+ * suspended an active rider mid-shift, unlike the store side's
+ * ONBOARDING_REQUIRED_DOC_TYPES-gated suspendStoreIfApprovedAndGetName
+ * (built 2026-08-06 to only suspend on Aadhaar/PAN edits). Mirrors that same
+ * "only identity documents matter for re-verification" rule — driving
+ * license, vehicle registration, and vehicle photos can be re-uploaded
+ * without knocking an approved rider offline. Found 2026-08-11 during a
+ * rider-onboarding audit.
+ */
+export const SUSPENSION_TRIGGER_DOC_TYPES = new Set<DocType>([
+  'aadhaar_front', 'aadhaar_back', 'pan_front', 'pan_back',
+]);
+
+/**
  * Format checks for the centrally-standardized documents. Driving License and
  * Vehicle Registration deliberately have no entry — like Trade License on the
  * shopkeeper side, they're issued by state RTOs with no single fixed national

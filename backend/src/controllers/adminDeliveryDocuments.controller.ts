@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import {
+  DOC_LABELS,
   DOC_TYPES,
   SIGNED_URL_TTL_SECONDS,
   VERIFICATION_DOCS_BUCKET,
@@ -174,9 +175,10 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
     let riderName: string | undefined;
     let riderSuspended = false;
     if (status === 'rejected') {
-      const result = await suspendRiderIfApprovedAndGetName(partnerId);
+      const result = await suspendRiderIfApprovedAndGetName(partnerId, docType);
       riderName = result.name;
       riderSuspended = result.suspended;
+      await notificationService.notifyRiderDocumentRejected(partnerId, DOC_LABELS[docType], reason);
     } else {
       const { data: rider } = await supabaseAdmin.from('app_users').select('name').eq('id', partnerId).maybeSingle();
       riderName = rider?.name;

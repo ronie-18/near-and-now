@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
+import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -985,6 +986,9 @@ export async function saveVerificationDocument(req: Request, res: Response) {
       if (!ext) {
         return res.status(400).json({ success: false, error: 'Unsupported file type' });
       }
+      if (!fileMatchesDeclaredExt(file.buffer, ext)) {
+        return res.status(400).json({ success: false, error: 'File content does not match its declared type' });
+      }
       if (file.size > MAX_DOC_SIZE_BYTES) {
         return res.status(400).json({
           success: false,
@@ -1268,6 +1272,9 @@ export async function saveBillingInfo(req: Request, res: Response) {
       const ext = ALLOWED_DOC_MIME_TYPES[file.mimetype];
       if (!ext) {
         return res.status(400).json({ success: false, error: 'Unsupported file type' });
+      }
+      if (!fileMatchesDeclaredExt(file.buffer, ext)) {
+        return res.status(400).json({ success: false, error: 'File content does not match its declared type' });
       }
       if (file.size > MAX_DOC_SIZE_BYTES) {
         return res.status(400).json({ success: false, error: `File exceeds ${MAX_DOC_SIZE_BYTES / (1024 * 1024)}MB limit` });

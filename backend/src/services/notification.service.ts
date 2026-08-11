@@ -344,6 +344,33 @@ export class NotificationService {
     }
   }
 
+  // A rejected verification document previously sent no rider-facing signal
+  // at all (only an admin-audit-trail entry via notifyAdminsOfReviewAction)
+  // — unlike notifyRiderApproved/notifyRiderProfileChangeReviewed, which both
+  // push+persist. A rider who doesn't reopen the Documents screen could sit
+  // rejected indefinitely with zero notice. Approval of an individual
+  // document is deliberately NOT pushed here — that's a routine, expected
+  // step toward overall approval (which notifyRiderApproved already
+  // announces); only the rejection outcome needs an explicit nudge. Same
+  // ungated-push precedent as notifyRiderProfileChangeReviewed. Found
+  // 2026-08-11 during a rider-onboarding audit.
+  async notifyRiderDocumentRejected(riderId: string, docLabel: string, rejectionReason?: string | null) {
+    const title = 'Document Rejected';
+    const body = `Your ${docLabel} was rejected${rejectionReason ? `: ${rejectionReason}` : '.'} Please re-upload it.`;
+
+    await this.persistNotification('rider', riderId, 'document_rejected', title, body, { riderId, docLabel, rejectionReason: rejectionReason ?? null });
+
+    const { data: partner } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('expo_push_token')
+      .eq('user_id', riderId)
+      .maybeSingle();
+
+    if (partner?.expo_push_token) {
+      await this.sendExpoPush(partner.expo_push_token, title, body, { riderId, type: 'document_rejected' }, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
+    }
+  }
+
   /**
    * Broadcasts one admin's review action (approve/reject on a profile-change
    * request, verification document, or product submission) to the shared
