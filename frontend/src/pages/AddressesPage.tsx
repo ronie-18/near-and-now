@@ -214,6 +214,7 @@ const AddressesPage = () => {
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingAddress, setEditingAddress] = useState<Address | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '', addressLine1: '', addressLine2: '',
@@ -288,6 +289,7 @@ const AddressesPage = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!formData.name || !formData.addressLine1 || !formData.city || !formData.state || !formData.pincode || !formData.phone) {
       showNotification('Please fill all required fields', 'error'); return;
     }
@@ -299,6 +301,7 @@ const AddressesPage = () => {
     }
     if (!user?.id) { showNotification('User not authenticated', 'error'); return; }
 
+    setIsSubmitting(true);
     try {
       const fullAddress = [formData.addressLine1, formData.addressLine2, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
       const geocoded = await geocodeAddress(fullAddress);
@@ -330,6 +333,8 @@ const AddressesPage = () => {
     } catch (error) {
       console.error('Error saving address:', error);
       showNotification('Failed to save address. Please try again.', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -552,11 +557,11 @@ const AddressesPage = () => {
                   onClick={() => { setShowAddForm(false); setEditingAddress(null); }}>
                   Cancel
                 </button>
-                <button type="submit" className="ap-btn-primary">
+                <button type="submit" className="ap-btn-primary" disabled={isSubmitting}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M5 13l4 4L19 7" />
                   </svg>
-                  {editingAddress ? 'Update Address' : 'Save Address'}
+                  {isSubmitting ? 'Saving…' : editingAddress ? 'Update Address' : 'Save Address'}
                 </button>
               </div>
             </form>

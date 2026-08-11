@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getAdminToken } from '../../services/adminSession';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { hasPermission } from '../../services/adminAuthService';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { Wallet, CheckCircle, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -41,6 +43,8 @@ function formatINR(value: number): string {
  * 2026-08-11 during a payout-flow audit.
  */
 const RiderPayoutsPage = () => {
+  const currentAdmin = getCurrentAdmin();
+  const canMarkPaid = Boolean(currentAdmin && hasPermission(currentAdmin, 'payments.edit'));
   const [payouts, setPayouts] = useState<RiderPayout[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -170,13 +174,17 @@ const RiderPayoutsPage = () => {
                     </td>
                     {statusFilter === 'pending' && (
                       <td className="px-5 py-3 text-right">
-                        <button
-                          onClick={() => handleMarkPaid(p.id)}
-                          disabled={actionLoading === p.id}
-                          className="inline-flex items-center px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold disabled:opacity-50 hover:bg-emerald-700"
-                        >
-                          <CheckCircle size={13} className="mr-1" /> Mark paid
-                        </button>
+                        {canMarkPaid ? (
+                          <button
+                            onClick={() => handleMarkPaid(p.id)}
+                            disabled={actionLoading === p.id}
+                            className="inline-flex items-center px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold disabled:opacity-50 hover:bg-emerald-700"
+                          >
+                            <CheckCircle size={13} className="mr-1" /> Mark paid
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">No permission</span>
+                        )}
                       </td>
                     )}
                   </tr>

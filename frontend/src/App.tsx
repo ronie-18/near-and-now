@@ -28,6 +28,7 @@ import AddressesPage from './pages/AddressesPage';
 import AboutPage from './pages/AboutPage';
 import HelpPage from './pages/HelpPage';
 import DeliveryPartnerPage from './pages/DeliveryPartnerPage';
+import NotFoundPage from './pages/NotFoundPage';
 
 // Policy pages
 import TermsOfServicePage from './pages/policies/TermsOfServicePage';
@@ -88,6 +89,8 @@ const AppContent: React.FC = () => {
             <Route path="/refund" element={<RefundPolicyPage />} />
             <Route path="/returns" element={<RefundPolicyPage />} />
             <Route path="/payment-options" element={<PaymentOptionsPage />} />
+            {/* Must stay last — matches any path none of the routes above did */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Layout>
       } />

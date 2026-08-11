@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { getAdminToken } from '../../services/adminSession';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { hasPermission } from '../../services/adminAuthService';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { MessageCircle, CheckCircle, Loader2, AlertCircle, RefreshCw, Send } from 'lucide-react';
 
@@ -43,6 +45,8 @@ const SupportMessagesPage = () => {
   // so filtered-out) message landed on a page with no sign the message ever
   // existed. Found 2026-08-11.
   const { id: targetId } = useParams<{ id?: string }>();
+  const currentAdmin = getCurrentAdmin();
+  const canReply = Boolean(currentAdmin && hasPermission(currentAdmin, 'support_messages.edit'));
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -223,7 +227,10 @@ const SupportMessagesPage = () => {
                   </div>
                 )}
 
-                {m.status === 'open' && (
+                {m.status === 'open' && !canReply && (
+                  <p className="mt-4 text-xs text-gray-400">You don&apos;t have permission to reply to messages.</p>
+                )}
+                {m.status === 'open' && canReply && (
                   <div className="mt-4 flex items-start gap-2">
                     <textarea
                       value={replyDrafts[m.id] || ''}
