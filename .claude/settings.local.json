@@ -89,7 +89,8 @@
       "Bash(npm audit *)",
       "Bash(npm ls *)",
       "Bash(npm view *)",
-      "Bash(npx depcheck *)"
+      "Bash(npx depcheck *)",
+      "Bash(supabase link *)"
     ],
     "additionalDirectories": [
       "/tmp"

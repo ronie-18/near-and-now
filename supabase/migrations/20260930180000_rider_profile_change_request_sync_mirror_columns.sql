@@ -8,6 +8,11 @@
 -- on one side or the other — invisible for brand-new riders (both tables are
 -- written together at signup) but permanent for existing riders who edit
 -- their profile. This makes both writes update both tables on approval.
+--
+-- Rebased against the LIVE function definition (not just the original
+-- 20260908000000 migration file) since 20260930120000 had already added
+-- upi_id handling to the delivery_partners UPDATE in production — that
+-- branch is preserved as-is below, only name/email get the new dual-write.
 
 CREATE OR REPLACE FUNCTION public.review_rider_profile_change_request(
   p_request_id UUID,
@@ -53,10 +58,11 @@ BEGIN
       WHERE user_id = v_request.rider_id;
     END IF;
 
-    IF (v_request.changes ? 'email') OR (v_request.changes ? 'address') THEN
+    IF (v_request.changes ? 'email') OR (v_request.changes ? 'address') OR (v_request.changes ? 'upi_id') THEN
       UPDATE public.delivery_partners SET
         email = COALESCE(v_request.changes -> 'email' ->> 'new', email),
         address = COALESCE(v_request.changes -> 'address' ->> 'new', address),
+        upi_id = COALESCE(v_request.changes -> 'upi_id' ->> 'new', upi_id),
         updated_at = NOW()
       WHERE user_id = v_request.rider_id;
 
