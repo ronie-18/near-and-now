@@ -1511,3 +1511,30 @@ export async function createSupportMessage(req: Request, res: Response) {
     res.status(500).json({ success: false, error: error?.message || 'Failed to send message' });
   }
 }
+
+/**
+ * A shopkeeper's own submitted messages, including any admin reply — the
+ * "does the user ever see the response" half of the support flow, which
+ * previously had no answer at all (admin had no way to reply, so there was
+ * nothing to surface here either). Found 2026-08-11 during a support-flow audit.
+ */
+export async function getMySupportMessages(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const { data, error } = await supabaseAdmin
+      .from('support_messages')
+      .select('id, message, status, admin_reply, replied_at, created_at')
+      .eq('sender_role', 'shopkeeper')
+      .eq('sender_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (error) throw error;
+
+    res.json({ success: true, messages: data || [] });
+  } catch (error: any) {
+    console.error('❌ getMySupportMessages error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch messages' });
+  }
+}

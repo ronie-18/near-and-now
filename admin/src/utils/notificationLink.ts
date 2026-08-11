@@ -50,6 +50,12 @@ export function getNotificationLink(type: string, data: Record<string, any> | nu
       return '/stores';
     case 'rider_status_changed':
       return '/delivery';
+    // Same missing-case bug class already fixed for profile_change_request
+    // (2026-07-27) — this one simply fell into `default: null` too, so
+    // clicking a support-message notification just marked it read with no
+    // navigation. Found 2026-08-11 during a support-flow audit.
+    case 'support_message':
+      return d.support_message_id ? `/support-messages/${d.support_message_id}` : '/support-messages';
     default:
       return null;
   }

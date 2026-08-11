@@ -32,6 +32,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, string[]> = {
     'product_submissions.*',
     'profile_change_requests.*',
     'activity_log.view',
+    'support_messages.*',
   ],
   manager: [
     'products.view',
@@ -49,6 +50,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, string[]> = {
     'payments.view',
     'product_submissions.view',
     'activity_log.view',
+    'support_messages.view',
   ],
   viewer: [
     'products.view',
@@ -65,6 +67,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, string[]> = {
     'payments.view',
     'product_submissions.view',
     'activity_log.view',
+    'support_messages.view',
   ],
 };
 

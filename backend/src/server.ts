@@ -27,6 +27,8 @@ import adminStoresRoutes from './routes/adminStores.routes.js';
 import adminStoreProductsRoutes from './routes/adminStoreProducts.routes.js';
 import adminProductSubmissionsRoutes from './routes/adminProductSubmissions.routes.js';
 import adminActivityLogRoutes from './routes/adminActivityLog.routes.js';
+import adminSupportMessagesRoutes from './routes/adminSupportMessages.routes.js';
+import adminRiderPayoutsRoutes from './routes/adminRiderPayouts.routes.js';
 import walletRoutes from './routes/wallet.routes.js';
 
 // Load .env from backend and project root
@@ -110,6 +112,8 @@ app.use('/api/admin', adminStoresRoutes);
 app.use('/api/admin', adminStoreProductsRoutes);
 app.use('/api/admin', adminProductSubmissionsRoutes);
 app.use('/api/admin', adminActivityLogRoutes);
+app.use('/api/admin', adminSupportMessagesRoutes);
+app.use('/api/admin', adminRiderPayoutsRoutes);
 app.use('/api/wallet', walletRoutes);
 
 app.get('/health', (_req, res) => {

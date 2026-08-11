@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages } from '../controllers/storeOwner.controller.js';
 import { MAX_DOC_SIZE_BYTES } from '../utils/verificationDocuments.js';
 
 const router = Router();
@@ -28,5 +28,6 @@ router.get('/notifications', getStoreNotifications);
 router.put('/notifications/read-all', markAllStoreNotificationsRead);
 router.put('/notifications/:notificationId/read', markStoreNotificationRead);
 router.post('/support-messages', createSupportMessage);
+router.get('/support-messages', getMySupportMessages);
 
 export default router;

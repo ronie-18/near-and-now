@@ -20,7 +20,9 @@ import {
   X,
   Store,
   FileText,
-  History
+  History,
+  MessageCircle,
+  Wallet
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
@@ -202,6 +204,16 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
           title: 'Activity Log',
           path: '/activity-log',
           icon: <History size={18} />
+        },
+        {
+          title: 'Support Messages',
+          path: '/support-messages',
+          icon: <MessageCircle size={18} />
+        },
+        {
+          title: 'Rider Payouts',
+          path: '/rider-payouts',
+          icon: <Wallet size={18} />
         },
         {
           title: 'Admin Users',

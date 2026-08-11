@@ -237,6 +237,28 @@ export class NotificationService {
     }
   }
 
+  // Support messages previously had no reply mechanism at all — an admin
+  // replying now at least pushes+persists to the shopkeeper who sent it, the
+  // same shape as every other admin-review-outcome notification. Deliberately
+  // ungated, same account-status/response-outcome precedent as
+  // notifyRiderProfileChangeReviewed. Found 2026-08-11 during a support-flow audit.
+  async notifyShopkeeperSupportReply(storeId: string, reply: string) {
+    const title = 'Support Team Replied';
+    const body = reply.length > 120 ? `${reply.slice(0, 117)}...` : reply;
+
+    await this.persistNotification('store', storeId, 'support_reply', title, body, { reply });
+
+    const { data: store } = await supabaseAdmin
+      .from('stores')
+      .select('expo_push_token')
+      .eq('id', storeId)
+      .maybeSingle();
+
+    if (store?.expo_push_token) {
+      await this.sendExpoPush(store.expo_push_token, title, body, { type: 'support_reply' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });
+    }
+  }
+
   async notifyRiderNewOrder(riderId: string, orderId: string, orderCode: string, storeName: string) {
     const title = 'New Order!';
     const body = `Order #${orderCode} from ${storeName} is waiting for you.`;
