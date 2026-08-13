@@ -4,7 +4,10 @@ import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { authenticateAdmin } from '../../services/adminAuthService';
 import { setAdminSession } from '../../services/adminSession';
 import { isAdminAuthenticated } from '../../services/secureAdminAuth';
-import logoUrl from '../../../../near_now_image.png';
+// Was the repo-root near_now_image.png (781KB, 1315x1196px) displayed at
+// 64x64px — a properly-sized/compressed copy (9KB) is used instead. Found
+// 2026-08-13 during an optimization pass.
+import logoUrl from '../../assets/login-logo.png';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');

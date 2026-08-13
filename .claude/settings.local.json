@@ -91,7 +91,12 @@
       "Bash(npm view *)",
       "Bash(npx depcheck *)",
       "Bash(supabase link *)",
-      "Bash(xargs -I{} echo {})"
+      "Bash(xargs -I{} echo {})",
+      "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node \"/private/tmp/claude-501/-Users-tiasmondal166-projects-near-and-now/839ae97e-cd43-4bf9-be41-b0d90e1793e4/scratchpad/rider_login_phase1.js\")",
+      "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node \"/private/tmp/claude-501/-Users-tiasmondal166-projects-near-and-now/839ae97e-cd43-4bf9-be41-b0d90e1793e4/scratchpad/rider_login_phase2.js\" 307758)",
+      "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node \"/private/tmp/claude-501/-Users-tiasmondal166-projects-near-and-now/839ae97e-cd43-4bf9-be41-b0d90e1793e4/scratchpad/rider_login_phase2.js\" 473623)",
+      "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node /tmp/rider_phase2_debug.js)",
+      "Bash(sed -i.bak \"s/473623/517589/\" /tmp/rider_phase2_debug.js)"
     ],
     "additionalDirectories": [
       "/tmp"

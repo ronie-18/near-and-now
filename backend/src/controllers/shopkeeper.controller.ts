@@ -253,7 +253,7 @@ export class ShopkeeperController {
       // their list, or hit the endpoint directly.
       const { data: parentOrder } = await supabaseAdmin
         .from('customer_orders')
-        .select('payment_status, payment_method')
+        .select('payment_status, payment_method, delivery_otp')
         .eq('id', alloc.order_id)
         .maybeSingle();
       if (parentOrder && parentOrder.payment_method !== 'cod' && parentOrder.payment_status !== 'paid') {
@@ -270,7 +270,33 @@ export class ShopkeeperController {
       const allItemIds = (allItems || []).map((i: any) => i.id);
       const unavailableIds = allItemIds.filter((id: string) => !accepted_item_ids.includes(id));
 
-      const code = randomFourDigit();
+      // Regenerate on collision with the order's delivery_otp OR any sibling
+      // store's already-accepted pickup_code (multi-store orders can have
+      // several allocations, each with its own independently-random code) —
+      // none of these were ever guaranteed distinct from each other. Pickup
+      // codes go to shopkeepers, delivery OTP goes to the customer; a
+      // coincidental match would mean one party's code also verifies a
+      // different handoff, and two stores sharing a code in the same order
+      // risks a rider genuinely mixing them up even though the backend
+      // checks each against its own specific allocation. Found 2026-08-13
+      // via the map/handoff implementation deep dive.
+      const { data: siblingAllocs } = await supabaseAdmin
+        .from('order_store_allocations')
+        .select('pickup_code')
+        .eq('order_id', alloc.order_id)
+        .neq('id', allocationId)
+        .not('pickup_code', 'is', null);
+      const takenCodes = new Set<string>(
+        (siblingAllocs || []).map((a: any) => a.pickup_code as string).filter(Boolean)
+      );
+      if (parentOrder?.delivery_otp) takenCodes.add(parentOrder.delivery_otp);
+
+      let code = randomFourDigit();
+      let attempts = 0;
+      while (takenCodes.has(code) && attempts < 20) {
+        code = randomFourDigit();
+        attempts++;
+      }
 
       // Confirm accepted items, unassign unavailable ones for reallocation.
       // The `.eq('status', 'pending_acceptance')` guard here (not just on the

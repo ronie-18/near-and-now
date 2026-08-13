@@ -38,9 +38,10 @@ const CartItem = ({ item }: CartItemProps) => {
     <div className="flex items-start border-b border-gray-200 pb-4">
       {/* Product Image */}
       <div className="w-20 h-20 flex-shrink-0 bg-gray-100 rounded-md overflow-hidden">
-        <img 
-          src={item.image || 'https://via.placeholder.com/80x80?text=No+Image'} 
+        <img
+          src={item.image || 'https://via.placeholder.com/80x80?text=No+Image'}
           alt={item.name}
+          loading="lazy"
           className="w-full h-full object-cover"
         />
       </div>

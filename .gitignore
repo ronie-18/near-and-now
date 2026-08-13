@@ -58,3 +58,6 @@ web-build/
 *.sw?
 .claude/settings.local.json
 .claude/settings.local.json
+
+# Backup files created by sed -i.bak etc — never track, may contain secrets from .env backups
+*.bak

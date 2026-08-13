@@ -1,36 +1,43 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense, lazy } from 'react';
 import { Route, Routes, Navigate } from 'react-router-dom';
-import AdminDashboardPage from '../pages/admin/AdminDashboardPage';
-import ProductsPage from '../pages/admin/ProductsPage';
-import AddProductPage from '../pages/admin/AddProductPage';
-import EditProductPage from '../pages/admin/EditProductPage';
-import OrdersPage from '../pages/admin/OrdersPage';
-import OrderDetailPage from '../pages/admin/OrderDetailPage';
-import CustomersPage from '../pages/admin/CustomersPage';
-import CustomerDetailPage from '../pages/admin/CustomerDetailPage';
-import CategoriesPage from '../pages/admin/CategoriesPage';
-import AddCategoryPage from '../pages/admin/AddCategoryPage';
-import EditCategoryPage from '../pages/admin/EditCategoryPage';
-import ReportsPage from '../pages/admin/ReportsPage';
-import AdminManagementPage from '../pages/admin/AdminManagementPage';
-import CreateAdminPage from '../pages/admin/CreateAdminPage';
-import EditAdminPage from '../pages/admin/EditAdminPage';
-import DeliveryPage from '../pages/admin/DeliveryPage';
-import OffersPage from '../pages/admin/OffersPage';
-import SettingsPage from '../pages/admin/SettingsPage';
-import ProfilePage from '../pages/admin/ProfilePage';
-import HelpPage from '../pages/admin/HelpPage';
-import NotificationsPage from '../pages/admin/NotificationsPage';
-import StoresPage from '../pages/admin/StoresPage';
-import StoreProductsPage from '../pages/admin/StoreProductsPage';
-import StoreProfileChangeRequestsPage from '../pages/admin/StoreProfileChangeRequestsPage';
-import RiderProfileChangeRequestsPage from '../pages/admin/RiderProfileChangeRequestsPage';
-import ProductSubmissionsPage from '../pages/admin/ProductSubmissionsPage';
-import ActivityLogPage from '../pages/admin/ActivityLogPage';
-import SupportMessagesPage from '../pages/admin/SupportMessagesPage';
-import RiderPayoutsPage from '../pages/admin/RiderPayoutsPage';
-import SecurityLogPage from '../pages/admin/SecurityLogPage';
 import { isAdminAuthenticated } from '../services/secureAdminAuth';
+import PageLoadingFallback from '../components/PageLoadingFallback';
+// AdminDashboardPage stays a static import — mounted at "/", the most
+// common landing page after login, so it renders with no Suspense flash.
+// Every other page is lazy: previously all 30 admin pages were bundled into
+// one ~470KB (87KB gzip) JS chunk downloaded on every login regardless of
+// which page was actually visited. Found 2026-08-13 during an optimization
+// pass (same fix already applied to the website's App.tsx).
+import AdminDashboardPage from '../pages/admin/AdminDashboardPage';
+const ProductsPage = lazy(() => import('../pages/admin/ProductsPage'));
+const AddProductPage = lazy(() => import('../pages/admin/AddProductPage'));
+const EditProductPage = lazy(() => import('../pages/admin/EditProductPage'));
+const OrdersPage = lazy(() => import('../pages/admin/OrdersPage'));
+const OrderDetailPage = lazy(() => import('../pages/admin/OrderDetailPage'));
+const CustomersPage = lazy(() => import('../pages/admin/CustomersPage'));
+const CustomerDetailPage = lazy(() => import('../pages/admin/CustomerDetailPage'));
+const CategoriesPage = lazy(() => import('../pages/admin/CategoriesPage'));
+const AddCategoryPage = lazy(() => import('../pages/admin/AddCategoryPage'));
+const EditCategoryPage = lazy(() => import('../pages/admin/EditCategoryPage'));
+const ReportsPage = lazy(() => import('../pages/admin/ReportsPage'));
+const AdminManagementPage = lazy(() => import('../pages/admin/AdminManagementPage'));
+const CreateAdminPage = lazy(() => import('../pages/admin/CreateAdminPage'));
+const EditAdminPage = lazy(() => import('../pages/admin/EditAdminPage'));
+const DeliveryPage = lazy(() => import('../pages/admin/DeliveryPage'));
+const OffersPage = lazy(() => import('../pages/admin/OffersPage'));
+const SettingsPage = lazy(() => import('../pages/admin/SettingsPage'));
+const ProfilePage = lazy(() => import('../pages/admin/ProfilePage'));
+const HelpPage = lazy(() => import('../pages/admin/HelpPage'));
+const NotificationsPage = lazy(() => import('../pages/admin/NotificationsPage'));
+const StoresPage = lazy(() => import('../pages/admin/StoresPage'));
+const StoreProductsPage = lazy(() => import('../pages/admin/StoreProductsPage'));
+const StoreProfileChangeRequestsPage = lazy(() => import('../pages/admin/StoreProfileChangeRequestsPage'));
+const RiderProfileChangeRequestsPage = lazy(() => import('../pages/admin/RiderProfileChangeRequestsPage'));
+const ProductSubmissionsPage = lazy(() => import('../pages/admin/ProductSubmissionsPage'));
+const ActivityLogPage = lazy(() => import('../pages/admin/ActivityLogPage'));
+const SupportMessagesPage = lazy(() => import('../pages/admin/SupportMessagesPage'));
+const RiderPayoutsPage = lazy(() => import('../pages/admin/RiderPayoutsPage'));
+const SecurityLogPage = lazy(() => import('../pages/admin/SecurityLogPage'));
 
 // Secure admin authentication guard using JWT tokens
 const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
@@ -60,6 +67,7 @@ const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
 
 const AdminRoutes = () => {
   return (
+    <Suspense fallback={<PageLoadingFallback />}>
     <Routes>
       <Route
         path="/"
@@ -315,6 +323,7 @@ const AdminRoutes = () => {
           unauthenticated admin by bouncing to /login. */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   );
 };
 
