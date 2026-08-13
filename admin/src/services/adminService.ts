@@ -193,7 +193,16 @@ export async function getAdminProducts(): Promise<Product[]> {
       const { data, error } = await getAdminClient()
         .from('master_products')
         .select('*')
+        // `id` tiebreaker: `created_at` alone isn't unique across a 44k+-row
+        // bulk-imported table (many rows share an identical timestamp from
+        // the same import batch), and offset pagination has no guaranteed
+        // stable order across separate requests when the sort key ties —
+        // the same row can be returned on two different pages (and another
+        // row skipped entirely), which is exactly what surfaced as React
+        // "duplicate key" warnings on ProductsPage. Found 2026-08-13 via
+        // live click-testing.
         .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
         .range(from, from + batchSize - 1);
 
       if (error) {

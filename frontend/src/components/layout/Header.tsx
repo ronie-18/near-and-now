@@ -369,12 +369,12 @@ const Header = () => {
                         </div>
                       ) : (
                         <div>
-                          <p className="text-xs font-bold text-gray-600 uppercase mb-3 flex items-center gap-2">
+                          <div className="text-xs font-bold text-gray-600 uppercase mb-3 flex items-center gap-2">
                             <div className="w-6 h-6 bg-gradient-to-br from-primary to-secondary rounded-lg flex items-center justify-center">
                               <Clock className="w-3.5 h-3.5 text-white" />
                             </div>
                             Popular Searches
-                          </p>
+                          </div>
                           <div className="flex flex-wrap gap-2">
                             {popularSearches.map((term) => (
                               <button

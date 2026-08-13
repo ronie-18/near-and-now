@@ -1,0 +1,11 @@
+-- support_messages (20260930020000_support_messages.sql) enabled RLS and
+-- created a service_role policy, but never issued the underlying GRANT —
+-- a policy alone is meaningless without it; Postgres checks table-level
+-- grants before RLS is ever evaluated. Result: every single call to the
+-- Support Messages feature (admin list/reply/resolve, and any app's "send a
+-- support message" write) has 500'd with "permission denied for table
+-- support_messages" since the table was created — the entire feature has
+-- been completely non-functional end-to-end. Found 2026-08-13 via live
+-- click-testing of the admin panel (GET /api/admin/support-messages
+-- returning 500).
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.support_messages TO service_role;
