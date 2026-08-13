@@ -231,6 +231,23 @@ export class ShopkeeperController {
         return res.status(409).json({ error: `Already responded: ${alloc.status}` });
       }
 
+      // req.shopkeeperStoreIds includes every store this account owns
+      // regardless of approval state, so a shopkeeper owning one approved
+      // store and one admin-suspended store could otherwise keep accepting
+      // new work on the suspended one indefinitely — the allocation itself
+      // may predate the suspension. Re-check this specific store's current
+      // approval status at the moment of accepting (not just at session
+      // auth time). rejectAllocation is deliberately left ungated — letting
+      // a suspended store's owner decline an order harms no one.
+      const { data: allocStore } = await supabaseAdmin
+        .from('stores')
+        .select('is_approved, is_active')
+        .eq('id', alloc.store_id)
+        .maybeSingle();
+      if (!allocStore?.is_approved || !allocStore.is_active) {
+        return res.status(403).json({ error: 'This store is not currently approved to accept orders.' });
+      }
+
       // Same payment-readiness guard as getIncomingOrders — belt-and-suspenders
       // in case a shopkeeper had this allocation open before it dropped out of
       // their list, or hit the endpoint directly.
@@ -449,10 +466,15 @@ async function assignCandidatesInRadius(
 ): Promise<{ id: string; product_id: string }[]> {
   if (!remaining.length) return remaining;
 
+  // is_approved wasn't checked here — only is_active — so a store an admin
+  // had suspended (suspendStoreIfApprovedAndGetName flips is_approved=false
+  // but never touches is_active) kept being assigned brand-new customer
+  // orders indefinitely. Found 2026-08-13 during a full-codebase audit.
   const { data: rawStores } = await supabaseAdmin
     .from('stores')
     .select('id, latitude, longitude')
-    .eq('is_active', true);
+    .eq('is_active', true)
+    .eq('is_approved', true);
 
   const candidates = (rawStores || [])
     .map((s: any) => ({ ...s, dist: haversineKm(lat, lng, s.latitude, s.longitude) }))

@@ -206,12 +206,28 @@ const ProductSubmissionsPage = () => {
       setError('Enter a valid GST rate');
       return;
     }
+    const cgstNum = cgst.trim() === '' ? gstNum / 2 : Number(cgst);
+    const sgstNum = sgst.trim() === '' ? gstNum / 2 : Number(sgst);
+    if (!Number.isFinite(cgstNum) || !Number.isFinite(sgstNum) || cgstNum < 0 || sgstNum < 0) {
+      setError('Enter valid CGST/SGST values');
+      return;
+    }
+    // cgst/sgst auto-populate as gstRate/2 but stay free-editable afterward —
+    // previously nothing re-checked they still summed back to gst_rate
+    // before submit, so e.g. GST 18% with CGST manually overwritten to 5
+    // (SGST left at 9) could approve as an internally inconsistent tax
+    // record (gst_rate=18, cgst=5, sgst=9) that flows straight into
+    // invoicing. Small epsilon for float rounding (e.g. 9.5 + 9.5).
+    if (Math.abs(cgstNum + sgstNum - gstNum) > 0.01) {
+      setError(`CGST + SGST must equal the GST rate (${cgstNum} + ${sgstNum} ≠ ${gstNum})`);
+      return;
+    }
     await review(id, 'approved', undefined, {
       hsn_code: hsnCode.trim(),
       hsn_description: hsnDescription.trim() || null,
       gst_rate: gstNum,
-      cgst: cgst.trim() === '' ? gstNum / 2 : Number(cgst),
-      sgst: sgst.trim() === '' ? gstNum / 2 : Number(sgst),
+      cgst: cgstNum,
+      sgst: sgstNum,
     });
     setApprovingId(null);
   };

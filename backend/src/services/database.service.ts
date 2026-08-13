@@ -1536,27 +1536,25 @@ export class DatabaseService {
   }
 
   async recordCouponUsage(couponId: string, customerId: string, orderId: string) {
-    const { error: redemptionErr } = await supabaseAdmin
-      .from('coupon_redemptions')
-      .insert({ coupon_id: couponId, customer_id: customerId, order_id: orderId });
-    if (redemptionErr) {
-      console.error('[COUPON] Failed to record redemption', { couponId, orderId, error: redemptionErr });
-    }
-    // Atomic row-locked increment (increment_coupon_usage_if_available, migration
-    // 20260811000000) — replaces a read-then-write that could lose increments or
-    // let a coupon exceed usage_limit under concurrent redemptions.
-    const { data: incremented, error: incrErr } = await supabaseAdmin.rpc(
-      'increment_coupon_usage_if_available',
-      { p_coupon_id: couponId }
+    // Atomic row-locked insert+increment (record_coupon_redemption_if_available,
+    // migration 20260930230000) — does the coupon_redemptions insert and the
+    // usage_count bump together under one FOR UPDATE lock on the coupon row, so
+    // both the global usage_limit and the per-user per_user_limit are enforced
+    // atomically at the one place that actually commits a redemption, closing a
+    // TOCTOU race where two near-simultaneous validateCoupon() calls could both
+    // pass a "1 per user" check before either redemption was recorded.
+    const { data: recorded, error: rpcErr } = await supabaseAdmin.rpc(
+      'record_coupon_redemption_if_available',
+      { p_coupon_id: couponId, p_customer_id: customerId, p_order_id: orderId }
     );
-    if (incrErr) {
-      console.error('[COUPON] Failed to increment usage_count', { couponId, error: incrErr });
-    } else if (!incremented) {
+    if (rpcErr) {
+      console.error('[COUPON] Failed to record redemption', { couponId, orderId, error: rpcErr });
+    } else if (!recorded) {
       // The order was already created by the time this runs (this is a
-      // fire-and-forget post-order side effect) — usage_limit was hit by a
-      // concurrent redemption between validateCoupon's check and this call.
-      // Flagged for manual review rather than silently under-counting.
-      console.warn('[COUPON] usage_limit reached at increment time — order already placed', { couponId, orderId });
+      // fire-and-forget post-order side effect) — usage_limit or per_user_limit
+      // was hit by a concurrent redemption between validateCoupon's check and
+      // this call. Flagged for manual review rather than silently under-counting.
+      console.warn('[COUPON] usage_limit or per_user_limit reached at redemption time — order already placed', { couponId, customerId, orderId });
     }
   }
 

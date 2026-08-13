@@ -18,7 +18,7 @@ import {
   Clock,
   Ban
 } from 'lucide-react';
-import { getAdmins, deleteAdmin, Admin, getRoleDisplayName, hasPermission } from '../../services/adminAuthService';
+import { getAdmins, deleteAdmin, Admin, getRoleDisplayName, hasPermission, hasRole } from '../../services/adminAuthService';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 
 // Stat Card
@@ -123,6 +123,13 @@ const AdminManagementPage = () => {
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
   const currentAdmin: Admin | null = getCurrentAdmin();
+  // Admin management has no 'admins.*' entry in ROLE_PERMISSIONS for any role
+  // but super_admin (which gets '*') — getAdmins()'s own comment says
+  // "super_admin only". Previously this page fetched/rendered the full
+  // roster (emails, roles, status, last login) for any logged-in admin,
+  // including viewer/manager, before the action-button-level hasPermission
+  // checks below ever ran. Gate the page itself, not just its buttons.
+  const isSuperAdmin = Boolean(currentAdmin && hasRole(currentAdmin, 'super_admin'));
 
   const fetchAdmins = async () => {
     try {
@@ -139,8 +146,12 @@ const AdminManagementPage = () => {
   };
 
   useEffect(() => {
-    fetchAdmins();
-  }, []);
+    if (isSuperAdmin) {
+      fetchAdmins();
+    } else {
+      setLoading(false);
+    }
+  }, [isSuperAdmin]);
 
   const handleDeleteAdmin = async (id: string, name: string) => {
     if (!currentAdmin || !hasPermission(currentAdmin, 'admins.delete')) {
@@ -194,6 +205,22 @@ const AdminManagementPage = () => {
   const canCreateAdmin = currentAdmin && hasPermission(currentAdmin, 'admins.create');
   const canEditAdmin = currentAdmin && hasPermission(currentAdmin, 'admins.edit');
   const canDeleteAdmin = currentAdmin && hasPermission(currentAdmin, 'admins.delete');
+
+  if (!isSuperAdmin) {
+    return (
+      <AdminLayout>
+        <div className="p-16 flex flex-col items-center justify-center text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mb-4">
+            <Ban className="w-8 h-8 text-red-500" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900">Access Denied</h1>
+          <p className="text-gray-500 mt-2 max-w-md">
+            Admin Management is restricted to super admins. You don't have permission to view the admin roster.
+          </p>
+        </div>
+      </AdminLayout>
+    );
+  }
 
   return (
     <AdminLayout>

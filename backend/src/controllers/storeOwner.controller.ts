@@ -179,15 +179,22 @@ export async function deleteStoreProduct(req: Request, res: Response) {
 
     const productId = req.params.productId;
 
-    // Verify this product row belongs to one of the shopkeeper's stores
+    // Verify this product row belongs to one of the shopkeeper's *approved*
+    // stores. This route has no middleware at all (routes/storeOwner.routes.ts)
+    // beyond resolveShopkeeperFromToken — previously it never checked
+    // is_approved, so a suspended store's owner could still delete/modify
+    // inventory by hitting it directly (curl/Postman), even though the
+    // mobile UI's client-side gate (useRequireStoreApproval) blocks
+    // navigation to the screen that would normally call it.
     const { data: stores } = await supabaseAdmin
       .from('stores')
       .select('id')
-      .eq('owner_id', userId);
+      .eq('owner_id', userId)
+      .eq('is_approved', true);
 
     const storeIds = (stores || []).map((s: any) => s.id);
     if (!storeIds.length) {
-      return res.status(403).json({ success: false, error: 'No store found for this account' });
+      return res.status(403).json({ success: false, error: 'No approved store found for this account' });
     }
 
     const { data: product } = await supabaseAdmin
@@ -226,15 +233,18 @@ export async function updateProductQuantity(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'quantity (non-negative number) required' });
     }
 
-    // Ownership check via store lookup
+    // Ownership + approval check via store lookup — same reasoning as
+    // deleteStoreProduct above; this route also has no approval-gating
+    // middleware of its own.
     const { data: stores } = await supabaseAdmin
       .from('stores')
       .select('id')
-      .eq('owner_id', userId);
+      .eq('owner_id', userId)
+      .eq('is_approved', true);
 
     const storeIds = (stores || []).map((s: any) => s.id);
     if (!storeIds.length) {
-      return res.status(403).json({ success: false, error: 'No store found for this account' });
+      return res.status(403).json({ success: false, error: 'No approved store found for this account' });
     }
 
     const { data: existing } = await supabaseAdmin
@@ -265,6 +275,69 @@ export async function updateProductQuantity(req: Request, res: Response) {
   } catch (error: any) {
     console.error('❌ updateProductQuantity error:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to update product quantity' });
+  }
+}
+
+/**
+ * Toggle a product's is_active flag. The store-owner app writes this
+ * directly to Supabase (lib/storeProducts.ts's updateProductActiveState)
+ * and only falls back to this route if that write fails — but no matching
+ * route existed here, so the fallback 404'd and the toggle failed silently
+ * (only a console.warn, no error surfaced to the shopkeeper) whenever the
+ * primary Supabase write hit an RLS denial or a transient network error.
+ * Found 2026-08-13 during a full-codebase audit.
+ */
+export async function updateProductActiveState(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const productId = req.params.productId;
+    const { is_active } = req.body;
+
+    if (typeof is_active !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'is_active (boolean) required' });
+    }
+
+    const { data: stores } = await supabaseAdmin
+      .from('stores')
+      .select('id')
+      .eq('owner_id', userId)
+      .eq('is_approved', true);
+
+    const storeIds = (stores || []).map((s: any) => s.id);
+    if (!storeIds.length) {
+      return res.status(403).json({ success: false, error: 'No approved store found for this account' });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('id', productId)
+      .in('store_id', storeIds)
+      .maybeSingle();
+
+    if (!existing) return res.status(403).json({ success: false, error: 'Product not found or not owned by you' });
+
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .update({ is_active, updated_at: new Date().toISOString() })
+      .eq('id', productId)
+      .select();
+
+    if (error) {
+      console.error('❌ Error updating product active state:', error);
+      return res.status(500).json({ success: false, error: error.message || 'Failed to update product' });
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(404).json({ success: false, error: 'Product not found' });
+    }
+
+    res.json({ success: true, product: data[0] });
+  } catch (error: any) {
+    console.error('❌ updateProductActiveState error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to update product' });
   }
 }
 

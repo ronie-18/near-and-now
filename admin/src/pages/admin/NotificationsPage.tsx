@@ -265,6 +265,31 @@ const NotificationsPage = () => {
   const [search, setSearch] = useState('');
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [refunding, setRefunding] = useState<string | null>(null);
+  const PAGE_SIZE = 100;
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Unread count/total were previously derived purely from `notifications`,
+  // which was hard-capped at 100 rows with no pagination — once total
+  // notification volume passed 100 (easily reached: every document upload,
+  // image change, status toggle, and admin review action inserts one), any
+  // unread notification older than the 100 most recent silently vanished
+  // from both the list and this count, with no indication anything was
+  // missing. Fetched separately via an exact `count` query (head: true, no
+  // rows returned) so it's never bounded by the list's own page size.
+  const [unreadTotal, setUnreadTotal] = useState(0);
+
+  const fetchUnreadTotal = useCallback(async () => {
+    if (!currentAdmin?.id) return;
+    try {
+      const { count, error } = await getAdminClient()
+        .from('admin_notifications')
+        .select('id', { count: 'exact', head: true })
+        .not('read_by', 'cs', `{${currentAdmin.id}}`);
+      if (!error && count != null) setUnreadTotal(count);
+    } catch (err) {
+      console.error('Failed to fetch unread total:', err);
+    }
+  }, [currentAdmin?.id]);
 
   const fetchNotifications = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -274,17 +299,40 @@ const NotificationsPage = () => {
         .from('admin_notifications')
         .select('id, type, title, message, data, read_by, created_at')
         .order('created_at', { ascending: false })
-        .limit(100);
+        .range(0, PAGE_SIZE - 1);
 
       if (!error && data) {
         setNotifications(data);
+        setHasMore(data.length === PAGE_SIZE);
       }
     } catch (err) {
       console.error('Failed to fetch notifications:', err);
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+    fetchUnreadTotal();
+  }, [fetchUnreadTotal]);
+
+  const loadMoreNotifications = async () => {
+    setLoadingMore(true);
+    try {
+      const db = getAdminClient();
+      const { data, error } = await db
+        .from('admin_notifications')
+        .select('id, type, title, message, data, read_by, created_at')
+        .order('created_at', { ascending: false })
+        .range(notifications.length, notifications.length + PAGE_SIZE - 1);
+
+      if (!error && data) {
+        setNotifications(prev => [...prev, ...data]);
+        setHasMore(data.length === PAGE_SIZE);
+      }
+    } catch (err) {
+      console.error('Failed to load more notifications:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     fetchNotifications();
@@ -308,6 +356,9 @@ const NotificationsPage = () => {
       setNotifications(prev => prev.map(n => (
         n.read_by.includes(currentAdmin.id) ? n : { ...n, read_by: [...n.read_by, currentAdmin.id] }
       )));
+      // The RPC marks every row read server-side, including any beyond the
+      // loaded page — safe to zero out directly rather than re-fetching.
+      setUnreadTotal(0);
     } catch (err: any) {
       alert(err?.message || 'Failed to mark notifications as read');
     }
@@ -318,9 +369,15 @@ const NotificationsPage = () => {
     try {
       const { error } = await getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: id });
       if (error) throw error;
-      setNotifications(prev => prev.map(n => (
-        n.id === id && !n.read_by.includes(currentAdmin.id) ? { ...n, read_by: [...n.read_by, currentAdmin.id] } : n
-      )));
+      let wasUnread = false;
+      setNotifications(prev => prev.map(n => {
+        if (n.id === id && !n.read_by.includes(currentAdmin.id)) {
+          wasUnread = true;
+          return { ...n, read_by: [...n.read_by, currentAdmin.id] };
+        }
+        return n;
+      }));
+      if (wasUnread) setUnreadTotal(prev => Math.max(0, prev - 1));
     } catch (err: any) {
       alert(err?.message || 'Failed to mark notification as read');
     }
@@ -377,7 +434,10 @@ const NotificationsPage = () => {
     return true;
   });
 
-  const unreadCount = notifications.filter(isUnread).length;
+  // Sourced from the uncapped fetchUnreadTotal() query, not the loaded page
+  // window — notifications.filter(isUnread).length would undercount once
+  // more than PAGE_SIZE rows exist.
+  const unreadCount = unreadTotal;
 
   return (
     <AdminLayout>
@@ -588,6 +648,20 @@ const NotificationsPage = () => {
                   </div>
                 );
               })}
+            </div>
+          )}
+          {hasMore && !loading && (
+            <div className="p-4 border-t border-gray-100 flex justify-center">
+              <button
+                onClick={loadMoreNotifications}
+                disabled={loadingMore}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 rounded-xl transition-colors"
+              >
+                {loadingMore ? (
+                  <div className="w-4 h-4 border-2 border-gray-400/40 border-t-gray-600 rounded-full animate-spin" />
+                ) : null}
+                {loadingMore ? 'Loading…' : 'Load older notifications'}
+              </button>
             </div>
           )}
         </div>

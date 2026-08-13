@@ -107,6 +107,24 @@ const CheckoutPage = () => {
     addressName: ''
   });
 
+  // AuthContext restores the session asynchronously, so `user` is still null
+  // on the very first render of a fresh page load (refresh, bookmark, new
+  // tab) — the useState initializer above only ever ran once against that
+  // null value, so name/email/phone were left permanently blank even for a
+  // logged-in customer with a saved profile. Sync once `user` actually
+  // populates, same pattern as ProfilePage.tsx's own user-sync effect. Only
+  // fills fields still empty, so it never clobbers something the customer
+  // already typed in the brief window before restoration completes.
+  useEffect(() => {
+    if (!user) return;
+    setFormData(prev => ({
+      ...prev,
+      name: prev.name || user.name || '',
+      email: prev.email || user.email || '',
+      phone: prev.phone || user.phone || ''
+    }));
+  }, [user]);
+
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   useEffect(() => {
     if (!isAuthenticated) return;

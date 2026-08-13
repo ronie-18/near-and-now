@@ -58,6 +58,19 @@ function getStepIndex(status: string): number {
   return 0;
 }
 
+// Shared by both the initial fetch and every realtime/polling refresh, so the
+// ETA badge actually tracks the order's real status instead of being set
+// once on mount and frozen — previously only fetchTracking() ever called
+// setEtaMinutes, so an order stuck longer than its initial estimate (e.g.
+// rider delayed) would show "0:00 remaining" indefinitely while the rest of
+// the page kept updating live.
+function computeEtaMinutes(status: string, serverEtaMinutes?: number | null): number | null {
+  if (['order_delivered', 'order_cancelled'].includes(status)) return null;
+  if (serverEtaMinutes) return serverEtaMinutes;
+  const stepIdx = getStepIndex(status);
+  return Math.max(3, (PROGRESS_STEPS.length - 1 - stepIdx) * 7 + 5);
+}
+
 // ETA countdown timer
 function ETACountdown({ etaMinutes }: { etaMinutes: number }) {
   const [remaining, setRemaining] = useState(etaMinutes * 60);
@@ -182,16 +195,7 @@ const OrderTrackingPage = () => {
       setOrder(transformed);
       setTrackingHistory(buildTrackingHistory(transformed, statusHistory || []));
 
-      // Use server ETA if available, otherwise estimate from step
-      if (!['order_delivered', 'order_cancelled'].includes(transformed.status)) {
-        if ((orderData as any).eta_minutes) {
-          setEtaMinutes((orderData as any).eta_minutes);
-        } else {
-          const stepIdx = getStepIndex(transformed.status);
-          const remaining = Math.max(3, (PROGRESS_STEPS.length - 1 - stepIdx) * 7 + 5);
-          setEtaMinutes(remaining);
-        }
-      }
+      setEtaMinutes(computeEtaMinutes(transformed.status, (orderData as any).eta_minutes));
     } catch (err) {
       console.error('Error fetching order tracking:', err);
       setFetchError(true);
@@ -249,7 +253,7 @@ const OrderTrackingPage = () => {
     return history;
   }, [formatStatusForDisplay]);
 
-  const { isRealtimeConnected } = useOrderTrackingRealtime(orderId, order, setOrder, setTrackingHistory, setDriverLocation, setDriverLocations, buildTrackingHistory);
+  const { isRealtimeConnected } = useOrderTrackingRealtime(orderId, order, setOrder, setTrackingHistory, setDriverLocation, setDriverLocations, buildTrackingHistory, setEtaMinutes, computeEtaMinutes);
 
   const formatDate = (s: string) => new Date(s).toLocaleString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',

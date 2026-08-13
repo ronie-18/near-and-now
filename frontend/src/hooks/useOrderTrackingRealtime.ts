@@ -48,6 +48,7 @@ type SetOrder = React.Dispatch<React.SetStateAction<Order | null>>;
 type SetTrackingHistory = React.Dispatch<React.SetStateAction<OrderStatus[]>>;
 type SetDriverLocation = React.Dispatch<React.SetStateAction<DriverLocation | null>>;
 type SetDriverLocations = React.Dispatch<React.SetStateAction<Record<string, DriverLocation>>>;
+type SetEtaMinutes = React.Dispatch<React.SetStateAction<number | null>>;
 
 export function useOrderTrackingRealtime(
   orderId: string | undefined,
@@ -56,7 +57,9 @@ export function useOrderTrackingRealtime(
   setTrackingHistory: SetTrackingHistory,
   _setDriverLocation: SetDriverLocation,
   setDriverLocations: SetDriverLocations,
-  buildTrackingHistory: (order: Order, statusHistory: { status: string; notes?: string; created_at: string }[]) => OrderStatus[]
+  buildTrackingHistory: (order: Order, statusHistory: { status: string; notes?: string; created_at: string }[]) => OrderStatus[],
+  setEtaMinutes?: SetEtaMinutes,
+  computeEtaMinutes?: (status: string, serverEtaMinutes?: number | null) => number | null
 ) {
   const buildRef = useRef(buildTrackingHistory);
   buildRef.current = buildTrackingHistory;
@@ -126,6 +129,9 @@ export function useOrderTrackingRealtime(
 
     setOrder(updatedOrder);
     setTrackingHistory(build(updatedOrder, statusHistory));
+    if (setEtaMinutes && computeEtaMinutes) {
+      setEtaMinutes(computeEtaMinutes(updatedOrder.status, (co as any).eta_minutes));
+    }
   };
 
   // Subscribe to order/store_orders/status changes + polling fallback (runs when order loads)
