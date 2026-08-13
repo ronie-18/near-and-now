@@ -13,8 +13,8 @@
  * session is the one authenticateAdmin writes under 'adminToken'.
  */
 
-import { logSecurityEvent } from './auditLog';
 import { getAdminClient } from './supabase';
+import { apiUrl } from '../utils/apiBase';
 import { getAdminToken, getAdminDataRaw, getAdminTokenExpiry, clearAdminSession } from './adminSession';
 
 /**
@@ -24,13 +24,23 @@ export async function secureAdminLogout(): Promise<void> {
   try {
     const token = getAdminToken();
     if (token) {
+      // Audit-log the logout server-side (POST /api/admin/logout, requireAdmin
+      // — must run before the session-row delete below, while the token is
+      // still valid) rather than the old logSecurityEvent() call this
+      // replaces, which always silently failed: security_events only grants
+      // SELECT/INSERT to service_role, so that anon-key write 401'd every
+      // time. Found 2026-08-13 via a live click-test of the new Security Log
+      // page. Best-effort — a failed audit write should never block logout.
+      await fetch(apiUrl('/api/admin/logout'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch((error) => console.error('Failed to record logout audit log:', error));
+
       await getAdminClient()
         .from('admin_sessions')
         .delete()
         .eq('session_token', token);
     }
-
-    await logSecurityEvent('ADMIN_LOGOUT', 'low', 'Admin logged out');
   } catch (error) {
     console.error('Error during logout:', error);
   } finally {

@@ -1,7 +1,6 @@
 import { getAdminClient } from './supabase';
 import { getAdminToken } from './adminSession';
 import { apiUrl } from '../utils/apiBase';
-import { logAdminAction, logSecurityEvent, logFailedLogin } from './auditLog';
 
 // Admin types
 export interface Admin {
@@ -130,7 +129,6 @@ export async function authenticateAdmin(email: string, password: string): Promis
     // Network-level failure only (DNS/offline/etc) — a real HTTP response,
     // even a 401/429, is handled below instead of landing here.
     if (import.meta.env.DEV) console.error('❌ Error authenticating admin:', error);
-    await logSecurityEvent('AUTH_ERROR', 'high', `Unexpected error during admin login for ${normalizedEmail}`);
     return null;
   }
 
@@ -142,20 +140,21 @@ export async function authenticateAdmin(email: string, password: string): Promis
     // misleading message) instead of a one-size-fits-all fallback.
     const json = await response.json().catch(() => null) as { error?: string } | null;
     if (import.meta.env.DEV) console.error('❌ Admin login failed:', response.status, json?.error);
-    await logFailedLogin(normalizedEmail);
-    await logSecurityEvent('FAILED_LOGIN', 'medium', `Admin login failed for ${normalizedEmail}`);
+    // Failed-login/security-event recording now happens server-side inside
+    // AdminController.login() (backend/src/controllers/admin.controller.ts),
+    // using supabaseAdmin — the logFailedLogin()/logSecurityEvent() calls
+    // that used to run from here never actually worked: failed_login_attempts/
+    // security_events only grant SELECT/INSERT to service_role
+    // (20260718000002_fix_missing_table_grants.sql), so every one of these
+    // anon-key writes has silently 401'd since that migration landed. Found
+    // 2026-08-13 via a live click-test of the new Security Log page.
     throw new Error(json?.error || 'Invalid email or password');
   }
 
   const { admin, token } = (await response.json()) as { admin: Admin; token: string };
 
-  await logAdminAction({
-    admin_id: admin.id,
-    action: 'LOGIN',
-    resource_type: 'admin_session',
-    status: 'success',
-    new_values: { email: normalizedEmail, role: admin.role }
-  });
+  // LOGIN audit_logs row is now written server-side inside the same
+  // /api/admin/login call above (same reason as the failed-login case).
 
   return { admin, token };
 }

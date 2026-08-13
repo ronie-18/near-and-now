@@ -48,13 +48,14 @@ const SEVERITY_STYLE: Record<SecurityEventRow['severity'], string> = {
 };
 
 /**
- * Surfaces audit_logs/security_events/failed_login_attempts — all three were
- * already being written to (every admin login/logout/failed-login already
- * calls logAdminAction/logSecurityEvent/logFailedLogin, see
- * services/auditLog.ts) but had no UI reading them back. Distinct from
- * ActivityLogPage, which covers admin *review* actions (store/rider
- * approvals, product submissions) — this page covers admin *session*
- * security (logins, logouts, auth errors, failed-login attempts).
+ * Surfaces audit_logs/security_events/failed_login_attempts. Every admin
+ * login/logout/failed-login is written here server-side (AdminController's
+ * login()/logout(), backend/src/controllers/admin.controller.ts, using
+ * supabaseAdmin) — the original client-side write path (services/auditLog.ts,
+ * since deleted) always silently failed, since those 3 tables only grant to
+ * service_role. Distinct from ActivityLogPage, which covers admin *review*
+ * actions (store/rider approvals, product submissions) — this page covers
+ * admin *session* security (logins, logouts, failed-login attempts).
  * Gated on `security_log.view`, deliberately not granted to manager/viewer
  * (see adminPermissions.ts) — this surfaces other admins' session activity
  * and failed-login attempts, more sensitive than the review-workflow data

@@ -33,6 +33,26 @@ export class AdminController {
         return res.status(400).json({ error: 'Email and password are required' });
       }
       const normalizedEmail = email.toLowerCase().trim();
+      const ipAddress = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || null;
+      const userAgent = (req.headers['user-agent'] as string) || null;
+
+      // is_account_locked()/failed_login_attempts already existed (migration
+      // 20260515000000) but were only ever written to and checked from the
+      // frontend's anon-key client — which has never actually been able to
+      // write to failed_login_attempts (service_role-only grant since
+      // 20260718000002_fix_missing_table_grants.sql), so this brute-force
+      // lockout has been silently non-functional since that migration.
+      // Found 2026-08-13 via a live click-test of the new Security Log page
+      // showing zero rows even after a deliberately-wrong-password attempt.
+      // Moved fully server-side (supabaseAdmin, always has the grant) rather
+      // than re-granting anon INSERT on a table that gates account lockout —
+      // letting an untrusted client freely write rows into a table an RPC
+      // uses to decide whether to lock an account out is its own footgun.
+      const { data: locked } = await supabaseAdmin.rpc('is_account_locked', { p_email: normalizedEmail });
+      if (locked === true) {
+        await this.recordFailedLogin(normalizedEmail, ipAddress, userAgent, 'Account locked — too many recent failed attempts');
+        return res.status(429).json({ error: 'Too many failed attempts. Please wait 15 minutes and try again.' });
+      }
 
       const { data: admin, error } = await supabaseAdmin
         .from('admins')
@@ -42,11 +62,13 @@ export class AdminController {
         .maybeSingle();
 
       if (error || !admin) {
+        await this.recordFailedLogin(normalizedEmail, ipAddress, userAgent, `Admin login failed for ${normalizedEmail}`);
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
       const isValidPassword = await bcrypt.compare(password, (admin as any).password_hash);
       if (!isValidPassword) {
+        await this.recordFailedLogin(normalizedEmail, ipAddress, userAgent, `Admin login failed for ${normalizedEmail}`);
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
@@ -75,11 +97,77 @@ export class AdminController {
         console.error('admin login: failed to update last_login_at (non-blocking)', lastLoginError);
       }
 
+      const { error: auditError } = await supabaseAdmin.from('audit_logs').insert({
+        admin_id: (admin as any).id,
+        action: 'LOGIN',
+        resource_type: 'admin_session',
+        status: 'success',
+        new_values: { email: normalizedEmail, role: (admin as any).role },
+        ip_address: ipAddress,
+        user_agent: userAgent,
+      });
+      if (auditError) {
+        console.error('admin login: failed to write audit log (non-blocking)', auditError);
+      }
+
       const { password_hash, ...adminData } = admin as any;
       res.json({ admin: adminData, token, expiresAt });
     } catch (err) {
       console.error('admin login error:', err);
       res.status(500).json({ error: 'Login failed' });
+    }
+  }
+
+  private async recordFailedLogin(
+    email: string,
+    ipAddress: string | null,
+    userAgent: string | null,
+    description: string
+  ) {
+    try {
+      await supabaseAdmin.from('failed_login_attempts').insert({
+        email,
+        ip_address: ipAddress,
+        user_agent: userAgent,
+      });
+      await supabaseAdmin.from('security_events').insert({
+        event_type: 'FAILED_LOGIN',
+        severity: 'medium',
+        description,
+        user_agent: userAgent,
+      });
+    } catch (err) {
+      console.error('admin login: failed to record failed-login audit trail (non-blocking)', err);
+    }
+  }
+
+  // POST /api/admin/logout — requireAdmin-gated
+  // Previously logout only ever did a direct anon-key delete of the session
+  // row (secureAdminAuth.ts's secureAdminLogout, still correct — RLS allows
+  // it via the x-admin-token header) plus a client-side logSecurityEvent
+  // call that always silently failed for the same missing-grant reason as
+  // the login-side logging above. This gives logout the same real,
+  // service-role-backed audit trail; secureAdminLogout still does its own
+  // session-row delete + local-storage clear regardless of this call's
+  // success, so a failure here never blocks logging out.
+  async logout(req: Request, res: Response) {
+    try {
+      const { data: admin } = await supabaseAdmin.from('admins').select('email').eq('id', req.adminId).maybeSingle();
+      await supabaseAdmin.from('audit_logs').insert({
+        admin_id: req.adminId,
+        action: 'LOGOUT',
+        resource_type: 'admin_session',
+        status: 'success',
+      });
+      await supabaseAdmin.from('security_events').insert({
+        event_type: 'ADMIN_LOGOUT',
+        severity: 'low',
+        description: admin ? `Admin logged out: ${(admin as any).email}` : 'Admin logged out',
+      });
+      res.json({ success: true });
+    } catch (err) {
+      console.error('admin logout audit-log error (non-blocking):', err);
+      res.json({ success: true });
     }
   }
 
