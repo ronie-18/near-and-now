@@ -22,7 +22,8 @@ import {
   FileText,
   History,
   MessageCircle,
-  Wallet
+  Wallet,
+  ShieldAlert
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
@@ -204,6 +205,11 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
           title: 'Activity Log',
           path: '/activity-log',
           icon: <History size={18} />
+        },
+        {
+          title: 'Security Log',
+          path: '/security-log',
+          icon: <ShieldAlert size={18} />
         },
         {
           title: 'Support Messages',

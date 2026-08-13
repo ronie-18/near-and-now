@@ -33,6 +33,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, string[]> = {
     'profile_change_requests.*',
     'activity_log.view',
     'support_messages.*',
+    'security_log.view',
   ],
   manager: [
     'products.view',

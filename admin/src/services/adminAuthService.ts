@@ -73,7 +73,8 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'product_submissions.*',
     'profile_change_requests.*',
     'activity_log.view',
-    'support_messages.*'
+    'support_messages.*',
+    'security_log.view'
   ],
   manager: [
     'products.view',
