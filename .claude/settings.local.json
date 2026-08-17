@@ -96,7 +96,11 @@
       "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node \"/private/tmp/claude-501/-Users-tiasmondal166-projects-near-and-now/839ae97e-cd43-4bf9-be41-b0d90e1793e4/scratchpad/rider_login_phase2.js\" 307758)",
       "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node \"/private/tmp/claude-501/-Users-tiasmondal166-projects-near-and-now/839ae97e-cd43-4bf9-be41-b0d90e1793e4/scratchpad/rider_login_phase2.js\" 473623)",
       "Bash(NODE_PATH=/Users/tiasmondal166/projects/near-and-now/node_modules node /tmp/rider_phase2_debug.js)",
-      "Bash(sed -i.bak \"s/473623/517589/\" /tmp/rider_phase2_debug.js)"
+      "Bash(sed -i.bak \"s/473623/517589/\" /tmp/rider_phase2_debug.js)",
+      "Bash(npm --prefix \"/Users/tiasmondal166/projects/NAT_Near-Now_Rider-\" run lint)",
+      "Bash(lsof -ti tcp:8082 -sTCP:LISTEN)",
+      "Bash(xargs -r kill)",
+      "Bash(disown)"
     ],
     "additionalDirectories": [
       "/tmp"
