@@ -10,7 +10,7 @@ function adminAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-type Source = 'store_profile_change' | 'rider_profile_change' | 'product_submission' | 'store_verification_doc' | 'rider_verification_doc';
+type Source = 'store_profile_change' | 'rider_profile_change' | 'product_submission' | 'store_verification_doc' | 'rider_verification_doc' | 'store_image';
 
 interface ActivityRow {
   id: string;
@@ -31,6 +31,7 @@ const SOURCE_LABEL: Record<Source, string> = {
   product_submission: 'Product submission',
   store_verification_doc: 'Store verification document',
   rider_verification_doc: 'Rider verification document',
+  store_image: 'Storefront photo',
 };
 
 /**

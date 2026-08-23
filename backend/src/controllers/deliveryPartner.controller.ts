@@ -370,7 +370,15 @@ export async function payRiderForDeliveredOrder(orderId: string, riderId: string
       status: 'pending',
       notes: tipAmount > 0 ? `Flat fee ₹${RIDER_FLAT_FEE} + tip ₹${tipAmount}` : `Flat fee ₹${RIDER_FLAT_FEE}`,
     });
-    if (error) console.error('payRiderForDeliveredOrder insert failed:', error);
+    // 23505 = unique_violation on idx_delivery_partners_payouts_one_per_order
+    // (customer_order_id, partner_user_id) — the select-then-insert check
+    // above is only a cheap first-pass short-circuit, not the real guard;
+    // this is what actually closes the race between this function's two
+    // independent callers (rider markDelivered, admin updateOrderStatus)
+    // firing for the same order at nearly the same instant. A concurrent
+    // caller losing this race already got its payout recorded by the
+    // winner, so this is a correct no-op, not a real failure.
+    if (error && error.code !== '23505') console.error('payRiderForDeliveredOrder insert failed:', error);
   } catch (err) {
     console.error('payRiderForDeliveredOrder error:', err);
   }

@@ -8,7 +8,8 @@ type ActivityRow = {
     | 'rider_profile_change'
     | 'product_submission'
     | 'store_verification_doc'
-    | 'rider_verification_doc';
+    | 'rider_verification_doc'
+    | 'store_image';
   action: 'approved' | 'rejected';
   entity_label: string;
   actor_id: string | null;
@@ -21,13 +22,18 @@ type ActivityRow = {
 
 /**
  * Unified admin activity log — aggregates every review action across the
- * five places an admin approves/rejects something (store & rider profile
- * changes, product submissions, store & rider verification documents), each
- * of which stores its own reviewed_by/reviewed_at independently with no
- * shared table. Rather than adding a new write-path table every review
- * controller has to remember to also insert into (more surface area to drift
- * out of sync), this reads the same source-of-truth rows those pages already
- * show, just normalized into one shape and merged.
+ * six places an admin approves/rejects something (store & rider profile
+ * changes, product submissions, store & rider verification documents,
+ * storefront gallery photos), each of which stores its own
+ * reviewed_by/reviewed_at independently with no shared table. Rather than
+ * adding a new write-path table every review controller has to remember to
+ * also insert into (more surface area to drift out of sync), this reads the
+ * same source-of-truth rows those pages already show, just normalized into
+ * one shape and merged.
+ *
+ * store_images gained the identical review workflow (status/rejection_reason/
+ * reviewed_by/reviewed_at, 20260926000000) after this aggregator was first
+ * written and was missed — added 2026-08-23.
  *
  * Visibility, per explicit requirement:
  *   - super_admin: sees every row, including other super admins' actions.
@@ -44,7 +50,7 @@ export async function listActivityLog(req: Request, res: Response) {
       return res.status(401).json({ success: false, error: 'Invalid admin session' });
     }
 
-    const [storeChanges, riderChanges, productSubs, storeDocs, riderDocs] = await Promise.all([
+    const [storeChanges, riderChanges, productSubs, storeDocs, riderDocs, storeImages] = await Promise.all([
       supabaseAdmin
         .from('store_profile_change_requests')
         .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
@@ -65,6 +71,10 @@ export async function listActivityLog(req: Request, res: Response) {
         .from('delivery_partner_verification_documents')
         .select('id, partner_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at')
         .in('status', ['approved', 'rejected']),
+      supabaseAdmin
+        .from('store_images')
+        .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
+        .in('status', ['approved', 'rejected']),
     ]);
 
     for (const [label, result] of [
@@ -73,6 +83,7 @@ export async function listActivityLog(req: Request, res: Response) {
       ['product_submissions', productSubs],
       ['store_verification_documents', storeDocs],
       ['delivery_partner_verification_documents', riderDocs],
+      ['store_images', storeImages],
     ] as const) {
       if (result.error) {
         console.error(`❌ listActivityLog (${label}) error:`, result.error);
@@ -104,6 +115,7 @@ export async function listActivityLog(req: Request, res: Response) {
           ...(productSubs.data ?? []),
           ...(storeDocs.data ?? []),
           ...(riderDocs.data ?? []),
+          ...(storeImages.data ?? []),
         ]
           .map((r: any) => r.reviewed_by)
           .filter(Boolean)
@@ -193,6 +205,22 @@ export async function listActivityLog(req: Request, res: Response) {
         actor_role: reviewer?.role ?? null,
         detail: { rejection_reason: r.rejection_reason },
         created_at: r.uploaded_at,
+        reviewed_at: r.reviewed_at,
+      });
+    }
+
+    for (const r of storeImages.data ?? []) {
+      const reviewer = r.reviewed_by ? adminById.get(r.reviewed_by) : null;
+      rows.push({
+        id: r.id,
+        source: 'store_image',
+        action: r.status as 'approved' | 'rejected',
+        entity_label: `Storefront photo — ${(r as any).stores?.name ?? 'Unknown store'}`,
+        actor_id: r.reviewed_by,
+        actor_name: reviewer?.full_name ?? null,
+        actor_role: reviewer?.role ?? null,
+        detail: { rejection_reason: r.rejection_reason },
+        created_at: r.created_at,
         reviewed_at: r.reviewed_at,
       });
     }

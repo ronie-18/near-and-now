@@ -62,7 +62,16 @@ export class CouponsController {
 
   async validateCoupon(req: Request, res: Response) {
     try {
-      const { code, customerId, orderTotal } = req.body;
+      const { code, orderTotal } = req.body;
+      // requireCustomer (this route's middleware) already sets req.customerId
+      // from the authenticated session — the client-supplied req.body.customerId
+      // was previously trusted instead, letting any authenticated customer pass
+      // an arbitrary customerId and probe another specific customer's
+      // coupon-redemption/first-order status via this endpoint's distinct
+      // error messages. Every other money-affecting endpoint in this codebase
+      // (payment verify, wallet topup, order creation) already enforces
+      // server-session identity only — this one was missed.
+      const customerId = req.customerId;
 
       if (!code || !customerId) {
         return res.status(400).json({ error: 'Code and customerId are required' });

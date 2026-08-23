@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { notificationService } from '../services/notification.service.js';
 
 /**
  * delivery_partners_payouts rows were written on every delivery
@@ -83,6 +84,24 @@ export async function markRiderPayoutPaid(req: Request, res: Response) {
 
     if (error) throw error;
     if (!data) return res.status(409).json({ success: false, error: 'Payout was already updated by another request' });
+
+    // Same financial-sensitivity class as a refund — every sibling admin
+    // mutation (approvals/rejections/edits) already writes an audit-trail
+    // entry via notifyAdminsOfReviewAction; this was the one that didn't,
+    // so a payout could be marked paid with zero record of who did it or
+    // when, visible only via a manual DB diff of paid_by/paid_at.
+    const [{ data: partner }, { data: order }] = await Promise.all([
+      supabaseAdmin.from('delivery_partners').select('name').eq('user_id', data.partner_user_id).maybeSingle(),
+      supabaseAdmin.from('customer_orders').select('order_code').eq('id', data.customer_order_id).maybeSingle(),
+    ]);
+    notificationService
+      .notifyAdminsOfReviewAction({
+        actorAdminId: req.adminId!,
+        category: 'rider_payout',
+        action: 'paid',
+        entityLabel: `${partner?.name ?? 'Unknown rider'} — Order ${order?.order_code ?? data.customer_order_id} (₹${data.amount})`,
+      })
+      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, payout: data });
   } catch (error: any) {
