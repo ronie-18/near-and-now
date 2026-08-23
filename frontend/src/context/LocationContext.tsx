@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef, ReactNode } from 'react';
 import { calculateDistance } from '../utils/deliveryFees';
 import { useAuth } from './AuthContext';
 
@@ -56,17 +56,17 @@ export function LocationProvider({ children }: LocationProviderProps) {
   }, [isAuthenticated]);
 
   // Save location to localStorage whenever it changes
-  const setUserLocation = (location: UserLocation | null) => {
+  const setUserLocation = useCallback((location: UserLocation | null) => {
     setUserLocationState(location);
     if (location) {
       localStorage.setItem('userLocation', JSON.stringify(location));
     } else {
       localStorage.removeItem('userLocation');
     }
-  };
+  }, []);
 
   // Calculate distance from user location to a store
-  const calculateDistanceToStore = (storeLat: number, storeLng: number): number | null => {
+  const calculateDistanceToStore = useCallback((storeLat: number, storeLng: number): number | null => {
     if (!userLocation) return null;
     return calculateDistance(
       userLocation.latitude,
@@ -74,14 +74,21 @@ export function LocationProvider({ children }: LocationProviderProps) {
       storeLat,
       storeLng
     );
-  };
+  }, [userLocation]);
 
-  const value = {
-    userLocation,
-    setUserLocation,
-    calculateDistanceToStore,
-    isLocationSet: userLocation !== null
-  };
+  // Memoized so LocationProvider's own re-renders (for reasons unrelated to
+  // location itself) don't force every useLocation() consumer to re-render
+  // — mirrors CartContext.tsx's identical fix in this same directory (also
+  // done 2026-08-24, closing this exact gap for the sibling context).
+  const value = useMemo(
+    () => ({
+      userLocation,
+      setUserLocation,
+      calculateDistanceToStore,
+      isLocationSet: userLocation !== null
+    }),
+    [userLocation, setUserLocation, calculateDistanceToStore]
+  );
 
   return (
     <LocationContext.Provider value={value}>
