@@ -96,11 +96,12 @@ const PushNotificationPanel = () => {
       let tokens: string[] = [];
 
       if (targetApp === 'drivers' || targetApp === 'all') {
-        const { data: driverData } = await db
-          .from('delivery_partners')
-          .select('expo_push_token')
-          .not('expo_push_token', 'is', null);
-        tokens = [...tokens, ...(driverData?.map(r => r.expo_push_token).filter(Boolean) || [])];
+        // expo_push_token is no longer directly readable off delivery_partners
+        // (see 20260930290000 migration, closing an unrestricted-admin-read
+        // exposure of every rider's live push token) — this admin-gated RPC
+        // is the only remaining way to fetch it.
+        const { data: driverData } = await db.rpc('admin_get_delivery_partner_push_tokens');
+        tokens = [...tokens, ...((driverData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
       }
 
       if (targetApp === 'stores' || targetApp === 'all') {
@@ -112,15 +113,10 @@ const PushNotificationPanel = () => {
       }
 
       if (targetApp === 'customers' || targetApp === 'all') {
-        // app_users has no public-facing SELECT policy the way stores.public_read
-        // does, so — unlike stores — no RPC carve-out is needed here; the admin
-        // session's existing admin_full_access RLS policy already covers this.
-        const { data: customerData } = await db
-          .from('app_users')
-          .select('expo_push_token')
-          .eq('role', 'customer')
-          .not('expo_push_token', 'is', null);
-        tokens = [...tokens, ...(customerData?.map(r => r.expo_push_token).filter(Boolean) || [])];
+        // expo_push_token is no longer directly readable off app_users either
+        // (same 20260930290000 migration) — same admin-gated RPC pattern.
+        const { data: customerData } = await db.rpc('admin_get_customer_push_tokens');
+        tokens = [...tokens, ...((customerData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
       }
 
       const uniqueTokens = [...new Set(tokens)];

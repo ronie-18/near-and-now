@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Product } from '../../services/supabase';
 import ProductCard from './ProductCard';
 import QuickViewModal from './QuickViewModal';
@@ -17,9 +17,14 @@ const ProductGrid = ({ products, loading = false, gridClassName }: ProductGridPr
   const gridClass = gridClassName ?? DEFAULT_GRID_CLASS;
   const [quickViewProduct, setQuickViewProduct] = useState<Product | null>(null);
 
-  const handleQuickView = (product: Product) => {
+  // Stable reference — ProductCard is wrapped in React.memo specifically so
+  // an unrelated re-render of this grid (e.g. loading/gridClassName
+  // changing) doesn't re-render every card; a fresh handleQuickView closure
+  // every render would silently defeat that memoization via a changed
+  // onQuickView prop.
+  const handleQuickView = useCallback((product: Product) => {
     setQuickViewProduct(product);
-  };
+  }, []);
 
   const closeQuickView = () => {
     setQuickViewProduct(null);

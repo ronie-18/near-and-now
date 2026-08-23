@@ -2201,14 +2201,25 @@ export class DatabaseService {
       const storeRows = stores || [];
       for (const s of storeRows) {
         const row = s as { id: string; latitude: number; longitude: number; name?: string; address?: string; phone?: string };
-        let address = row.address?.trim() || undefined;
+        const address = row.address?.trim() || undefined;
         const isGeneric = !address || /^Pickup point/i.test(address) || /^Local store/i.test(address);
+        // Previously awaited a real Google reverse-geocode API call here,
+        // synchronously, per store, before the tracking page could respond
+        // — for any store whose address hadn't been backfilled yet, this
+        // added 200ms-1s+ to every single tracking-page load/poll for that
+        // order, indefinitely (the fix below never got a chance to run
+        // until this exact code path executed, and if it kept failing, the
+        // cost repeated on every request). Now returns the current (maybe
+        // generic) address immediately and geocodes-and-caches in the
+        // background — the next request naturally picks up the backfilled
+        // address once it lands, with no request ever blocked on it.
         if (isGeneric && row.latitude != null && row.longitude != null) {
-          const geocoded = await reverseGeocode(Number(row.latitude), Number(row.longitude));
-          if (geocoded) {
-            address = geocoded;
-            await supabaseAdmin.from('stores').update({ address: geocoded, updated_at: new Date().toISOString() }).eq('id', row.id);
-          }
+          void reverseGeocode(Number(row.latitude), Number(row.longitude))
+            .then((geocoded) => {
+              if (!geocoded) return;
+              return supabaseAdmin.from('stores').update({ address: geocoded, updated_at: new Date().toISOString() }).eq('id', row.id);
+            })
+            .catch((err) => console.error(`Background reverse-geocode failed for store ${row.id}:`, err));
         }
         storeLocations.push({
           lat: Number(row.latitude),

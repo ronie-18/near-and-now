@@ -921,13 +921,39 @@ const StoresPage = () => {
       )
       .subscribe();
 
-    const pollId = setInterval(() => {
-      refreshAll().catch((err) => console.error('Background refresh failed:', err));
-    }, 20_000);
+    // This is a safety net, not the primary update path (Realtime above
+    // handles that) — a 20s cadence meant every open Stores tab did 4
+    // full-table scans (stores + 3 docs/images/change-request tables) 3
+    // times a minute, forever, even while backgrounded. Lengthened to 3
+    // minutes (still frequent enough to catch a missed Realtime event well
+    // within a normal admin session) and paused entirely while the tab is
+    // hidden, resuming with an immediate refresh when it regains focus —
+    // mirrors the mobile apps' useSmartPoll pattern for the same reason.
+    let pollId: ReturnType<typeof setInterval> | null = null;
+    const startPoll = () => {
+      if (pollId) return;
+      pollId = setInterval(() => {
+        refreshAll().catch((err) => console.error('Background refresh failed:', err));
+      }, 180_000);
+    };
+    const stopPoll = () => {
+      if (pollId) { clearInterval(pollId); pollId = null; }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stopPoll();
+      } else {
+        refreshAll().catch((err) => console.error('Foreground refresh failed:', err));
+        startPoll();
+      }
+    };
+    startPoll();
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       client.removeChannel(channel);
-      clearInterval(pollId);
+      stopPoll();
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 

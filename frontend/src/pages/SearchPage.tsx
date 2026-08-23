@@ -9,6 +9,10 @@ const SearchPage = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  // Renders a growing window instead of the whole result set at once —
+  // mirrors ShopPage.tsx/CategoryPage.tsx's identical fix.
+  const PRODUCTS_PAGE_SIZE = 24;
+  const [visibleCount, setVisibleCount] = useState(PRODUCTS_PAGE_SIZE);
   const { showNotification } = useNotification();
   const location = useLocation();
   const navigate = useNavigate();
@@ -28,7 +32,7 @@ const SearchPage = () => {
         setLoading(true);
         if (query.trim()) {
           const results = await searchProducts(query);
-          if (!cancelled) setProducts(results);
+          if (!cancelled) { setProducts(results); setVisibleCount(PRODUCTS_PAGE_SIZE); }
         } else {
           if (!cancelled) setProducts([]);
         }
@@ -90,7 +94,18 @@ const SearchPage = () => {
             )}
           </div>
 
-          <ProductGrid products={products} loading={loading} />
+          <ProductGrid products={products.slice(0, visibleCount)} loading={loading} />
+
+          {!loading && visibleCount < products.length && (
+            <div className="flex justify-center mt-8">
+              <button
+                onClick={() => setVisibleCount((c) => c + PRODUCTS_PAGE_SIZE)}
+                className="bg-white border-2 border-primary text-primary hover:bg-primary hover:text-white px-8 py-3 rounded-xl font-semibold transition-all duration-300"
+              >
+                Load More ({products.length - visibleCount} remaining)
+              </button>
+            </div>
+          )}
 
           {!loading && products.length === 0 && (
             <div className="text-center py-12">

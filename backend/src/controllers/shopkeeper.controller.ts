@@ -429,28 +429,47 @@ export async function expireStaleAllocations(orderId: string) {
 
   if (!staleAllocs?.length) return;
 
-  for (const alloc of staleAllocs) {
-    // Only proceed if this row is still pending_acceptance right now — guards against
-    // a race with the shopkeeper accepting/rejecting between the select above and here.
-    const { data: updated } = await supabaseAdmin
-      .from('order_store_allocations')
-      .update({ status: 'rejected' })
-      .eq('id', alloc.id)
-      .eq('status', 'pending_acceptance')
-      .select('id');
-    if (!updated?.length) continue;
+  // The flip-to-rejected guard and the order_items lookup are pure,
+  // mutually-independent I/O per allocation — previously ran as N sequential
+  // round trips per stale allocation. Batched into one query each below.
+  // `reallocateMissingItems` itself stays a sequential per-store loop: it
+  // re-reads order_store_allocations fresh (no row lock) to pick reallocation
+  // targets/sequence numbers, so running two calls for the same order
+  // concurrently could race and hand out colliding sequence numbers —
+  // genuinely needs to stay sequential, not just "for simplicity".
+  const staleAllocIds = staleAllocs.map((a: any) => a.id);
+  const { data: updated } = await supabaseAdmin
+    .from('order_store_allocations')
+    .update({ status: 'rejected' })
+    .in('id', staleAllocIds)
+    .eq('status', 'pending_acceptance')
+    .select('id, store_id');
+  if (!updated?.length) return;
 
-    const { data: items } = await supabaseAdmin
-      .from('order_items')
-      .select('id')
-      .eq('customer_order_id', orderId)
-      .eq('assigned_store_id', alloc.store_id);
+  const rejectedStoreIds = updated.map((a: any) => a.store_id);
+  const { data: items } = await supabaseAdmin
+    .from('order_items')
+    .select('id, assigned_store_id')
+    .eq('customer_order_id', orderId)
+    .in('assigned_store_id', rejectedStoreIds);
 
-    const itemIds = (items || []).map((i: any) => i.id);
-    if (itemIds.length) {
-      await supabaseAdmin.from('order_items')
-        .update({ item_status: 'pending', assigned_store_id: null })
-        .in('id', itemIds);
+  const itemIdsByStore = new Map<string, string[]>();
+  for (const item of items || []) {
+    const list = itemIdsByStore.get((item as any).assigned_store_id) ?? [];
+    list.push((item as any).id);
+    itemIdsByStore.set((item as any).assigned_store_id, list);
+  }
+
+  const allItemIds = (items || []).map((i: any) => i.id);
+  if (allItemIds.length) {
+    await supabaseAdmin.from('order_items')
+      .update({ item_status: 'pending', assigned_store_id: null })
+      .in('id', allItemIds);
+  }
+
+  for (const storeId of rejectedStoreIds) {
+    const itemIds = itemIdsByStore.get(storeId);
+    if (itemIds?.length) {
       await reallocateMissingItems(orderId, itemIds).catch(console.error);
     }
   }

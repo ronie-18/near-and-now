@@ -1,7 +1,7 @@
-import { useState, useRef, useCallback } from 'react';
+import { memo, useState, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Product } from '../../services/supabase';
-import { useCart } from '../../context/CartContext';
+import { useCart, useCartItemMap } from '../../context/CartContext';
 import { truncateText } from '../../utils/formatters';
 import StarRating from './StarRating';
 
@@ -11,15 +11,18 @@ interface ProductCardProps {
 }
 
 const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
-  const { addToCart, cartItems, updateCartQuantity, removeFromCart } = useCart();
+  const { addToCart, updateCartQuantity, removeFromCart } = useCart();
+  // O(1) map lookup instead of scanning the whole cart array on every
+  // render — on a page rendering many cards at once, an "Add to cart" on
+  // one card previously re-ran an O(n) .find() on every *other* card too,
+  // since a cart change re-renders every ProductCard (React Context
+  // re-renders all consumers on any value change).
+  const cartItemMap = useCartItemMap();
   const [isHovered, setIsHovered] = useState(false);
   const [looseQuantity, setLooseQuantity] = useState(0.25);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Memoize cart item lookup
-  const cartItem = cartItems.find(
-    item => item.id === product.id && (product.isLoose ? item.isLoose : !item.isLoose)
-  );
+  const cartItem = cartItemMap.get(`${product.id}:${product.isLoose ? 'loose' : 'unit'}`);
   const inCart = Boolean(cartItem);
   const quantity = cartItem?.quantity ?? 0;
 
@@ -264,4 +267,10 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
   );
 };
 
-export default ProductCard;
+// React.memo cuts re-renders caused by the parent (ProductGrid) re-rendering
+// with the same product/onQuickView props — it does not prevent the
+// still-necessary re-render when this card's own useCartItemMap()/useCart()
+// subscription actually changes (any cart mutation), which is inherent to
+// how React Context works and is instead made cheap via the O(1) map lookup
+// above.
+export default memo(ProductCard);

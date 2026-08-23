@@ -22,6 +22,15 @@ const ShopPage = () => {
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [maxPrice, setMaxPrice] = useState(1000);
   const [dealsOnly, setDealsOnly] = useState(searchParams.get('deals') === 'true');
+  // Renders a growing window of `filteredProducts` instead of the whole
+  // filtered/sorted result at once — the underlying fetch/filter/dedupe
+  // pipeline (fetchProductRows, across all nearby stores) stays a single
+  // full fetch, but for a catalog of a few hundred products, mounting every
+  // matching ProductCard simultaneously (each with its own image, hover
+  // state, and cart-context subscription) was the actual dominant cost of a
+  // slow/janky Shop page load, not just the network payload.
+  const PRODUCTS_PAGE_SIZE = 24;
+  const [visibleCount, setVisibleCount] = useState(PRODUCTS_PAGE_SIZE);
 
   const { userLocation } = useLocation();
   const { showNotification } = useNotification();
@@ -140,6 +149,7 @@ const ShopPage = () => {
     }
 
     setFilteredProducts(result);
+    setVisibleCount(PRODUCTS_PAGE_SIZE);
   }, [products, selectedCategory, sortBy, priceRange, searchQuery, dealsOnly]);
 
   const handleCategoryChange = (category: string) => setSelectedCategory(category);
@@ -435,7 +445,19 @@ const ShopPage = () => {
             )}
 
             {filteredProducts.length > 0 && (
-              <ProductGrid products={filteredProducts} loading={loading} />
+              <>
+                <ProductGrid products={filteredProducts.slice(0, visibleCount)} loading={loading} />
+                {visibleCount < filteredProducts.length && (
+                  <div className="flex justify-center mt-8">
+                    <button
+                      onClick={() => setVisibleCount((c) => c + PRODUCTS_PAGE_SIZE)}
+                      className="bg-white border-2 border-primary text-primary hover:bg-primary hover:text-white px-8 py-3 rounded-xl font-semibold transition-all duration-300"
+                    >
+                      Load More ({filteredProducts.length - visibleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

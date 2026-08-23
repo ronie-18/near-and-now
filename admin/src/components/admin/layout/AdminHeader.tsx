@@ -128,9 +128,17 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
     // reads PostgREST's request.headers GUC, which Realtime's postgres_changes feed
     // never populates (it's a WAL broadcast, not an HTTP request) — so a
     // postgres_changes subscription here would silently never receive events.
+    //
+    // Skipped while NotificationsPage itself is the active route — that page
+    // runs its own identical 15s poll against the same table, so an admin
+    // viewing it was previously getting hit twice on independent,
+    // unsynchronized timers for no benefit. The header still does its
+    // initial fetch above on every mount/navigation, so the bell badge is
+    // never stale — only the redundant *second* interval is skipped.
+    if (location.pathname === '/notifications') return;
     const intervalId = setInterval(fetchNotifications, 15_000);
     return () => clearInterval(intervalId);
-  }, [fetchNotifications]);
+  }, [fetchNotifications, location.pathname]);
 
   const markAllRead = async () => {
     if (!currentAdmin?.id) return;

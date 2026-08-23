@@ -240,6 +240,21 @@ const STYLES = `
   }
   .cp-retry-btn:hover { background: var(--ink); color: #fff; }
 
+  .cp-load-more-wrap { display: flex; justify-content: center; margin-top: 28px; }
+  .cp-load-more-btn {
+    padding: 12px 32px;
+    border-radius: 100px;
+    border: 1.5px solid var(--ink);
+    background: transparent;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .cp-load-more-btn:hover { background: var(--ink); color: #fff; }
+
   /* ── empty state ── */
   .cp-empty {
     display: flex;
@@ -362,6 +377,15 @@ const CategoryPage = () => {
     });
   }, [products, sortBy]);
 
+  // Renders a growing window instead of the whole sorted result at once —
+  // mirrors ShopPage.tsx's identical fix; mounting every matching
+  // ProductCard simultaneously (image + hover state + cart subscription
+  // each) was the dominant cost of a slow category page, not the fetch
+  // itself.
+  const PRODUCTS_PAGE_SIZE = 24;
+  const [visibleCount, setVisibleCount] = useState(PRODUCTS_PAGE_SIZE);
+  useEffect(() => { setVisibleCount(PRODUCTS_PAGE_SIZE); }, [sortedProducts]);
+
   const categoryName = useMemo(
     () => (categoryId ? formatCategoryName(categoryId) : 'Category'),
     [categoryId],
@@ -444,7 +468,19 @@ const CategoryPage = () => {
             <p className="cp-empty-msg">No products found in this category.</p>
           </div>
         ) : (
-          <ProductGrid products={sortedProducts} loading={loading} />
+          <>
+            <ProductGrid products={sortedProducts.slice(0, visibleCount)} loading={loading} />
+            {visibleCount < sortedProducts.length && (
+              <div className="cp-load-more-wrap">
+                <button
+                  className="cp-load-more-btn"
+                  onClick={() => setVisibleCount((c) => c + PRODUCTS_PAGE_SIZE)}
+                >
+                  Load More ({sortedProducts.length - visibleCount} remaining)
+                </button>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

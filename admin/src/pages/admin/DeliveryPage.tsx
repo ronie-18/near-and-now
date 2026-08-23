@@ -208,9 +208,15 @@ const DeliveryPage = () => {
   };
 
   const refreshAll = async () => {
+    // session_token/expo_push_token are deliberately excluded: neither is
+    // used on this page, and both are no longer anon/authenticated-readable
+    // at all (see 20260930290000 migration) — a plain select('*') would fail
+    // outright since Postgres denies SELECT * when any column is
+    // inaccessible, rather than silently omitting it. Matches StoresPage.tsx's
+    // identical fix for the same reason.
     const { data, error: sbError } = await getAdminClient()
       .from('delivery_partners')
-      .select('*')
+      .select('user_id, name, email, phone, address, upi_id, vehicle_type, vehicle_number, is_online, status, is_approved, created_at, updated_at, approved_at, approved_by, deleted_at')
       .order('created_at', { ascending: false });
     if (sbError) throw sbError;
     setPartners(data || []);
@@ -258,13 +264,37 @@ const DeliveryPage = () => {
       )
       .subscribe();
 
-    const pollId = setInterval(() => {
-      refreshAll().catch((err) => console.error('Background refresh failed:', err));
-    }, 20_000);
+    // Safety net, not the primary update path (Realtime above handles that)
+    // — a 20s cadence meant every open Delivery tab did 2 full-table scans
+    // 3 times a minute, forever, even while backgrounded. Lengthened to 3
+    // minutes and paused while the tab is hidden, resuming with an
+    // immediate refresh on regaining focus — mirrors StoresPage's identical
+    // fix and the mobile apps' useSmartPoll pattern for the same reason.
+    let pollId: ReturnType<typeof setInterval> | null = null;
+    const startPoll = () => {
+      if (pollId) return;
+      pollId = setInterval(() => {
+        refreshAll().catch((err) => console.error('Background refresh failed:', err));
+      }, 180_000);
+    };
+    const stopPoll = () => {
+      if (pollId) { clearInterval(pollId); pollId = null; }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stopPoll();
+      } else {
+        refreshAll().catch((err) => console.error('Foreground refresh failed:', err));
+        startPoll();
+      }
+    };
+    startPoll();
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       client.removeChannel(channel);
-      clearInterval(pollId);
+      stopPoll();
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 

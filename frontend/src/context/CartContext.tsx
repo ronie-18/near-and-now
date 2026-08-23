@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { Product } from '../services/supabase';
 import { useAuth } from './AuthContext';
 import {
@@ -233,24 +233,35 @@ export function CartProvider({ children }: CartProviderProps) {
   const getFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown =>
     calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal);
 
-  // Context value
-  const value = {
-    cartItems,
-    cartCount,
-    cartTotal,
-    addToCart,
-    removeFromCart,
-    updateCartQuantity,
-    decreaseCartQuantity,
-    clearCart,
-    getCartTotal,
-    getDeliveryFee,
-    getFeeBreakdown,
-    platformFee: PLATFORM_FEE,
-    handlingFee: HANDLING_FEE,
-    isAuthenticated,
-    hasLoadedCart
-  };
+  // Context value — memoized so CartProvider's own re-renders (e.g. from
+  // AuthContext changing up the tree) don't force every consumer to
+  // re-render just because this object literal has a new reference despite
+  // nothing inside it actually changing. Doesn't eliminate re-renders when
+  // cartItems itself genuinely changes (React Context re-renders every
+  // consumer on any value change, by design) — that residual cost is
+  // addressed separately by useCartItemMap below (O(1) lookup instead of an
+  // O(n) scan per card) and ProductCard's React.memo wrap.
+  const value = useMemo(
+    () => ({
+      cartItems,
+      cartCount,
+      cartTotal,
+      addToCart,
+      removeFromCart,
+      updateCartQuantity,
+      decreaseCartQuantity,
+      clearCart,
+      getCartTotal,
+      getDeliveryFee,
+      getFeeBreakdown,
+      platformFee: PLATFORM_FEE,
+      handlingFee: HANDLING_FEE,
+      isAuthenticated,
+      hasLoadedCart
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cartItems, cartCount, cartTotal, isAuthenticated, hasLoadedCart]
+  );
 
   return (
     <CartContext.Provider value={value}>
@@ -266,4 +277,21 @@ export function useCart() {
     throw new Error('useCart must be used within a CartProvider');
   }
   return context;
+}
+
+// Lightweight selector hook: returns a Map of product id (+isLoose variant)
+// to cart item. ProductCard previously did `cartItems.find(...)` — an O(n)
+// scan of the whole cart — inside every card's render body; consumers
+// should look up against this Map instead (O(1)) to keep each still-
+// necessary re-render (a genuine cart change re-renders every card that
+// reads cartItems, by React Context's own design) as cheap as possible.
+export function useCartItemMap(): Map<string, CartItem> {
+  const { cartItems } = useCart();
+  return useMemo(() => {
+    const m = new Map<string, CartItem>();
+    for (const item of cartItems) {
+      m.set(`${item.id}:${item.isLoose ? 'loose' : 'unit'}`, item);
+    }
+    return m;
+  }, [cartItems]);
 }
