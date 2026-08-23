@@ -29,7 +29,8 @@ import {
 import AdminLayout from "../../components/admin/layout/AdminLayout";
 import IdCell from "../../components/admin/IdCell";
 import {
-  getAdminProducts,
+  getAdminProductsPaginated,
+  getProductStats,
   deleteProduct,
   createProduct,
   updateProduct,
@@ -718,12 +719,24 @@ const ProductCard: React.FC<{
 
 // Main Component
 const ProductsPage = () => {
+  // Server-paginated: `products` only ever holds the current page's rows,
+  // not the full 44,000+-row master_products table — previously
+  // getAdminProducts() explicitly batch-fetched the entire table client-side
+  // on every load/refresh and did all search/filter/sort/pagination in JS.
+  // `stats` is fetched independently via lightweight count queries so the
+  // stats bar still reflects the whole catalog, not just the current page.
   const [products, setProducts] = useState<Product[]>([]);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [stats, setStats] = useState({ total: 0, inStock: 0, outOfStock: 0 });
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  // Debounced separately so the search box stays instantly responsive while
+  // typing, without firing a server request per keystroke now that search
+  // runs against the database instead of an in-memory array.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(PAGE_SIZE_OPTIONS[0]);
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -734,17 +747,29 @@ const ProductsPage = () => {
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
-  // Fetch data
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  // Fetch the current page of products
   const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      const [productsData, categoriesData] = await Promise.all([
-        getAdminProducts(),
-        getCategories(),
-      ]);
-      setProducts(productsData);
-      setCategories(categoriesData);
+      const { products: data, total } = await getAdminProductsPaginated({
+        page: currentPage,
+        pageSize: itemsPerPage,
+        search: debouncedSearch,
+        category: selectedCategory,
+        sortField,
+        sortDirection,
+      });
+      setProducts(data);
+      setTotalProducts(total);
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Failed to load products. Please try again.");
@@ -753,9 +778,28 @@ const ProductsPage = () => {
     }
   };
 
+  const fetchStats = async () => {
+    try {
+      setStats(await getProductStats());
+    } catch (err) {
+      console.error("Error fetching product stats:", err);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, itemsPerPage, debouncedSearch, selectedCategory, sortField, sortDirection]);
+
+  useEffect(() => {
+    fetchStats();
+    getCategories().then(setCategories).catch((err) => console.error("Error fetching categories:", err));
   }, []);
+
+  const handleRefresh = () => {
+    fetchData();
+    fetchStats();
+  };
 
   // Handle sort
   const handleSort = (field: SortField) => {
@@ -781,6 +825,8 @@ const ProductsPage = () => {
 
         if (successResult) {
           setProducts((prev) => prev.filter((p) => p.id !== id));
+          setTotalProducts((prev) => Math.max(0, prev - 1));
+          fetchStats();
           await notifyAdminAction('deleted product', productName, { product_id: id, product_name: productName });
           setSuccess(`"${productName}" has been deleted successfully.`);
           setTimeout(() => setSuccess(null), 3000);
@@ -814,6 +860,7 @@ const ProductsPage = () => {
         );
 
         const newStatus = currentStatus ? "Out of Stock" : "In Stock";
+        fetchStats();
         await notifyAdminAction(`set "${newStatus}"`, productName, { product_id: id, product_name: productName });
 
         // Show success message
@@ -830,76 +877,25 @@ const ProductsPage = () => {
     }
   };
 
-  // Filtered and sorted products
-  const filteredProducts = useMemo(() => {
-    const result = products.filter((product) => {
-      const searchLower = searchTerm.toLowerCase();
-      const matchesSearch =
-        product.name.toLowerCase().includes(searchLower) ||
-        (product.id && product.id.toLowerCase().includes(searchLower)) ||
-        (product.description &&
-          product.description.toLowerCase().includes(searchLower));
-      const matchesCategory =
-        selectedCategory === "All" || product.category === selectedCategory;
-      return matchesSearch && matchesCategory;
-    });
+  // `products` already holds only the current page's rows, already filtered
+  // and sorted server-side by fetchData's query — no client-side
+  // filter/sort pass needed.
+  const currentProducts = products;
 
-    // Sort
-    result.sort((a, b) => {
-      let comparison = 0;
-      switch (sortField) {
-        case "name":
-          comparison = a.name.localeCompare(b.name);
-          break;
-        case "price":
-          comparison = a.price - b.price;
-          break;
-        case "category":
-          comparison = (a.category || "").localeCompare(b.category || "");
-          break;
-        case "in_stock":
-          comparison = a.in_stock === b.in_stock ? 0 : a.in_stock ? -1 : 1;
-          break;
-        case "created_at":
-          comparison =
-            new Date(a.created_at || 0).getTime() -
-            new Date(b.created_at || 0).getTime();
-          break;
-      }
-      return sortDirection === "asc" ? comparison : -comparison;
-    });
+  // Pagination — `totalProducts` is the server-reported total for the
+  // current search/category filter.
+  const totalPages = Math.ceil(totalProducts / itemsPerPage) || 1;
+  const indexOfFirstProduct = (currentPage - 1) * itemsPerPage;
+  const indexOfLastProduct = indexOfFirstProduct + products.length;
 
-    return result;
-  }, [products, searchTerm, selectedCategory, sortField, sortDirection]);
-
-  // Stats
-  const stats = useMemo(
-    () => ({
-      total: products.length,
-      inStock: products.filter((p) => p.in_stock).length,
-      outOfStock: products.filter((p) => !p.in_stock).length,
-    }),
-    [products]
-  );
-
-  // Pagination
-  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage);
-  const indexOfLastProduct = currentPage * itemsPerPage;
-  const indexOfFirstProduct = indexOfLastProduct - itemsPerPage;
-  const currentProducts = filteredProducts.slice(
-    indexOfFirstProduct,
-    indexOfLastProduct
-  );
-
-  // Reset page on filter or page-size change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, selectedCategory, itemsPerPage]);
-
-  // Get unique categories from products
+  // Category filter options come from the real `categories` table (fetched
+  // once on mount), not derived from `products` — deriving from `products`
+  // only worked when that array held the whole catalog; against a paginated
+  // `products` array it would show a different, incomplete category list on
+  // every page.
   const productCategories = useMemo(
-    () => ["All", ...new Set(products.map((p) => p.category).filter(Boolean))],
-    [products]
+    () => ["All", ...categories.map((c) => c.name)],
+    [categories]
   );
 
   return (
@@ -915,7 +911,7 @@ const ProductsPage = () => {
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={fetchData}
+              onClick={handleRefresh}
               className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
               title="Refresh"
             >
@@ -1004,7 +1000,7 @@ const ProductsPage = () => {
               <Filter size={18} className="text-gray-400" />
               <select
                 value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
+                onChange={(e) => { setSelectedCategory(e.target.value); setCurrentPage(1); }}
                 className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-0 transition-colors min-w-[160px] text-gray-700"
               >
                 {productCategories.map((category) => (
@@ -1037,7 +1033,7 @@ const ProductsPage = () => {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           {loading ? (
             <LoadingSpinner />
-          ) : filteredProducts.length === 0 ? (
+          ) : currentProducts.length === 0 ? (
             <EmptyState
               searchTerm={searchTerm}
               selectedCategory={selectedCategory}
@@ -1110,7 +1106,7 @@ const ProductsPage = () => {
           )}
 
           {/* Pagination */}
-          {filteredProducts.length > 0 && (
+          {totalProducts > 0 && (
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-4">
                 <p className="text-sm text-gray-600">
@@ -1120,11 +1116,11 @@ const ProductsPage = () => {
                   </span>{" "}
                   to{" "}
                   <span className="font-semibold text-gray-800">
-                    {Math.min(indexOfLastProduct, filteredProducts.length)}
+                    {Math.min(indexOfLastProduct, totalProducts)}
                   </span>{" "}
                   of{" "}
                   <span className="font-semibold text-gray-800">
-                    {filteredProducts.length}
+                    {totalProducts}
                   </span>{" "}
                   products
                 </p>
@@ -1132,7 +1128,7 @@ const ProductsPage = () => {
                   Show
                   <select
                     value={itemsPerPage}
-                    onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                    onChange={(e) => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
                     className="px-2 py-1.5 border border-gray-200 rounded-lg bg-white text-gray-800 font-semibold focus:outline-none focus:border-emerald-400 transition-colors"
                   >
                     {PAGE_SIZE_OPTIONS.map((size) => (
@@ -1206,6 +1202,7 @@ const ProductsPage = () => {
         categories={categories}
         onProductAdded={() => {
           fetchData();
+          fetchStats();
           setSuccess("Product added successfully!");
           setTimeout(() => setSuccess(null), 3000);
         }}

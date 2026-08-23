@@ -226,6 +226,89 @@ export async function getAdminProducts(): Promise<Product[]> {
   }
 }
 
+const PRODUCT_SORT_COLUMN: Record<string, string> = {
+  name: 'name',
+  price: 'discounted_price',
+  category: 'category',
+  in_stock: 'is_active',
+  created_at: 'created_at',
+};
+
+// Server-side search/filter/sort/pagination for ProductsPage, which
+// previously called getAdminProducts() — an explicit batched-fetch loop
+// pulling the *entire* master_products table (44,000+ rows, bulk-imported)
+// client-side on every page load and manual refresh, then did all
+// searching/filtering/sorting/pagination in JS. The trigram indexes
+// (idx_master_products_name_trgm, idx_master_products_search_trgm) and the
+// category index (idx_master_products_category_active) already exist
+// specifically to support server-side search — this is the first thing to
+// actually use them.
+export async function getAdminProductsPaginated(options: {
+  page: number;
+  pageSize: number;
+  search?: string;
+  category?: string;
+  sortField: string;
+  sortDirection: 'asc' | 'desc';
+}): Promise<{ products: Product[]; total: number }> {
+  const { page, pageSize, search, category, sortField, sortDirection } = options;
+  try {
+    let query = getAdminClient()
+      .from('master_products')
+      .select('*', { count: 'exact' });
+
+    if (category && category !== 'All') {
+      query = query.eq('category', category);
+    }
+    if (search?.trim()) {
+      const term = search.trim();
+      // Covers the two fields the previous client-side filter actually
+      // matched most usefully (name, description) — id-substring matching
+      // is dropped: `id` is a uuid column, and ILIKE-ing it server-side
+      // would need a text cast Postgrest's filter syntax doesn't expose
+      // cleanly, for a search pattern (searching by partial product id) an
+      // admin would rarely use in practice.
+      query = query.or(`name.ilike.%${term}%,description.ilike.%${term}%`);
+    }
+
+    const sortColumn = PRODUCT_SORT_COLUMN[sortField] ?? 'name';
+    query = query
+      .order(sortColumn, { ascending: sortDirection === 'asc' })
+      // Same tiebreaker as the old batched fetch (20260930-era fix for
+      // duplicate-key warnings from tied sort values across a 44k-row
+      // table) — needed here too since offset pagination has no guaranteed
+      // stable order across requests when the sort key ties.
+      .order('id', { ascending: true });
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    const { data, error, count } = await query.range(from, to);
+
+    if (error) {
+      console.error('Error fetching paginated admin products:', error);
+      throw error;
+    }
+    return { products: (data ?? []).map(transformMasterProductToProduct), total: count ?? 0 };
+  } catch (error) {
+    console.error('Error in getAdminProductsPaginated:', error);
+    throw error;
+  }
+}
+
+// Lightweight counts for ProductsPage's stats bar — head:true count queries
+// return only a row count, not the underlying rows, so this stays cheap even
+// against the full 44k+-row table, unlike computing the same stats by
+// reducing over a fully-fetched product array.
+export async function getProductStats(): Promise<{ total: number; inStock: number; outOfStock: number }> {
+  const [totalRes, inStockRes] = await Promise.all([
+    getAdminClient().from('master_products').select('*', { count: 'exact', head: true }),
+    getAdminClient().from('master_products').select('*', { count: 'exact', head: true }).eq('is_active', true),
+  ]);
+  const total = totalRes.count ?? 0;
+  const inStock = inStockRes.count ?? 0;
+  return { total, inStock, outOfStock: total - inStock };
+}
+
 export async function getProductById(id: string): Promise<Product | null> {
   try {
     const { data, error } = await getAdminClient()
@@ -505,39 +588,87 @@ function mapDbStatusToFrontend(dbStatus: string): Order['order_status'] {
   return 'placed'; // default
 }
 
+// Reverse of mapDbStatusToFrontend above — kept as an explicit map (not a
+// naive inverse function) since the forward mapping is many-to-one
+// ('pending_at_store' and 'store_accepted' both collapse to 'placed'), so a
+// frontend status filter needs `.in('status', [...])`, not a single `.eq()`.
+// 'confirmed' is in OrdersPage's own ORDER_STATUSES list but is never
+// actually produced by mapDbStatusToFrontend — matches zero rows here too,
+// same as it already effectively does today via the unfiltered full fetch.
+const FRONTEND_TO_DB_STATUSES: Record<string, string[]> = {
+  placed: ['pending_at_store', 'store_accepted'],
+  confirmed: [],
+  preparing: ['preparing_order'],
+  ready: ['ready_for_pickup'],
+  assigned: ['delivery_partner_assigned'],
+  picking_up: ['picking_up'],
+  picked_up: ['order_picked_up'],
+  shipped: ['in_transit'],
+  delivered: ['order_delivered'],
+  cancelled: ['order_cancelled'],
+};
+
 // Orders Management
-export async function getOrders(): Promise<Order[]> {
-  try {
-    // Fetch customer_orders with related store_orders and order_items
-    const { data: customerOrders, error } = await getAdminClient()
-      .from('customer_orders')
-      .select(`
-        *,
-        store_orders (
-          id,
-          store_id,
-          status,
-          subtotal_amount,
-          delivery_fee,
-          delivery_partner_id,
-          order_items (
-            id,
-            product_id,
-            product_name,
-            unit,
-            image_url,
-            unit_price,
-            quantity
-          )
-        )
-      `)
-      .order('placed_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching orders:', error);
-      throw error;
-    }
+// Shared row shape/transform used by every getOrders* variant below — keeps
+// the customer_orders -> Order mapping in exactly one place so a paginated
+// or customer-scoped fetch can't silently drift out of sync with the full
+// getOrders() one.
+type CustomerOrderRow = {
+  id: string;
+  customer_id: string;
+  status: string;
+  payment_status: Order['payment_status'];
+  payment_method: string | null;
+  total_amount: number | null;
+  subtotal_amount: number | null;
+  delivery_fee: number | null;
+  delivery_address: string | null;
+  placed_at: string | null;
+  created_at: string | null;
+  order_code: string;
+  updated_at: string;
+  store_orders: {
+    id: string;
+    store_id: string;
+    status: string;
+    subtotal_amount: number;
+    delivery_fee: number;
+    delivery_partner_id: string | null;
+    order_items: {
+      id: string;
+      product_id: string;
+      product_name: string;
+      unit: string;
+      image_url: string;
+      unit_price: number;
+      quantity: number;
+    }[];
+  }[];
+};
 
+const ORDER_SELECT = `
+  *,
+  store_orders (
+    id,
+    store_id,
+    status,
+    subtotal_amount,
+    delivery_fee,
+    delivery_partner_id,
+    order_items (
+      id,
+      product_id,
+      product_name,
+      unit,
+      image_url,
+      unit_price,
+      quantity
+    )
+  )
+`;
+
+async function transformCustomerOrderRows(customerOrders: CustomerOrderRow[]): Promise<Order[]> {
     if (!customerOrders || customerOrders.length === 0) {
       return [];
     }
@@ -640,10 +771,133 @@ export async function getOrders(): Promise<Order[]> {
     });
 
     return transformedOrders;
+}
+
+export async function getOrders(): Promise<Order[]> {
+  try {
+    const { data: customerOrders, error } = await getAdminClient()
+      .from('customer_orders')
+      .select(ORDER_SELECT)
+      .order('placed_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching orders:', error);
+      throw error;
+    }
+    return transformCustomerOrderRows((customerOrders ?? []) as unknown as CustomerOrderRow[]);
   } catch (error) {
     console.error('Error in getOrders:', error);
     throw error;
   }
+}
+
+// Scoped to one customer server-side, instead of CustomerDetailPage's
+// previous approach of fetching every order platform-wide via getOrders()
+// and filtering client-side — that meant opening any single customer's
+// profile re-ran the same whole-database fetch+join+transform as the full
+// Orders list, discarding everything except that one customer's rows.
+export async function getOrdersByCustomerId(customerId: string): Promise<Order[]> {
+  try {
+    const { data: customerOrders, error } = await getAdminClient()
+      .from('customer_orders')
+      .select(ORDER_SELECT)
+      .eq('customer_id', customerId)
+      .order('placed_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching orders for customer:', error);
+      throw error;
+    }
+    return transformCustomerOrderRows((customerOrders ?? []) as unknown as CustomerOrderRow[]);
+  } catch (error) {
+    console.error('Error in getOrdersByCustomerId:', error);
+    throw error;
+  }
+}
+
+// Server-side paginated + filtered order fetch for OrdersPage, which
+// previously called getOrders() (the full, unbounded order history with
+// nested store_orders/order_items) on every load/refresh and only sliced
+// the page window client-side after the fact. Status/search filtering is
+// pushed into the query itself; search-by-customer-name/email still needs a
+// first-pass lookup against app_users since customer identity only comes in
+// via a join, not a column on customer_orders itself.
+export async function getOrdersPaginated(options: {
+  page: number;
+  pageSize: number;
+  status?: string;
+  search?: string;
+}): Promise<{ orders: Order[]; total: number }> {
+  const { page, pageSize, status, search } = options;
+  try {
+    let matchingCustomerIds: string[] | null = null;
+    if (search?.trim()) {
+      const term = search.trim();
+      const { data: matches } = await getAdminClient()
+        .from('app_users')
+        .select('id')
+        .or(`name.ilike.%${term}%,email.ilike.%${term}%`);
+      matchingCustomerIds = (matches ?? []).map((m: any) => m.id);
+      // No matching customer AND the term doesn't look like an order id/code
+      // either — short-circuit to an empty result rather than running a
+      // query that (with an empty .in() list) would otherwise match nothing
+      // via customer but still needs the order_code/id branch below to have
+      // a chance, so this only short-circuits when neither can possibly hit.
+    }
+
+    let query = getAdminClient()
+      .from('customer_orders')
+      .select(ORDER_SELECT, { count: 'exact' })
+      .order('placed_at', { ascending: false });
+
+    if (status && status !== 'All') {
+      query = query.in('status', FRONTEND_TO_DB_STATUSES[status] ?? []);
+    }
+    if (search?.trim()) {
+      const term = search.trim();
+      const idFilter = `order_code.ilike.%${term}%,id.ilike.%${term}%`;
+      const orFilter = matchingCustomerIds?.length
+        ? `${idFilter},customer_id.in.(${matchingCustomerIds.join(',')})`
+        : idFilter;
+      query = query.or(orFilter);
+    }
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    const { data: customerOrders, error, count } = await query.range(from, to);
+
+    if (error) {
+      console.error('Error fetching paginated orders:', error);
+      throw error;
+    }
+    const orders = await transformCustomerOrderRows((customerOrders ?? []) as unknown as CustomerOrderRow[]);
+    return { orders, total: count ?? 0 };
+  } catch (error) {
+    console.error('Error in getOrdersPaginated:', error);
+    throw error;
+  }
+}
+
+// Lightweight per-status counts for OrdersPage's stats bar — head:true count
+// queries return only a row count, not the underlying rows, so this is cheap
+// even at large order volumes, unlike computing the same stats by reducing
+// over the full getOrders() result.
+export async function getOrderStatusCounts(): Promise<Record<string, number>> {
+  const frontendStatuses = Object.keys(FRONTEND_TO_DB_STATUSES).filter((s) => FRONTEND_TO_DB_STATUSES[s].length > 0);
+  const [totalRes, revenueRes, ...statusRes] = await Promise.all([
+    getAdminClient().from('customer_orders').select('*', { count: 'exact', head: true }),
+    getAdminClient().from('customer_orders').select('total_amount').neq('status', 'order_cancelled'),
+    ...frontendStatuses.map((s) =>
+      getAdminClient().from('customer_orders').select('*', { count: 'exact', head: true }).in('status', FRONTEND_TO_DB_STATUSES[s])
+    ),
+  ]);
+  const counts: Record<string, number> = { total: totalRes.count ?? 0, confirmed: 0 };
+  frontendStatuses.forEach((s, i) => { counts[s] = statusRes[i].count ?? 0; });
+  // OrdersPage's "shipped" stat previously included assigned/picking_up/picked_up
+  // combined — mirror that here so the stats bar's numbers don't change shape.
+  counts.shipped = (counts.assigned ?? 0) + (counts.picking_up ?? 0) + (counts.picked_up ?? 0) + (counts.shipped ?? 0);
+  counts.totalRevenue = Math.round((revenueRes.data ?? []).reduce((sum: number, o: any) => sum + (Number(o.total_amount) || 0), 0));
+  return counts;
 }
 
 export async function getOrderById(id: string): Promise<Order | null> {

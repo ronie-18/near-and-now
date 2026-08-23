@@ -22,7 +22,7 @@ import {
   Store
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getOrders, updateOrderStatus, Order } from '../../services/adminService';
+import { getOrdersPaginated, getOrderStatusCounts, updateOrderStatus, Order } from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
 
 // Constants
@@ -159,21 +159,50 @@ const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
 const formatStatusLabel = (str: string) => str.split('_').map(capitalize).join(' ');
 
 const OrdersPage = () => {
+  // Server-paginated: `orders` only ever holds the current page's rows, not
+  // the full order history — previously getOrders() fetched every order
+  // platform-wide (with nested store_orders/order_items) on every load and
+  // refresh, and pagination/search/status-filter all happened by slicing
+  // that already-fully-fetched array client-side. `orderStats` is fetched
+  // independently via lightweight count queries so the stats bar still
+  // reflects the whole order history, not just the current page.
   const [orders, setOrders] = useState<Order[]>([]);
+  const [totalOrders, setTotalOrders] = useState(0);
+  const [orderStats, setOrderStats] = useState<Record<string, number>>({
+    total: 0, placed: 0, confirmed: 0, preparing: 0, ready: 0, shipped: 0, delivered: 0, cancelled: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  // Debounced separately from searchTerm so the search box stays instantly
+  // responsive while typing, without firing a server request per keystroke
+  // now that search runs against the database instead of an in-memory array.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedStatus, setSelectedStatus] = useState('All');
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
 
-  // Fetch orders
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  // Fetch the current page of orders
   const fetchOrders = async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getOrders();
+      const { orders: data, total } = await getOrdersPaginated({
+        page: currentPage,
+        pageSize: ITEMS_PER_PAGE,
+        status: selectedStatus,
+        search: debouncedSearch,
+      });
       setOrders(data);
+      setTotalOrders(total);
     } catch (err) {
       setError('Failed to load orders. Please try again.');
       console.error('Error fetching orders:', err);
@@ -182,9 +211,28 @@ const OrdersPage = () => {
     }
   };
 
+  const fetchStats = async () => {
+    try {
+      const counts = await getOrderStatusCounts();
+      setOrderStats(counts);
+    } catch (err) {
+      console.error('Error fetching order stats:', err);
+    }
+  };
+
   useEffect(() => {
     fetchOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, selectedStatus, debouncedSearch]);
+
+  useEffect(() => {
+    fetchStats();
   }, []);
+
+  const handleRefresh = () => {
+    fetchOrders();
+    fetchStats();
+  };
 
   // Handle status update
   const handleUpdateOrderStatus = async (orderId: string, newStatus: Order['order_status']) => {
@@ -211,6 +259,10 @@ const OrdersPage = () => {
         setOrders(prev => prev.map(order =>
           order.id === orderId ? { ...order, order_status: newStatus } : order
         ));
+        // The stats bar is derived server-side now, not from `orders` — a
+        // status change moves a row between buckets there too, so refresh
+        // it alongside the optimistic local patch above.
+        fetchStats();
       } else {
         setError('Failed to update order status.');
       }
@@ -221,42 +273,16 @@ const OrdersPage = () => {
     }
   };
 
-  // Stats
-  const orderStats = useMemo(() => ({
-    total: orders.length,
-    placed: orders.filter(o => o.order_status === 'placed').length,
-    confirmed: orders.filter(o => o.order_status === 'confirmed').length,
-    preparing: orders.filter(o => o.order_status === 'preparing').length,
-    ready: orders.filter(o => o.order_status === 'ready').length,
-    shipped: orders.filter(o => ['assigned', 'picking_up', 'picked_up', 'shipped'].includes(o.order_status)).length,
-    delivered: orders.filter(o => o.order_status === 'delivered').length,
-    cancelled: orders.filter(o => o.order_status === 'cancelled').length,
-    totalRevenue: orders.filter(o => o.order_status !== 'cancelled').reduce((sum, o) => sum + (o.order_total || 0), 0),
-  }), [orders]);
-
-  // Filtered orders
-  const filteredOrders = useMemo(() => {
-    return orders.filter(order => {
-      const matchesSearch =
-        order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (order.customer_email?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false);
-      const matchesStatus = selectedStatus === 'All' || order.order_status === selectedStatus;
-      return matchesSearch && matchesStatus;
-    });
-  }, [orders, searchTerm, selectedStatus]);
-
   const statuses = useMemo(() => ['All', ...ORDER_STATUSES], []);
 
-  // Pagination
-  const totalPages = Math.ceil(filteredOrders.length / ITEMS_PER_PAGE);
-  const indexOfLastOrder = currentPage * ITEMS_PER_PAGE;
-  const indexOfFirstOrder = indexOfLastOrder - ITEMS_PER_PAGE;
-  const currentOrders = filteredOrders.slice(indexOfFirstOrder, indexOfLastOrder);
+  // Pagination — `orders` already holds only the current page's rows and
+  // `totalOrders` is the server-reported total for the current filter/search,
+  // so no client-side slicing is needed.
+  const totalPages = Math.ceil(totalOrders / ITEMS_PER_PAGE) || 1;
+  const indexOfFirstOrder = (currentPage - 1) * ITEMS_PER_PAGE;
+  const indexOfLastOrder = indexOfFirstOrder + orders.length;
+  const currentOrders = orders;
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, selectedStatus]);
 
   return (
     <AdminLayout>
@@ -268,7 +294,7 @@ const OrdersPage = () => {
             <p className="text-gray-500 mt-1">Manage and track customer orders</p>
           </div>
           <button
-            onClick={fetchOrders}
+            onClick={handleRefresh}
             className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
           >
             <RefreshCw size={18} className="mr-2" />
@@ -313,7 +339,7 @@ const OrdersPage = () => {
               <Filter size={18} className="text-gray-400" />
               <select
                 value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
+                onChange={(e) => { setSelectedStatus(e.target.value); setCurrentPage(1); }}
                 className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-0 transition-colors min-w-[140px] text-gray-700"
               >
                 {statuses.map(status => (
@@ -328,7 +354,7 @@ const OrdersPage = () => {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           {loading ? (
             <LoadingSpinner />
-          ) : filteredOrders.length === 0 ? (
+          ) : currentOrders.length === 0 ? (
             <EmptyState searchTerm={searchTerm} />
           ) : (
             <div className="overflow-x-auto">
@@ -430,8 +456,8 @@ const OrdersPage = () => {
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
               <p className="text-sm text-gray-600">
                 Showing <span className="font-semibold text-gray-800">{indexOfFirstOrder + 1}</span> to{' '}
-                <span className="font-semibold text-gray-800">{Math.min(indexOfLastOrder, filteredOrders.length)}</span> of{' '}
-                <span className="font-semibold text-gray-800">{filteredOrders.length}</span> orders
+                <span className="font-semibold text-gray-800">{Math.min(indexOfLastOrder, totalOrders)}</span> of{' '}
+                <span className="font-semibold text-gray-800">{totalOrders}</span> orders
               </p>
               <div className="flex items-center gap-2">
                 <button

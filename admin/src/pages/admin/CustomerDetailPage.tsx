@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, User, Mail, Phone, MapPin, Calendar, ShoppingBag, TrendingUp, Package, CheckCircle, Clock, XCircle, RefreshCw } from 'lucide-react';
-import { getCustomerById, setCustomerSuspended, notifyAdminAction, Customer, getOrders } from '../../services/adminService';
+import { getCustomerById, setCustomerSuspended, notifyAdminAction, Customer, getOrdersByCustomerId } from '../../services/adminService';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
 
@@ -25,9 +25,11 @@ const CustomerDetailPage = () => {
       const customerData = await getCustomerById(id!);
       setCustomer(customerData);
       
-      // Fetch customer orders
-      const allOrders = await getOrders();
-      const customerOrders = allOrders.filter((o: any) => o.user_id === id);
+      // Fetch only this customer's orders server-side — previously fetched
+      // every order platform-wide via getOrders() and filtered client-side,
+      // meaning opening any single customer's profile re-ran the same
+      // whole-database fetch+join+transform as the full Orders list.
+      const customerOrders = await getOrdersByCustomerId(id!);
       setOrders(customerOrders);
     } catch (error) {
       console.error('Error fetching customer data:', error);
