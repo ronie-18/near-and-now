@@ -1,160 +1,149 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
-import { getAllProducts, hasNearbyStores, Product } from '../services/supabase';
+import { getNearbyProductsPage, getNearbyProductsMeta, hasNearbyStores, Product, ProductSortOption } from '../services/supabase';
 import { useLocation } from '../context/LocationContext';
 import { useNotification } from '../context/NotificationContext';
 import { formatCategoryName } from '../utils/formatters';
 import { Search, SlidersHorizontal, X, ChevronDown, Package, MapPin, Tag } from 'lucide-react';
 
+const PRODUCTS_PAGE_SIZE = 24;
+
 const ShopPage = () => {
   const [searchParams] = useSearchParams();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  // `pageProducts` accumulates across "Load More" clicks (page 1, then 1+2,
+  // etc.) — previously `products` held the entire nearby-store catalog,
+  // fetched via fetchProductRows across every eligible store 500 rows/
+  // request until exhausted, deduped in JS. Now backed by
+  // get_nearby_products_page(), which does the dedup/filter/sort/pagination
+  // server-side and returns only the requested page.
+  const [pageProducts, setPageProducts] = useState<Product[]>([]);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [noStoresNearby, setNoStoresNearby] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<string>('default');
+  const [sortBy, setSortBy] = useState<ProductSortOption>('default');
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 1000]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [maxPrice, setMaxPrice] = useState(1000);
   const [dealsOnly, setDealsOnly] = useState(searchParams.get('deals') === 'true');
-  // Renders a growing window of `filteredProducts` instead of the whole
-  // filtered/sorted result at once — the underlying fetch/filter/dedupe
-  // pipeline (fetchProductRows, across all nearby stores) stays a single
-  // full fetch, but for a catalog of a few hundred products, mounting every
-  // matching ProductCard simultaneously (each with its own image, hover
-  // state, and cart-context subscription) was the actual dominant cost of a
-  // slow/janky Shop page load, not just the network payload.
-  const PRODUCTS_PAGE_SIZE = 24;
-  const [visibleCount, setVisibleCount] = useState(PRODUCTS_PAGE_SIZE);
+
+  // Search text and price-range dragging both fire on every keystroke/pixel
+  // — debounced into the values that actually trigger a server fetch, same
+  // pattern used across the admin panel's paginated pages today. Category,
+  // sort, and deals-only are discrete one-tap actions and fetch immediately.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [debouncedPriceRange, setDebouncedPriceRange] = useState<[number, number]>([0, 1000]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setDebouncedPriceRange(priceRange);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchQuery, priceRange]);
 
   const { userLocation } = useLocation();
   const { showNotification } = useNotification();
   const lastLocationKeyRef = useRef<string | null>(null);
   // Guards against a slower, older fetch overwriting a newer one — e.g. the
   // user picks location A then immediately corrects to location B; A's
-  // response can resolve after B's and must not clobber it. fetchProducts is
-  // called both from the location-change effect and the manual Retry
-  // button, so a sequence counter (bumped per-call, checked before each
-  // state write) covers both call sites. Same race already fixed on
-  // ProductDetailPage/CategoryPage/SearchPage.
+  // response can resolve after B's and must not clobber it. Also guards
+  // page/filter fetches against each other the same way. Same race already
+  // fixed on ProductDetailPage/CategoryPage/SearchPage.
   const fetchSeqRef = useRef(0);
 
-  const shuffleArray = <T,>(array: T[]): T[] => {
-    const newArray = [...array];
-    for (let i = newArray.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
-    }
-    return newArray;
-  };
+  const locKey = userLocation?.latitude != null && userLocation?.longitude != null
+    ? `${userLocation.latitude.toFixed(3)},${userLocation.longitude.toFixed(3)}`
+    : 'no-location';
 
-  const fetchProducts = async (lat?: number, lng?: number) => {
+  // Metadata (category list + price-slider ceiling) reflects the whole
+  // nearby catalog and stays stable while filtering — fetched once per
+  // location change, decoupled from the paginated product fetch below.
+  useEffect(() => {
+    if (lastLocationKeyRef.current === locKey) return;
+    lastLocationKeyRef.current = locKey;
+
+    (async () => {
+      try {
+        if (userLocation?.latitude != null && userLocation?.longitude != null) {
+          const storesExist = await hasNearbyStores(userLocation.latitude, userLocation.longitude);
+          if (!storesExist) {
+            setNoStoresNearby(true);
+            setCategories([]);
+            setMaxPrice(1000);
+            setPriceRange([0, 1000]);
+            return;
+          }
+        }
+        setNoStoresNearby(false);
+        const opts = userLocation?.latitude != null && userLocation?.longitude != null
+          ? { lat: userLocation.latitude, lng: userLocation.longitude }
+          : undefined;
+        const meta = await getNearbyProductsMeta(opts);
+        setCategories(meta.categories);
+        setMaxPrice(meta.maxPrice);
+        setPriceRange([0, meta.maxPrice]);
+      } catch (error) {
+        console.error('Error fetching product metadata:', error);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locKey]);
+
+  const fetchPage = async (targetPage: number, append: boolean) => {
     const seq = ++fetchSeqRef.current;
     try {
-      setLoading(true);
-      setNoStoresNearby(false);
+      if (append) setLoadingMore(true); else setLoading(true);
       setFetchError(false);
 
-      // If we have a location, check whether any stores are nearby first.
-      if (lat != null && lng != null) {
-        const storesExist = await hasNearbyStores(lat, lng);
-        if (seq !== fetchSeqRef.current) return;
-        if (!storesExist) {
-          setNoStoresNearby(true);
-          setProducts([]);
-          setFilteredProducts([]);
-          setCategories([]);
-          return;
-        }
-      }
-
-      const opts = lat != null && lng != null ? { lat, lng } : undefined;
-      const allProducts = await getAllProducts(opts);
+      const opts = userLocation?.latitude != null && userLocation?.longitude != null
+        ? { lat: userLocation.latitude, lng: userLocation.longitude }
+        : undefined;
+      const { products: newProducts, total } = await getNearbyProductsPage({
+        ...opts,
+        category: selectedCategory,
+        search: debouncedSearch,
+        sort: sortBy,
+        dealsOnly,
+        minPrice: debouncedPriceRange[0],
+        maxPrice: debouncedPriceRange[1],
+        page: targetPage,
+        pageSize: PRODUCTS_PAGE_SIZE,
+      });
       if (seq !== fetchSeqRef.current) return;
-      const randomizedProducts = shuffleArray(allProducts);
-      setProducts(randomizedProducts);
-      setFilteredProducts(randomizedProducts);
 
-      const uniqueCategories = Array.from(
-        new Set(allProducts.map(product => product.category))
-      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
-      setCategories(uniqueCategories);
-
-      const calculatedMaxPrice = Math.max(...allProducts.map(product => product.price), 1000);
-      setMaxPrice(calculatedMaxPrice);
-      setPriceRange([0, calculatedMaxPrice]);
+      setPageProducts(prev => append ? [...prev, ...newProducts] : newProducts);
+      setTotalProducts(total);
+      setPage(targetPage);
     } catch (error) {
       if (seq !== fetchSeqRef.current) return;
       console.error('Error fetching products:', error);
       showNotification('Failed to load products. Please try again.', 'error');
       setFetchError(true);
-      setProducts([]);
-      setFilteredProducts([]);
+      if (!append) { setPageProducts([]); setTotalProducts(0); }
     } finally {
-      if (seq === fetchSeqRef.current) setLoading(false);
+      if (seq === fetchSeqRef.current) { setLoading(false); setLoadingMore(false); }
     }
   };
 
-  // Re-fetch whenever user location changes (rounded to ~110 m grid to avoid GPS jitter).
+  // Any filter/sort/location change resets to page 1 and replaces the list;
+  // "Load More" (below) appends instead.
   useEffect(() => {
-    const lat = userLocation?.latitude;
-    const lng = userLocation?.longitude;
-    const key = lat != null && lng != null
-      ? `${lat.toFixed(3)},${lng.toFixed(3)}`
-      : 'no-location';
-
-    if (lastLocationKeyRef.current === key) return;
-    lastLocationKeyRef.current = key;
-
-    fetchProducts(lat, lng);
+    if (noStoresNearby) { setPageProducts([]); setTotalProducts(0); setLoading(false); return; }
+    fetchPage(1, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userLocation?.latitude, userLocation?.longitude]);
+  }, [locKey, selectedCategory, sortBy, dealsOnly, debouncedSearch, debouncedPriceRange, noStoresNearby]);
 
-  // Apply filters and sorting whenever products or filter state changes.
-  useEffect(() => {
-    let result = [...products];
-
-    if (selectedCategory !== 'all') {
-      result = result.filter(product => product.category === selectedCategory);
-    }
-
-    if (dealsOnly) {
-      result = result.filter(
-        product => product.original_price != null && product.original_price > product.price
-      );
-    }
-
-    result = result.filter(
-      product => product.price >= priceRange[0] && product.price <= priceRange[1]
-    );
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(
-        product => product.name.toLowerCase().includes(query) ||
-          product.category.toLowerCase().includes(query)
-      );
-    }
-
-    switch (sortBy) {
-      case 'price-asc': result.sort((a, b) => a.price - b.price); break;
-      case 'price-desc': result.sort((a, b) => b.price - a.price); break;
-      case 'name-asc': result.sort((a, b) => a.name.localeCompare(b.name)); break;
-      case 'name-desc': result.sort((a, b) => b.name.localeCompare(a.name)); break;
-    }
-
-    setFilteredProducts(result);
-    setVisibleCount(PRODUCTS_PAGE_SIZE);
-  }, [products, selectedCategory, sortBy, priceRange, searchQuery, dealsOnly]);
+  const handleLoadMore = () => fetchPage(page + 1, true);
 
   const handleCategoryChange = (category: string) => setSelectedCategory(category);
 
-  const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => setSortBy(e.target.value);
+  const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => setSortBy(e.target.value as ProductSortOption);
 
   const handlePriceRangeChange = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
     const value = parseInt(e.target.value);
@@ -369,7 +358,7 @@ const ShopPage = () => {
           <div className="lg:w-3/4">
             <div className="flex items-center justify-between mb-6">
               <div className="text-gray-600 font-medium">
-                Showing <span className="text-primary font-bold">{filteredProducts.length}</span> products
+                Showing <span className="text-primary font-bold">{totalProducts}</span> products
               </div>
               <div className="flex items-center gap-2">
                 <label htmlFor="sort-by" className="text-gray-600 font-medium whitespace-nowrap">Sort:</label>
@@ -377,7 +366,7 @@ const ShopPage = () => {
                   id="sort-by" value={sortBy} onChange={handleSortChange}
                   className="border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-300 font-medium text-gray-700 cursor-pointer bg-white"
                 >
-                  <option value="default">Random</option>
+                  <option value="default">Featured</option>
                   <option value="price-asc">Price: Low to High</option>
                   <option value="price-desc">Price: High to Low</option>
                   <option value="name-asc">Name: A to Z</option>
@@ -395,7 +384,7 @@ const ShopPage = () => {
                 <h3 className="text-xl font-bold text-gray-800 mb-2">Couldn&apos;t Load Products</h3>
                 <p className="text-gray-600 mb-6">Something went wrong. Please check your connection and try again.</p>
                 <button
-                  onClick={() => fetchProducts(userLocation?.latitude, userLocation?.longitude)}
+                  onClick={() => fetchPage(1, false)}
                   className="bg-primary hover:bg-secondary text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105"
                 >
                   Try Again
@@ -417,7 +406,7 @@ const ShopPage = () => {
             )}
 
             {/* No results from active filters */}
-            {!loading && !fetchError && !noStoresNearby && filteredProducts.length === 0 && products.length > 0 && (
+            {!loading && !fetchError && !noStoresNearby && totalProducts === 0 && hasActiveFilters && (
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
                 <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <Package className="w-10 h-10 text-gray-400" />
@@ -433,8 +422,8 @@ const ShopPage = () => {
               </div>
             )}
 
-            {/* No products at all (no location, empty catalog) */}
-            {!loading && !fetchError && !noStoresNearby && products.length === 0 && !userLocation && (
+            {/* No location set at all */}
+            {!loading && !fetchError && !noStoresNearby && totalProducts === 0 && !hasActiveFilters && !userLocation && (
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
                 <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <MapPin className="w-10 h-10 text-gray-400" />
@@ -444,16 +433,28 @@ const ShopPage = () => {
               </div>
             )}
 
-            {filteredProducts.length > 0 && (
+            {/* Location set, stores nearby, but genuinely no active products */}
+            {!loading && !fetchError && !noStoresNearby && totalProducts === 0 && !hasActiveFilters && userLocation && (
+              <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
+                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Package className="w-10 h-10 text-gray-400" />
+                </div>
+                <h3 className="text-xl font-bold text-gray-800 mb-2">No Products Yet</h3>
+                <p className="text-gray-600">Stores near you haven&apos;t added products yet — check back soon.</p>
+              </div>
+            )}
+
+            {pageProducts.length > 0 && (
               <>
-                <ProductGrid products={filteredProducts.slice(0, visibleCount)} loading={loading} />
-                {visibleCount < filteredProducts.length && (
+                <ProductGrid products={pageProducts} loading={loading} />
+                {pageProducts.length < totalProducts && (
                   <div className="flex justify-center mt-8">
                     <button
-                      onClick={() => setVisibleCount((c) => c + PRODUCTS_PAGE_SIZE)}
-                      className="bg-white border-2 border-primary text-primary hover:bg-primary hover:text-white px-8 py-3 rounded-xl font-semibold transition-all duration-300"
+                      onClick={handleLoadMore}
+                      disabled={loadingMore}
+                      className="bg-white border-2 border-primary text-primary hover:bg-primary hover:text-white px-8 py-3 rounded-xl font-semibold transition-all duration-300 disabled:opacity-60"
                     >
-                      Load More ({filteredProducts.length - visibleCount} remaining)
+                      {loadingMore ? 'Loading…' : `Load More (${totalProducts - pageProducts.length} remaining)`}
                     </button>
                   </div>
                 )}

@@ -278,6 +278,92 @@ export async function getAllProducts(options?: ProductFetchOptions): Promise<Pro
   }
 }
 
+export type ProductSortOption = 'default' | 'price-asc' | 'price-desc' | 'name-asc' | 'name-desc';
+
+export interface NearbyProductsPageOptions extends ProductFetchOptions {
+  category?: string;
+  search?: string;
+  sort?: ProductSortOption;
+  dealsOnly?: boolean;
+  minPrice?: number;
+  maxPrice?: number;
+  page: number;
+  pageSize: number;
+}
+
+// Server-side paginated/deduped/filtered/sorted product listing, backed by
+// the get_nearby_products_page() RPC (20260930320000 migration). Unlike
+// getAllProducts (fetches the entire nearby-store catalog, 500 rows/request
+// per store until exhausted), this fetches only the requested page —
+// dedup/filter/sort happen in SQL, but all price/GST calculation still goes
+// through the same unchanged productRowsToProducts/transformProductRowToProduct
+// used everywhere else, so there's no risk of the SQL and JS pricing logic
+// diverging. Store eligibility (nearby-radius expansion) is resolved in JS
+// exactly the same way getAllProducts does — the RPC only receives the
+// already-resolved store id list (or null for "no location filter").
+export async function getNearbyProductsPage(
+  options: NearbyProductsPageOptions
+): Promise<{ products: Product[]; total: number }> {
+  try {
+    const locFallback = (options.lat == null || options.lng == null) ? getLocationFromStorage() : undefined;
+    const lat = options.lat ?? locFallback?.lat;
+    const lng = options.lng ?? locFallback?.lng;
+    const nearbyStoreIds = (lat != null && lng != null)
+      ? await getNearbyStoreIdsExpanding(lat, lng)
+      : null;
+    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
+
+    const { page, pageSize, category, search, sort, dealsOnly, minPrice, maxPrice } = options;
+    const { data, error } = await supabaseNoSession.rpc('get_nearby_products_page', {
+      p_store_ids: storeIdsToUse,
+      p_category: category && category !== 'all' ? category : null,
+      p_search: search?.trim() || null,
+      p_sort: sort ?? 'default',
+      p_limit: pageSize,
+      p_offset: (page - 1) * pageSize,
+      p_deals_only: dealsOnly ?? false,
+      p_min_price: minPrice ?? null,
+      p_max_price: maxPrice ?? null,
+    });
+    if (error) throw new Error(`Database error: ${error.message}`);
+
+    const result = (data ?? { products: [], total: 0 }) as { products: ProductRow[]; total: number };
+    return { products: productRowsToProducts(result.products ?? []), total: result.total ?? 0 };
+  } catch (error) {
+    console.error('❌ Error in getNearbyProductsPage:', error);
+    throw error;
+  }
+}
+
+// Lightweight companion to getNearbyProductsPage: distinct category list and
+// max effective price across the whole nearby catalog, computed once per
+// location change (independent of the current search/category/price
+// filters) — matches ShopPage.tsx's original semantics where these were
+// derived from the one full-catalog fetch and stayed stable while filtering.
+export async function getNearbyProductsMeta(
+  options?: ProductFetchOptions
+): Promise<{ categories: string[]; maxPrice: number }> {
+  try {
+    const opts = options ?? getLocationFromStorage();
+    const { lat, lng } = opts || {};
+    const nearbyStoreIds = (lat != null && lng != null)
+      ? await getNearbyStoreIdsExpanding(lat, lng)
+      : null;
+    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
+
+    const { data, error } = await supabaseNoSession.rpc('get_nearby_products_meta', {
+      p_store_ids: storeIdsToUse,
+    });
+    if (error) throw new Error(`Database error: ${error.message}`);
+
+    const result = (data ?? { categories: [], max_price: 1000 }) as { categories: string[]; max_price: number };
+    return { categories: result.categories ?? [], maxPrice: result.max_price ?? 1000 };
+  } catch (error) {
+    console.error('❌ Error in getNearbyProductsMeta:', error);
+    throw error;
+  }
+}
+
 // Get products by category from products table (joined with master_products), optionally filtered by nearby stores
 export async function getProductsByCategory(
   categoryName: string,

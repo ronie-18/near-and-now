@@ -1060,6 +1060,103 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 
 // Customers Management
 // Use app_users table and aggregate order data
+// Server-side paginated + filtered customer fetch for CustomersPage, which
+// previously called getCustomers() (fetching every customer AND every
+// customer_order platform-wide, to aggregate order counts/totals in JS) on
+// every load/refresh. Per-customer order stats are now aggregated only for
+// the current page's customer IDs (a small .in() query) instead of scanning
+// the entire order history to compute stats for 10 visible rows.
+export async function getCustomersPaginated(options: {
+  page: number;
+  pageSize: number;
+  search?: string;
+  status?: string;
+}): Promise<{ customers: Customer[]; total: number }> {
+  const { page, pageSize, search, status } = options;
+  try {
+    let query = getAdminClient()
+      .from('app_users')
+      .select('id, name, email, phone, created_at, is_suspended', { count: 'exact' })
+      .eq('role', 'customer');
+
+    if (status === 'Active') query = query.eq('is_suspended', false);
+    if (status === 'Inactive') query = query.eq('is_suspended', true);
+    if (search?.trim()) {
+      const term = search.trim();
+      // id-substring matching (present in the old client-side filter) is
+      // dropped here — same reasoning as ProductsPage's identical fix:
+      // ilike-ing a uuid column server-side needs a text cast Postgrest's
+      // filter syntax doesn't expose cleanly, for a rarely-used search
+      // pattern.
+      query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`);
+    }
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    const { data: users, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      console.error('Error fetching paginated customers:', error);
+      throw error;
+    }
+
+    const ids = (users ?? []).map((u) => u.id);
+    const orderStats = new Map<string, { count: number; total: number }>();
+    if (ids.length > 0) {
+      const { data: orders } = await getAdminClient()
+        .from('customer_orders')
+        .select('customer_id, total_amount')
+        .in('customer_id', ids);
+      (orders ?? []).forEach((order: any) => {
+        const stats = orderStats.get(order.customer_id) ?? { count: 0, total: 0 };
+        stats.count += 1;
+        stats.total += Number(order.total_amount || 0);
+        orderStats.set(order.customer_id, stats);
+      });
+    }
+
+    const customers: Customer[] = (users ?? []).map((user: any) => {
+      const stats = orderStats.get(user.id) || { count: 0, total: 0 };
+      return {
+        id: user.id,
+        name: user.name || '',
+        email: user.email || '',
+        phone: user.phone || '',
+        status: user.is_suspended ? 'Inactive' : 'Active',
+        orders_count: stats.count,
+        total_spent: Math.round(stats.total),
+        created_at: user.created_at || '',
+        location: ''
+      };
+    });
+
+    return { customers, total: count ?? 0 };
+  } catch (error) {
+    console.error('Error in getCustomersPaginated:', error);
+    throw error;
+  }
+}
+
+// Lightweight stats for CustomersPage's stat cards — count queries return
+// only a row count (or, for revenue, a single narrow column across all
+// orders) rather than fetching every customer/order row to reduce over.
+export async function getCustomerStats(): Promise<{ total: number; active: number; totalOrders: number; totalRevenue: number }> {
+  const [totalRes, activeRes, ordersCountRes, revenueRes] = await Promise.all([
+    getAdminClient().from('app_users').select('*', { count: 'exact', head: true }).eq('role', 'customer'),
+    getAdminClient().from('app_users').select('*', { count: 'exact', head: true }).eq('role', 'customer').eq('is_suspended', false),
+    getAdminClient().from('customer_orders').select('*', { count: 'exact', head: true }),
+    getAdminClient().from('customer_orders').select('total_amount'),
+  ]);
+  return {
+    total: totalRes.count ?? 0,
+    active: activeRes.count ?? 0,
+    totalOrders: ordersCountRes.count ?? 0,
+    totalRevenue: Math.round((revenueRes.data ?? []).reduce((sum: number, o: any) => sum + (Number(o.total_amount) || 0), 0)),
+  };
+}
+
 export async function getCustomers(): Promise<Customer[]> {
   try {
     // Fetch all app_users with role = customer (app_users also holds shopkeepers and

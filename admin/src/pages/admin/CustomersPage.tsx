@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { 
@@ -19,7 +19,7 @@ import {
   UserCheck,
   UserX
 } from 'lucide-react';
-import { getCustomers, setCustomerSuspended, notifyAdminAction, Customer } from '../../services/adminService';
+import { getCustomersPaginated, getCustomerStats, setCustomerSuspended, notifyAdminAction, Customer } from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
 
 // Constants
@@ -73,25 +73,59 @@ const EmptyState = ({ searchTerm }: { searchTerm: string }) => (
 );
 
 const CustomersPage = () => {
+  // Server-paginated: `customers` only ever holds the current page's rows.
+  // `stats` is fetched independently via lightweight count/aggregate
+  // queries so the stat cards still reflect the whole customer base, not
+  // just the current page.
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [totalCustomers, setTotalCustomers] = useState(0);
+  const [stats, setStats] = useState({ total: 0, active: 0, totalOrders: 0, totalRevenue: 0 });
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedStatus, setSelectedStatus] = useState('All');
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch customers
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  // Fetch the current page of customers
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      const data = await getCustomers();
+      const { customers: data, total } = await getCustomersPaginated({
+        page: currentPage,
+        pageSize: ITEMS_PER_PAGE,
+        search: debouncedSearch,
+        status: selectedStatus,
+      });
       setCustomers(data);
+      setTotalCustomers(total);
     } catch (err) {
       console.error('Error fetching customers:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchStats = async () => {
+    try {
+      setStats(await getCustomerStats());
+    } catch (err) {
+      console.error('Error fetching customer stats:', err);
+    }
+  };
+
+  const handleRefresh = () => {
+    fetchCustomers();
+    fetchStats();
   };
 
   // Suspend/reactivate — matches the online-offline toggle pattern already
@@ -107,6 +141,7 @@ const CustomersPage = () => {
     try {
       await setCustomerSuspended(customer.id, suspending);
       setCustomers(prev => prev.map(c => c.id === customer.id ? { ...c, status: suspending ? 'Inactive' : 'Active' } : c));
+      fetchStats();
       await notifyAdminAction(
         `${suspending ? 'suspended' : 'reactivated'} customer`,
         customer.name,
@@ -122,38 +157,22 @@ const CustomersPage = () => {
 
   useEffect(() => {
     fetchCustomers();
-  }, []);
-
-  // Stats
-  const stats = useMemo(() => ({
-    total: customers.length,
-    active: customers.filter(c => c.status === 'Active').length,
-    totalOrders: customers.reduce((sum, c) => sum + c.orders_count, 0),
-    totalRevenue: customers.reduce((sum, c) => sum + c.total_spent, 0),
-  }), [customers]);
-
-  // Filtered customers
-  const filteredCustomers = useMemo(() => {
-    return customers.filter(customer => {
-      const matchesSearch = 
-        customer.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        (customer.email?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
-        (customer.phone?.includes(searchTerm) ?? false) ||
-        customer.id.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesStatus = selectedStatus === 'All' || customer.status === selectedStatus;
-      return matchesSearch && matchesStatus;
-    });
-  }, [customers, searchTerm, selectedStatus]);
-
-  // Pagination
-  const totalPages = Math.ceil(filteredCustomers.length / ITEMS_PER_PAGE);
-  const indexOfLastCustomer = currentPage * ITEMS_PER_PAGE;
-  const indexOfFirstCustomer = indexOfLastCustomer - ITEMS_PER_PAGE;
-  const currentCustomers = filteredCustomers.slice(indexOfFirstCustomer, indexOfLastCustomer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, debouncedSearch, selectedStatus]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, selectedStatus]);
+    fetchStats();
+  }, []);
+
+  // `customers` already holds only the current page's rows, filtered
+  // server-side by fetchCustomers' query — no client-side filter pass needed.
+  const currentCustomers = customers;
+
+  // Pagination — `totalCustomers` is the server-reported total for the
+  // current search/status filter.
+  const totalPages = Math.ceil(totalCustomers / ITEMS_PER_PAGE) || 1;
+  const indexOfFirstCustomer = (currentPage - 1) * ITEMS_PER_PAGE;
+  const indexOfLastCustomer = indexOfFirstCustomer + customers.length;
 
   const statuses = ['All', 'Active', 'Inactive'];
 
@@ -167,7 +186,7 @@ const CustomersPage = () => {
             <p className="text-gray-500 mt-1">View and manage your customer database</p>
           </div>
           <button
-            onClick={fetchCustomers}
+            onClick={handleRefresh}
             className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
           >
             <RefreshCw size={18} className="mr-2" />
@@ -232,7 +251,7 @@ const CustomersPage = () => {
               <Filter size={18} className="text-gray-400" />
               <select
                 value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
+                onChange={(e) => { setSelectedStatus(e.target.value); setCurrentPage(1); }}
                 className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:ring-0 transition-colors min-w-[140px] text-gray-700"
               >
                 {statuses.map(status => (
@@ -247,7 +266,7 @@ const CustomersPage = () => {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           {loading ? (
             <LoadingSpinner />
-          ) : filteredCustomers.length === 0 ? (
+          ) : currentCustomers.length === 0 ? (
             <EmptyState searchTerm={searchTerm} />
           ) : (
             <div className="overflow-x-auto">
@@ -367,8 +386,8 @@ const CustomersPage = () => {
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
               <p className="text-sm text-gray-600">
                 Showing <span className="font-semibold text-gray-800">{indexOfFirstCustomer + 1}</span> to{' '}
-                <span className="font-semibold text-gray-800">{Math.min(indexOfLastCustomer, filteredCustomers.length)}</span> of{' '}
-                <span className="font-semibold text-gray-800">{filteredCustomers.length}</span> customers
+                <span className="font-semibold text-gray-800">{Math.min(indexOfLastCustomer, totalCustomers)}</span> of{' '}
+                <span className="font-semibold text-gray-800">{totalCustomers}</span> customers
               </p>
               <div className="flex items-center gap-2">
                 <button
