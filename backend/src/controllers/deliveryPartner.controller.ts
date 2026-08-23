@@ -134,6 +134,15 @@ async function notifyAdminsOfRiderDocs(type: string, title: string, message: str
  * caller can merge it into the response it's already building, instead of
  * re-querying the row.
  */
+// Throttles demoteRiderIfDocsIncomplete's actual check to once per rider per
+// window. getProfile is polled/re-fetched constantly (verification gate,
+// home screen's own fetch, focus effects) and, right at the moment a rider
+// taps "Start Delivering", 2-3 of those land concurrently — without this,
+// each one independently re-runs the doc-count query and (if it decides to
+// demote) re-issues the same DB write and admin notification redundantly.
+const lastDemotionCheck = new Map<string, number>();
+const DEMOTION_CHECK_THROTTLE_MS = 60 * 1000;
+
 async function demoteRiderIfDocsIncomplete(
   riderId: string,
   isApproved: boolean | null | undefined,
@@ -141,18 +150,34 @@ async function demoteRiderIfDocsIncomplete(
 ): Promise<Record<string, unknown> | null> {
   if (!isApproved) return null;
 
-  const { count } = await supabaseAdmin
+  // A null/undefined vehicle_type should never happen for an approved rider
+  // (signupComplete requires it), but isVehicleRegistrationRequired(null)
+  // resolves to "required" — if this ever fires on a transient/bad read, it
+  // would incorrectly demand vehicle_registration and wrongly demote an
+  // otherwise fully-documented rider. Bail out rather than guess.
+  if (!vehicleType) return null;
+
+  const last = lastDemotionCheck.get(riderId) ?? 0;
+  if (Date.now() - last < DEMOTION_CHECK_THROTTLE_MS) return null;
+  lastDemotionCheck.set(riderId, Date.now());
+
+  const { data: uploadedDocs } = await supabaseAdmin
     .from('delivery_partner_verification_documents')
-    .select('id', { count: 'exact', head: true })
+    .select('doc_type')
     .eq('partner_id', riderId)
     .not('storage_path', 'is', null);
 
-  // DOC_TYPES.length derives the required count directly from the shared doc
-  // list (10 today) rather than a hardcoded number, so this stays correct
-  // automatically if more required documents are ever added — only
-  // vehicle_registration is conditionally excluded (cycle/e-bike).
-  const requiredCount = DOC_TYPES.length - (isVehicleRegistrationRequired(vehicleType) ? 0 : 1);
-  if ((count ?? 0) >= requiredCount) return null;
+  // Per-doc-type comparison (not a raw row count) — matches the admin
+  // panel's own approval gate (DeliveryPage.tsx's approvalReadiness), which
+  // requires each specific required doc_type to be present rather than just
+  // "N rows total". A raw count can't tell "all required types present" apart
+  // from "some types duplicated, others missing".
+  const uploadedTypes = new Set((uploadedDocs ?? []).map((d) => d.doc_type));
+  const requiredTypes = DOC_TYPES.filter(
+    (t) => t !== 'vehicle_registration' || isVehicleRegistrationRequired(vehicleType)
+  );
+  const missingTypes = requiredTypes.filter((t) => !uploadedTypes.has(t));
+  if (missingTypes.length === 0) return null;
 
   const patch = {
     is_approved: false,
@@ -165,11 +190,13 @@ async function demoteRiderIfDocsIncomplete(
   };
   await supabaseAdmin.from('delivery_partners').update(patch).eq('user_id', riderId);
 
+  console.warn(`[demoteRiderIfDocsIncomplete] Demoting rider ${riderId} — missing doc types:`, missingTypes);
+
   await notifyAdminsOfRiderDocs(
     'rider_verification_incomplete',
     'Rider sent back for re-verification',
     'A previously-approved rider no longer meets the full document requirements (a new required document was added) and has been automatically returned to pending verification.',
-    { partner_id: riderId }
+    { partner_id: riderId, missing_doc_types: missingTypes }
   );
 
   return patch;
