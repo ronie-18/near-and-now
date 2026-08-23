@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
+import { useLocation } from '../../context/LocationContext';
 import LocationPicker, { LocationData } from '../location/LocationPicker';
 import {
   Search, ShoppingCart, User, MapPin, ChevronDown, Menu, X,
@@ -13,6 +14,7 @@ const Header = () => {
   const navigate = useNavigate();
   const { user, customer, isAuthenticated, logoutUser } = useAuth();
   const { cartCount } = useCart();
+  const { setUserLocation } = useLocation();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,6 +50,12 @@ const Header = () => {
             };
             setCurrentLocation(loc);
             localStorage.setItem('currentLocation', JSON.stringify(loc));
+            // LocationContext's `userLocation` (a separate store, keyed under
+            // localStorage's `userLocation`) is what Home/Shop actually watch
+            // to refetch nearby-store products — this header state alone
+            // never fed it, so picking/loading a location here previously
+            // never changed what products those pages showed.
+            setUserLocation({ latitude: loc.lat, longitude: loc.lng, address: loc.address, city: loc.city, state: loc.state, pincode: loc.pincode });
             return;
           }
         } catch (e) {
@@ -59,13 +67,16 @@ const Header = () => {
       const savedLocation = localStorage.getItem('currentLocation');
       if (savedLocation) {
         try {
-          setCurrentLocation(JSON.parse(savedLocation));
+          const loc: LocationData = JSON.parse(savedLocation);
+          setCurrentLocation(loc);
+          setUserLocation({ latitude: loc.lat, longitude: loc.lng, address: loc.address, city: loc.city, state: loc.state, pincode: loc.pincode });
         } catch (e) {
           console.error('Error loading saved location:', e);
         }
       }
     };
     loadLocation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, user?.id, user?.phone, customer?.phone]);
 
   // Handle scroll effect
@@ -186,6 +197,9 @@ const Header = () => {
   const handleLocationSelect = (location: LocationData) => {
     setCurrentLocation(location);
     localStorage.setItem('currentLocation', JSON.stringify(location));
+    // Keep LocationContext's userLocation in sync — Home/Shop's product
+    // fetching reacts to that store, not this component's own state.
+    setUserLocation({ latitude: location.lat, longitude: location.lng, address: location.address, city: location.city, state: location.state, pincode: location.pincode });
   };
 
   const toggleLocationPicker = () => {
