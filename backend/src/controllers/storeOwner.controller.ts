@@ -1466,10 +1466,27 @@ export async function registerPushToken(req: Request, res: Response) {
     const { pushToken } = req.body as { pushToken?: string | null };
     if (pushToken === undefined) return res.status(400).json({ success: false, error: 'pushToken required' });
 
-    await supabaseAdmin
+    // .select('id') turns this into an UPDATE ... RETURNING, so a write that's
+    // silently filtered to 0 rows (e.g. by RLS, if this ever runs under
+    // anything other than service_role) surfaces as an empty array instead of
+    // a bare "success" with nothing actually persisted — this exact silent
+    // failure mode is why every store's expo_push_token was null in
+    // production despite the app reporting successful registration every
+    // time (see riderAuthBridge.service.ts's session-leakage fix).
+    const { data: updated, error } = await supabaseAdmin
       .from('stores')
       .update({ expo_push_token: pushToken })
-      .eq('owner_id', userId);
+      .eq('owner_id', userId)
+      .select('id');
+
+    if (error) {
+      console.error('❌ registerPushToken update failed:', error);
+      return res.status(500).json({ success: false, error: 'Failed to register push token' });
+    }
+    if (!updated || updated.length === 0) {
+      console.error(`❌ registerPushToken: no store row updated for owner_id ${userId}`);
+      return res.status(500).json({ success: false, error: 'Failed to register push token' });
+    }
 
     res.json({ success: true });
   } catch (error: any) {

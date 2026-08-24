@@ -1744,7 +1744,28 @@ export class DeliveryPartnerController {
       if (expo_push_token === undefined) {
         return res.status(400).json({ error: 'expo_push_token required' });
       }
-      await supabaseAdmin.from('delivery_partners').update({ expo_push_token }).eq('user_id', req.riderId!);
+      // .select('user_id') turns this into an UPDATE ... RETURNING so a write
+      // silently filtered to 0 rows (e.g. by RLS, if this ever runs under
+      // anything other than service_role) surfaces as an empty array instead
+      // of a bare "success" with nothing actually persisted — this exact
+      // silent failure mode is why every rider's expo_push_token was null in
+      // production despite the app reporting successful registration every
+      // time (see riderAuthBridge.service.ts's session-leakage fix).
+      const { data: updated, error } = await supabaseAdmin
+        .from('delivery_partners')
+        .update({ expo_push_token })
+        .eq('user_id', req.riderId!)
+        .select('user_id');
+
+      if (error) {
+        console.error('updatePushToken error:', error);
+        return res.status(500).json({ error: 'Failed to save push token' });
+      }
+      if (!updated || updated.length === 0) {
+        console.error(`updatePushToken: no delivery_partners row updated for user_id ${req.riderId}`);
+        return res.status(500).json({ error: 'Failed to save push token' });
+      }
+
       res.json({ success: true });
     } catch (err) {
       console.error('updatePushToken error:', err);

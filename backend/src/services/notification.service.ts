@@ -3,6 +3,14 @@ import { supabaseAdmin } from '../config/database.js';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
+// All three apps (customer, rider, store-owner) create this exact Android
+// notification channel client-side (MAX importance, order_chime.wav, custom
+// vibration pattern) — see e.g. near-now-store_owner/lib/notifications.ts.
+// Without `channelId` on the push payload, Android routes the notification
+// to Expo's default channel instead, silently dropping the custom
+// sound/vibration/importance the apps already set up.
+const ORDER_ALERT_CHANNEL_ID = 'orders_v2';
+
 // Mirrors the Twilio init guard in auth.controller.ts: only construct a real
 // client if a key is actually configured, so a missing key degrades to a
 // logged no-op instead of crashing the process on startup.
@@ -44,7 +52,7 @@ export class NotificationService {
           'Accept-encoding': 'gzip, deflate',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ to: expoPushToken, sound, title, body, data }),
+        body: JSON.stringify({ to: expoPushToken, sound, title, body, data, channelId: ORDER_ALERT_CHANNEL_ID }),
       });
       const json: any = await res.json().catch(() => null);
       const ticket = json?.data;
@@ -82,7 +90,7 @@ export class NotificationService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(partners.map((p) => ({
-          to: p.expo_push_token, sound: 'default', title, body, data,
+          to: p.expo_push_token, sound: 'default', title, body, data, channelId: ORDER_ALERT_CHANNEL_ID,
         }))),
       });
       const json: any = await res.json().catch(() => null);
