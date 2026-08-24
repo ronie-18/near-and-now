@@ -171,13 +171,29 @@ export class AuthController {
         // exactly this reason.
         let existingUser: any = null;
         const roleVariants = phoneLookupVariants(phone);
-        const { data: byVariant } = await supabaseAdmin
+        const { data: byVariant, error: byVariantError } = await supabaseAdmin
           .from('app_users')
           .select('*')
           .in('phone', roleVariants)
           .eq('role', requestedRole)
           .limit(1)
           .maybeSingle();
+
+        // A genuine lookup failure (DB/permission/network) must not be treated
+        // the same as "no account found" — that previously bounced real,
+        // already-registered riders/shopkeepers into "complete signup" (or,
+        // for the existing-user app flow, straight back to the phone screen)
+        // purely because this query errored, even though their OTP was
+        // already verified. Surface it as a failed request instead so the
+        // client shows a retryable error rather than silently mis-reporting
+        // a real account as unregistered.
+        if (byVariantError) {
+          console.error(`❌ ${requestedRole} account lookup failed:`, byVariantError);
+          return res.status(500).json({
+            error: 'Failed to verify account',
+            message: 'Could not check your account right now. Please try again.'
+          });
+        }
 
         if (byVariant) {
           existingUser = byVariant;

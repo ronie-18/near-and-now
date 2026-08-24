@@ -1,4 +1,4 @@
-import { supabaseAdmin } from '../config/database.js';
+import { createServiceRoleClient } from '../config/database.js';
 
 // Supabase Realtime's postgres_changes RLS check only ever evaluates auth.uid()
 // from a real Supabase Auth session — it can't be scoped using this app's
@@ -19,6 +19,11 @@ function riderAuthEmail(deliveryPartnerUserId: string): string {
 export async function mintRiderRealtimeSession(
   deliveryPartnerUserId: string
 ): Promise<{ access_token: string; refresh_token: string } | null> {
+  // A throwaway client, never the shared `supabaseAdmin` singleton — see
+  // createServiceRoleClient's doc comment. `auth.verifyOtp` below logs
+  // whichever client instance it's called on into a real session, and that
+  // must not leak into the app-wide admin client every other request reuses.
+  const supabaseAdmin = createServiceRoleClient();
   try {
     const { data: partner, error: fetchError } = await supabaseAdmin
       .from('delivery_partners')

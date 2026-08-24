@@ -91,6 +91,39 @@ export const supabaseAdmin: SupabaseClient = supabaseServiceKey
     })
   : createMisconfiguredAdminClient();
 
+/**
+ * Fresh, one-off service-role client — NOT the shared `supabaseAdmin` singleton.
+ *
+ * Any call that logs the client itself into a real Supabase Auth session
+ * (`auth.verifyOtp`, `auth.signInWithPassword`, `auth.setSession`, ...) mutates
+ * that client's in-memory session, and `persistSession: false` does NOT prevent
+ * this — it only skips writing to storage. Every subsequent `.from()` request
+ * made through that same client then authenticates as the logged-in session's
+ * `authenticated` role instead of the original `service_role` apikey, because
+ * supabase-js prefers an active session over the client's own apikey when
+ * building the Authorization header.
+ *
+ * `supabaseAdmin` is a module-level singleton reused across every request in a
+ * warm serverless instance, so doing this on it doesn't just affect the one
+ * caller — it silently downgrades EVERY later request on that instance (any
+ * user, any role) until the instance recycles. This bit riderAuthBridge.service.ts's
+ * mintRiderRealtimeSession, which calls `auth.verifyOtp` to mint each rider a
+ * realtime session: the first rider login on a warm instance would permanently
+ * swap that instance's `supabaseAdmin` from service_role to that rider's own
+ * `authenticated` session, and every app_users query after it (for anyone)
+ * started failing with "permission denied for table app_users" — full table
+ * grants only exist for service_role; `authenticated` only has a column-scoped
+ * SELECT grant, so `select('*')` / `insert().select()` (RETURNING *) break.
+ * Use this factory instead for any code path that calls a session-mutating
+ * auth method, so the mutation is scoped to a throwaway client.
+ */
+export function createServiceRoleClient(): SupabaseClient {
+  if (!supabaseServiceKey) return createMisconfiguredAdminClient();
+  return createClient(supabaseUrl!, supabaseServiceKey, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
+}
+
 /** Saved-address merge uses service role to read app_users / customer_saved_addresses under RLS. */
 export const isSupabaseServiceRoleConfigured = Boolean(supabaseServiceKey);
 
