@@ -220,10 +220,20 @@ export async function createAdditionPayment(req: Request, res: Response) {
       amount: subtotalAmount,
     });
 
-    await supabaseAdmin
+    // Checked and thrown — verifyAdditionPayment (below) later compares the
+    // client-submitted razorpay_order_id against this exact stored value. A
+    // silent failure here would leave it null, so a customer who genuinely
+    // pays via the razorpay_order_id we're about to hand back would have
+    // their payment permanently rejected at verification (null never
+    // matches a real order id) with no way to retry.
+    const { error: linkErr } = await supabaseAdmin
       .from('order_addition_requests')
       .update({ razorpay_order_id: paymentOrder.razorpay_order_id })
       .eq('id', request.id);
+    if (linkErr) {
+      console.error('createAdditionPayment: failed to persist razorpay_order_id:', linkErr, { requestId: request.id });
+      throw linkErr;
+    }
 
     res.json({
       success: true,

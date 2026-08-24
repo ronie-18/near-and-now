@@ -377,10 +377,16 @@ export class DatabaseService {
     }
 
     // Cancel all store allocations so shopkeepers and riders stop seeing this order.
-    await supabaseAdmin
+    // Checked — a silent failure would leave a "cancelled" order still
+    // visible/actionable to a shopkeeper or rider as if it were live.
+    const { error: allocCancelErr } = await supabaseAdmin
       .from('order_store_allocations')
       .update({ status: 'cancelled' })
       .eq('order_id', orderId);
+    if (allocCancelErr) {
+      console.error('Error cancelling order store allocations:', allocCancelErr);
+      throw allocCancelErr;
+    }
 
     console.log('Updating store orders status...');
     const { data: cancelledStoreOrders, error: updateStoreOrdersError } = await supabaseAdmin
@@ -440,10 +446,19 @@ export class DatabaseService {
           reason: 'Order cancelled by customer'
         });
         console.log('Refund initiated for payment:', customerOrder.razorpay_payment_id);
-        await supabaseAdmin
+        // Checked but not thrown — the Razorpay refund has already gone
+        // through by this point, so failing the request now would be
+        // misleading (the cancel + refund both actually happened). But a
+        // silent failure here would leave payment_status stuck at 'paid'
+        // with real money already refunded, risking a double-refund if
+        // anyone later acts on that stale status — log it loudly instead.
+        const { error: markRefundedErr } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'refunded', refunded_amount: alreadyRefunded + remainingToRefund })
           .eq('id', orderId);
+        if (markRefundedErr) {
+          console.error('CRITICAL: Razorpay refund succeeded but failed to mark order as refunded (double-refund risk):', markRefundedErr, { orderId, paymentId: customerOrder.razorpay_payment_id });
+        }
       } catch (refundErr) {
         console.error('Refund failed (order still cancelled):', refundErr);
       }
@@ -468,10 +483,17 @@ export class DatabaseService {
         });
         if (refundRpcErr) throw refundRpcErr;
         console.log('Wallet refund credited for cancelled order:', orderId);
-        await supabaseAdmin
+        // Checked but not thrown — same reasoning as the Razorpay branch
+        // above: the wallet credit already happened, so log loudly on
+        // failure rather than fail a request whose money movement already
+        // succeeded.
+        const { error: markRefundedErr } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'refunded', refunded_amount: alreadyRefunded + remainingToRefund })
           .eq('id', orderId);
+        if (markRefundedErr) {
+          console.error('CRITICAL: Wallet refund succeeded but failed to mark order as refunded (double-refund risk):', markRefundedErr, { orderId });
+        }
       } catch (refundErr) {
         console.error('Wallet refund failed (order still cancelled):', refundErr);
       }
@@ -678,8 +700,13 @@ export class DatabaseService {
       delivery_instructions?: string;
     }
   ) {
+    // Logged, not thrown — this returns the freshly re-read profile below
+    // regardless, so a silent write failure is at least self-correcting for
+    // the caller (they'll see their old values come back, not stale-success
+    // data), but it's worth surfacing loudly since nothing else would.
     if (updates.name) {
-      await supabaseAdmin.from('app_users').update({ name: updates.name }).eq('id', userId);
+      const { error } = await supabaseAdmin.from('app_users').update({ name: updates.name }).eq('id', userId);
+      if (error) console.error('updateCustomerProfile: failed to update app_users.name:', error, { userId });
     }
 
     const customerUpdates: Record<string, string> = {};
@@ -695,7 +722,8 @@ export class DatabaseService {
     }
 
     if (Object.keys(customerUpdates).length > 0) {
-      await supabaseAdmin.from('customers').update(customerUpdates).eq('user_id', userId);
+      const { error } = await supabaseAdmin.from('customers').update(customerUpdates).eq('user_id', userId);
+      if (error) console.error('updateCustomerProfile: failed to update customers:', error, { userId });
     }
 
     return this.getCustomerProfile(userId);
@@ -703,10 +731,15 @@ export class DatabaseService {
 
   async createCustomerSavedAddress(addressData: Partial<CustomerSavedAddress>) {
     if (addressData.is_default && addressData.customer_id) {
-      await supabaseAdmin
+      // Logged, not thrown — a silent failure here risks two addresses both
+      // marked is_default: true (this one, plus whichever old one didn't get
+      // unset), not a blocked request; the new address insert below still
+      // proceeds and is itself checked.
+      const { error } = await supabaseAdmin
         .from('customer_saved_addresses')
         .update({ is_default: false })
         .eq('customer_id', addressData.customer_id);
+      if (error) console.error('createCustomerSavedAddress: failed to unset prior default:', error, { customerId: addressData.customer_id });
     }
 
     const { data, error } = await supabaseAdmin
@@ -725,10 +758,12 @@ export class DatabaseService {
     updates: Partial<Omit<CustomerSavedAddress, 'id' | 'customer_id' | 'created_at'>>
   ) {
     if (updates.is_default) {
-      await supabaseAdmin
+      // Logged, not thrown — same reasoning as createCustomerSavedAddress.
+      const { error } = await supabaseAdmin
         .from('customer_saved_addresses')
         .update({ is_default: false })
         .eq('customer_id', customerId);
+      if (error) console.error('updateCustomerSavedAddress: failed to unset prior default:', error, { customerId });
     }
 
     const { data, error } = await supabaseAdmin

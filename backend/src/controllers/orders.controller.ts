@@ -262,7 +262,7 @@ export class OrdersController {
       }
 
       const totalAmount = totalSubtotal + totalDeliveryFee - discountAmount;
-      await supabaseAdmin
+      const { error: totalsErr } = await supabaseAdmin
         .from('customer_orders')
         .update({
           subtotal_amount: totalSubtotal,
@@ -271,6 +271,12 @@ export class OrdersController {
           total_amount: totalAmount,
         })
         .eq('id', customerOrder.id);
+      if (totalsErr) {
+        // customerOrder was created with these as zeros (see comment above) —
+        // a silent failure here would leave a real order persisted with
+        // total_amount: 0, undercharging the customer for the whole order.
+        throw new Error(`[createOrder] totals back-fill failed: ${totalsErr.message}`);
+      }
 
       if (validatedCouponId && customer_id) {
         databaseService.recordCouponUsage(validatedCouponId, customer_id, customerOrder.id).catch((err) => {

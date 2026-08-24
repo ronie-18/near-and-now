@@ -547,10 +547,18 @@ export class PaymentService {
       const payment = event.payload?.payment?.entity;
       const internalOrderId = payment?.notes?.internal_order_id;
       if (internalOrderId && payment?.id) {
-        await supabaseAdmin
+        // Checked and re-thrown — the caller (payment.controller.ts's
+        // handleWebhook) responds non-2xx on a thrown error, which makes
+        // Razorpay retry the webhook. An unchecked write here would instead
+        // silently leave payment_status stale with no retry and no trace.
+        const { error } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'authorized', razorpay_payment_id: payment.id })
           .eq('id', internalOrderId);
+        if (error) {
+          console.error('[WEBHOOK] Failed to persist payment.authorized', { eventId, internalOrderId, error });
+          throw error;
+        }
       }
     } else if (eventType === 'payment.captured') {
       const payment = event.payload?.payment?.entity;
@@ -606,19 +614,27 @@ export class PaymentService {
       const payment = event.payload?.payment?.entity;
       const internalOrderId = payment?.notes?.internal_order_id;
       if (internalOrderId) {
-        await supabaseAdmin
+        const { error } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'failed' })
           .eq('id', internalOrderId);
+        if (error) {
+          console.error('[WEBHOOK] Failed to persist payment.failed', { eventId, internalOrderId, error });
+          throw error;
+        }
       }
     } else if (eventType === 'refund.processed') {
       const refund = event.payload?.refund?.entity;
       const paymentId = refund?.payment_id;
       if (paymentId) {
-        await supabaseAdmin
+        const { error } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'refunded' })
           .eq('razorpay_payment_id', paymentId);
+        if (error) {
+          console.error('[WEBHOOK] Failed to persist refund.processed', { eventId, paymentId, error });
+          throw error;
+        }
       }
     }
   }

@@ -205,18 +205,30 @@ export class AuthController {
           const { password_hash: _, ...userWithoutPassword } = existingUser;
           console.log(`👤 Existing ${requestedRole}, logging in:`, existingUser.id, existingUser.name);
 
-          // Persist token so delivery-partner / shopkeeper APIs can authenticate requests
+          // Persist token so delivery-partner / shopkeeper APIs can authenticate requests.
+          // Checked (mirrors the customer flow below) — an unchecked write here would
+          // return a token to the client that was never actually saved, so every
+          // subsequent authenticated request would reject it as invalid, even though
+          // this endpoint itself reported a successful login.
           if (requestedRole === 'delivery_partner') {
-            await supabaseAdmin
+            const { error: tokenError } = await supabaseAdmin
               .from('delivery_partners')
               .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
               .eq('user_id', existingUser.id);
+            if (tokenError) {
+              console.error('❌ Failed to persist delivery_partner session token:', tokenError);
+              return res.status(500).json({ error: 'Failed to complete login', message: 'Could not persist session token' });
+            }
           }
           if (requestedRole === 'shopkeeper') {
-            await supabaseAdmin
+            const { error: tokenError } = await supabaseAdmin
               .from('app_users')
               .update({ session_token: token, session_token_issued_at: new Date().toISOString() })
               .eq('id', existingUser.id);
+            if (tokenError) {
+              console.error('❌ Failed to persist shopkeeper session token:', tokenError);
+              return res.status(500).json({ error: 'Failed to complete login', message: 'Could not persist session token' });
+            }
           }
 
           // Only riders currently have a Realtime-scoped RLS policy

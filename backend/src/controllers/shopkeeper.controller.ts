@@ -321,11 +321,18 @@ export class ShopkeeperController {
         return res.status(409).json({ error: 'Already responded' });
       }
 
+      // Logged, not thrown — the allocation itself is already accepted
+      // (checked above); failing the whole request here would be misleading.
+      // But a silent failure would leave item_status stale, which
+      // getPickupSequence/invoice generation read to decide what's actually
+      // being fulfilled.
       if (accepted_item_ids.length) {
-        await supabaseAdmin.from('order_items').update({ item_status: 'confirmed' }).in('id', accepted_item_ids);
+        const { error: acceptItemsErr } = await supabaseAdmin.from('order_items').update({ item_status: 'confirmed' }).in('id', accepted_item_ids);
+        if (acceptItemsErr) console.error('acceptAllocation: failed to confirm order_items:', acceptItemsErr, { accepted_item_ids });
       }
       if (unavailableIds.length) {
-        await supabaseAdmin.from('order_items').update({ item_status: 'unavailable', assigned_store_id: null }).in('id', unavailableIds);
+        const { error: unavailableItemsErr } = await supabaseAdmin.from('order_items').update({ item_status: 'unavailable', assigned_store_id: null }).in('id', unavailableIds);
+        if (unavailableItemsErr) console.error('acceptAllocation: failed to mark order_items unavailable:', unavailableItemsErr, { unavailableIds });
       }
 
       // Reallocate unavailable items to next nearest store (async, non-blocking)
@@ -368,7 +375,15 @@ export class ShopkeeperController {
       if (!alloc) return res.status(404).json({ error: 'Allocation not found' });
       if (alloc.status !== 'pending_acceptance') return res.status(409).json({ error: 'Already responded' });
 
-      await supabaseAdmin.from('order_store_allocations').update({ status: 'rejected' }).eq('id', allocationId);
+      // Checked — this IS the action the endpoint promises; a silent failure
+      // would tell the shopkeeper "rejected" while the allocation stays
+      // pending_acceptance, and the item-unassign/reallocation below would
+      // proceed against an allocation that was never actually rejected.
+      const { error: rejectErr } = await supabaseAdmin.from('order_store_allocations').update({ status: 'rejected' }).eq('id', allocationId);
+      if (rejectErr) {
+        console.error('rejectAllocation: failed to update allocation status:', rejectErr, { allocationId });
+        return res.status(500).json({ error: 'Failed to reject allocation' });
+      }
 
       // Unassign all items from this store and trigger reallocation
       const { data: items } = await supabaseAdmin

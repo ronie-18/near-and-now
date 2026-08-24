@@ -62,10 +62,19 @@ export async function suspendRiderIfApprovedAndGetName(
   // already blocked from accepting (accept_driver_offer re-checks is_approved
   // atomically) — a stray, confusing notification with no way to act on it.
   // Found 2026-08-10 during a rider-app double-submit-guard audit.
-  await supabaseAdmin
+  // Checked — this revokes approval when a required identity document is
+  // removed. A silent failure here would leave is_approved: true in the DB
+  // while every caller believes (and tells the admin/rider) the rider was
+  // just suspended — they'd keep operating as approved with no trace that
+  // the demotion never actually happened.
+  const { error: suspendErr } = await supabaseAdmin
     .from('delivery_partners')
     .update({ is_approved: false, is_online: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
     .eq('user_id', riderId);
+  if (suspendErr) {
+    console.error('❌ Failed to suspend rider after document removal:', suspendErr, { riderId, docType });
+    throw suspendErr;
+  }
 
   return { suspended: true, name };
 }
@@ -188,7 +197,15 @@ async function demoteRiderIfDocsIncomplete(
     verification_submitted_at: null,
     updated_at: new Date().toISOString(),
   };
-  await supabaseAdmin.from('delivery_partners').update(patch).eq('user_id', riderId);
+  const { error: demoteErr } = await supabaseAdmin.from('delivery_partners').update(patch).eq('user_id', riderId);
+  if (demoteErr) {
+    // Logged, not thrown — this runs inline in getProfile's response path
+    // (see call site), so a failure here shouldn't break the profile fetch
+    // itself. But it's worth flagging loudly: a silent failure leaves the
+    // rider still is_approved: true with known-missing required documents.
+    console.error(`[demoteRiderIfDocsIncomplete] Failed to demote rider ${riderId}:`, demoteErr);
+    return null;
+  }
 
   console.warn(`[demoteRiderIfDocsIncomplete] Demoting rider ${riderId} — missing doc types:`, missingTypes);
 
@@ -910,17 +927,27 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'This order is not assigned to you.' });
       }
 
-      await supabaseAdmin
+      // Mirror writes — customer_orders (checked above) is the source of
+      // truth for the rider/customer flow; a failure here would only desync
+      // store_orders' own status display, not block the delivery itself, so
+      // logged rather than thrown.
+      const { error: storeOrdersErr } = await supabaseAdmin
         .from('store_orders')
         .update({ status: 'order_picked_up' })
         .eq('customer_order_id', orderId)
         .eq('delivery_partner_id', riderId);
+      if (storeOrdersErr) {
+        console.error('markPickedUp: failed to update store_orders status:', storeOrdersErr, { orderId, riderId });
+      }
 
-      await supabaseAdmin.from('order_status_history').insert({
+      const { error: historyErr } = await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
         status: 'order_picked_up',
         notes: 'Rider picked up order from store',
       });
+      if (historyErr) {
+        console.error('markPickedUp: failed to record order_status_history:', historyErr, { orderId });
+      }
 
       notificationService.sendOrderNotification(orderId, 'order_shipped').catch(console.error);
 
@@ -1050,11 +1077,18 @@ export class DeliveryPartnerController {
       }
 
       // Persist verification so markDelivered can require it server-side,
-      // instead of trusting client-side-only React state.
-      await supabaseAdmin
+      // instead of trusting client-side-only React state. Checked — a silent
+      // failure here would tell the rider "success" for an OTP that was
+      // never actually recorded, then permanently block markDelivered (which
+      // requires this flag) with no way for the rider to retry the same OTP.
+      const { error: verifyErr } = await supabaseAdmin
         .from('customer_orders')
         .update({ delivery_otp_verified_at: new Date().toISOString() })
         .eq('id', orderId);
+      if (verifyErr) {
+        console.error('verifyDeliveryOTP: failed to persist verification:', verifyErr, { orderId });
+        return res.status(500).json({ success: false, error: 'Could not confirm verification. Please try again.' });
+      }
 
       res.json({ success: true });
     } catch (err) {
@@ -1708,10 +1742,17 @@ export class DeliveryPartnerController {
       // saveVerificationDocument) — clear it too so the profile page doesn't
       // keep showing a number whose backing document no longer exists.
       if (docType === 'vehicle_registration') partnerUpdate.vehicle_number = null;
-      await supabaseAdmin
+      const { error: partnerUpdateErr } = await supabaseAdmin
         .from('delivery_partners')
         .update(partnerUpdate)
         .eq('user_id', riderId);
+      if (partnerUpdateErr) {
+        // Logged, not thrown — the document itself is already deleted at
+        // this point, so failing the request now would be misleading. A
+        // silent failure here just means verification_submitted_at (and
+        // vehicle_number, for RC removal) stays stale until the next write.
+        console.error('❌ deleteVerificationDocument (rider): failed to clear partner flags:', partnerUpdateErr, { riderId, docType });
+      }
 
       const { suspended: riderSuspended, name: riderName } = await suspendRiderIfApprovedAndGetName(riderId, docType);
 
@@ -2123,9 +2164,19 @@ export class DeliveryPartnerController {
         return res.status(400).json({ success: false, error: 'Incorrect code. Try again.' });
       }
 
-      await supabaseAdmin.from('order_store_allocations').update({
+      // Checked — a silent failure here would leave this allocation's status
+      // stuck at 'accepted' while the rider is told success. The "remaining"
+      // query right below filters on this same status, so it would keep
+      // counting this stop as not-yet-picked-up forever, permanently
+      // stalling the order at "picking_up" even after every other stop
+      // completes.
+      const { error: pickupErr } = await supabaseAdmin.from('order_store_allocations').update({
         status: 'picked_up', picked_up_at: new Date().toISOString(),
       }).eq('id', allocationId);
+      if (pickupErr) {
+        console.error('verifyPickupCode: failed to persist pickup status:', pickupErr, { orderId, allocationId });
+        return res.status(500).json({ success: false, error: 'Could not confirm pickup. Please try again.' });
+      }
 
       // Check remaining (not yet picked up) allocations, ordered by sequence so we know what's next
       const { data: remaining } = await supabaseAdmin

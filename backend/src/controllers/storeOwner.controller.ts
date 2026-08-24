@@ -960,10 +960,19 @@ export async function suspendStoreIfApprovedAndGetName(
     return { suspended: false, name };
   }
 
-  await supabaseAdmin
+  // Checked — this revokes approval when a required identity document is
+  // removed. A silent failure here would leave is_approved: true in the DB
+  // while every caller believes (and tells the admin/store) the store was
+  // just suspended — the store would keep operating as approved with no
+  // trace that the demotion never actually happened.
+  const { error: suspendErr } = await supabaseAdmin
     .from('stores')
     .update({ is_approved: false, approved_at: null, approved_by: null, updated_at: new Date().toISOString() })
     .eq('id', storeId);
+  if (suspendErr) {
+    console.error('❌ Failed to suspend store after document removal:', suspendErr, { storeId, docType });
+    throw suspendErr;
+  }
 
   return { suspended: true, name };
 }

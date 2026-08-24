@@ -285,7 +285,12 @@ export class PaymentController {
       }
 
       const newRefundedTotal = alreadyRefunded + amount;
-      await Promise.all([
+      // Checked — the actual refund (Razorpay or wallet credit) has already
+      // happened by this point, so a silent failure here would leave the
+      // order showing as unrefunded despite the money already having moved,
+      // risking a double-refund on retry. supabase-js resolves (doesn't
+      // reject) on a PostgREST error, so Promise.all alone doesn't surface it.
+      const [orderUpdate, notificationUpdate] = await Promise.all([
         supabaseAdmin.from('customer_orders').update({
           refunded_amount: newRefundedTotal,
           payment_status: newRefundedTotal >= Number(order.total_amount || 0) - 0.01 ? 'refunded' : 'partially_refunded',
@@ -299,6 +304,14 @@ export class PaymentController {
           },
         }).eq('id', notificationId),
       ]);
+      if (orderUpdate.error) {
+        console.error('Failed to persist refund on order (refund already processed!):', orderUpdate.error, { orderId: order.id, razorpayRefundId });
+        throw orderUpdate.error;
+      }
+      if (notificationUpdate.error) {
+        console.error('Failed to mark refund notification resolved:', notificationUpdate.error, { notificationId });
+        throw notificationUpdate.error;
+      }
 
       res.json({ success: true, refund_method: refundMethod });
     } catch (error) {
