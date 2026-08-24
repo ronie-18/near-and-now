@@ -2064,10 +2064,18 @@ export class DeliveryPartnerController {
 
       if (!order) return res.status(404).json({ error: 'Order not found or not assigned to you' });
 
+      // Excludes 'rejected'/'cancelled' — those rows are left behind
+      // permanently once a store rejects and reallocateMissingItems creates a
+      // fresh allocation for the reassigned store. Without this filter they'd
+      // show up as a phantom stop in the driver's route (with a store name/
+      // address but no pickup code) and would keep `all_picked_up` below from
+      // ever becoming true, since it can never be marked picked_up. Same root
+      // cause as verifyPickupCode's `remaining` query above.
       const { data: allocations } = await supabaseAdmin
         .from('order_store_allocations')
         .select('id, store_id, sequence_number, status, pickup_code, accepted_item_ids, accepted_at, picked_up_at')
         .eq('order_id', orderId)
+        .not('status', 'in', '(rejected,cancelled)')
         .order('sequence_number', { ascending: true });
 
       const storeIds = (allocations || []).map((a: any) => a.store_id);
@@ -2178,12 +2186,20 @@ export class DeliveryPartnerController {
         return res.status(500).json({ success: false, error: 'Could not confirm pickup. Please try again.' });
       }
 
-      // Check remaining (not yet picked up) allocations, ordered by sequence so we know what's next
+      // Check remaining (not yet picked up) allocations, ordered by sequence so we know what's next.
+      // Must exclude 'rejected'/'cancelled', not just 'picked_up' — a store that
+      // rejected its allocation (or was auto-expired) leaves that row behind
+      // forever once reallocateMissingItems creates a fresh allocation for the
+      // reassigned store; `!= picked_up` alone kept counting that dead row as
+      // still outstanding, so `remaining` could never reach 0 and the order got
+      // permanently stuck on the "partial pickup" branch below — order_picked_up
+      // (and therefore markDelivered, which requires it) became unreachable for
+      // any order that ever had a single rejected/reallocated store.
       const { data: remaining } = await supabaseAdmin
         .from('order_store_allocations')
         .select('id, store_id, sequence_number')
         .eq('order_id', orderId)
-        .not('status', 'eq', 'picked_up')
+        .not('status', 'in', '(picked_up,rejected,cancelled)')
         .order('sequence_number', { ascending: true });
 
       if (!remaining?.length) {

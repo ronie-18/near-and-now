@@ -338,6 +338,14 @@ export class ShopkeeperController {
       // Reallocate unavailable items to next nearest store (async, non-blocking)
       if (unavailableIds.length) {
         reallocateMissingItems(alloc.order_id, unavailableIds).catch(console.error);
+        // This store DID respond and accept what it could — the customer
+        // shouldn't wait in silence just because reallocation is happening
+        // behind the scenes for the rest. Safe to fire unconditionally (no
+        // WHERE-guard needed like the branch below): acceptAllocation's own
+        // atomic `.eq('status', 'pending_acceptance')` guard earlier in this
+        // function already ensures this code path runs at most once per
+        // allocation, so there's no concurrent-retry duplicate-send risk here.
+        notificationService.sendOrderNotification(alloc.order_id, 'order_confirmed').catch(console.error);
       } else {
         const resolved = await finalizeIfAllResolved(alloc.order_id);
         if (!resolved) {
