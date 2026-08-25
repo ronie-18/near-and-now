@@ -321,6 +321,26 @@ export class ShopkeeperController {
         return res.status(409).json({ error: 'Already responded' });
       }
 
+      // Reflect this specific store's acceptance on its own store_orders row.
+      // Scoped by store_id (not just customer_order_id) — unlike the blanket
+      // status writes elsewhere (admin override, pickup-marking), this must
+      // NOT touch sibling stores' rows on the same multi-store order, since
+      // each store's tracking box is independent. Before this, acceptAllocation
+      // never wrote to store_orders at all — every store's box stayed frozen
+      // at 'pending_at_store' ("waiting for confirmation") through acceptance
+      // and preparation, only ever jumping straight to 'order_picked_up'
+      // regardless of when this store actually accepted. Logged, not thrown —
+      // the allocation itself is already accepted; a display-only desync here
+      // shouldn't fail the whole accept request.
+      const { error: storeOrderStatusErr } = await supabaseAdmin
+        .from('store_orders')
+        .update({ status: 'store_accepted' })
+        .eq('customer_order_id', alloc.order_id)
+        .eq('store_id', alloc.store_id);
+      if (storeOrderStatusErr) {
+        console.error('acceptAllocation: failed to update store_orders status:', storeOrderStatusErr, { orderId: alloc.order_id, storeId: alloc.store_id });
+      }
+
       // Logged, not thrown — the allocation itself is already accepted
       // (checked above); failing the whole request here would be misleading.
       // But a silent failure would leave item_status stale, which
@@ -574,13 +594,42 @@ async function assignCandidatesInRadius(
       .select('id').single();
 
     if (newAlloc) {
-      await Promise.all([
-        supabaseAdmin.from('order_items').update({ assigned_store_id: store.id, item_status: 'pending' }).in('id', assignable.map((i) => i.id)),
-        supabaseAdmin.from('store_orders').upsert(
+      // Upsert must resolve (and be awaited) before the order_items update
+      // below — we need its id to repoint store_order_id, so this can't run
+      // in the same Promise.all as that update the way it used to.
+      const { data: storeOrderRow, error: storeOrderErr } = await supabaseAdmin
+        .from('store_orders')
+        .upsert(
           { customer_order_id: orderId, store_id: store.id, status: 'pending_at_store', subtotal_amount: 0, delivery_fee: 0 },
           { onConflict: 'customer_order_id,store_id' }
-        ),
-      ]);
+        )
+        .select('id')
+        .single();
+      if (storeOrderErr || !storeOrderRow) {
+        console.error('assignCandidatesInRadius: failed to upsert store_orders for reallocation:', storeOrderErr, { orderId, storeId: store.id });
+        continue; // leave these items unplaced at this store; loop tries the next candidate
+      }
+
+      // order_items.store_order_id is an FK set once at order creation and
+      // otherwise never touched — every reallocation before this fix left it
+      // pointing at the OLD (rejected/expired) store's store_orders row.
+      // Customer tracking (getOrderTracking) and invoice generation
+      // (invoice.service.ts) both join through this exact FK, so a stale
+      // value meant: the tracking page kept showing the rejected store as if
+      // still "waiting for confirmation" while the new store's box showed no
+      // items, and an item could get invoiced to the store that REJECTED it
+      // instead of the store that actually fulfilled it. Repointing this
+      // alongside assigned_store_id is the actual fix — the tracking query
+      // filter added separately is just a display-layer backstop.
+      const { error: repointErr } = await supabaseAdmin
+        .from('order_items')
+        .update({ assigned_store_id: store.id, store_order_id: storeOrderRow.id, item_status: 'pending' })
+        .in('id', assignable.map((i) => i.id));
+      if (repointErr) {
+        console.error('assignCandidatesInRadius: failed to repoint order_items to new store:', repointErr, { orderId, storeId: store.id });
+        continue;
+      }
+
       usedStoreIds.add(store.id);
       const assignedIds = new Set(assignable.map((i) => i.id));
       left = left.filter((i) => !assignedIds.has(i.id));

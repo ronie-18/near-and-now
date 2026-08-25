@@ -2189,7 +2189,54 @@ export class DatabaseService {
       console.error('Error fetching order tracking:', error);
       return null;
     }
+    if (data?.store_orders?.length) {
+      data.store_orders = await this.filterOutRejectedStoreOrders(orderId, data.store_orders);
+    }
     return data;
+  }
+
+  /**
+   * Backstop for stale `store_orders` rows: a store that rejected its
+   * allocation (or was auto-expired) never gets its `store_orders` row
+   * touched — `assignCandidatesInRadius` repoints the affected items'
+   * `store_order_id` to the newly-assigned store's row (see that function's
+   * own comment), but the rejected store's now-empty `store_orders` row
+   * still exists and would otherwise still render on the customer's
+   * tracking page as a phantom "waiting for store confirmation" box. Drops
+   * any `store_orders` row whose store's ONLY allocation(s) are 'rejected'.
+   * Also covers orders reallocated before the repoint fix existed, where the
+   * stale row could still be holding real items.
+   *
+   * Deliberately does NOT exclude 'cancelled' allocations — that status is
+   * only ever set order-wide, on every allocation at once, when the whole
+   * order is cancelled (database.service.ts's cancelOrder, ~line 383), not
+   * as a per-store marker. Excluding it here would have emptied
+   * `store_orders` (and with it, the item list both frontends build from
+   * `storeOrders`/`storeOrders.flatMap(so => so.order_items)`) for every
+   * cancelled order — the customer still needs to see what they ordered and
+   * from where even after cancelling.
+   */
+  private async filterOutRejectedStoreOrders<T extends { store_id: string }>(
+    orderId: string,
+    storeOrders: T[]
+  ): Promise<T[]> {
+    const { data: allocations, error } = await supabaseAdmin
+      .from('order_store_allocations')
+      .select('store_id, status')
+      .eq('order_id', orderId);
+    if (error || !allocations) return storeOrders; // fail open — don't hide real stores on a lookup blip
+
+    const rejectedStoreIds = new Set(
+      allocations.filter((a) => a.status === 'rejected').map((a) => a.store_id)
+    );
+    const liveStoreIds = new Set(
+      allocations.filter((a) => a.status !== 'rejected').map((a) => a.store_id)
+    );
+    // Only drop a store's row if it has a rejected allocation AND no other
+    // (live) allocation for the same store on this order — a store that was
+    // rejected once but re-assigned the SAME store again later (rare, but
+    // possible if it's the nearest candidate again) must still show up.
+    return storeOrders.filter((so) => !rejectedStoreIds.has(so.store_id) || liveStoreIds.has(so.store_id));
   }
 
   /** True only if `orderId` belongs to `customerId` — used by tracking reads that don't otherwise touch `customer_orders`. */

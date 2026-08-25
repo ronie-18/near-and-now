@@ -355,6 +355,26 @@ const OrderTrackingPage = () => {
   const isCancelled = order.status === 'order_cancelled';
   const storeOrders = order.store_orders || [];
   const isMultiStore = storeOrders.length > 1;
+  // A store's own store_orders.status starts (and used to stay stuck) at
+  // 'pending_at_store' until that specific store accepts (backend now sets
+  // it to 'store_accepted' on acceptAllocation). Gates the whole tracking
+  // section below: nothing about individual stores — no map, no boxes — is
+  // shown to the customer until at least one has actually confirmed.
+  // `isMultiStore` above stays based on the FULL live store list (not just
+  // accepted ones) so a structurally multi-store order keeps a stable
+  // box-per-store layout as more stores accept one by one, rather than
+  // flipping from the single-store map layout to the multi-store box layout
+  // partway through.
+  const acceptedStoreOrders = storeOrders.filter((so) => so.status && so.status !== 'pending_at_store');
+  // Also requires order.status === 'pending_at_store' (not just the per-store
+  // check) — a safety net for orders already in flight at the moment this
+  // per-store status write shipped: their store_orders.status may still be
+  // stuck at 'pending_at_store' forever (acceptAllocation never wrote it
+  // before), but customer_orders.status only ever leaves 'pending_at_store'
+  // once a store has genuinely accepted (either the partial-acceptance path
+  // or finalize_order_if_ready), so it's a reliable independent signal that
+  // doesn't depend on the per-store column being fresh.
+  const noStoreAcceptedYet = !isCancelled && !isDelivered && acceptedStoreOrders.length === 0 && order.status === 'pending_at_store';
   const storeLocationsMap = new Map((order.store_locations || []).map((s) => [s.store_id || '', s]));
   const hasMap = (order.delivery_latitude != null && order.delivery_longitude != null) || geocodedCoords;
   const delivLat = order.delivery_latitude ?? geocodedCoords?.lat ?? 0;
@@ -437,7 +457,7 @@ const OrderTrackingPage = () => {
       <div className="max-w-2xl mx-auto px-4 -mt-20 space-y-4 pb-10">
 
         {/* ── Animated progress stepper ───────────────────────────────────── */}
-        {!isCancelled && (
+        {!isCancelled && !noStoreAcceptedYet && (
           <div className="bg-white rounded-2xl shadow-lg p-5 overflow-hidden">
             {/* Desktop: horizontal steps */}
             <div className="hidden sm:flex items-center justify-between relative">
@@ -496,10 +516,21 @@ const OrderTrackingPage = () => {
           </div>
         )}
 
+        {/* ── Pending at store: no stores have accepted yet ──────────────────── */}
+        {noStoreAcceptedYet && (
+          <div className="bg-white rounded-2xl shadow-lg p-6 text-center">
+            <div className="w-14 h-14 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-3">
+              <Store className="w-7 h-7 text-primary" />
+            </div>
+            <p className="font-bold text-gray-800 mb-1">Order Pending at Store</p>
+            <p className="text-gray-500 text-sm">{STATUS_DESCRIPTIONS.pending_at_store}</p>
+          </div>
+        )}
+
         {/* ── Multi-store tracking boxes ──────────────────────────────────── */}
-        {isMultiStore ? (
+        {!noStoreAcceptedYet && (isMultiStore ? (
           <>
-            {storeOrders.map((storeOrder) => {
+            {acceptedStoreOrders.map((storeOrder) => {
               const storeLocation = storeLocationsMap.get(storeOrder.store_id) || order.store_locations?.[0];
               if (!storeLocation) return null;
               const deliveryAgent = storeOrder.delivery_partner_id && order.delivery_agents
@@ -587,10 +618,10 @@ const OrderTrackingPage = () => {
               </div>
             )}
           </>
-        )}
+        ))}
 
         {/* ── Delivery partner card ──────────────────────────────────────── */}
-        {order.delivery_agent && !isDelivered && !isCancelled && !isMultiStore && (
+        {order.delivery_agent && !isDelivered && !isCancelled && !isMultiStore && !noStoreAcceptedYet && (
           <div className="bg-white rounded-2xl shadow-lg p-5">
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Your Delivery Partner</p>
             <div className="flex items-center gap-3">
@@ -659,7 +690,7 @@ const OrderTrackingPage = () => {
         </div>
 
         {/* ── Store info ──────────────────────────────────────────────────── */}
-        {(order.store_locations?.length ?? 0) > 0 && !isMultiStore && (
+        {(order.store_locations?.length ?? 0) > 0 && !isMultiStore && !noStoreAcceptedYet && (
           <div className="bg-white rounded-2xl shadow-lg p-5">
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Order From</p>
             {order.store_locations!.map((s, idx) => (
