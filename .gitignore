@@ -1,3 +1,8 @@
+# Firebase / Google service-account credentials (real secrets — used locally
+# to upload FCM V1 push credentials via `eas credentials`, never committed)
+*firebase-adminsdk*.json
+google-service-account.json
+
 # Logs
 logs
 *.log
