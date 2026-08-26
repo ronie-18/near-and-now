@@ -2215,8 +2215,19 @@ export class DatabaseService {
    * `storeOrders`/`storeOrders.flatMap(so => so.order_items)`) for every
    * cancelled order — the customer still needs to see what they ordered and
    * from where even after cancelling.
+   *
+   * Also never drops a row that's still actually holding items. rejectAllocation
+   * fires reallocateMissingItems() fire-and-forget (not awaited) — there's a
+   * real window between a store rejecting and its items' store_order_id
+   * actually getting repointed to the new store (assignCandidatesInRadius).
+   * A tracking fetch that lands in that window would otherwise make those
+   * items disappear entirely (from this store's box AND the combined "Order
+   * Items" total both frontends build via flatMap) until reallocation
+   * finishes — self-healing on the next poll, but a real gap. Keeping any
+   * row with items still attached closes it, at the cost of occasionally
+   * showing a rejected store's box for the few seconds until its items move.
    */
-  private async filterOutRejectedStoreOrders<T extends { store_id: string }>(
+  private async filterOutRejectedStoreOrders<T extends { store_id: string; order_items?: unknown[] | null }>(
     orderId: string,
     storeOrders: T[]
   ): Promise<T[]> {
@@ -2232,11 +2243,16 @@ export class DatabaseService {
     const liveStoreIds = new Set(
       allocations.filter((a) => a.status !== 'rejected').map((a) => a.store_id)
     );
-    // Only drop a store's row if it has a rejected allocation AND no other
-    // (live) allocation for the same store on this order — a store that was
-    // rejected once but re-assigned the SAME store again later (rare, but
-    // possible if it's the nearest candidate again) must still show up.
-    return storeOrders.filter((so) => !rejectedStoreIds.has(so.store_id) || liveStoreIds.has(so.store_id));
+    // Only drop a store's row if: it has a rejected allocation, AND no other
+    // (live) allocation for the same store on this order (a store rejected
+    // once but re-assigned the same store again later — rare, but possible —
+    // must still show up), AND it isn't still holding items mid-reallocation.
+    return storeOrders.filter(
+      (so) =>
+        !rejectedStoreIds.has(so.store_id) ||
+        liveStoreIds.has(so.store_id) ||
+        (so.order_items?.length ?? 0) > 0
+    );
   }
 
   /** True only if `orderId` belongs to `customerId` — used by tracking reads that don't otherwise touch `customer_orders`. */
