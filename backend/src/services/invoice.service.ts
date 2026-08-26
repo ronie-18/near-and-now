@@ -28,16 +28,47 @@ export interface InvoiceLineItem {
   line_total: number;
 }
 
-export interface InvoiceData {
-  order_id: string;
-  invoice_number: string;
-  invoice_date: string;
+/**
+ * One store's self-contained slice of a (possibly multi-store) order — its
+ * own seller identity and its own items/taxable/GST totals only. A real
+ * multi-vendor marketplace invoice (this one included, per 2026-08-26
+ * product decision) issues one tax-invoice section per seller, never a
+ * single mixed table across stores that were never actually the same legal
+ * seller.
+ */
+export interface StoreInvoiceGroup {
+  store_order_id: string;
   seller_name: string;
   seller_address: string;
   seller_gstin: string;
   seller_fssai: string;
   seller_pan: string;
   seller_cin: string;
+  items: InvoiceLineItem[];
+  subtotal: number;
+  taxable_value: number;
+  cgst_total: number;
+  sgst_total: number;
+  igst_total: number;
+}
+
+/** One row of the platform-fee breakdown page (seller = Near & Now itself, not any store). */
+export interface FeeLine {
+  label: string;
+  total: number;
+  base: number;
+  cgst_percent: number;
+  cgst_amount: number;
+  sgst_percent: number;
+  sgst_amount: number;
+  igst_percent: number;
+  igst_amount: number;
+}
+
+export interface InvoiceData {
+  order_id: string;
+  invoice_number: string;
+  invoice_date: string;
   buyer_name: string;
   buyer_phone: string;
   buyer_email: string;
@@ -46,21 +77,47 @@ export interface InvoiceData {
   buyer_pincode: string;
   place_of_supply: string;
   reverse_charge: boolean;
-  subtotal: number;
+
+  // Per-store sections (one tax-invoice page-set each).
+  store_groups: StoreInvoiceGroup[];
+
+  // Platform fee-breakdown page (seller = Near & Now).
+  fee_seller_name: string;
+  fee_lines: FeeLine[];
+  fees_total: number;
+  fees_cgst_total: number;
+  fees_sgst_total: number;
+  delivery_fee: number;
+  tip_amount: number;
+
   discount_amount: number;
   taxable_amount: number;
   cgst_total: number;
   sgst_total: number;
   igst_total: number;
   cess_total: number;
-  delivery_fee: number;
+  subtotal: number;
   grand_total: number;
   amount_in_words: string;
+
   payment_method: string;
   payment_status: string;
   razorpay_payment_id: string;
   razorpay_order_id: string;
+
+  // Flat item list across every store — kept because invoice_items has no
+  // per-store grouping concept, and generateStorePDF/generateDeliveryPDF
+  // (unchanged by this pass — see bug_fixes_2026-07-23.md) still expect one
+  // flat list. Equal to store_groups.flatMap(g => g.items).
   items: InvoiceLineItem[];
+  // First store's identity — same backward-compatibility reason as `items`.
+  seller_name: string;
+  seller_address: string;
+  seller_gstin: string;
+  seller_fssai: string;
+  seller_pan: string;
+  seller_cin: string;
+
   delivery_partner_name?: string;
   delivery_partner_phone?: string;
   store_order_id?: string;
@@ -71,14 +128,6 @@ type DocumentType = 'customer' | 'store' | 'delivery';
 // ---------------------------------------------------------------------------
 // GST helpers
 // ---------------------------------------------------------------------------
-
-// The flat, GoI-mandated checkout-level GST applied to the whole item subtotal
-// (layer 2 — see "Pricing model / GST reference" in bug_fixes_2026-07-16.md),
-// separate from each product's own gst_rate (layer 1, applied per line item
-// below via master_products.gst_rate — 0 for loose products). This used to be
-// applied per-line instead of once on the subtotal, which silently discarded
-// every product's real GST rate; fixed 2026-07-16.
-const DEFAULT_GST_RATE = 5;
 
 function calcGstSplit(
   taxableValue: number,
@@ -144,12 +193,11 @@ function amountToWords(amount: number): string {
 // ---------------------------------------------------------------------------
 
 async function fetchOrderData(orderId: string) {
-  // Fetch main order
   const { data: order, error: orderErr } = await supabaseAdmin
     .from('customer_orders')
     .select(`
       id, order_code, customer_id, status, payment_status, payment_method,
-      subtotal_amount, delivery_fee, discount_amount, total_amount,
+      subtotal_amount, delivery_fee, discount_amount, total_amount, tip_amount,
       delivery_address, placed_at, created_at,
       razorpay_payment_id
     `)
@@ -157,7 +205,6 @@ async function fetchOrderData(orderId: string) {
     .single();
   if (orderErr) throw new Error(`Order not found: ${orderErr.message}`);
 
-  // Customer profile
   const { data: customer } = await supabaseAdmin
     .from('customers')
     .select('name, surname, phone, address, city, state, pincode')
@@ -170,80 +217,96 @@ async function fetchOrderData(orderId: string) {
     .eq('id', (order as any).customer_id)
     .maybeSingle();
 
-  // Store order(s) + items
+  // ALL store orders for this customer order — an order with items from
+  // multiple stores has one row per store here. Previously only the first
+  // was ever used (storeOrders?.[0]), which silently merged every other
+  // store's items/identity under whichever store happened to be first.
   const { data: storeOrders, error: soErr } = await supabaseAdmin
     .from('store_orders')
     .select('id, store_id, delivery_partner_id, status')
     .eq('customer_order_id', orderId);
   if (soErr) throw new Error(`Store orders not found: ${soErr.message}`);
+  if (!storeOrders?.length) throw new Error('No store orders found for this order');
 
-  const storeOrder = storeOrders?.[0];
+  const storeOrderIds = storeOrders.map((s: any) => s.id);
+  const { data: oi } = await supabaseAdmin
+    .from('order_items')
+    .select('id, store_order_id, product_id, product_name, unit, unit_price, quantity, item_status')
+    .in('store_order_id', storeOrderIds);
+  // Items the shopkeeper marked unavailable were never fulfilled/charged —
+  // excluding them here keeps every total consistent by construction.
+  const allItems: any[] = (oi || []).filter((it: any) => it.item_status !== 'unavailable');
 
-  // Items
-  const storeOrderIds = (storeOrders || []).map((s: any) => s.id);
-  let items: any[] = [];
-  if (storeOrderIds.length) {
-    const { data: oi } = await supabaseAdmin
-      .from('order_items')
-      .select('id, store_order_id, product_id, product_name, unit, unit_price, quantity, item_status')
-      .in('store_order_id', storeOrderIds);
-    // Items the shopkeeper marked unavailable were never fulfilled/charged —
-    // excluding them here (rather than at the caller) keeps every invoice
-    // total (subtotal/GST/grand total) consistent by construction.
-    items = (oi || []).filter((it: any) => it.item_status !== 'unavailable');
+  // Real per-product GST rate + HSN code for accurate line-item tax
+  // reporting. order_items only stores unit_price (already GST-inclusive at
+  // the product's own rate) — rate and HSN both live on master_products via
+  // products.master_product_id. Previously hsn_code was never fetched at
+  // all; every line item printed a hardcoded '2106' regardless of the real
+  // product.
+  const productIds = [...new Set(allItems.map((it: any) => it.product_id).filter(Boolean))];
+  const masterIdByProduct = new Map<string, string>();
+  if (productIds.length) {
+    const { data: productRows } = await supabaseAdmin
+      .from('products')
+      .select('id, master_product_id')
+      .in('id', productIds);
+    for (const p of productRows || []) masterIdByProduct.set((p as any).id, (p as any).master_product_id);
+  }
 
-    // Real per-product GST rate for accurate line-item tax reporting (see
-    // "Pricing model / GST reference" in bug_fixes_2026-07-16.md). order_items
-    // only stores unit_price (already GST-inclusive at the product's own rate),
-    // not the rate itself, so it's looked up via products -> master_products.
-    const productIds = [...new Set(items.map((it) => it.product_id).filter(Boolean))];
-    if (productIds.length) {
-      const { data: productRows } = await supabaseAdmin
-        .from('products')
-        .select('id, master_product_id')
-        .in('id', productIds);
-      const masterIdByProduct = new Map<string, string>();
-      for (const p of productRows || []) masterIdByProduct.set(p.id, p.master_product_id);
-
-      const masterIds = [...new Set(Array.from(masterIdByProduct.values()))];
-      const gstByMaster = new Map<string, { gst_rate: number; is_loose: boolean }>();
-      if (masterIds.length) {
-        const { data: masterRows } = await supabaseAdmin
-          .from('master_products')
-          .select('id, gst_rate, is_loose')
-          .in('id', masterIds);
-        for (const m of masterRows || []) {
-          gstByMaster.set(m.id, { gst_rate: Number((m as any).gst_rate) || 0, is_loose: Boolean((m as any).is_loose) });
-        }
-      }
-
-      for (const it of items) {
-        const masterId = masterIdByProduct.get(it.product_id);
-        const info = masterId ? gstByMaster.get(masterId) : undefined;
-        // Loose products carry no per-item GST (matches checkout pricing rule).
-        it.gst_rate = info?.is_loose ? 0 : (info?.gst_rate ?? 0);
-      }
+  const masterIds = [...new Set(Array.from(masterIdByProduct.values()))];
+  const masterInfoById = new Map<string, { gst_rate: number; is_loose: boolean; hsn_code: string }>();
+  if (masterIds.length) {
+    const { data: masterRows } = await supabaseAdmin
+      .from('master_products')
+      .select('id, gst_rate, is_loose, hsn_code')
+      .in('id', masterIds);
+    for (const m of masterRows || []) {
+      masterInfoById.set((m as any).id, {
+        gst_rate: Number((m as any).gst_rate) || 0,
+        is_loose: Boolean((m as any).is_loose),
+        hsn_code: ((m as any).hsn_code || '').trim(),
+      });
     }
   }
 
-  // Store details
-  let store: any = null;
-  if (storeOrder?.store_id) {
-    const { data: s } = await supabaseAdmin
-      .from('stores')
-      .select('id, name, phone, address')
-      .eq('id', storeOrder.store_id)
-      .maybeSingle();
-    store = s;
+  for (const it of allItems) {
+    const masterId = masterIdByProduct.get(it.product_id);
+    const info = masterId ? masterInfoById.get(masterId) : undefined;
+    // Loose products carry no per-item GST (matches checkout pricing rule).
+    it.gst_rate = info?.is_loose ? 0 : (info?.gst_rate ?? 0);
+    it.hsn_code = info?.hsn_code || '';
   }
 
-  // Delivery partner
+  // Group items by their own store order — this is what actually drives the
+  // per-store invoice pages.
+  const itemsByStoreOrder = new Map<string, any[]>();
+  for (const it of allItems) {
+    const list = itemsByStoreOrder.get(it.store_order_id) || [];
+    list.push(it);
+    itemsByStoreOrder.set(it.store_order_id, list);
+  }
+
+  // All stores involved, fetched in one batch (was: only stores?.[0]).
+  const storeIds = [...new Set(storeOrders.map((s: any) => s.store_id).filter(Boolean))];
+  const storesById = new Map<string, any>();
+  if (storeIds.length) {
+    const { data: storeRows } = await supabaseAdmin
+      .from('stores')
+      .select('id, name, phone, address')
+      .in('id', storeIds);
+    for (const s of storeRows || []) storesById.set((s as any).id, s);
+  }
+
+  // Delivery partner shown on the delivery slip — same store used before
+  // (first store order's partner) since a single rider typically runs the
+  // whole multi-store pickup sequence for one customer order.
+  const firstStoreOrder = storeOrders[0];
   let deliveryPartner: any = null;
-  if (storeOrder?.delivery_partner_id) {
+  if (firstStoreOrder?.delivery_partner_id) {
     const { data: dp } = await supabaseAdmin
       .from('delivery_partners')
       .select('user_id, name, phone')
-      .eq('user_id', storeOrder.delivery_partner_id)
+      .eq('user_id', firstStoreOrder.delivery_partner_id)
       .maybeSingle();
     deliveryPartner = dp;
   }
@@ -255,69 +318,35 @@ async function fetchOrderData(orderId: string) {
     .eq('customer_order_id', orderId)
     .maybeSingle();
 
-  return { order, customer, appUser, storeOrder, items, store, deliveryPartner, payment };
+  return {
+    order, customer, appUser, storeOrders, itemsByStoreOrder, storesById,
+    deliveryPartner, payment,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Build InvoiceData from raw DB rows
 // ---------------------------------------------------------------------------
 
-function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): InvoiceData {
-  const { order, customer, appUser, storeOrder, items, store, deliveryPartner, payment } = raw;
-  const o = order as any;
-
-  const buyerName = [customer?.name, customer?.surname].filter(Boolean).join(' ') || appUser?.name || 'Customer';
-  const buyerPhone = customer?.phone || appUser?.phone || '';
-  const buyerEmail = appUser?.email || '';
-  const buyerState = customer?.state || '';
-  const buyerPincode = customer?.pincode || '';
-  const buyerAddress = o.delivery_address || [customer?.address, customer?.city, customer?.state, customer?.pincode].filter(Boolean).join(', ');
-
-  const isInterState = false; // assume intra-state (same state for now)
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // CALCULATION FLOW:
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 1. Taxable value = Base price of product (without GST)
-  // 2. GST (5%) = Calculated on taxable value
-  // 3. MRP = Taxable value + GST (if no discount)
-  // 4. Final amount = MRP - discount
-  // 5. Platform fee: ₹9.50 (includes GST) → ₹9.05 base + ₹0.45 GST
-  // 6. Handling fee: ₹5.50 (includes GST) → ₹5.24 base + ₹0.26 GST
-  // 7. Delivery fee: No GST applicable
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // Line items calculation
-  const lineItems: InvoiceLineItem[] = items.map((item: any, idx: number) => {
+function buildLineItems(items: any[], isInterState: boolean): InvoiceLineItem[] {
+  return items.map((item: any, idx: number) => {
     const qty = Number(item.quantity || 1);
     const unitPrice = Number(item.unit_price || 0);
-    // What was actually charged for this line — already GST-inclusive at the
-    // product's own rate (unitPrice = discounted_price + discounted_price*gst_rate/100,
-    // 0 for loose products). See "Pricing model / GST reference" in bug_fixes_2026-07-16.md.
     const sellingTotal = round2(unitPrice * qty);
 
-    // Reverse out the product's real GST rate to get the true pre-tax taxable
-    // value, instead of treating the already-tax-inclusive unitPrice as if it
-    // were untaxed (the bug this replaces: it used to add a second, hardcoded
-    // 5% on top of a price that already had real per-product GST baked in).
     const gstPercent = Number(item.gst_rate) || 0;
     const taxableValue = round2(sellingTotal / (1 + gstPercent / 100));
     const gst = calcGstSplit(taxableValue, gstPercent, isInterState);
 
-    // MRP reconstructs back to sellingTotal (taxableValue + its own GST).
     const mrp = round2(taxableValue + gst.cgst_amount + gst.sgst_amount + gst.igst_amount);
-
-    // Discount (if any)
     const discountAmt = 0;
-
-    // Final line total = MRP - discount
     const lineTotal = round2(mrp - discountAmt);
 
     return {
       line_no: idx + 1,
       product_id: item.product_id || undefined,
       product_name: item.product_name || 'Product',
-      hsn_code: '2106', // default HSN for misc food preparations
+      hsn_code: item.hsn_code || '',
       unit: item.unit || 'nos',
       mrp,
       selling_price: unitPrice,
@@ -331,75 +360,128 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
       line_total: lineTotal,
     };
   });
+}
 
-  // Sum up all line items (each already reconstructs to what was actually
-  // charged per line, i.e. layer-1/per-product GST only — see per-line calc above).
-  const itemsSubtotal = round2(lineItems.reduce((s, i) => s + i.line_total, 0));
-  const itemsTaxableAmount = round2(lineItems.reduce((s, i) => s + i.taxable_value, 0));
-  const itemsCgstTotal = round2(lineItems.reduce((s, i) => s + i.cgst_amount, 0));
-  const itemsSgstTotal = round2(lineItems.reduce((s, i) => s + i.sgst_amount, 0));
-  const itemsIgstTotal = round2(lineItems.reduce((s, i) => s + i.igst_amount, 0));
+function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): InvoiceData {
+  const { order, customer, appUser, storeOrders, itemsByStoreOrder, storesById, deliveryPartner, payment } = raw;
+  const o = order as any;
 
-  // Layer 2: the separate, flat GoI-mandated 5% GST on the whole item subtotal
-  // (on top of each item's own layer-1 GST above) — see "Pricing model / GST
-  // reference" in bug_fixes_2026-07-16.md. This is what the old flat
-  // DEFAULT_GST_RATE=5 per-line calculation was actually representing, just
-  // incorrectly applied per-line instead of once on the subtotal. Folded into
-  // the overall taxable/cgst/sgst totals below rather than given its own
-  // invoice line, matching how platform/handling fee GST is already handled —
-  // grand_total is unaffected by this change (still reconciles to what the
-  // customer actually paid), only the per-line and CGST/SGST breakdown does.
-  const checkoutGst = calcGstSplit(itemsSubtotal, DEFAULT_GST_RATE, isInterState);
+  const buyerName = [customer?.name, customer?.surname].filter(Boolean).join(' ') || appUser?.name || 'Customer';
+  const buyerPhone = customer?.phone || appUser?.phone || '';
+  const buyerEmail = appUser?.email || '';
+  const buyerState = customer?.state || '';
+  const buyerPincode = customer?.pincode || '';
+  const buyerAddress = o.delivery_address || [customer?.address, customer?.city, customer?.state, customer?.pincode].filter(Boolean).join(', ');
 
-  // Platform fee and handling fee (fixed amounts with embedded GST at 5%)
-  // Platform fee: ₹9.50 (includes GST), Handling fee: ₹5.50 (includes GST)
+  const isInterState = false; // assume intra-state (same state for now)
+
+  // ── Per-store sections ──────────────────────────────────────────────────
+  // stores.gstin/fssai/pan don't exist as columns yet (no shopkeeper-facing
+  // way to enter them either) — every store's registration fields render as
+  // "N/A", same fallback the footer/seller blocks already used before this
+  // change; not something this pass adds or fixes.
+  const storeGroups: StoreInvoiceGroup[] = storeOrders.map((so: any) => {
+    const store = storesById.get(so.store_id);
+    const rawItems = itemsByStoreOrder.get(so.id) || [];
+    const lineItems = buildLineItems(rawItems, isInterState);
+
+    return {
+      store_order_id: so.id,
+      seller_name: store?.name || 'Near & Now Partner Store',
+      seller_address: store?.address || '',
+      seller_gstin: '',
+      seller_fssai: '',
+      seller_pan: '',
+      seller_cin: '',
+      items: lineItems,
+      subtotal: round2(lineItems.reduce((s, i) => s + i.line_total, 0)),
+      taxable_value: round2(lineItems.reduce((s, i) => s + i.taxable_value, 0)),
+      cgst_total: round2(lineItems.reduce((s, i) => s + i.cgst_amount, 0)),
+      sgst_total: round2(lineItems.reduce((s, i) => s + i.sgst_amount, 0)),
+      igst_total: round2(lineItems.reduce((s, i) => s + i.igst_amount, 0)),
+    };
+  });
+
+  const itemsSubtotal = round2(storeGroups.reduce((s, g) => s + g.subtotal, 0));
+  const itemsTaxableAmount = round2(storeGroups.reduce((s, g) => s + g.taxable_value, 0));
+  const itemsCgstTotal = round2(storeGroups.reduce((s, g) => s + g.cgst_total, 0));
+  const itemsSgstTotal = round2(storeGroups.reduce((s, g) => s + g.sgst_total, 0));
+  const itemsIgstTotal = round2(storeGroups.reduce((s, g) => s + g.igst_total, 0));
+
+  // ── Platform fee breakdown (seller = Near & Now, not any store) ────────
+  // Fixed amounts with embedded 5% GST — matches the backend's own
+  // order-total source of truth exactly (database.service.ts's
+  // PLATFORM_FEE/HANDLING_FEE = 9.5/5.5). The previous version of this file
+  // additionally invented a separate flat 5% "checkout GST" layer on top of
+  // the item subtotal (DEFAULT_GST_RATE) — that layer was removed from
+  // actual checkout pricing on 2026-07-31 (see checkoutCalculations.ts /
+  // database.service.ts comments) as a double-count, but this invoice
+  // generator kept charging for it anyway, inflating grand_total above what
+  // the customer actually paid. Removed here; grand_total now reconciles to
+  // order.total_amount (ground truth) instead of being independently
+  // re-derived with a phantom extra charge.
+  const feeGstRate = 0.05;
   const platformFeeWithGst = 9.50;
   const handlingFeeWithGst = 5.50;
 
-  // Reverse GST calculation: base = total / (1 + gst_rate)
-  // Example: 9.50 / 1.05 = 9.047619... ≈ 9.05 (base), GST = 0.45
-  const feeGstRate = 0.05; // 5% GST on fees
   const platformFeeBase = round2(platformFeeWithGst / (1 + feeGstRate));
   const platformFeeGst = round2(platformFeeWithGst - platformFeeBase);
   const handlingFeeBase = round2(handlingFeeWithGst / (1 + feeGstRate));
   const handlingFeeGst = round2(handlingFeeWithGst - handlingFeeBase);
 
-  // Delivery fee (no GST applicable)
-  const deliveryFee = round2(Number(o.delivery_fee || 0));
+  const feeLines: FeeLine[] = [
+    {
+      label: 'Platform / Processing Fee',
+      total: platformFeeWithGst,
+      base: platformFeeBase,
+      cgst_percent: 2.5, cgst_amount: round2(platformFeeGst / 2),
+      sgst_percent: 2.5, sgst_amount: round2(platformFeeGst / 2),
+      igst_percent: 0, igst_amount: 0,
+    },
+    {
+      label: 'Handling Fee',
+      total: handlingFeeWithGst,
+      base: handlingFeeBase,
+      cgst_percent: 2.5, cgst_amount: round2(handlingFeeGst / 2),
+      sgst_percent: 2.5, sgst_amount: round2(handlingFeeGst / 2),
+      igst_percent: 0, igst_amount: 0,
+    },
+  ];
+  const feesTotal = round2(feeLines.reduce((s, f) => s + f.total, 0));
+  const feesCgstTotal = round2(feeLines.reduce((s, f) => s + f.cgst_amount, 0));
+  const feesSgstTotal = round2(feeLines.reduce((s, f) => s + f.sgst_amount, 0));
 
-  // Discount amount
+  const deliveryFee = round2(Number(o.delivery_fee || 0));
+  const tipAmount = round2(Number(o.tip_amount || 0));
   const discountAmount = round2(Number(o.discount_amount || 0));
 
-  const checkoutGstTotal = round2(checkoutGst.cgst_amount + checkoutGst.sgst_amount + checkoutGst.igst_amount);
+  const cgstTotal = round2(itemsCgstTotal + feesCgstTotal);
+  const sgstTotal = round2(itemsSgstTotal + feesSgstTotal);
+  const igstTotal = itemsIgstTotal;
+  const taxableAmount = round2(itemsTaxableAmount + platformFeeBase + handlingFeeBase);
 
-  // Subtotal with fees (items as charged + layer-2 checkout GST + platform fee + handling fee + delivery - discount)
-  const subtotal = round2(itemsSubtotal + checkoutGstTotal + platformFeeWithGst + handlingFeeWithGst + deliveryFee - discountAmount);
+  const computedSubtotal = round2(itemsSubtotal + feesTotal + deliveryFee + tipAmount - discountAmount);
 
-  // Total taxable amount (items' true pre-tax value + layer-2 base + platform fee base + handling fee base)
-  const taxableAmount = round2(itemsTaxableAmount + itemsSubtotal + platformFeeBase + handlingFeeBase);
+  // grand_total is what the customer was actually charged — ground truth
+  // from the order row, not re-derived (see comment above). Logged, not
+  // silently overwritten, if it ever drifts from the computed breakdown so a
+  // real discrepancy stays visible instead of being hidden by always
+  // trusting one side.
+  const dbTotal = Number(o.total_amount);
+  const grandTotal = Number.isFinite(dbTotal) && dbTotal > 0 ? round2(dbTotal) : computedSubtotal;
+  if (Number.isFinite(dbTotal) && Math.abs(grandTotal - computedSubtotal) > 0.5) {
+    console.warn(
+      `[INVOICE] order ${o.id}: computed breakdown (${computedSubtotal}) doesn't match order.total_amount (${grandTotal}) — showing the actual charged amount, but the breakdown above it may not fully reconcile.`
+    );
+  }
 
-  // Split fee GST into CGST/SGST for intra-state
-  const feeCgst = round2((platformFeeGst + handlingFeeGst) / 2);
-  const feeSgst = round2((platformFeeGst + handlingFeeGst) / 2);
-
-  const cgstTotal = round2(itemsCgstTotal + checkoutGst.cgst_amount + feeCgst);
-  const sgstTotal = round2(itemsSgstTotal + checkoutGst.sgst_amount + feeSgst);
-  const igstTotal = round2(itemsIgstTotal + checkoutGst.igst_amount); // No IGST for intra-state
-  const cessTotal = 0;
-
-  // Grand total = subtotal (already includes items with GST + fees with GST + delivery - discount)
-  const grandTotal = round2(subtotal);
+  const flatItems = storeGroups.flatMap((g) => g.items);
+  const firstGroup = storeGroups[0];
 
   return {
     order_id: o.id,
     invoice_number: '', // filled after DB insert
     invoice_date: new Date(o.placed_at || o.created_at).toISOString().slice(0, 10),
-    seller_name: store?.name || 'Near & Now Partner Store',
-    seller_address: store?.address || '',
-    seller_gstin: '',
-    seller_fssai: '',
-    seller_pan: '',
-    seller_cin: '',
     buyer_name: buyerName,
     buyer_phone: buyerPhone,
     buyer_email: buyerEmail,
@@ -408,24 +490,43 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
     buyer_pincode: buyerPincode,
     place_of_supply: buyerState || 'India',
     reverse_charge: false,
-    subtotal,
+
+    store_groups: storeGroups,
+
+    fee_seller_name: 'Near & Now Digital Commerce',
+    fee_lines: feeLines,
+    fees_total: feesTotal,
+    fees_cgst_total: feesCgstTotal,
+    fees_sgst_total: feesSgstTotal,
+    delivery_fee: deliveryFee,
+    tip_amount: tipAmount,
+
     discount_amount: discountAmount,
     taxable_amount: taxableAmount,
     cgst_total: cgstTotal,
     sgst_total: sgstTotal,
     igst_total: igstTotal,
-    cess_total: cessTotal,
-    delivery_fee: deliveryFee,
+    cess_total: 0,
+    subtotal: computedSubtotal,
     grand_total: grandTotal,
     amount_in_words: amountToWords(grandTotal),
+
     payment_method: String(o.payment_method || 'razorpay'),
     payment_status: String(o.payment_status || 'paid'),
     razorpay_payment_id: o.razorpay_payment_id || '',
     razorpay_order_id: (payment as any)?.razorpay_order_id || '',
-    items: lineItems,
+
+    items: flatItems,
+    seller_name: firstGroup?.seller_name || 'Near & Now Partner Store',
+    seller_address: firstGroup?.seller_address || '',
+    seller_gstin: firstGroup?.seller_gstin || '',
+    seller_fssai: firstGroup?.seller_fssai || '',
+    seller_pan: firstGroup?.seller_pan || '',
+    seller_cin: firstGroup?.seller_cin || '',
+
     delivery_partner_name: deliveryPartner?.name || '',
     delivery_partner_phone: deliveryPartner?.phone || '',
-    store_order_id: storeOrder?.id || '',
+    store_order_id: firstGroup?.store_order_id || '',
   };
 }
 
@@ -443,6 +544,10 @@ function r(n: number): string {
   return '₹' + n.toFixed(2);
 }
 
+// ---------------------------------------------------------------------------
+// Customer tax invoice — one page-set per store, plus one fee-breakdown page
+// ---------------------------------------------------------------------------
+
 function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margins: { top: 30, bottom: 30, left: 30, right: 30 } });
@@ -452,6 +557,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
     doc.on('error', reject);
 
     const L = 30, R = 565, W = R - L; // 535pt usable
+    const PAGE_BOTTOM = doc.page.height - 30;
 
     const vLine = (rx: number, y1: number, y2: number) =>
       doc.moveTo(rx, y1).lineTo(rx, y2).strokeColor('#000000').lineWidth(0.5).stroke();
@@ -460,16 +566,13 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
     const t = (text: string, x: number, ry: number, opts: Record<string, unknown> = {}) =>
       doc.text(text, x, ry, { lineBreak: false, ...opts });
 
-    let y = 30;
-
-    // ── 1. HEADER ───────────────────────────────────────────────────────────
-    {
+    // ── Header — identical on every page ────────────────────────────────
+    function drawHeader(y: number): number {
       const h = 54;
       box(L, y, W, h);
       const divX = L + 275;
       vLine(divX, y, y + h);
 
-      // Orange logo box
       doc.rect(L + 5, y + 9, 36, 36).fill('#FF8C00').stroke();
       doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold');
       t('N&N', L + 14, y + 23);
@@ -482,16 +585,19 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       doc.fillColor('#1a1a1a').fontSize(17).font('Helvetica-Bold');
       t('Tax Invoice', divX + 5, y + 18, { width: R - divX - 10, align: 'right' });
 
-      y += h;
+      return y + h;
     }
 
-    // ── 2. SELLER BLOCK ─────────────────────────────────────────────────────
-    {
+    // ── Seller block — parameterized so it can render either a store's own
+    //    identity or Near & Now's (fee-breakdown page) ───────────────────
+    function drawSellerBlock(
+      y: number,
+      seller: { name: string; address: string; gstin: string; fssai: string; pan: string; cin: string },
+    ): number {
       const qrW = 135;
       const infoW = W - qrW;
       const qrX = L + infoW;
 
-      // "Sold By / Seller" label row
       const labelH = 14;
       box(L, y, W, labelH);
       vLine(qrX, y, y + labelH);
@@ -499,22 +605,20 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       t('Sold By / Seller', L + 4, y + 3);
       y += labelH;
 
-      // Seller name + address row
       const nameH = 26;
       box(L, y, infoW, nameH);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
-      t(inv.seller_name, L + 4, y + 3);
-      if (inv.seller_address) {
+      t(seller.name, L + 4, y + 3);
+      if (seller.address) {
         doc.fillColor('#000000').fontSize(7).font('Helvetica');
-        t(inv.seller_address, L + 4, y + 14, { width: infoW - 8, ellipsis: true });
+        t(seller.address, L + 4, y + 14, { width: infoW - 8, ellipsis: true });
       }
 
-      // Info rows: GSTIN, FSSAI, CIN, PAN
       const infoRows = [
-        { label: 'GSTIN', value: inv.seller_gstin || 'N/A', labelW: 95 },
-        { label: 'FSSAI License Number', value: inv.seller_fssai || 'N/A', labelW: 95 },
-        { label: 'CIN', value: inv.seller_cin || 'N/A', labelW: 95 },
-        { label: 'PAN', value: inv.seller_pan || 'N/A', labelW: 95 },
+        { label: 'GSTIN', value: seller.gstin || 'N/A', labelW: 95 },
+        { label: 'FSSAI License Number', value: seller.fssai || 'N/A', labelW: 95 },
+        { label: 'CIN', value: seller.cin || 'N/A', labelW: 95 },
+        { label: 'PAN', value: seller.pan || 'N/A', labelW: 95 },
       ];
       const infoRowH = 13;
       let rowY = y + nameH;
@@ -529,7 +633,6 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
 
       const totalSellerH = nameH + infoRows.length * infoRowH;
 
-      // QR placeholder (spans all seller rows below the label row)
       box(qrX, y, qrW, totalSellerH);
       const qrSize = 52;
       const qrPX = qrX + (qrW - qrSize) / 2;
@@ -542,17 +645,19 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       doc.fillColor('#000000').fontSize(6.5).font('Helvetica');
       t(`Invoice Number : ${inv.invoice_number}`, qrX + 3, qrPY + qrSize + 5, { width: qrW - 6, align: 'center' });
 
-      y += totalSellerH;
+      return y + totalSellerH;
     }
 
-    // ── 3. INVOICE TO / ORDER BLOCK ──────────────────────────────────────────
-    {
-      const blockH = 66;
-      box(L, y, W, blockH);
+    // ── Invoice To / Order block — fixed to avoid the address/pincode
+    //    overlap: address gets its own row sized to however many lines it
+    //    actually wraps to (computed via heightOfString), pincode moved to
+    //    its own row below it instead of being crammed into the same label
+    //    as the full address text. ───────────────────────────────────────
+    function drawBuyerBlock(y: number): number {
       const splitX = L + Math.round(W * 0.58);
-      vLine(splitX, y, y + blockH);
-
       const buyerLabelW = 90;
+      const addressValueW = splitX - L - buyerLabelW - 8;
+
       const invoiceDateStr = (() => {
         try {
           return new Date(inv.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', {
@@ -563,23 +668,51 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
         }
       })();
 
-      // Left: buyer details
-      const buyerRows: [string, string][] = [
+      doc.fontSize(7.5).font('Helvetica');
+      const addressH = Math.max(12, doc.heightOfString(inv.buyer_address || '', { width: addressValueW }));
+
+      const fixedRows: [string, string][] = [
         ['Invoice To', 'Near & Now'],
         ['Name', inv.buyer_name],
-        ['Address Pin code', inv.buyer_address || ''],
-        ['State', inv.buyer_state || 'West Bengal'],
       ];
+      const rowH = 15;
+      const addressRowH = addressH + 4;
+      const tailRows: [string, string][] = [
+        ['Pincode', inv.buyer_pincode || ''],
+        ['State', inv.buyer_state || ''],
+      ];
+
+      const blockH = fixedRows.length * rowH + addressRowH + tailRows.length * rowH + 6;
+      box(L, y, W, blockH);
+      vLine(splitX, y, y + blockH);
+
       let ly = y + 4;
-      buyerRows.forEach(([label, value]) => {
+      fixedRows.forEach(([label, value]) => {
         doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
         t(label, L + 4, ly);
         doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
         t(': ' + value, L + buyerLabelW, ly, { width: splitX - L - buyerLabelW - 8, ellipsis: true });
-        ly += 15;
+        ly += rowH;
       });
 
-      // Right: order details
+      // Address — own row, wraps to as many lines as it needs.
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+      t('Address', L + 4, ly);
+      doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+      doc.text(': ' + (inv.buyer_address || ''), L + buyerLabelW, ly, {
+        width: addressValueW, lineBreak: true,
+      });
+      ly += addressRowH;
+
+      tailRows.forEach(([label, value]) => {
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
+        t(label, L + 4, ly);
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+        t(': ' + value, L + buyerLabelW, ly, { width: splitX - L - buyerLabelW - 8, ellipsis: true });
+        ly += rowH;
+      });
+
+      // Right column: order details
       const odX = splitX + 5;
       const odLW = 65;
       let oy = y + 4;
@@ -591,67 +724,73 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       oy += 14;
 
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
-      t('Invoice', odX, oy);
-      oy += 9;
-      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
-      t('Date', odX, oy);
+      t('Invoice Date', odX, oy);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
       t(': ' + invoiceDateStr, odX + odLW, oy);
       oy += 14;
 
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
-      t('Place of', odX, oy);
-      oy += 9;
-      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
-      t('Supply', odX, oy);
+      t('Place of Supply', odX, oy);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(': ' + (inv.place_of_supply || inv.buyer_state || 'West Bengal'), odX + odLW, oy);
+      t(': ' + (inv.place_of_supply || inv.buyer_state || ''), odX + odLW + 20, oy, { width: R - odX - odLW - 25, ellipsis: true });
 
-      y += blockH;
+      return y + blockH;
     }
 
-    // ── 4. ITEMS TABLE ───────────────────────────────────────────────────────
-    {
-      const colDefs = [
-        { label: 'Sr. no',             w: 25 },
-        { label: 'UPC',                w: 35 },
-        { label: 'Item Description',   w: 95 },
-        { label: 'MRP',                w: 32 },
-        { label: 'Discount',           w: 32 },
-        { label: 'Qty.',               w: 22 },
-        { label: 'Taxable\nValue',     w: 40 },
-        { label: 'CGST\n(%)',          w: 28 },
-        { label: 'CGST\n(INR)',        w: 32 },
-        { label: 'SGST\n(%)',          w: 28 },
-        { label: 'SGST\n(INR)',        w: 32 },
-        { label: 'Cess\n(%)',          w: 28 },
-        { label: 'Additional\nCess Val', w: 40 },
-        { label: 'Total',              w: 36 },
-      ];
-      const rawW = colDefs.reduce((s, c) => s + c.w, 0);
-      const scale = W / rawW;
-      const cw = colDefs.map(c => c.w * scale);
+    const colDefs = [
+      { label: 'Sr. no',             w: 25 },
+      { label: 'HSN',                w: 35 },
+      { label: 'Item Description',   w: 95 },
+      { label: 'MRP',                w: 32 },
+      { label: 'Discount',           w: 32 },
+      { label: 'Qty.',               w: 22 },
+      { label: 'Taxable\nValue',     w: 40 },
+      { label: 'CGST\n(%)',          w: 28 },
+      { label: 'CGST\n(INR)',        w: 32 },
+      { label: 'SGST\n(%)',          w: 28 },
+      { label: 'SGST\n(INR)',        w: 32 },
+      { label: 'Cess\n(%)',          w: 28 },
+      { label: 'Additional\nCess Val', w: 40 },
+      { label: 'Total',              w: 36 },
+    ];
+    const rawW = colDefs.reduce((s, c) => s + c.w, 0);
+    const scale = W / rawW;
+    const cw = colDefs.map(c => c.w * scale);
+    const ROW_H = 26;
+    const HDR_H = 22;
 
-      // Header row (2-line text, so taller)
-      const hdrH = 22;
-      box(L, y, W, hdrH);
+    function drawTableHeader(y: number): number {
+      box(L, y, W, HDR_H);
       let cx = L;
       colDefs.forEach((col, i) => {
-        if (i > 0) vLine(cx, y, y + hdrH);
+        if (i > 0) vLine(cx, y, y + HDR_H);
         doc.fillColor('#000000').fontSize(6.5).font('Helvetica-Bold')
           .text(col.label, cx + 1, y + 2, { width: cw[i] - 2, align: 'center', lineBreak: true });
         cx += cw[i];
       });
-      y += hdrH;
+      return y + HDR_H;
+    }
 
-      // Data rows
-      inv.items.forEach(item => {
-        const rowH = 26;
-        box(L, y, W, rowH);
-        cx = L;
+    // Renders the items table for one store, paginating (new page + repeated
+    // table header) whenever a row would run past the bottom margin — a
+    // single-store invoice with enough line items now correctly spans
+    // multiple pages instead of the old implementation, which had no
+    // pagination at all and just let rows run off the page.
+    function drawItemsTable(startY: number, items: InvoiceLineItem[]): number {
+      let y = startY;
+      y = drawTableHeader(y);
+
+      items.forEach(item => {
+        if (y + ROW_H > PAGE_BOTTOM) {
+          doc.addPage();
+          y = drawHeader(30);
+          y = drawTableHeader(y);
+        }
+        box(L, y, W, ROW_H);
+        let cx = L;
         const vals = [
           String(item.line_no),
-          item.hsn_code || '',
+          item.hsn_code || 'N/A',
           item.product_name,
           item.mrp.toFixed(2),
           item.discount_amount.toFixed(2),
@@ -666,52 +805,76 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
           item.line_total.toFixed(2),
         ];
         vals.forEach((v, i) => {
-          if (i > 0) vLine(cx, y, y + rowH);
+          if (i > 0) vLine(cx, y, y + ROW_H);
           const align: 'left' | 'right' | 'center' = i === 2 ? 'left' : (i < 2 ? 'center' : 'right');
           doc.fillColor('#000000').fontSize(7).font('Helvetica')
             .text(v, cx + 2, y + 4, { width: cw[i] - 4, align, lineBreak: false, ellipsis: true });
           cx += cw[i];
         });
-        y += rowH;
+        y += ROW_H;
       });
 
-      // Total row
+      return y;
+    }
+
+    function drawTotalRow(y: number, totalQty: number, cgst: number, sgst: number, total: number): number {
+      if (y + 14 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = drawHeader(30);
+      }
       const totRowH = 14;
       box(L, y, W, totRowH);
-      cx = L;
+      let cx = L;
       colDefs.forEach((_, i) => {
         if (i > 0) vLine(cx, y, y + totRowH);
         let val = '';
-        const totalQty = inv.items.reduce((s, it) => s + it.quantity, 0);
         if (i === 0) val = 'Total';
         else if (i === 5) val = String(totalQty);
-        else if (i === 8) val = inv.cgst_total.toFixed(2);
-        else if (i === 10) val = inv.sgst_total.toFixed(2);
-        else if (i === 13) val = inv.grand_total.toFixed(2);
+        else if (i === 8) val = cgst.toFixed(2);
+        else if (i === 10) val = sgst.toFixed(2);
+        else if (i === 13) val = total.toFixed(2);
         if (val) {
           doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold')
             .text(val, cx + 2, y + 3, { width: cw[i] - 4, align: i === 0 ? 'left' : 'right', lineBreak: false });
         }
         cx += cw[i];
       });
-      y += totRowH;
+      return y + totRowH;
     }
 
-    // ── 5. AMOUNT IN WORDS ───────────────────────────────────────────────────
-    {
-      const wH = 16;
+    // Amount-in-words — fixed to size its box from the actual wrapped
+    // height of the text instead of a fixed 16pt (which is what caused the
+    // value to visibly run into the block below it whenever it wrapped to a
+    // second line, e.g. any total in the thousands).
+    function drawAmountInWords(y: number, words: string): number {
+      const labelW = 55;
+      const valueW = W - labelW - 5;
+      doc.fontSize(7.5).font('Helvetica');
+      const textH = doc.heightOfString(words, { width: valueW });
+      // Minimum 20, not 16 — the "Amount in / Words" label itself wraps to two
+      // lines at y+4/y+12, which needs ~20pt to fit comfortably even when the
+      // value text is short enough to fit on one line.
+      const wH = Math.max(20, textH + 8);
+
+      if (y + wH > PAGE_BOTTOM) {
+        doc.addPage();
+        y = drawHeader(30);
+      }
+
       box(L, y, W, wH);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('Amount in', L + 4, y + 4);
-      doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('Words', L + 4, y + 12);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(inv.amount_in_words, L + 55, y + 4, { width: W - 60, lineBreak: false });
-      y += wH;
+      doc.text(words, L + labelW, y + 4, { width: valueW, lineBreak: true });
+      return y + wH;
     }
 
-    // ── 6. FOOTER SELLER BLOCK ───────────────────────────────────────────────
-    {
+    function drawFooterSellerBlock(y: number): number {
+      if (y + 60 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = drawHeader(30);
+      }
       const sigW = 110;
       const infoW = W - sigW;
       const sigX = L + infoW;
@@ -719,7 +882,6 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       box(L, y, W, fH);
       vLine(sigX, y, y + fH);
 
-      // Company name line
       doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
       t('Near & Now Digital Commerce ', L + 4, y + 5);
       doc.fillColor('#000000').fontSize(8).font('Helvetica-Oblique');
@@ -731,45 +893,46 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       const labelW1 = 30;
       const labelW2 = 100;
 
-      // Left column: GSTIN, CIN
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('GSTIN', L + 4, y + 22);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(': ' + (inv.seller_gstin || 'N/A'), L + labelW1 + 4, y + 22, { width: midX - L - labelW1 - 8, ellipsis: true });
+      t(': N/A', L + labelW1 + 4, y + 22, { width: midX - L - labelW1 - 8, ellipsis: true });
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('CIN', L + 4, y + 36);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(': ' + (inv.seller_cin || 'N/A'), L + labelW1 + 4, y + 36, { width: midX - L - labelW1 - 8, ellipsis: true });
+      t(': N/A', L + labelW1 + 4, y + 36, { width: midX - L - labelW1 - 8, ellipsis: true });
 
-      // Right column: FSSAI, PAN
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('FSSAI License Number', midX + 4, y + 22);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(': ' + (inv.seller_fssai || 'N/A'), midX + labelW2 + 4, y + 22, { width: sigX - midX - labelW2 - 8, ellipsis: true });
+      t(': N/A', midX + labelW2 + 4, y + 22, { width: sigX - midX - labelW2 - 8, ellipsis: true });
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('PAN', midX + 4, y + 36);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(': ' + (inv.seller_pan || 'N/A'), midX + labelW1 + 4, y + 36, { width: sigX - midX - labelW1 - 8, ellipsis: true });
+      t(': N/A', midX + labelW1 + 4, y + 36, { width: sigX - midX - labelW1 - 8, ellipsis: true });
 
-      // Signature area
       doc.fillColor('#000000').fontSize(7).font('Helvetica');
       t('Authorised Signatory', sigX + 3, y + fH - 14, { width: sigW - 6, align: 'center' });
 
-      y += fH;
+      return y + fH;
     }
 
-    // ── 7. REVERSE CHARGE ────────────────────────────────────────────────────
-    {
+    function drawReverseChargeAndTerms(y: number): void {
+      if (y + 14 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = drawHeader(30);
+      }
       const rcH = 14;
       box(L, y, W, rcH);
       doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
       t(`Whether the tax is payable on reverse charge - ${inv.reverse_charge ? 'Yes' : 'No'}`, L + 4, y + 3);
       y += rcH;
-    }
 
-    // ── 8. TERMS & CONDITIONS ────────────────────────────────────────────────
-    {
       y += 5;
+      if (y + 60 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = drawHeader(30) + 5;
+      }
       doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold').text('Terms & Conditions:', L, y);
       y += 13;
       const terms = [
@@ -779,14 +942,149 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
         '4. MRP displayed on the platform is as printed on the product package. Actual MRP and amount payable may be a function of offers/discounts and/or the revised GST rates made effective by Govt.',
       ];
       terms.forEach(term => {
-        doc.fillColor('#000000').fontSize(6.5).font('Helvetica').text(term, L, y, { width: W, lineBreak: true });
-        y = doc.y + 2;
+        doc.fillColor('#000000').fontSize(6.5).font('Helvetica').text(term, L, doc.y, { width: W, lineBreak: true });
+        doc.y = doc.y + 2;
       });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // One page-set per store — each is a self-contained tax invoice for
+    // that store's own items only, per the 2026-08-26 product decision:
+    // stores were never meant to share one invoice page.
+    // ═══════════════════════════════════════════════════════════════════
+    inv.store_groups.forEach((group, idx) => {
+      if (idx > 0) doc.addPage();
+      let y = 30;
+      y = drawHeader(y);
+      y = drawSellerBlock(y, {
+        name: group.seller_name, address: group.seller_address,
+        gstin: group.seller_gstin, fssai: group.seller_fssai,
+        pan: group.seller_pan, cin: group.seller_cin,
+      });
+      y = drawBuyerBlock(y);
+      y = drawItemsTable(y, group.items);
+      const totalQty = group.items.reduce((s, it) => s + it.quantity, 0);
+      y = drawTotalRow(y, totalQty, group.cgst_total, group.sgst_total, group.subtotal);
+      y = drawAmountInWords(y, amountToWords(group.subtotal));
+      y = drawFooterSellerBlock(y);
+      drawReverseChargeAndTerms(y);
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Final page — platform fee breakdown (seller = Near & Now), GST-split
+    // per fee, plus the whole order's grand total reconciling everything
+    // above (every store's subtotal + these fees + delivery + tip - discount).
+    // ═══════════════════════════════════════════════════════════════════
+    doc.addPage();
+    {
+      let y = 30;
+      y = drawHeader(y);
+      y = drawSellerBlock(y, {
+        name: inv.fee_seller_name, address: '', gstin: '', fssai: '', pan: '', cin: '',
+      });
+      y = drawBuyerBlock(y);
+
+      // Fee table — same visual language as the items table, but its own
+      // narrower column set (no HSN/MRP/discount, since these are service
+      // fees, not products).
+      const feeColDefs = [
+        { label: 'Sr. no', w: 30 },
+        { label: 'Description', w: 160 },
+        { label: 'Taxable\nValue', w: 70 },
+        { label: 'CGST\n(%)', w: 45 },
+        { label: 'CGST\n(INR)', w: 55 },
+        { label: 'SGST\n(%)', w: 45 },
+        { label: 'SGST\n(INR)', w: 55 },
+        { label: 'Total', w: 75 },
+      ];
+      const feeRawW = feeColDefs.reduce((s, c) => s + c.w, 0);
+      const feeScale = W / feeRawW;
+      const feeCw = feeColDefs.map(c => c.w * feeScale);
+
+      const feeHdrH = 22;
+      box(L, y, W, feeHdrH);
+      let cx = L;
+      feeColDefs.forEach((col, i) => {
+        if (i > 0) vLine(cx, y, y + feeHdrH);
+        doc.fillColor('#000000').fontSize(7).font('Helvetica-Bold')
+          .text(col.label, cx + 1, y + 4, { width: feeCw[i] - 2, align: 'center', lineBreak: true });
+        cx += feeCw[i];
+      });
+      y += feeHdrH;
+
+      const feeRowH = 20;
+      inv.fee_lines.forEach((fee, idx) => {
+        box(L, y, W, feeRowH);
+        cx = L;
+        const vals = [
+          String(idx + 1), fee.label, fee.base.toFixed(2),
+          String(fee.cgst_percent), fee.cgst_amount.toFixed(2),
+          String(fee.sgst_percent), fee.sgst_amount.toFixed(2),
+          fee.total.toFixed(2),
+        ];
+        vals.forEach((v, i) => {
+          if (i > 0) vLine(cx, y, y + feeRowH);
+          const align: 'left' | 'right' | 'center' = i === 1 ? 'left' : (i === 0 ? 'center' : 'right');
+          doc.fillColor('#000000').fontSize(7.5).font('Helvetica')
+            .text(v, cx + 3, y + 5, { width: feeCw[i] - 5, align, lineBreak: false, ellipsis: true });
+          cx += feeCw[i];
+        });
+        y += feeRowH;
+      });
+
+      // Non-GST lines: delivery fee, tip, discount — shown for completeness
+      // so this page's own total is traceable, even though they carry no tax.
+      const extraRows: [string, number][] = [
+        ['Delivery Fee (no GST)', inv.delivery_fee],
+        ...(inv.tip_amount > 0 ? [['Delivery Tip (no GST)', inv.tip_amount] as [string, number]] : []),
+        ...(inv.discount_amount > 0 ? [['Discount', -inv.discount_amount] as [string, number]] : []),
+      ];
+      extraRows.forEach(([label, amt]) => {
+        box(L, y, W, feeRowH);
+        doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
+        t(label, L + 6, y + 5, { width: W - 120 });
+        t((amt < 0 ? '-' : '') + r(Math.abs(amt)), L + W - 90, y + 5, { width: 84, align: 'right' });
+        y += feeRowH;
+      });
+
+      // This page's own total (fees + delivery + tip - discount).
+      const feePageTotal = round2(
+        inv.fees_total + inv.delivery_fee + inv.tip_amount - inv.discount_amount
+      );
+      box(L, y, W, feeRowH);
+      doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+      t('Total (this page)', L + 6, y + 5, { width: W - 120 });
+      t(r(feePageTotal), L + W - 90, y + 5, { width: 84, align: 'right' });
+      y += feeRowH;
+      y += 10;
+
+      // Whole-order grand total — every store's subtotal + this page's total.
+      const allStoresTotal = round2(inv.store_groups.reduce((s, g) => s + g.subtotal, 0));
+      box(L, y, W, 20);
+      doc.fillColor('#000000').fontSize(8).font('Helvetica');
+      t(`Store items total (all ${inv.store_groups.length} store${inv.store_groups.length > 1 ? 's' : ''})`, L + 6, y + 6, { width: W - 140 });
+      t(r(allStoresTotal), L + W - 90, y + 6, { width: 84, align: 'right' });
+      y += 20;
+      box(L, y, W, 22);
+      doc.fillColor('#000000').fontSize(9.5).font('Helvetica-Bold');
+      t('ORDER GRAND TOTAL', L + 6, y + 6, { width: W - 140 });
+      t(r(inv.grand_total), L + W - 92, y + 6, { width: 86, align: 'right' });
+      y += 22;
+
+      y = drawAmountInWords(y + 8, inv.amount_in_words);
+      y = drawFooterSellerBlock(y);
+      drawReverseChargeAndTerms(y);
     }
 
     doc.end();
   });
 }
+
+// ---------------------------------------------------------------------------
+// Store (merchant) copy and delivery slip — left as one document per order
+// (not per store) for now; see bug_fixes_2026-07-23.md for the known
+// per-store scoping gap this shares with what the customer PDF used to do.
+// ---------------------------------------------------------------------------
 
 function generateStorePDF(inv: InvoiceData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
