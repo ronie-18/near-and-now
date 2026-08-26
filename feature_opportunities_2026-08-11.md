@@ -1,4 +1,4 @@
-# Near & Now — Feature Opportunities (2026-08-11)
+# Near & Now — Feature Opportunities (2026-08-11, updated 2026-08-26)
 
 Companion to `bug_fixes_2026-07-23.md` (which tracks defects) — this doc tracks **things that aren't broken, just not built yet**, or built inconsistently across the four surfaces (website, admin panel, and the store-owner/rider/customer mobile apps). Every entry below is grounded in an actual read of the code (file:line cited) — nothing here is speculative. Nothing in this doc has been built; it's a menu, not a plan.
 
