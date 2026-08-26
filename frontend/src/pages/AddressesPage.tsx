@@ -10,7 +10,8 @@ import {
   setDefaultAddress
 } from '../services/supabase';
 import { geocodeAddress } from '../services/placesService';
-import { Home, Briefcase, MapPin, AlertCircle } from 'lucide-react';
+import { Home, Briefcase, MapPin, AlertCircle, Navigation } from 'lucide-react';
+import LocationPicker, { LocationData } from '../components/location/LocationPicker';
 
 /* ─────────────────────────────────────────────
    Types
@@ -215,6 +216,13 @@ const AddressesPage = () => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingAddress, setEditingAddress] = useState<Address | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  // Set whenever the pin-drop map/search picker resolves a location. When
+  // present at submit time, its lat/lng is used directly instead of
+  // forward-geocoding the typed address text — same precedence CheckoutPage
+  // already uses, since a dropped pin is more accurate than text geocoding
+  // (Indian addresses often geocode poorly from free-text alone).
+  const [pickedLocation, setPickedLocation] = useState<LocationData | null>(null);
 
   const [formData, setFormData] = useState({
     name: '', addressLine1: '', addressLine2: '',
@@ -264,9 +272,11 @@ const AddressesPage = () => {
         pincode: editingAddress.pincode, phone: editingAddress.phone,
         isDefault: editingAddress.isDefault
       });
+      setPickedLocation(null);
       setShowAddForm(true);
     } else if (!showAddForm) {
       setFormData({ name: '', addressLine1: '', addressLine2: '', city: '', state: '', pincode: '', phone: '', isDefault: false });
+      setPickedLocation(null);
     }
   }, [editingAddress, showAddForm]);
 
@@ -274,6 +284,25 @@ const AddressesPage = () => {
     const { name, value, type } = e.target as HTMLInputElement;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
     setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    // Manually editing the address text after dropping a pin means the pin's
+    // coordinates no longer necessarily match what's on screen — fall back
+    // to geocoding the (now-edited) text on submit rather than silently
+    // saving a mismatched lat/lng.
+    if (name === 'addressLine1' || name === 'addressLine2' || name === 'city' || name === 'state' || name === 'pincode') {
+      setPickedLocation(null);
+    }
+  };
+
+  const handleLocationPicked = (location: LocationData) => {
+    setPickedLocation(location);
+    setFormData(prev => ({
+      ...prev,
+      addressLine1: location.address,
+      city: location.city || prev.city,
+      state: location.state || prev.state,
+      pincode: location.pincode || prev.pincode,
+    }));
+    setShowLocationPicker(false);
   };
 
   const refreshAddresses = async () => {
@@ -303,9 +332,17 @@ const AddressesPage = () => {
 
     setIsSubmitting(true);
     try {
-      const fullAddress = [formData.addressLine1, formData.addressLine2, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
-      const geocoded = await geocodeAddress(fullAddress);
-      if (!geocoded) { showNotification('Could not verify address. Please try a different address.', 'error'); return; }
+      let lat: number, lng: number;
+      if (pickedLocation) {
+        lat = pickedLocation.lat;
+        lng = pickedLocation.lng;
+      } else {
+        const fullAddress = [formData.addressLine1, formData.addressLine2, formData.city, formData.state, formData.pincode].filter(Boolean).join(', ');
+        const geocoded = await geocodeAddress(fullAddress);
+        if (!geocoded) { showNotification('Could not verify address. Please use "Pin on map" or try a different address.', 'error'); return; }
+        lat = geocoded.lat;
+        lng = geocoded.lng;
+      }
 
       if (editingAddress) {
         await updateAddress(editingAddress.id, user.id, {
@@ -313,7 +350,7 @@ const AddressesPage = () => {
           address_line_2: formData.addressLine2 || undefined,
           city: formData.city, state: formData.state, pincode: formData.pincode,
           phone: formData.phone, is_default: formData.isDefault,
-          latitude: geocoded.lat, longitude: geocoded.lng,
+          latitude: lat, longitude: lng,
         });
         showNotification('Address updated successfully', 'success');
       } else {
@@ -323,13 +360,17 @@ const AddressesPage = () => {
           address_line_2: formData.addressLine2 || undefined,
           city: formData.city, state: formData.state, pincode: formData.pincode,
           phone: formData.phone, is_default: formData.isDefault,
-          latitude: geocoded.lat, longitude: geocoded.lng,
+          latitude: lat, longitude: lng,
+          google_place_id: pickedLocation?.placeId,
+          google_formatted_address: pickedLocation?.formattedAddress,
+          google_place_data: pickedLocation?.placeData,
         });
         showNotification('Address added successfully', 'success');
       }
       setAddresses(await refreshAddresses());
       setEditingAddress(null);
       setShowAddForm(false);
+      setPickedLocation(null);
     } catch (error) {
       console.error('Error saving address:', error);
       showNotification('Failed to save address. Please try again.', 'error');
@@ -447,6 +488,19 @@ const AddressesPage = () => {
             <div className="ap-divider" />
 
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
+              {/* Pin-drop location picker — sets the exact delivery coordinates via
+                  map/search/current-location instead of relying only on geocoding
+                  whatever address text is typed below. */}
+              <button
+                type="button"
+                className="ap-btn-ghost"
+                onClick={() => setShowLocationPicker(true)}
+                style={{ width: '100%', marginBottom: 20, borderColor: pickedLocation ? '#4f46e5' : undefined, color: pickedLocation ? '#4f46e5' : undefined }}
+              >
+                <Navigation size={15} />
+                {pickedLocation ? 'Location pinned — change on map' : 'Pin exact location on map'}
+              </button>
+
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, marginBottom: 20 }}>
 
                 {/* Name */}
@@ -696,6 +750,12 @@ const AddressesPage = () => {
           </button>
         </div>
       </div>
+
+      <LocationPicker
+        isOpen={showLocationPicker}
+        onClose={() => setShowLocationPicker(false)}
+        onLocationSelect={handleLocationPicked}
+      />
     </div>
   );
 };
