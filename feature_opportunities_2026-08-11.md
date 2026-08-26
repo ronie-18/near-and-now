@@ -11,7 +11,8 @@ Companion to `bug_fixes_2026-07-23.md` (which tracks defects) — this doc track
 - **Store-approval verification-document review UI.** Previously believed missing (riders had a review modal, stores supposedly didn't). Actually already built: `admin/src/pages/admin/StoresPage.tsx`'s `DocumentReviewModal` (~line 110) fetches `/api/admin/stores/:id/verification-documents` and lets admin approve/reject per document, same pattern as the rider side.
 - **Store/rider approval notifications.** Previously believed missing. Actually already built: `backend/src/services/notification.service.ts:460` (`notifyStoreApproved`) and `:477` (`notifyRiderApproved`) both persist a notification row and send a push on approval.
 - **Server-verified admin login.** Fixed 2026-07-16 (Jira SCRUM-69, see `bug_fixes_2026-07-23.md` line ~397) — `POST /api/admin/login` does the password check server-side with the service-role client; RLS locked down on `admins`/`admin_sessions`.
-- **Rider app: push notification now deep-links to the specific order.** Fixed 2026-08-26 — `NAT_Near-Now_Rider-/app/_layout.tsx`'s notification-tap handler now checks `data.type === "new_order"` and routes to `/delivery/[orderId]` with the real order id, instead of always going to the home tab. `new_order_offer` pushes (multiple candidate orders, none yet accepted) still correctly go to home/the offers list since there's no single order to open. Verified via `tsc --noEmit` clean.
+- **Rider app: push notification now deep-links to the specific order.** Fixed 2026-08-26 — `NAT_Near-Now_Rider-/app/_layout.tsx`'s notification-tap handler now checks `data.type === "new_order"` and routes to `/delivery/[orderId]` with the real order id, instead of always going to the home tab. Every other push type (`new_order_offer`, `profile_change_reviewed`, `document_rejected`, `rider_approved`) has no single order to deep-link to and is left a no-op on tap, same as before this fix — an earlier draft of this change forced *all* of those to navigate to home too, which would have yanked a rider off an active in-progress delivery screen when tapping an unrelated push; caught in regression review and reverted to the original no-op for non-`new_order` types before landing. Verified via `tsc --noEmit` clean.
+- **Customer-app notification preferences.** Fixed 2026-08-26 — new `nearandnowcustomerapp/app/notification-preferences.tsx` screen calls the already-working `GET/PUT /api/notifications/users/:userId/preferences` endpoint to toggle the one server-gated category (`orderUpdates`), matching the store-owner/rider apps' existing preferences-screen pattern. Reachable via a new gear icon on the existing `app/notifications.tsx` header. Verified via `tsc --noEmit` clean.
 
 ---
 
@@ -30,11 +31,6 @@ Companion to `bug_fixes_2026-07-23.md` (which tracks defects) — this doc track
 ---
 
 ## Quick wins (existing scaffolding, just needs wiring or UI)
-
-### Customer-app notification preferences
-- **Built today:** Backend is fully built and secured but has zero callers — `GET/PUT /users/:userId/preferences` (`backend/src/routes/notifications.routes.ts:14-15`), enforcement logic already live in `notification.service.ts:142-161` (`isCustomerNotificationEnabled`, category `orderUpdates`). The store-owner and rider apps both have a real preferences screen; the customer app has none.
-- **Missing:** A toggle screen in `nearandnowcustomerapp` calling the already-working endpoint. Zero backend work needed.
-- **Tier:** Quick win — almost pure frontend against a working, secured API.
 
 ### Store-owner's 3 dead notification toggles
 - **Built today:** `near-now-store_owner/lib/notifications.ts:43-48` shows shopkeepers 4 toggles (`newOrders`, `dailySummary`, `payments`, `systemAlerts`). Preferences persist correctly (AsyncStorage + `PATCH /store-owner/notifications/preferences`, `backend/src/controllers/storeOwner.controller.ts:1413-1433`).
