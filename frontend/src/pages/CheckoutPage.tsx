@@ -7,6 +7,7 @@ import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAd
 import { geocodeAddress, LocationData } from '../services/placesService';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
 import { getWalletBalance, payOrderWithWallet } from '../services/walletService';
+import { cancelOrder } from '../services/orderService';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft, Tag, X, Wallet } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
@@ -141,6 +142,12 @@ const CheckoutPage = () => {
   const [receiverAddress, setReceiverAddress] = useState('');
 
   const [loading, setLoading] = useState(false);
+  // Shown inline on this page when a payment attempt (Razorpay or wallet) is
+  // cancelled/fails after the order row was already created — the order is
+  // voided (cancelOrder) rather than left "placed" for a shopkeeper to start
+  // prepping, and the customer stays right here to retry instead of being
+  // routed to the tracking/thank-you flow for an order that was never paid.
+  const [paymentCancelledNotice, setPaymentCancelledNotice] = useState(false);
   const [tipAmount, setTipAmount] = useState(0);
   const [customTip, setCustomTip] = useState('');
   const [selectedTip, setSelectedTip] = useState<string | null>(null);
@@ -451,6 +458,7 @@ const CheckoutPage = () => {
     }
     try {
       setLoading(true);
+      setPaymentCancelledNotice(false);
       if (saveAddress && showNewAddressForm && !editAddressId && user?.id) {
         try {
           let lat: number, lng: number;
@@ -627,10 +635,9 @@ const CheckoutPage = () => {
           await payOrderWithWallet(createdOrder.id);
         } catch (walletErr: unknown) {
           const msg = walletErr instanceof Error ? walletErr.message : String(walletErr);
-          showNotification(`${msg} Your order has been saved — you can retry payment from your Orders.`, 'error');
-          clearCart();
-          lastCreatedAddressRef.current = null;
-          navigate(`/thank-you?orderId=${createdOrder.id}`, { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
+          await voidUnpaidOrder(createdOrder.id);
+          showNotification(msg || 'Payment could not be completed. Please try again.', 'error');
+          setPaymentCancelledNotice(true);
           return;
         }
       } else if (isOnlineRazorpay || isSplitWithUpi) {
@@ -657,22 +664,26 @@ const CheckoutPage = () => {
           });
         } catch (payErr: unknown) {
           const msg = payErr instanceof Error ? payErr.message : String(payErr);
-          if (msg.includes('cancelled') || msg.includes('Payment cancelled')) {
-            showNotification('Order placed. Payment was not completed — your order is pending payment.', 'warning');
-          } else {
-            showNotification(msg || 'Payment could not be completed. Your order is pending payment.', 'error');
-          }
-          clearCart();
-          lastCreatedAddressRef.current = null;
-          navigate(`/thank-you?orderId=${createdOrder.id}`, { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
+          await voidUnpaidOrder(createdOrder.id);
+          showNotification(
+            msg.includes('cancelled') || msg.includes('Payment cancelled')
+              ? 'Payment was cancelled. Your order was not placed.'
+              : (msg || 'Payment could not be completed. Your order was not placed.'),
+            'warning'
+          );
+          setPaymentCancelledNotice(true);
           return;
         }
       }
 
+      // Every path that reaches here has either needed no online payment step
+      // (COD, cash-only split) or already succeeded at one (wallet, Razorpay,
+      // split UPI) — so the order is genuinely committed and it's safe to go
+      // straight to live tracking instead of the old thank-you interstitial.
       showNotification('Order placed successfully! 🎉', 'success');
       clearCart();
       lastCreatedAddressRef.current = null;
-      navigate(`/thank-you?orderId=${createdOrder.id}`, { state: { order: createdOrder, orderId: createdOrder.id, orderNumber: createdOrder.order_number } });
+      navigate(`/track/${createdOrder.id}`);
     } catch (error: any) {
       console.error('Error placing order:', error);
       const message = error?.message || 'Failed to place order. Please try again.';
@@ -682,6 +693,29 @@ const CheckoutPage = () => {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // The order row is created before Razorpay/wallet payment is attempted
+  // (Razorpay needs an existing internal orderId to create its own payment
+  // order against), and creating it already fires the shopkeeper
+  // notification/store-allocation broadcast (placeCheckoutOrder,
+  // database.service.ts) — so a payment that then fails or gets cancelled
+  // must actively void the order via the same cancel endpoint customers use
+  // from their Orders list, not just be left "placed" for a shopkeeper to
+  // start prepping an order nobody paid for. cancelOrder() already unwinds
+  // store_allocations/store_orders and notifies the shopkeeper of the
+  // cancellation, so this is safe even after the broadcast already fired.
+  const voidUnpaidOrder = async (orderId: string) => {
+    try {
+      await cancelOrder(orderId);
+    } catch (err) {
+      // Best-effort — if this fails (e.g. a delivery partner was assigned in
+      // the ~seconds between order creation and the payment being cancelled,
+      // vanishingly unlikely but not impossible), the order is still real and
+      // the customer needs to know via their Orders page rather than have
+      // this swallowed silently.
+      console.error('Failed to void unpaid order after payment cancellation:', err);
     }
   };
 
@@ -839,6 +873,27 @@ const CheckoutPage = () => {
         </div>
 
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+          {paymentCancelledNotice && (
+            <div className="mb-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 animate-in">
+              <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.007v.008H12v-.008zM21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1">
+                <p className="font-semibold text-amber-900">Payment was cancelled</p>
+                <p className="text-sm text-amber-700 mt-0.5">
+                  Your order was not placed and nothing was charged. Review your details below and try again whenever you're ready.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPaymentCancelledNotice(false)}
+                className="text-amber-500 hover:text-amber-700 flex-shrink-0"
+                aria-label="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           <form onSubmit={handleFormSubmit}>
             <div className="flex flex-col lg:flex-row gap-6 items-start">
 
