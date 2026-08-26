@@ -6,6 +6,29 @@ Companion to `bug_fixes_2026-07-23.md` (which tracks defects) — this doc track
 
 ---
 
+## Fixed since 2026-08-11 (were gaps, now built — verified 2026-08-26)
+
+- **Store-approval verification-document review UI.** Previously believed missing (riders had a review modal, stores supposedly didn't). Actually already built: `admin/src/pages/admin/StoresPage.tsx`'s `DocumentReviewModal` (~line 110) fetches `/api/admin/stores/:id/verification-documents` and lets admin approve/reject per document, same pattern as the rider side.
+- **Store/rider approval notifications.** Previously believed missing. Actually already built: `backend/src/services/notification.service.ts:460` (`notifyStoreApproved`) and `:477` (`notifyRiderApproved`) both persist a notification row and send a push on approval.
+- **Server-verified admin login.** Fixed 2026-07-16 (Jira SCRUM-69, see `bug_fixes_2026-07-23.md` line ~397) — `POST /api/admin/login` does the password check server-side with the service-role client; RLS locked down on `admins`/`admin_sessions`.
+- **Rider app: push notification now deep-links to the specific order.** Fixed 2026-08-26 — `NAT_Near-Now_Rider-/app/_layout.tsx`'s notification-tap handler now checks `data.type === "new_order"` and routes to `/delivery/[orderId]` with the real order id, instead of always going to the home tab. `new_order_offer` pushes (multiple candidate orders, none yet accepted) still correctly go to home/the offers list since there's no single order to open. Verified via `tsc --noEmit` clean.
+
+---
+
+## New gaps found 2026-08-26
+
+### Real OS-level push delivery (FCM) on all 3 mobile apps
+- **Built today:** In-app notifications persist and display correctly; Expo's push relay is called correctly from the backend.
+- **Missing:** No Android app is actually registered with a real Firebase project (no `google-services.json`, no FCM V1 service-account credential in EAS), so `getExpoPushTokenAsync()` fails on every device and no push has ever actually reached a phone. Full root-cause and remaining manual steps (Firebase console + EAS access needed, can't be done by the assistant) are in memory: `fcm_push_notifications_gap.md`.
+- **Tier:** Large-ish but not really an engineering gap — it's an infra/account-access blocker, not new code, since the app-side wiring is already done.
+
+### Wishlist
+- **Built today:** Nothing — the button on product pages shows a "coming soon" toast (`frontend/src/pages/ProductDetailPage.tsx:416-421`); no table, no endpoints, no persistence anywhere.
+- **Missing:** Everything — a `wishlist_items` table, `POST/GET/DELETE` endpoints, and UI in both the website and customer app (product-page toggle + a "My Wishlist" list view).
+- **Tier:** Medium — straightforward CRUD feature, but touches 2 client surfaces plus new schema.
+
+---
+
 ## Quick wins (existing scaffolding, just needs wiring or UI)
 
 ### Customer-app notification preferences
