@@ -37,56 +37,69 @@ export async function requireCustomer(req: Request, res: Response, next: NextFun
     return res.status(401).json({ error: 'Missing auth token' });
   }
 
-  const { data: user, error } = await supabaseAdmin
-    .from('app_users')
-    .select('id, role, session_token_issued_at, is_suspended')
-    .eq('session_token', token)
-    .eq('role', 'customer')
-    .maybeSingle();
+  // This runs on every authenticated customer request, ahead of every
+  // controller — unlike controllers (all of which wrap their bodies in
+  // try/catch), this had no try/catch at all. A thrown error here (e.g.
+  // Supabase returning a non-JSON response during a maintenance/gateway
+  // blip, a DNS failure) becomes an unhandled promise rejection, which is
+  // fatal to the whole Node process (no global handler exists either — see
+  // server.ts), taking down every other in-flight request, not just this
+  // one. Found 2026-08-26 during a crash-risk audit.
+  try {
+    const { data: user, error } = await supabaseAdmin
+      .from('app_users')
+      .select('id, role, session_token_issued_at, is_suspended')
+      .eq('session_token', token)
+      .eq('role', 'customer')
+      .maybeSingle();
 
-  if (error || !user) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-
-  if ((user as any).is_suspended) {
-    return res.status(403).json({ error: 'This account has been suspended.' });
-  }
-
-  const issuedAtRaw = (user as any).session_token_issued_at;
-  if (issuedAtRaw) {
-    const issuedAt = new Date(issuedAtRaw).getTime();
-    const age = Date.now() - issuedAt;
-    if (age > SESSION_TTL_MS) {
-      try {
-        await supabaseAdmin
-          .from('app_users')
-          .update({ session_token: null, session_token_issued_at: null })
-          .eq('session_token', token)
-          .eq('role', 'customer');
-      } catch {
-        // Best-effort cleanup — still expire the request either way; a failed
-        // clear just means this row gets cleared on some future expired hit.
-      }
-      return res.status(401).json({ error: 'Session expired — please log in again' });
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
     }
-    // Renew on every request so the 25-day window always counts from the
-    // customer's actual last activity. Fire-and-forget: don't hold up the
-    // request on this write, and a missed renewal just means the next
-    // request renews it instead. Filtered by role too, matching the SELECT
-    // above, so this can never touch a non-customer row even in principle.
-    void (async () => {
-      try {
-        await supabaseAdmin
-          .from('app_users')
-          .update({ session_token_issued_at: new Date().toISOString() })
-          .eq('session_token', token)
-          .eq('role', 'customer');
-      } catch {
-        // Best-effort — a missed renewal just means the next request renews it.
-      }
-    })();
-  }
 
-  req.customerId = (user as any).id;
-  next();
+    if ((user as any).is_suspended) {
+      return res.status(403).json({ error: 'This account has been suspended.' });
+    }
+
+    const issuedAtRaw = (user as any).session_token_issued_at;
+    if (issuedAtRaw) {
+      const issuedAt = new Date(issuedAtRaw).getTime();
+      const age = Date.now() - issuedAt;
+      if (age > SESSION_TTL_MS) {
+        try {
+          await supabaseAdmin
+            .from('app_users')
+            .update({ session_token: null, session_token_issued_at: null })
+            .eq('session_token', token)
+            .eq('role', 'customer');
+        } catch {
+          // Best-effort cleanup — still expire the request either way; a failed
+          // clear just means this row gets cleared on some future expired hit.
+        }
+        return res.status(401).json({ error: 'Session expired — please log in again' });
+      }
+      // Renew on every request so the 25-day window always counts from the
+      // customer's actual last activity. Fire-and-forget: don't hold up the
+      // request on this write, and a missed renewal just means the next
+      // request renews it instead. Filtered by role too, matching the SELECT
+      // above, so this can never touch a non-customer row even in principle.
+      void (async () => {
+        try {
+          await supabaseAdmin
+            .from('app_users')
+            .update({ session_token_issued_at: new Date().toISOString() })
+            .eq('session_token', token)
+            .eq('role', 'customer');
+        } catch {
+          // Best-effort — a missed renewal just means the next request renews it.
+        }
+      })();
+    }
+
+    req.customerId = (user as any).id;
+    next();
+  } catch (err) {
+    console.error('requireCustomer auth check failed:', err);
+    res.status(500).json({ error: 'Authentication check failed' });
+  }
 }

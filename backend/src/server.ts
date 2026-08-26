@@ -36,6 +36,26 @@ import walletRoutes from './routes/wallet.routes.js';
 dotenv.config();
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
+// Backstop only — the real fix for known unguarded async paths (e.g. the
+// six auth middleware functions that had no try/catch, found 2026-08-26) is
+// fixing them directly, not relying on this. But Node's default behavior on
+// an unhandled promise rejection is to crash the whole process (fatal since
+// Node 15), taking down every other in-flight request along with whatever
+// future code path someone forgets to wrap in try/catch. Logging instead of
+// crashing here means one overlooked gap degrades to a single failed
+// request instead of an outage for every concurrent user. Does not apply
+// under Vercel's serverless runtime (each invocation is its own process
+// anyway, and `!process.env.VERCEL` already gates the long-running
+// `app.listen` below the same way).
+if (!process.env.VERCEL) {
+  process.on('unhandledRejection', (reason) => {
+    console.error('❌ Unhandled promise rejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught exception:', err);
+  });
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 

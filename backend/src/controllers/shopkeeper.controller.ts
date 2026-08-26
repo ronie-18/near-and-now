@@ -33,38 +33,48 @@ export async function requireShopkeeperAuth(req: Request, res: Response, next: N
   if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
 
   const token = auth.slice(7);
-  const { data: user, error } = await supabaseAdmin
-    .from('app_users')
-    .select('id, role, session_token_issued_at')
-    .eq('session_token', token)
-    .eq('role', 'shopkeeper')
-    .maybeSingle();
 
-  if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
+  // No try/catch previously — a thrown error (Supabase network/gateway blip)
+  // became an unhandled promise rejection, fatal to the whole Node process
+  // with no global handler to catch it. Found 2026-08-26 during a crash-risk
+  // audit; requireShopkeeper below calls this directly, so it's covered too.
+  try {
+    const { data: user, error } = await supabaseAdmin
+      .from('app_users')
+      .select('id, role, session_token_issued_at')
+      .eq('session_token', token)
+      .eq('role', 'shopkeeper')
+      .maybeSingle();
 
-  if (user.session_token_issued_at) {
-    const issuedAt = new Date(user.session_token_issued_at).getTime();
-    if (Date.now() - issuedAt > SESSION_TTL_MS) {
-      await supabaseAdmin
-        .from('app_users')
-        .update({ session_token: null, session_token_issued_at: null })
-        .eq('session_token', token);
-      return res.status(401).json({ error: 'Session expired — please log in again' });
+    if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
+
+    if (user.session_token_issued_at) {
+      const issuedAt = new Date(user.session_token_issued_at).getTime();
+      if (Date.now() - issuedAt > SESSION_TTL_MS) {
+        await supabaseAdmin
+          .from('app_users')
+          .update({ session_token: null, session_token_issued_at: null })
+          .eq('session_token', token);
+        return res.status(401).json({ error: 'Session expired — please log in again' });
+      }
     }
+
+    const { data: stores } = await supabaseAdmin
+      .from('stores')
+      .select('id, is_approved')
+      .eq('owner_id', user.id);
+
+    if (!stores?.length) return res.status(403).json({ error: 'No store found for this account' });
+
+    req.shopkeeperId = user.id;
+    req.shopkeeperStoreIds = stores.map((s: any) => s.id);
+    req.shopkeeperStoreId = stores[0].id; // primary store for backward compat
+    req.shopkeeperHasApprovedStore = stores.some((s: any) => s.is_approved);
+    next();
+  } catch (err) {
+    console.error('requireShopkeeperAuth auth check failed:', err);
+    res.status(500).json({ error: 'Authentication check failed' });
   }
-
-  const { data: stores } = await supabaseAdmin
-    .from('stores')
-    .select('id, is_approved')
-    .eq('owner_id', user.id);
-
-  if (!stores?.length) return res.status(403).json({ error: 'No store found for this account' });
-
-  req.shopkeeperId = user.id;
-  req.shopkeeperStoreIds = stores.map((s: any) => s.id);
-  req.shopkeeperStoreId = stores[0].id; // primary store for backward compat
-  req.shopkeeperHasApprovedStore = stores.some((s: any) => s.is_approved);
-  next();
 }
 
 // Order management (and everything else state-changing) is additionally

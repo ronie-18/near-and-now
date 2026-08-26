@@ -24,29 +24,38 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     return res.status(401).json({ error: 'Missing admin token' });
   }
 
-  const now = new Date().toISOString();
-  const { data: session, error } = await supabaseAdmin
-    .from('admin_sessions')
-    .select('admin_id, expires_at, logged_out_at')
-    .eq('session_token', token)
-    .gt('expires_at', now)
-    .maybeSingle();
+  // No try/catch previously — a thrown error (Supabase network/gateway
+  // blip) became an unhandled promise rejection, fatal to the whole Node
+  // process with no global handler to catch it. Found 2026-08-26 during a
+  // crash-risk audit; same fix applied to every auth middleware in the app.
+  try {
+    const now = new Date().toISOString();
+    const { data: session, error } = await supabaseAdmin
+      .from('admin_sessions')
+      .select('admin_id, expires_at, logged_out_at')
+      .eq('session_token', token)
+      .gt('expires_at', now)
+      .maybeSingle();
 
-  // Every RLS-level session check (is_admin_authenticated(), admin_has_permission())
-  // already requires logged_out_at IS NULL too — this Express layer was the
-  // one place that didn't, previously checking only expires_at. Not
-  // exploitable today (the only logout path deletes the session row outright
-  // rather than setting logged_out_at), but a future "revoke this session"
-  // feature that sets it instead would otherwise keep this layer accepting
-  // an admin-revoked token for up to the full session TTL while Supabase
-  // calls correctly reject it. Found 2026-08-10 during an admin-panel
-  // auth/permissions audit.
-  if (error || !session || session.logged_out_at) {
-    return res.status(401).json({ error: 'Invalid or expired admin session' });
+    // Every RLS-level session check (is_admin_authenticated(), admin_has_permission())
+    // already requires logged_out_at IS NULL too — this Express layer was the
+    // one place that didn't, previously checking only expires_at. Not
+    // exploitable today (the only logout path deletes the session row outright
+    // rather than setting logged_out_at), but a future "revoke this session"
+    // feature that sets it instead would otherwise keep this layer accepting
+    // an admin-revoked token for up to the full session TTL while Supabase
+    // calls correctly reject it. Found 2026-08-10 during an admin-panel
+    // auth/permissions audit.
+    if (error || !session || session.logged_out_at) {
+      return res.status(401).json({ error: 'Invalid or expired admin session' });
+    }
+
+    req.adminId = session.admin_id;
+    next();
+  } catch (err) {
+    console.error('requireAdmin auth check failed:', err);
+    res.status(500).json({ error: 'Authentication check failed' });
   }
-
-  req.adminId = session.admin_id;
-  next();
 }
 
 /**
@@ -62,20 +71,25 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
  */
 export function requirePermission(permission: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const { data: caller, error } = await supabaseAdmin
-      .from('admins')
-      .select('role')
-      .eq('id', req.adminId)
-      .maybeSingle();
+    try {
+      const { data: caller, error } = await supabaseAdmin
+        .from('admins')
+        .select('role')
+        .eq('id', req.adminId)
+        .maybeSingle();
 
-    if (error || !caller) {
-      return res.status(401).json({ error: 'Invalid admin session' });
+      if (error || !caller) {
+        return res.status(401).json({ error: 'Invalid admin session' });
+      }
+
+      if (!hasPermission((caller as { role: string }).role, permission)) {
+        return res.status(403).json({ error: `Missing permission: ${permission}` });
+      }
+
+      next();
+    } catch (err) {
+      console.error('requirePermission auth check failed:', err);
+      res.status(500).json({ error: 'Authentication check failed' });
     }
-
-    if (!hasPermission((caller as { role: string }).role, permission)) {
-      return res.status(403).json({ error: `Missing permission: ${permission}` });
-    }
-
-    next();
   };
 }

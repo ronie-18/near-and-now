@@ -250,29 +250,38 @@ export async function requireRider(req: Request, res: Response, next: NextFuncti
   }
   const token = auth.slice(7);
 
-  const { data: partner, error } = await supabaseAdmin
-    .from('delivery_partners')
-    .select('user_id, session_token_issued_at')
-    .eq('session_token', token)
-    .maybeSingle();
+  // No try/catch previously — a thrown error (Supabase network/gateway blip)
+  // became an unhandled promise rejection, fatal to the whole Node process
+  // with no global handler to catch it. Found 2026-08-26 during a crash-risk
+  // audit; same fix applied to every auth middleware in the app.
+  try {
+    const { data: partner, error } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('user_id, session_token_issued_at')
+      .eq('session_token', token)
+      .maybeSingle();
 
-  if (error || !partner) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-
-  if (partner.session_token_issued_at) {
-    const issuedAt = new Date(partner.session_token_issued_at).getTime();
-    if (Date.now() - issuedAt > SESSION_TTL_MS) {
-      await supabaseAdmin
-        .from('delivery_partners')
-        .update({ session_token: null, session_token_issued_at: null })
-        .eq('session_token', token);
-      return res.status(401).json({ error: 'Session expired — please log in again' });
+    if (error || !partner) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
     }
-  }
 
-  req.riderId = partner.user_id;
-  next();
+    if (partner.session_token_issued_at) {
+      const issuedAt = new Date(partner.session_token_issued_at).getTime();
+      if (Date.now() - issuedAt > SESSION_TTL_MS) {
+        await supabaseAdmin
+          .from('delivery_partners')
+          .update({ session_token: null, session_token_issued_at: null })
+          .eq('session_token', token);
+        return res.status(401).json({ error: 'Session expired — please log in again' });
+      }
+    }
+
+    req.riderId = partner.user_id;
+    next();
+  } catch (err) {
+    console.error('requireRider auth check failed:', err);
+    res.status(500).json({ error: 'Authentication check failed' });
+  }
 }
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
