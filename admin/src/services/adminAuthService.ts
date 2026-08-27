@@ -73,7 +73,8 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'profile_change_requests.*',
     'activity_log.view',
     'support_messages.*',
-    'security_log.view'
+    'security_log.view',
+    'reviews.*'
   ],
   manager: [
     'products.view',
@@ -91,7 +92,8 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'payments.view',
     'product_submissions.view',
     'activity_log.view',
-    'support_messages.view'
+    'support_messages.view',
+    'reviews.view'
   ],
   viewer: [
     'products.view',
@@ -108,7 +110,8 @@ const ROLE_PERMISSIONS: Record<Admin['role'], string[]> = {
     'payments.view',
     'product_submissions.view',
     'activity_log.view',
-    'support_messages.view'
+    'support_messages.view',
+    'reviews.view'
   ]
 };
 

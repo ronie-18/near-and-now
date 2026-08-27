@@ -23,7 +23,8 @@ import {
   History,
   MessageCircle,
   Wallet,
-  ShieldAlert
+  ShieldAlert,
+  Star
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
@@ -138,7 +139,8 @@ const AdminSidebar = ({ isOpen, onClose }: AdminSidebarProps) => {
             { title: 'Add Product', path: '/products/add', icon: <Plus size={14} /> },
             { title: 'Categories', path: '/categories', icon: <Layers size={14} /> },
             { title: 'Store Inventory', path: '/stores/products', icon: <Store size={14} /> },
-            { title: 'Product Submissions', path: '/products/submissions', icon: <FileText size={14} /> }
+            { title: 'Product Submissions', path: '/products/submissions', icon: <FileText size={14} /> },
+            { title: 'Reviews', path: '/products/reviews', icon: <Star size={14} /> }
           ]
         }
       ]

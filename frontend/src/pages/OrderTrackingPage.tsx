@@ -840,7 +840,7 @@ const OrderTrackingPage = () => {
             {isDelivered && (
               <button
                 type="button"
-                onClick={() => showNotification('Rating your experience is coming soon!', 'info')}
+                onClick={() => orderId && navigate(`/track/${orderId}/rate`)}
                 className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-yellow-100 hover:border-yellow-300 hover:bg-yellow-50 transition-all group col-span-2"
               >
                 <Star className="w-6 h-6 text-yellow-400" />

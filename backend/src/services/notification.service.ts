@@ -142,10 +142,9 @@ export class NotificationService {
 
   // Shopkeeper-side twin of isRiderNotificationEnabled — same table/column,
   // just keyed on the store owner's app_users.id instead of the rider's.
-  // Only 'newOrders' has a real backend-driven push today (see
-  // notifyShopkeeperNewOrder); the mobile app's other three toggles
-  // (dailySummary/payments/systemAlerts) don't correspond to any push this
-  // service currently sends, so there's nothing yet to gate them against.
+  // 'newOrders' is the only category the mobile app exposes (the other
+  // three it briefly had — dailySummary/payments/systemAlerts — were removed
+  // 2026-08-27 since no push this service sends ever corresponded to them).
   // Missing/unset preferences default to enabled, same "opt-out" convention.
   // Customer-side twin of isRiderNotificationEnabled/isShopkeeperNotificationEnabled
   // — same table/column/opt-out-by-default convention, keyed on the

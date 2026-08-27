@@ -29,6 +29,7 @@ import ProfilePage from './pages/ProfilePage';
 import WalletPage from './pages/WalletPage';
 import OrdersPage from './pages/OrdersPage';
 import OrderTrackingPage from './pages/OrderTrackingPage';
+import RateOrderPage from './pages/RateOrderPage';
 import AddressesPage from './pages/AddressesPage';
 import AboutPage from './pages/AboutPage';
 import HelpPage from './pages/HelpPage';
@@ -80,6 +81,7 @@ const AppContent: React.FC = () => {
             <Route path="/orders" element={<OrdersPage />} />
             <Route path="/track" element={<OrderTrackingPage />} />
             <Route path="/track/:orderId" element={<OrderTrackingPage />} />
+            <Route path="/track/:orderId/rate" element={<RateOrderPage />} />
             <Route path="/addresses" element={<AddressesPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/contact" element={<AboutPage />} />

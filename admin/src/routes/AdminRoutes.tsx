@@ -34,6 +34,7 @@ const StoreProductsPage = lazy(() => import('../pages/admin/StoreProductsPage'))
 const StoreProfileChangeRequestsPage = lazy(() => import('../pages/admin/StoreProfileChangeRequestsPage'));
 const RiderProfileChangeRequestsPage = lazy(() => import('../pages/admin/RiderProfileChangeRequestsPage'));
 const ProductSubmissionsPage = lazy(() => import('../pages/admin/ProductSubmissionsPage'));
+const ReviewsPage = lazy(() => import('../pages/admin/ReviewsPage'));
 const ActivityLogPage = lazy(() => import('../pages/admin/ActivityLogPage'));
 const SupportMessagesPage = lazy(() => import('../pages/admin/SupportMessagesPage'));
 const RiderPayoutsPage = lazy(() => import('../pages/admin/RiderPayoutsPage'));
@@ -106,6 +107,14 @@ const AdminRoutes = () => {
         element={
           <AdminAuthGuard>
             <ProductSubmissionsPage />
+          </AdminAuthGuard>
+        }
+      />
+      <Route
+        path="/products/reviews"
+        element={
+          <AdminAuthGuard>
+            <ReviewsPage />
           </AdminAuthGuard>
         }
       />
