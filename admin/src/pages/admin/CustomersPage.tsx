@@ -17,10 +17,12 @@ import {
   X,
   RefreshCw,
   UserCheck,
-  UserX
+  UserX,
+  Download
 } from 'lucide-react';
 import { getCustomersPaginated, getCustomerStats, setCustomerSuspended, notifyAdminAction, Customer } from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
+import { exportToCsv } from '../../utils/csvExport';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -176,6 +178,27 @@ const CustomersPage = () => {
 
   const statuses = ['All', 'Active', 'Inactive'];
 
+  // Customers are server-paginated (see the comment on `currentCustomers`
+  // above) — this exports only the currently-loaded page, hence "Export
+  // Page" rather than a plain "Export".
+  const exportCsv = () => {
+    exportToCsv(
+      `customers-page-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        { header: 'Name', value: (c: Customer) => c.name },
+        { header: 'Email', value: (c: Customer) => c.email ?? '' },
+        { header: 'Phone', value: (c: Customer) => c.phone ?? '' },
+        { header: 'Status', value: (c: Customer) => c.status },
+        { header: 'Orders', value: (c: Customer) => c.orders_count },
+        { header: 'Total Spent', value: (c: Customer) => c.total_spent },
+        { header: 'Location', value: (c: Customer) => c.location ?? '' },
+        { header: 'Joined', value: (c: Customer) => c.created_at },
+        { header: 'ID', value: (c: Customer) => c.id },
+      ],
+      currentCustomers
+    );
+  };
+
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -185,13 +208,24 @@ const CustomersPage = () => {
             <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
             <p className="text-gray-500 mt-1">View and manage your customer database</p>
           </div>
-          <button
-            onClick={handleRefresh}
-            className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
-          >
-            <RefreshCw size={18} className="mr-2" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportCsv}
+              disabled={currentCustomers.length === 0}
+              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
+              title="Exports only the currently-loaded page, not every matching customer"
+            >
+              <Download size={18} className="mr-2" />
+              Export Page CSV
+            </button>
+            <button
+              onClick={handleRefresh}
+              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
+            >
+              <RefreshCw size={18} className="mr-2" />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {error && (

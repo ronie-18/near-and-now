@@ -18,11 +18,14 @@ import {
   Landmark,
   Trash2,
   RotateCcw,
+  Download,
+  CheckSquare,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { exportToCsv } from '../../utils/csvExport';
 import { notifyAdminAction } from '../../services/adminService';
 
 interface StoreData {
@@ -733,6 +736,16 @@ const StoresPage = () => {
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
   const [docStatusByStore, setDocStatusByStore] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
+
+  // Clear the selection whenever the visible list changes shape — otherwise
+  // a row selected under one filter stays "selected" (just invisible) after
+  // switching filters, so the "N selected" bulk-bar count could overstate
+  // what a bulk action would actually touch once switched back.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [searchTerm, statFilter]);
 
   // Most recent activity across each store's verification documents, gallery
   // photos, and profile change requests — one bulk query per source instead
@@ -1066,6 +1079,64 @@ const StoresPage = () => {
     }
   };
 
+  // Bulk-approve reuses toggleApproval one row at a time (same readiness
+  // gate, same admin-notification, same error handling per row) rather than
+  // a separate bulk endpoint — this preserves the existing per-store
+  // idempotency/atomic-guard discipline instead of duplicating it. Only
+  // acts on selected stores that are actually pending and ready to approve;
+  // already-approved or not-yet-document-ready stores in the selection are
+  // silently skipped rather than erroring the whole batch.
+  const bulkApproveSelected = async () => {
+    const targets = filteredStores.filter(
+      (s) => selectedIds.has(s.id) && !s.is_approved && approvalReadiness(s.id).ready
+    );
+    if (targets.length === 0) {
+      setError('None of the selected stores are eligible — they may already be approved or still need document review.');
+      return;
+    }
+    setBulkApproving(true);
+    try {
+      for (const store of targets) {
+        await toggleApproval(store);
+      }
+    } finally {
+      setBulkApproving(false);
+      setSelectedIds(new Set());
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) =>
+      prev.size === filteredStores.length ? new Set() : new Set(filteredStores.map((s) => s.id))
+    );
+  };
+
+  const exportCsv = () => {
+    exportToCsv(
+      `stores-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        { header: 'Store', value: (s: StoreData) => s.name },
+        { header: 'Phone', value: (s: StoreData) => s.phone ?? '' },
+        { header: 'Address', value: (s: StoreData) => s.address ?? '' },
+        { header: 'Online', value: (s: StoreData) => (s.is_active ? 'Yes' : 'No') },
+        { header: 'Approved', value: (s: StoreData) => (s.is_approved ? 'Yes' : 'No') },
+        { header: 'Approved On', value: (s: StoreData) => s.approved_at ?? '' },
+        { header: 'Joined', value: (s: StoreData) => s.created_at },
+        { header: 'ID', value: (s: StoreData) => s.id },
+      ],
+      filteredStores
+    );
+  };
+
   // Mirrors DeliveryPage's rider toggleOnline — stores previously only showed
   // a read-only Online/Offline badge here with no way for an admin to force a
   // store offline (e.g. a shopkeeper unreachable/misbehaving) without going
@@ -1159,13 +1230,24 @@ const StoresPage = () => {
             <h1 className="text-3xl font-bold text-gray-900">Stores</h1>
             <p className="text-gray-500 mt-1">Manage, approve and track all store partners</p>
           </div>
-          <button
-            onClick={fetchStores}
-            className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
-            title="Refresh"
-          >
-            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportCsv}
+              disabled={filteredStores.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200 disabled:opacity-50"
+              title="Export the currently filtered list as CSV"
+            >
+              <Download size={18} />
+              <span className="text-sm font-semibold">Export CSV</span>
+            </button>
+            <button
+              onClick={fetchStores}
+              className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
+              title="Refresh"
+            >
+              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
         </div>
 
         {/* Error */}
@@ -1211,6 +1293,29 @@ const StoresPage = () => {
           </div>
         </div>
 
+        {/* Bulk action bar — only shown once at least one row is selected */}
+        {selectedIds.size > 0 && (
+          <div className="bg-violet-50 border border-violet-200 rounded-xl px-5 py-3 flex items-center justify-between">
+            <span className="text-sm font-semibold text-violet-800">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={bulkApproveSelected}
+                disabled={bulkApproving}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 disabled:opacity-50"
+              >
+                <CheckSquare size={16} />
+                {bulkApproving ? 'Approving…' : 'Approve Selected'}
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 rounded-lg"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Stores List */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           {loading ? (
@@ -1236,6 +1341,15 @@ const StoresPage = () => {
               <table className="w-full">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
                   <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4 w-8">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.size > 0 && selectedIds.size === filteredStores.length}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                        aria-label="Select all stores"
+                      />
+                    </th>
                     <th className="px-6 py-4">Store</th>
                     <th className="px-6 py-4">Contact</th>
                     <th className="px-6 py-4">Address</th>
@@ -1250,6 +1364,15 @@ const StoresPage = () => {
                 <tbody className="divide-y divide-gray-100">
                   {filteredStores.map((store) => (
                     <tr key={store.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
+                      <td className="px-6 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(store.id)}
+                          onChange={() => toggleSelected(store.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                          aria-label={`Select ${store.name}`}
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <p className="font-semibold text-gray-800">{store.name}</p>
                         <div className="mt-1"><IdCell id={store.id} /></div>

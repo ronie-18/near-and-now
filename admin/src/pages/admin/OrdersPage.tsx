@@ -19,11 +19,13 @@ import {
   Loader2,
   Calendar,
   CreditCard,
-  Store
+  Store,
+  Download
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getOrdersPaginated, getOrderStatusCounts, updateOrderStatus, Order } from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
+import { exportToCsv } from '../../utils/csvExport';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -283,6 +285,26 @@ const OrdersPage = () => {
   const indexOfLastOrder = indexOfFirstOrder + orders.length;
   const currentOrders = orders;
 
+  // Orders are server-paginated (see the comment on `orders` above) — this
+  // exports only the currently-loaded page, not every order matching the
+  // current filters, hence "Export Page" rather than a plain "Export".
+  const exportCsv = () => {
+    exportToCsv(
+      `orders-page-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        { header: 'Order ID', value: (o: Order) => o.id },
+        { header: 'Customer', value: (o: Order) => o.customer_name },
+        { header: 'Email', value: (o: Order) => o.customer_email ?? '' },
+        { header: 'Phone', value: (o: Order) => o.customer_phone ?? '' },
+        { header: 'Status', value: (o: Order) => o.order_status },
+        { header: 'Payment Status', value: (o: Order) => o.payment_status },
+        { header: 'Payment Method', value: (o: Order) => o.payment_method },
+        { header: 'Total', value: (o: Order) => o.order_total },
+        { header: 'Placed', value: (o: Order) => o.created_at },
+      ],
+      currentOrders
+    );
+  };
 
   return (
     <AdminLayout>
@@ -293,13 +315,24 @@ const OrdersPage = () => {
             <h1 className="text-3xl font-bold text-gray-900">Orders</h1>
             <p className="text-gray-500 mt-1">Manage and track customer orders</p>
           </div>
-          <button
-            onClick={handleRefresh}
-            className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
-          >
-            <RefreshCw size={18} className="mr-2" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportCsv}
+              disabled={currentOrders.length === 0}
+              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
+              title="Exports only the currently-loaded page, not every matching order"
+            >
+              <Download size={18} className="mr-2" />
+              Export Page CSV
+            </button>
+            <button
+              onClick={handleRefresh}
+              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
+            >
+              <RefreshCw size={18} className="mr-2" />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {/* Error */}

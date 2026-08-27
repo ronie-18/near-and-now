@@ -15,12 +15,15 @@ import {
   WifiOff,
   RotateCcw,
   CreditCard,
+  Download,
+  CheckSquare,
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { hasPermission } from '../../services/adminAuthService';
 import { notifyAdminAction } from '../../services/adminService';
+import { exportToCsv } from '../../utils/csvExport';
 import { DeliveryDocumentReviewModal, DOC_LABELS } from './DeliveryDocumentReviewModal';
 
 // Mirrors the backend's isVehicleRegistrationRequired (deliveryPartnerVerificationDocuments.ts)
@@ -108,6 +111,16 @@ const DeliveryPage = () => {
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [pendingUpiByRider, setPendingUpiByRider] = useState<Record<string, string>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
+
+  // Clear the selection whenever the visible list changes shape — otherwise
+  // a row selected under one filter stays "selected" (just invisible) after
+  // switching filters, so the "N selected" bulk-bar count could overstate
+  // what a bulk action would actually touch once switched back.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [searchTerm, statFilter]);
 
   const currentAdmin = getCurrentAdmin();
   const canViewChangeRequests = Boolean(
@@ -465,6 +478,63 @@ const DeliveryPage = () => {
     }
   };
 
+  // Mirrors StoresPage.bulkApproveSelected — reuses toggleApproval per row
+  // (same readiness gate, same notification, same error handling) instead of
+  // a separate bulk endpoint. Skips already-approved or not-yet-ready riders
+  // in the selection rather than erroring the whole batch.
+  const bulkApproveSelected = async () => {
+    const targets = filteredPartners.filter(
+      (p) => selectedIds.has(p.user_id) && !p.is_approved && approvalReadiness(p).ready
+    );
+    if (targets.length === 0) {
+      setError('None of the selected riders are eligible — they may already be approved or still need document review.');
+      return;
+    }
+    setBulkApproving(true);
+    try {
+      for (const partner of targets) {
+        await toggleApproval(partner);
+      }
+    } finally {
+      setBulkApproving(false);
+      setSelectedIds(new Set());
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) =>
+      prev.size === filteredPartners.length ? new Set() : new Set(filteredPartners.map((p) => p.user_id))
+    );
+  };
+
+  const exportCsv = () => {
+    exportToCsv(
+      `riders-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        { header: 'Name', value: (p: PartnerData) => p.name },
+        { header: 'Phone', value: (p: PartnerData) => p.phone ?? '' },
+        { header: 'Email', value: (p: PartnerData) => p.email ?? '' },
+        { header: 'Vehicle', value: (p: PartnerData) => `${p.vehicle_type ?? ''} ${p.vehicle_number ?? ''}`.trim() },
+        { header: 'Online', value: (p: PartnerData) => (p.is_online ? 'Yes' : 'No') },
+        { header: 'Status', value: (p: PartnerData) => p.status },
+        { header: 'Approved', value: (p: PartnerData) => (p.is_approved ? 'Yes' : 'No') },
+        { header: 'Approved On', value: (p: PartnerData) => p.approved_at ?? '' },
+        { header: 'Joined', value: (p: PartnerData) => p.created_at },
+        { header: 'ID', value: (p: PartnerData) => p.user_id },
+      ],
+      filteredPartners
+    );
+  };
+
   // Soft delete (backend: deleteDeliveryPartner sets status='offboarded' +
   // deleted_at, never a real row delete) — order/payout/document history for
   // this rider is fully preserved, just hidden from the default roster.
@@ -522,13 +592,24 @@ const DeliveryPage = () => {
             <h1 className="text-3xl font-bold text-gray-900">Delivery Partners</h1>
             <p className="text-gray-500 mt-1">Manage, approve and track all delivery partners</p>
           </div>
-          <button
-            onClick={fetchPartners}
-            className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
-            title="Refresh"
-          >
-            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportCsv}
+              disabled={filteredPartners.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200 disabled:opacity-50"
+              title="Export the currently filtered list as CSV"
+            >
+              <Download size={18} />
+              <span className="text-sm font-semibold">Export CSV</span>
+            </button>
+            <button
+              onClick={fetchPartners}
+              className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
+              title="Refresh"
+            >
+              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
         </div>
 
         {/* Alerts */}
@@ -576,6 +657,29 @@ const DeliveryPage = () => {
           </div>
         </div>
 
+        {/* Bulk action bar — only shown once at least one row is selected */}
+        {selectedIds.size > 0 && (
+          <div className="bg-orange-50 border border-orange-200 rounded-xl px-5 py-3 flex items-center justify-between">
+            <span className="text-sm font-semibold text-orange-800">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={bulkApproveSelected}
+                disabled={bulkApproving}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg text-sm font-semibold hover:bg-orange-700 disabled:opacity-50"
+              >
+                <CheckSquare size={16} />
+                {bulkApproving ? 'Approving…' : 'Approve Selected'}
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="px-4 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100 rounded-lg"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Partners Table */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           {loading ? (
@@ -601,6 +705,15 @@ const DeliveryPage = () => {
               <table className="w-full">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
                   <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4 w-8">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.size > 0 && selectedIds.size === filteredPartners.length}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                        aria-label="Select all riders"
+                      />
+                    </th>
                     <th className="px-6 py-4">Name</th>
                     <th className="px-6 py-4">Contact</th>
                     <th className="px-6 py-4">Address</th>
@@ -621,6 +734,15 @@ const DeliveryPage = () => {
                       key={partner.user_id}
                       className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-orange-50/30 transition-all duration-200"
                     >
+                      <td className="px-6 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(partner.user_id)}
+                          onChange={() => toggleSelected(partner.user_id)}
+                          className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                          aria-label={`Select ${partner.name}`}
+                        />
+                      </td>
                       {/* Name — no avatar; full ID under name */}
                       <td className="px-6 py-4">
                         <p className="font-semibold text-gray-800">{partner.name}</p>

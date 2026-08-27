@@ -73,11 +73,15 @@ Now covers all 4 surfaces: backend, customer app, admin, **and the website** (ad
 - **To build:** a points ledger (mirror the existing `wallet_transactions` ledger pattern — this codebase already has a working credit/debit ledger design to copy), a points-to-coupon redemption path reusing the existing coupon engine, and separately a referral table + signup-attribution flow if referrals are wanted too.
 - **Tier:** Medium for a points program (real design work, but 2 strong existing patterns — coupons + wallet ledger — to build on). Large if a full referral system is bundled in, since that's genuinely unbuilt.
 
-### Admin bulk actions (approve/export)
-- **Built today:** Every admin list page (stores, riders, orders, customers) is single-row-action only — confirmed zero multi-select/checkbox/bulk-approve UI anywhere in `admin/src/pages/admin/*.tsx`.
-- **Missing:** No bulk-approve, no CSV export, on any list.
-- **To build:** a shared multi-select table pattern + a generic CSV-export utility; bulk-approve reuses each page's existing single-approve endpoint in a loop (careful: needs the same idempotency/atomic-guard discipline the codebase already applies elsewhere, e.g. `.eq('status', 'pending')` guards).
-- **Tier:** Medium — not conceptually hard, but touches many pages if done consistently rather than one-off.
+### Admin bulk actions (approve/export) — built 2026-08-27
+
+**Shared utility**: `admin/src/utils/csvExport.ts` — generic `exportToCsv(filename, columns, rows)`, quotes cells containing commas/quotes/newlines, prepends a UTF-8 BOM so Excel doesn't mis-decode non-ASCII characters (store/customer names).
+
+**Bulk-approve** (StoresPage, DeliveryPage — the two pages with a real per-row approve action): a checkbox column + "select all" + a bulk-action bar that appears once ≥1 row is selected. Reuses each page's existing `toggleApproval(row)` one row at a time (sequentially, not in parallel, to avoid racing the shared `approvingId`/notification state) — no new backend endpoint. Critical correctness point, verified in code: the bulk target list is filtered to `!row.is_approved && approvalReadiness(row).ready` before acting, so a mixed selection of approved + pending rows can never accidentally *revoke* an already-approved store/rider (since the underlying function toggles, it doesn't set-to-true) — only pending, document-ready rows are touched. Selection clears automatically on any search/filter change, so the "N selected" count can't overstate what a bulk action would actually touch after switching filters. Clicking with zero eligible rows selected surfaces an error instead of silently doing nothing.
+
+**CSV export**: added to all 4 list pages. Stores/Riders are client-side-filtered (all matching rows already loaded), so their export is a complete, accurate "Export CSV" of the current filter. Orders/Customers are server-paginated — labeled honestly as "Export Page CSV" rather than a plain "Export", since it only covers the currently-loaded page, not every row matching the filter; a full-result export for these two would need a dedicated backend endpoint, not attempted here.
+
+**Verification**: `tsc --noEmit` clean and a full `vite build` succeeds. No backend/schema changes — every action routes through the same single-row endpoints/writes that already worked, called in a loop, so no new database-level testing was needed beyond confirming the guard logic above by reading the code.
 
 ---
 
