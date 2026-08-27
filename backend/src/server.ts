@@ -33,6 +33,7 @@ import adminSecurityLogRoutes from './routes/adminSecurityLog.routes.js';
 import walletRoutes from './routes/wallet.routes.js';
 import reviewsRoutes from './routes/reviews.routes.js';
 import adminReviewsRoutes from './routes/adminReviews.routes.js';
+import wishlistRoutes from './routes/wishlist.routes.js';
 
 // Load .env from backend and project root
 dotenv.config();
@@ -141,6 +142,7 @@ app.use('/api/admin', adminSecurityLogRoutes);
 app.use('/api/admin', adminReviewsRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/reviews', reviewsRoutes);
+app.use('/api/wishlist', wishlistRoutes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

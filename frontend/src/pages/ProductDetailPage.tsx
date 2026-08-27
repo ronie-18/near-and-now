@@ -4,7 +4,11 @@ import ProductGrid from '../components/products/ProductGrid';
 import { getAllProducts, Product } from '../services/supabase';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
+import { useAuth } from '../context/AuthContext';
 import { formatPrice, formatCategoryName } from '../utils/formatters';
+import { getAuthHeaders, authedFetch } from '../utils/authHeader';
+
+const apiBase = () => (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
 
 /* ─────────────────────────────────────────────
    Inline styles & keyframes injected once
@@ -193,6 +197,9 @@ const ProductDetailPage = () => {
 
   const { addToCart, cartItems } = useCart();
   const { showNotification } = useNotification();
+  const { isAuthenticated } = useAuth();
+  const [inWishlist, setInWishlist] = useState(false);
+  const [wishlistBusy, setWishlistBusy] = useState(false);
 
   const productInCart = product
     ? cartItems.find(
@@ -241,6 +248,51 @@ const ProductDetailPage = () => {
       cancelled = true;
     };
   }, [productId]);
+
+  useEffect(() => {
+    if (!productId || !isAuthenticated) {
+      setInWishlist(false);
+      return;
+    }
+    let cancelled = false;
+    authedFetch(`${apiBase()}/api/wishlist/check/${productId}`, { headers: getAuthHeaders() })
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setInWishlist(Boolean(data.inWishlist)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [productId, isAuthenticated]);
+
+  const toggleWishlist = async () => {
+    if (!productId || wishlistBusy) return;
+    if (!isAuthenticated) {
+      showNotification('Please log in to save items to your wishlist.', 'info');
+      return;
+    }
+    const next = !inWishlist;
+    setInWishlist(next);
+    setWishlistBusy(true);
+    try {
+      if (next) {
+        const res = await authedFetch(`${apiBase()}/api/wishlist`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ productId }),
+        });
+        if (!res.ok) throw new Error('Failed to add to wishlist');
+      } else {
+        const res = await authedFetch(`${apiBase()}/api/wishlist/${productId}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        });
+        if (!res.ok) throw new Error('Failed to remove from wishlist');
+      }
+    } catch {
+      setInWishlist(!next);
+      showNotification('Something went wrong. Please try again.', 'error');
+    } finally {
+      setWishlistBusy(false);
+    }
+  };
 
   const incrementQuantity = () => setQuantity(prev => prev + 1);
   const decrementQuantity = () => setQuantity(prev => (prev > 1 ? prev - 1 : 1));
@@ -425,12 +477,20 @@ const ProductDetailPage = () => {
               <button
                 className="pdp-btn-ghost"
                 style={{ width: '100%', padding: '15px 28px' }}
-                onClick={() => showNotification('Wishlist is coming soon!', 'info')}
+                onClick={toggleWishlist}
+                disabled={wishlistBusy}
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill={inWishlist ? '#ef4444' : 'none'}
+                  stroke={inWishlist ? '#ef4444' : 'currentColor'}
+                  strokeWidth="2"
+                >
                   <path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                 </svg>
-                Add to Wishlist
+                {inWishlist ? 'Saved to Wishlist' : 'Add to Wishlist'}
               </button>
             </div>
           </div>

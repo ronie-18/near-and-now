@@ -25,10 +25,19 @@ Companion to `bug_fixes_2026-07-23.md` (which tracks defects) — this doc track
 - **Missing:** No Android app is actually registered with a real Firebase project (no `google-services.json`, no FCM V1 service-account credential in EAS), so `getExpoPushTokenAsync()` fails on every device and no push has ever actually reached a phone. Full root-cause and remaining manual steps (Firebase console + EAS access needed, can't be done by the assistant) are in memory: `fcm_push_notifications_gap.md`.
 - **Tier:** Large-ish but not really an engineering gap — it's an infra/account-access blocker, not new code, since the app-side wiring is already done.
 
-### Wishlist
-- **Built today:** Nothing — the button on product pages shows a "coming soon" toast (`frontend/src/pages/ProductDetailPage.tsx:416-421`); no table, no endpoints, no persistence anywhere.
-- **Missing:** Everything — a `wishlist_items` table, `POST/GET/DELETE` endpoints, and UI in both the website and customer app (product-page toggle + a "My Wishlist" list view).
-- **Tier:** Medium — straightforward CRUD feature, but touches 2 client surfaces plus new schema.
+### Wishlist — built 2026-08-27
+
+**Schema** (`20260930370000_wishlist_items.sql`, applied live): new `wishlist_items` table (`customer_id`/`product_id` FKs, unique constraint on the pair, `ON DELETE CASCADE` both ways). service_role-only, same reasoning as `product_reviews`/`customer_saved_addresses` — customer auth is a custom JWT, not Supabase Auth, so RLS can't gate it; all access goes through the backend.
+
+**Backend**: `backend/src/controllers/wishlist.controller.ts` + `routes/wishlist.routes.ts`, mounted at `/api/wishlist` — `GET /` (list), `POST /` (add, idempotent via `upsert(..., { ignoreDuplicates: true })` so re-adding an already-saved product is a no-op success, not a 409), `GET /check/:productId` (lightweight membership check for the product-page heart's initial state), `DELETE /:productId`. Returns pre-tax `basePrice`/`discountedPrice` plus `gstRate`/`isLoose`/`category` — deliberately *not* pre-computing a GST-inclusive price server-side, matching how every other `master_products` read in this codebase works (each client applies GST itself via its own existing helper).
+
+**Customer app**: heart toggle in `app/product/[id].tsx`'s header (checks membership on mount, optimistic toggle with revert-on-failure, prompts login for guests instead of silently failing); new `app/wishlist.tsx` list screen (image, GST-inclusive price, remove, quick add-to-cart), linked from `ProfileMenu.tsx`.
+
+**Website**: heart toggle on `ProductDetailPage.tsx` (previously `showNotification('Wishlist is coming soon!')`) now does the real thing, including a filled/outlined heart icon and "Saved to Wishlist" label swap; new `WishlistPage.tsx` at `/wishlist`, linked from `ProfilePage.tsx`'s account nav.
+
+**Bug caught and fixed before shipping**: the first draft of both list screens displayed and cart-added using the raw `discountedPrice`/`basePrice` fields with no GST applied, and the website version masked this with an `as any` cast on the object passed to `addToCart` — silently bypassing TypeScript's check that would have caught the mismatched field names (`Product.price`, not `discounted_price`/`base_price`) and produced a cart item with `price: undefined`. Fixed on both clients: added `gstRate`/`isLoose` to the API response, applied the same GST-inclusive pricing formula each client already uses elsewhere (`priceWithGst`/`parseGstRatePercent` on the website, matching inline logic on the customer app), and removed the `as any` cast in favor of a fully-typed `Product` object.
+
+**Verification**: `tsc --noEmit` clean across backend/website/customer app; website does a full `vite build`. Migration dry-run tested (`BEGIN...ROLLBACK`) before applying live — confirmed the unique constraint fires on a duplicate insert. The full controller path (check → add → duplicate-add-is-idempotent → confirm exactly 1 row exists → check again → list (verified every field the GST calc needs is present) → remove → check again → remove-when-absent-is-a-no-op) was exercised end-to-end against production through the real `wishlistController` code on a real product (a non-loose, 5%-GST item — ₹77 pre-tax, confirming the GST fix computes correctly on real data) and a real customer, self-cleaning; production confirmed back at its prior state after.
 
 ---
 

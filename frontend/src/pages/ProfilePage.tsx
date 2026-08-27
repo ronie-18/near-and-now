@@ -488,6 +488,22 @@ const ProfilePage = () => {
                 </svg>
               </button>
 
+              {/* My Wishlist */}
+              <button className="pp-nav-item" onClick={() => navigate('/wishlist')}>
+                <div className="pp-nav-item-icon" style={{ background: '#fef2f2' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2">
+                    <path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="pp-nav-item-label">My Wishlist</div>
+                  <div className="pp-nav-item-sub">Products you've saved</div>
+                </div>
+                <svg className="pp-nav-item-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </button>
+
               {/* Saved Addresses */}
               <button className="pp-nav-item" onClick={() => navigate('/addresses')}>
                 <div className="pp-nav-item-icon" style={{ background: '#eff6ff' }}>
