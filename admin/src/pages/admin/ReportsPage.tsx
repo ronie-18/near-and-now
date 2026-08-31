@@ -24,7 +24,7 @@ import {
   Eye,
   Clock
 } from 'lucide-react';
-import { getOrders, getAdminProducts, getCustomers, getCategories, Order, Category } from '../../services/adminService';
+import { getOrdersSince, getAdminProducts, getCategories, Order, Category } from '../../services/adminService';
 import { Product } from '../../services/supabase';
 
 // Types
@@ -447,7 +447,6 @@ const ReportsPage = () => {
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [_customers, setCustomers] = useState<any[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [period, setPeriod] = useState<'7' | '30' | '90' | '365'>('30');
   const [error, setError] = useState<string | null>(null);
@@ -458,15 +457,19 @@ const ReportsPage = () => {
     try {
       setLoading(true);
       setError(null);
-      const [ordersData, productsData, customersData, categoriesData] = await Promise.all([
-        getOrders(),
+      // getCustomers() was previously fetched here too, but this page derives
+      // its unique-customers figure from order rows (see `stats` below), not
+      // from that array — it was fetched and never read. Orders are bounded
+      // to 2 years, comfortably covering this page's widest period selector
+      // (365 days) plus the equal-length "previous period" the growth
+      // comparison needs, instead of the platform's entire order history.
+      const [ordersData, productsData, categoriesData] = await Promise.all([
+        getOrdersSince(730),
         getAdminProducts(),
-        getCustomers(),
         getCategories()
       ]);
       setOrders(ordersData);
       setProducts(productsData);
-      setCustomers(customersData);
       setCategories(categoriesData);
     } catch (err) {
       setError('Failed to load report data. Please try again.');

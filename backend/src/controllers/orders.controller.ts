@@ -173,18 +173,21 @@ export class OrdersController {
         storeOrdersMap.get(item.store_id).push(item);
       }
 
-      const storeOrders = [];
-      let seqNum = 1;
-      let totalSubtotal = 0;
       // Delivery fee is a launch-goodwill promo: ₹0 for now, matching placeCheckoutOrder
       // (the real production checkout path). Revisit when the promo ends.
       const PER_STORE_DELIVERY_FEE = 0;
 
-      for (const [storeId, items] of storeOrdersMap) {
+      // Each store's writes are independent, so they run concurrently instead
+      // of one-store-at-a-time — checkout latency no longer scales with the
+      // number of distinct stores in the cart. sequence_number is assigned
+      // from each entry's fixed position in storeOrdersMap (Map preserves
+      // insertion order) before the async work starts, so pickup ordering
+      // stays deterministic even though the DB writes themselves interleave.
+      const storeEntries = Array.from(storeOrdersMap.entries());
+      const perStoreResults = await Promise.all(storeEntries.map(async ([storeId, items], index) => {
         const subtotal = items.reduce((sum: number, item: any) =>
           sum + (item.unit_price * item.quantity), 0
         );
-        totalSubtotal += subtotal;
 
         const storeOrder = await databaseService.createStoreOrder({
           customer_order_id: customerOrder.id,
@@ -218,7 +221,7 @@ export class OrdersController {
           .insert({
             order_id: customerOrder.id,
             store_id: storeId,
-            sequence_number: seqNum++,
+            sequence_number: index + 1,
             status: 'pending_acceptance',
           });
         if (allocErr) {
@@ -232,8 +235,11 @@ export class OrdersController {
           console.error('[createOrder] shopkeeper push notification failed (non-fatal)', err);
         });
 
-        storeOrders.push({ ...storeOrder, items: orderItems });
-      }
+        return { subtotal, storeOrder: { ...storeOrder, items: orderItems } };
+      }));
+
+      const storeOrders = perStoreResults.map((r) => r.storeOrder);
+      const totalSubtotal = perStoreResults.reduce((sum, r) => sum + r.subtotal, 0);
 
       // Back-fill the computed totals that createCustomerOrder wrote as zeros.
       const totalDeliveryFee = storeOrdersMap.size * PER_STORE_DELIVERY_FEE;

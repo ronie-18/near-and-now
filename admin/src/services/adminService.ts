@@ -183,39 +183,52 @@ export interface Customer {
 // Products Management
 export async function getAdminProducts(): Promise<Product[]> {
   try {
-    // Fetch all products in batches to bypass Supabase's 1000 row limit
-    let allProducts: any[] = [];
-    let from = 0;
     const batchSize = 1000;
-    let hasMore = true;
+    // Get the total row count first (head:true — no rows transferred) so the
+    // remaining pages can be requested concurrently instead of one-at-a-time.
+    // Previously this looped 45+ sequential round-trips for the full 44k+-row
+    // table — every caller paid that full latency serially.
+    const { count, error: countError } = await getAdminClient()
+      .from('master_products')
+      .select('id', { count: 'exact', head: true });
+    if (countError) {
+      console.error('Error counting admin products:', countError);
+      throw countError;
+    }
 
-    while (hasMore) {
-      const { data, error } = await getAdminClient()
+    const totalPages = Math.max(1, Math.ceil((count ?? 0) / batchSize));
+    // `id` tiebreaker: `created_at` alone isn't unique across a 44k+-row
+    // bulk-imported table (many rows share an identical timestamp from
+    // the same import batch), and offset pagination has no guaranteed
+    // stable order across separate requests when the sort key ties —
+    // the same row can be returned on two different pages (and another
+    // row skipped entirely), which is exactly what surfaced as React
+    // "duplicate key" warnings on ProductsPage. Found 2026-08-13 via
+    // live click-testing.
+    const fetchPage = (page: number) =>
+      getAdminClient()
         .from('master_products')
         .select('*')
-        // `id` tiebreaker: `created_at` alone isn't unique across a 44k+-row
-        // bulk-imported table (many rows share an identical timestamp from
-        // the same import batch), and offset pagination has no guaranteed
-        // stable order across separate requests when the sort key ties —
-        // the same row can be returned on two different pages (and another
-        // row skipped entirely), which is exactly what surfaced as React
-        // "duplicate key" warnings on ProductsPage. Found 2026-08-13 via
-        // live click-testing.
         .order('created_at', { ascending: false })
         .order('id', { ascending: true })
-        .range(from, from + batchSize - 1);
+        .range(page * batchSize, page * batchSize + batchSize - 1);
 
-      if (error) {
-        console.error('Error fetching admin products:', error);
-        throw error;
-      }
-
-      if (data && data.length > 0) {
-        allProducts = [...allProducts, ...data];
-        from += batchSize;
-        hasMore = data.length === batchSize; // Continue if we got a full batch
-      } else {
-        hasMore = false;
+    // Bounded concurrency (5 at a time) rather than firing all pages at once —
+    // fast without hammering the API with 45 simultaneous requests.
+    const CONCURRENCY = 5;
+    const allProducts: any[] = [];
+    for (let start = 0; start < totalPages; start += CONCURRENCY) {
+      const pageNumbers = Array.from(
+        { length: Math.min(CONCURRENCY, totalPages - start) },
+        (_, i) => start + i
+      );
+      const results = await Promise.all(pageNumbers.map(fetchPage));
+      for (const { data, error } of results) {
+        if (error) {
+          console.error('Error fetching admin products:', error);
+          throw error;
+        }
+        if (data) allProducts.push(...data);
       }
     }
 
@@ -791,6 +804,34 @@ export async function getOrders(): Promise<Order[]> {
   }
 }
 
+// Scoped to the last `days` days server-side, instead of pulling the
+// platform's entire order history — used by the dashboard's sales chart
+// (which only ever shows a 7/30/90-day window), its "recent orders" list
+// (top 5, newest first), and its top-products tile (derived from the same
+// window). Fetch time now stays roughly constant as total order history
+// grows, instead of scaling with it.
+export async function getOrdersSince(days: number): Promise<Order[]> {
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const { data: customerOrders, error } = await getAdminClient()
+      .from('customer_orders')
+      .select(ORDER_SELECT)
+      .gte('placed_at', cutoff.toISOString())
+      .order('placed_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching recent orders:', error);
+      throw error;
+    }
+    return transformCustomerOrderRows((customerOrders ?? []) as unknown as CustomerOrderRow[]);
+  } catch (error) {
+    console.error('Error in getOrdersSince:', error);
+    throw error;
+  }
+}
+
 // Scoped to one customer server-side, instead of CustomerDetailPage's
 // previous approach of fetching every order platform-wide via getOrders()
 // and filtering client-side — that meant opening any single customer's
@@ -1319,60 +1360,38 @@ export async function getDashboardStats() {
       .eq('status', 'active');
     if (activeDeliveryPartnersError) throw activeDeliveryPartnersError;
 
-    // Get total orders from customer_orders
-    const { data: orders, error: ordersError } = await getAdminClient()
-      .from('customer_orders')
-      .select('id, status, total_amount, customer_id, payment_status, payment_method');
-
-    if (ordersError) throw ordersError;
-
-    // Calculate unique customers from orders
-    const uniqueCustomers = new Set<string>();
-    orders?.forEach(order => {
-      if (order.customer_id) uniqueCustomers.add(order.customer_id);
-    });
-
-    // Calculate statistics
-    const totalOrders = orders?.length || 0;
-    const totalCustomers = uniqueCustomers.size;
-    // Previously summed every order's total_amount with no filtering at
-    // all — not even excluding cancelled orders, let alone unpaid ones.
-    // Online-payment (razorpay/wallet) orders are created before the
-    // customer has actually finished paying (see shopkeeper.controller.ts's
-    // getIncomingOrders for the same gate); an order abandoned mid-payment
-    // that never got auto-cancelled stayed non-cancelled indefinitely and
-    // was counted as real revenue forever. This is the headline dashboard
-    // KPI, so the most-viewed number in the admin panel was wrong.
-    const countableOrders = orders?.filter(
-      (order) =>
-        order.status !== 'order_cancelled' &&
-        (order.payment_method === 'cod' || order.payment_status === 'paid')
-    ) ?? [];
-    const totalSales = Math.round(countableOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0));
-
-    // Order status counts (mapping database statuses to frontend statuses)
-    // Database uses: 'pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup',
-    // 'delivery_partner_assigned', 'picking_up', 'order_picked_up', 'in_transit', 'order_delivered', 'order_cancelled'
-    const placedOrders = orders?.filter(order => order.status === 'pending_at_store' || order.status === 'store_accepted').length || 0;
-    const confirmedOrders = orders?.filter(order => order.status === 'preparing_order' || order.status === 'ready_for_pickup').length || 0;
-    const shippedOrders = orders?.filter(order => order.status === 'delivery_partner_assigned' || order.status === 'picking_up' || order.status === 'order_picked_up' || order.status === 'in_transit').length || 0;
-    const deliveredOrders = orders?.filter(order => order.status === 'order_delivered').length || 0;
-    const cancelledOrders = orders?.filter(order => order.status === 'order_cancelled').length || 0;
+    // Order counts/sums computed server-side by get_admin_dashboard_order_stats()
+    // (migration 20260930380000) instead of fetching every row in
+    // customer_orders to the client just to .filter()/.reduce() them here —
+    // this was the single biggest unbounded fetch on the most-viewed admin
+    // screen, and it grew every time a new order was placed. The revenue
+    // filter (exclude cancelled; online payments must be actually paid,
+    // matching shopkeeper.controller.ts's getIncomingOrders gate) now lives
+    // in the SQL function instead of client-side .filter().
+    const { data: orderStatsRows, error: orderStatsError } = await getAdminClient()
+      .rpc('get_admin_dashboard_order_stats');
+    if (orderStatsError) throw orderStatsError;
+    const orderStats = orderStatsRows?.[0] ?? {
+      total_orders: 0, total_customers: 0, total_sales: 0,
+      placed_orders: 0, confirmed_orders: 0, shipped_orders: 0,
+      delivered_orders: 0, cancelled_orders: 0,
+    };
 
     return {
       totalProducts: totalProducts || 0,
-      totalOrders,
-      totalCustomers,
-      totalSales,
+      totalOrders: Number(orderStats.total_orders) || 0,
+      totalCustomers: Number(orderStats.total_customers) || 0,
+      totalSales: Math.round(Number(orderStats.total_sales) || 0),
       totalCategories: totalCategories || 0,
       totalStores: totalStores || 0,
       approvedStores: approvedStores || 0,
       totalDeliveryPartners: totalDeliveryPartners || 0,
       activeDeliveryPartners: activeDeliveryPartners || 0,
-      processingOrders: placedOrders + confirmedOrders, // Combine placed and confirmed for "processing" display
-      shippedOrders,
-      deliveredOrders,
-      cancelledOrders
+      // Combine placed and confirmed for "processing" display
+      processingOrders: (Number(orderStats.placed_orders) || 0) + (Number(orderStats.confirmed_orders) || 0),
+      shippedOrders: Number(orderStats.shipped_orders) || 0,
+      deliveredOrders: Number(orderStats.delivered_orders) || 0,
+      cancelledOrders: Number(orderStats.cancelled_orders) || 0,
     };
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);

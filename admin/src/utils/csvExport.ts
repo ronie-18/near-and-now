@@ -9,7 +9,14 @@ export interface CsvColumn<T> {
 }
 
 function escapeCsvCell(value: string | number | null | undefined): string {
-  const str = value === null || value === undefined ? '' : String(value);
+  let str = value === null || value === undefined ? '' : String(value);
+  // Neutralize formula injection: a cell starting with =, +, -, or @ is
+  // interpreted as a live formula by Excel/Sheets. These fields come from
+  // user-controlled input (store/rider/customer names, addresses), so a
+  // leading apostrophe forces spreadsheet apps to treat it as plain text.
+  if (/^[=+\-@]/.test(str)) {
+    str = `'${str}`;
+  }
   // Quote whenever the cell contains a comma, quote, or newline — plain
   // cells stay unquoted so the file reads cleanly in a text editor too.
   if (/[",\n]/.test(str)) {

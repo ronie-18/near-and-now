@@ -2051,6 +2051,18 @@ export class DeliveryPartnerController {
       if (result === 'driver_not_eligible') {
         return res.status(403).json({ success: false, result, error: 'Go online to accept orders.' });
       }
+      if (result === 'order_not_available') {
+        // The order was cancelled (or otherwise left the dispatchable set)
+        // after this offer was broadcast — driver_order_offers has no
+        // guaranteed cleanup on cancellation, so a rider can still be
+        // looking at a stale "available" card for it. Distinct message +
+        // result code so the client can clear the dead offer instead of
+        // just showing a generic "try again".
+        return res.status(410).json({ success: false, result, error: 'This order is no longer available — it may have been cancelled.' });
+      }
+      if (result === 'offer_not_found') {
+        return res.status(404).json({ success: false, result, error: 'This offer is no longer available.' });
+      }
       return res.status(400).json({ success: false, result, error: result });
     } catch (err) {
       console.error('acceptOffer error:', err);

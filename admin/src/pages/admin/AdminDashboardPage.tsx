@@ -20,7 +20,7 @@ import {
   Layers
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getDashboardStats, getOrders, Order } from '../../services/adminService';
+import { getDashboardStats, getOrdersSince, Order } from '../../services/adminService';
 
 // Stat tile — label, value, and an optional sub-line (e.g. "42 approved").
 // No decorative gradients/blobs and no fabricated trend percentages — a flat
@@ -297,10 +297,16 @@ const AdminDashboardPage = () => {
       setLoading(true);
       setError(null);
 
-      const stats = await getDashboardStats();
+      // Independent calls — run in parallel instead of one after the other.
+      // Orders are scoped to the last 90 days (the widest the sales-period
+      // toggle below ever shows) instead of the platform's entire history —
+      // recent orders, the sales chart, and the top-products tile all derive
+      // from this same bounded set.
+      const [stats, orders] = await Promise.all([
+        getDashboardStats(),
+        getOrdersSince(90),
+      ]);
       setDashboardStats(stats);
-
-      const orders = await getOrders();
       setAllOrders(orders);
       setRecentOrders(orders.slice(0, 5));
 

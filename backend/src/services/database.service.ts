@@ -388,6 +388,24 @@ export class DatabaseService {
       throw allocCancelErr;
     }
 
+    // Also expire any pending rider offers for this order — order_store_allocations
+    // (above) is what shopkeepers see, but driver_order_offers is a separate
+    // table riders see, and nothing else ever wrote 'expired'/'cancelled' to
+    // it on cancellation. Left unfixed, a rider who was already offered this
+    // order keeps seeing it as "available" forever (including across app
+    // restarts), and tapping Accept on it returns a generic error instead of
+    // "this order was cancelled." Non-fatal: an offer that fails to expire
+    // here still gets rejected at accept-time by accept_driver_offer()'s own
+    // status check, so this is a UX cleanup, not a correctness dependency.
+    const { error: offerExpireErr } = await supabaseAdmin
+      .from('driver_order_offers')
+      .update({ status: 'expired' })
+      .eq('order_id', orderId)
+      .eq('status', 'pending');
+    if (offerExpireErr) {
+      console.error('Error expiring driver order offers (non-fatal):', offerExpireErr);
+    }
+
     console.log('Updating store orders status...');
     const { data: cancelledStoreOrders, error: updateStoreOrdersError } = await supabaseAdmin
       .from('store_orders')
