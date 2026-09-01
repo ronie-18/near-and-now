@@ -460,11 +460,18 @@ const ReportsPage = () => {
       // getCustomers() was previously fetched here too, but this page derives
       // its unique-customers figure from order rows (see `stats` below), not
       // from that array — it was fetched and never read. Orders are bounded
-      // to 2 years, comfortably covering this page's widest period selector
-      // (365 days) plus the equal-length "previous period" the growth
-      // comparison needs, instead of the platform's entire order history.
+      // to 2 years + 1 day, comfortably covering this page's widest period
+      // selector (365 days) plus the equal-length "previous period" the
+      // growth comparison needs, instead of the platform's entire order
+      // history. The +1 day margin matters: `stats` below truncates the
+      // previous-period start to midnight (`previousPeriodStart.setHours(0,0,0,0)`
+      // after subtracting `days*2`), which lands slightly earlier than a
+      // plain `now - 730 days` cutoff computed at the current time of day —
+      // without the margin, orders in that sub-day gap were silently never
+      // fetched at all, undercounting the year-over-year growth comparison.
+      // Found 2026-09-01 during a cross-app audit.
       const [ordersData, productsData, categoriesData] = await Promise.all([
-        getOrdersSince(730),
+        getOrdersSince(731),
         getAdminProducts(),
         getCategories()
       ]);

@@ -2052,12 +2052,14 @@ export class DeliveryPartnerController {
         return res.status(403).json({ success: false, result, error: 'Go online to accept orders.' });
       }
       if (result === 'order_not_available') {
-        // The order was cancelled (or otherwise left the dispatchable set)
-        // after this offer was broadcast — driver_order_offers has no
-        // guaranteed cleanup on cancellation, so a rider can still be
-        // looking at a stale "available" card for it. Distinct message +
-        // result code so the client can clear the dead offer instead of
-        // just showing a generic "try again".
+        // The order left the dispatchable set (cancelled, etc.) after this
+        // offer was broadcast. cancelOrder() now bulk-expires this order's
+        // driver_order_offers rows, so this is mostly a narrow timing
+        // window rather than the permanent gap it used to be — but it's
+        // still reachable (e.g. a rider who already had this screen open
+        // before the expiry ran). Distinct message + result code so the
+        // client can clear the dead offer instead of showing a generic
+        // "try again".
         return res.status(410).json({ success: false, result, error: 'This order is no longer available — it may have been cancelled.' });
       }
       if (result === 'offer_not_found') {

@@ -305,6 +305,14 @@ export class DatabaseService {
   }
 
   async getCustomerOrders(customerId: string) {
+    // Bounded to the most recent 200 orders — this had no limit at all
+    // (`getUserOrders` in the customer app's own orderService.ts renders
+    // every row returned into a FlashList with no client-side pagination
+    // either), so a long-tenured customer's order history would grow
+    // unbounded on every fetch of this screen. 200 comfortably covers any
+    // realistic "recent order history" need; matches the same tradeoff
+    // already made for the store-owner app's previous-orders screen. Found
+    // 2026-09-01 during a cross-app audit.
     const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .select(`
@@ -315,7 +323,8 @@ export class DatabaseService {
         )
       `)
       .eq('customer_id', customerId)
-      .order('placed_at', { ascending: false });
+      .order('placed_at', { ascending: false })
+      .limit(200);
 
     if (error) throw error;
     return data;
