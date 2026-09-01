@@ -2302,18 +2302,46 @@ export class DatabaseService {
 
   /** Full tracking data for tracking page: order + status history + store locations + delivery partner */
   async getOrderTrackingFull(orderId: string, customerId: string) {
-    const order = await this.getOrderTracking(orderId, customerId);
+    // getOrderTracking needs to resolve first to know if the order exists/is
+    // owned by this customer, but the status history is keyed only on
+    // orderId — nothing about it depends on the order row itself — so it
+    // doesn't need to wait for that. Running them concurrently trades one
+    // wasted history query in the rare 404 case for cutting a full
+    // round-trip off every successful request (the overwhelmingly common
+    // case, and this endpoint is polled every 5s while the tracking screen
+    // is open — see tracking.controller.ts).
+    // Ownership is verified by getOrderTracking — getTrackingHistoryRaw is
+    // the same query getTrackingHistory itself uses after its own ownership
+    // check, so re-checking here would be redundant.
+    const [order, statusHistory] = await Promise.all([
+      this.getOrderTracking(orderId, customerId),
+      this.getTrackingHistoryRaw(orderId),
+    ]);
     if (!order) return null;
-    // Ownership already verified by getOrderTracking above — use the raw query
-    // directly instead of re-checking via the public getTrackingHistory.
-    const statusHistory = await this.getTrackingHistoryRaw(orderId);
     const storeIds = [...new Set((order.store_orders || []).map((so: { store_id: string }) => so.store_id).filter(Boolean))];
+    const partnerIds = [...new Set((order.store_orders || [])
+      .map((so: { delivery_partner_id?: string }) => so.delivery_partner_id)
+      .filter(Boolean))];
+
+    // Stores and delivery-partner lookups are both independent of each
+    // other (they read different tables keyed off different id sets derived
+    // from `order` above) — previously the stores query ran, then finished,
+    // before the two partner queries even started. All three now run in one
+    // batch instead of two sequential round-trips.
+    const [{ data: stores }, { data: users }, { data: profiles }] = await Promise.all([
+      storeIds.length > 0
+        ? supabaseAdmin.from('stores').select('id, latitude, longitude, name, address, phone').in('id', storeIds)
+        : Promise.resolve({ data: [] as any[] }),
+      partnerIds.length > 0
+        ? supabaseAdmin.from('app_users').select('id, name, phone').in('id', partnerIds)
+        : Promise.resolve({ data: [] as any[] }),
+      partnerIds.length > 0
+        ? supabaseAdmin.from('delivery_partners').select('user_id, vehicle_number').in('user_id', partnerIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+
     const storeLocations: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[] = [];
-    if (storeIds.length > 0) {
-      const { data: stores } = await supabaseAdmin
-        .from('stores')
-        .select('id, latitude, longitude, name, address, phone')
-        .in('id', storeIds);
+    {
       const storeRows = stores || [];
       for (const s of storeRows) {
         const row = s as { id: string; latitude: number; longitude: number; name?: string; address?: string; phone?: string };
@@ -2347,17 +2375,11 @@ export class DatabaseService {
         });
       }
     }
-    // Get delivery agents per store_order
-    const partnerIds = [...new Set((order.store_orders || [])
-      .map((so: { delivery_partner_id?: string }) => so.delivery_partner_id)
-      .filter(Boolean))];
 
+    // Get delivery agents per store_order — users/profiles already fetched
+    // above, alongside (not after) the stores query.
     const deliveryAgents: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }> = {};
     if (partnerIds.length > 0) {
-      const [{ data: users }, { data: profiles }] = await Promise.all([
-        supabaseAdmin.from('app_users').select('id, name, phone').in('id', partnerIds),
-        supabaseAdmin.from('delivery_partners').select('user_id, vehicle_number').in('user_id', partnerIds),
-      ]);
       const vehicleByUserId: Record<string, string> = {};
       (profiles || []).forEach((p: any) => {
         if (p.vehicle_number) vehicleByUserId[p.user_id] = p.vehicle_number;

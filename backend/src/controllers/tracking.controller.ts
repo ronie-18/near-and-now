@@ -39,21 +39,23 @@ export class TrackingController {
     try {
       const { orderId } = req.params;
       // Opportunistically expire any store allocation this order has been waiting
-      // on for too long, before reading tracking data, so a silent store doesn't
-      // leave the order stuck — see expireStaleAllocations for details.
-      // The customer app polls this endpoint every 5s while the tracking screen
-      // is open (see useOrderTracking.ts), so these three watchdog checks ran
-      // on every single poll — each is independent of the other two (they read/
-      // act on different order-state facets and are already individually
-      // caught below), so running them sequentially only added up their
-      // round-trip latencies for no correctness benefit. Parallelized —
-      // same three checks, same behavior, ~3x less time spent before the
-      // actual tracking data is even fetched.
-      await Promise.all([
-        expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err)),
-        reBroadcastIfStuck(orderId).catch((err) => console.error('reBroadcastIfStuck:', err)),
-        cancelIfPaymentAbandoned(orderId).catch((err) => console.error('cancelIfPaymentAbandoned:', err)),
-      ]);
+      // on for too long, so a silent store doesn't leave the order stuck — see
+      // expireStaleAllocations for details. "Opportunistically" is the operative
+      // word: these three watchdog checks are self-healing maintenance, not a
+      // hard dependency of this read. The customer app polls this endpoint
+      // every 5s while the tracking screen is open (useOrderTracking.ts), and
+      // previously ALL THREE were awaited before the tracking query even
+      // started — first sequentially (fixed once already, down to one
+      // Promise.all), but even run concurrently they still added a full
+      // extra round-trip of latency to *every single poll*, live-measured
+      // at ~2.3s/request in production. Fired-and-forgotten instead: they
+      // still run and still self-heal the order, just without blocking the
+      // response the customer is actually waiting on. Any state they change
+      // is picked up on the very next poll 5s later regardless (same
+      // effective staleness window the unconditional 5s polling already has).
+      expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err));
+      reBroadcastIfStuck(orderId).catch((err) => console.error('reBroadcastIfStuck:', err));
+      cancelIfPaymentAbandoned(orderId).catch((err) => console.error('cancelIfPaymentAbandoned:', err));
       const data = await databaseService.getOrderTrackingFull(orderId, req.customerId!);
 
       if (!data) {
