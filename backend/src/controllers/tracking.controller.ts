@@ -41,9 +41,19 @@ export class TrackingController {
       // Opportunistically expire any store allocation this order has been waiting
       // on for too long, before reading tracking data, so a silent store doesn't
       // leave the order stuck — see expireStaleAllocations for details.
-      await expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err));
-      await reBroadcastIfStuck(orderId).catch((err) => console.error('reBroadcastIfStuck:', err));
-      await cancelIfPaymentAbandoned(orderId).catch((err) => console.error('cancelIfPaymentAbandoned:', err));
+      // The customer app polls this endpoint every 5s while the tracking screen
+      // is open (see useOrderTracking.ts), so these three watchdog checks ran
+      // on every single poll — each is independent of the other two (they read/
+      // act on different order-state facets and are already individually
+      // caught below), so running them sequentially only added up their
+      // round-trip latencies for no correctness benefit. Parallelized —
+      // same three checks, same behavior, ~3x less time spent before the
+      // actual tracking data is even fetched.
+      await Promise.all([
+        expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err)),
+        reBroadcastIfStuck(orderId).catch((err) => console.error('reBroadcastIfStuck:', err)),
+        cancelIfPaymentAbandoned(orderId).catch((err) => console.error('cancelIfPaymentAbandoned:', err)),
+      ]);
       const data = await databaseService.getOrderTrackingFull(orderId, req.customerId!);
 
       if (!data) {
