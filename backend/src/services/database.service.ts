@@ -1199,9 +1199,96 @@ export class DatabaseService {
       };
     }
 
-    const { data: customerOrder, error: coError } = await supabaseAdmin
-      .from('customer_orders')
-      .insert({
+    // Resolve each store's items to real store-scoped product ids first —
+    // pure reads, no writes yet. If any item can't be resolved, this throws
+    // before a single row is written (matches the "fail before any writes
+    // happen" reasoning already established elsewhere in this function for
+    // the unassigned-items case above).
+    const storeChunks: Array<{
+      store_id: string;
+      subtotal: number;
+      delivery_fee: number;
+      items: Array<{
+        product_id: string;
+        product_name: string;
+        unit: string | null;
+        image_url: string | null;
+        unit_price: number;
+        quantity: number;
+      }>;
+    }> = [];
+
+    for (let i = 0; i < itemChunks.length; i++) {
+      const chunk = itemChunks[i];
+      const storeId = storeIdsToUse[i];
+      if (!chunk?.length || !storeId) continue;
+
+      const chunkSubtotal = chunk.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      // trustedDeliveryFee is currently always 0, so this division is a no-op today,
+      // but keeps the per-store split correct if the promo ends and it's nonzero again.
+      const chunkDeliveryFee =
+        itemChunks.length > 1 ? trustedDeliveryFee / itemChunks.length : trustedDeliveryFee;
+
+      const chunkMasterIds = chunk
+        .map((item) => item.product_id || item.id)
+        .filter((id): id is string => id != null && id !== '');
+
+      if (chunkMasterIds.length === 0) continue;
+
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from('products')
+        .select('id, master_product_id')
+        .eq('store_id', storeId)
+        .in('master_product_id', chunkMasterIds)
+        .eq('is_active', true);
+
+      if (productsError) {
+        throw new Error('Failed to verify product availability');
+      }
+
+      const masterToProduct = new Map<string, string>();
+      for (const p of products || []) {
+        masterToProduct.set(p.master_product_id, p.id);
+      }
+
+      const resolvedItems = chunk.map((item) => {
+        const masterId = item.product_id || item.id;
+        // Prefer the store-specific product ID resolved via master_product_id;
+        // fall back to the raw product_id the frontend sent (may already be the store product id).
+        const productId = (masterId ? masterToProduct.get(masterId) : null) ?? masterId ?? null;
+        if (!productId) {
+          throw new Error(`Product "${item.name}" is not available from the store.`);
+        }
+        return {
+          product_id: productId,
+          product_name: item.name,
+          unit: item.unit || null,
+          image_url: item.image || null,
+          unit_price: item.price,
+          quantity: item.quantity,
+        };
+      });
+
+      storeChunks.push({ store_id: storeId, subtotal: chunkSubtotal, delivery_fee: chunkDeliveryFee, items: resolvedItems });
+    }
+
+    // Every write below — customer_orders, every store's store_orders/
+    // order_items/order_store_allocations, and order_status_history — now
+    // happens inside one Postgres function call (place_multi_store_order,
+    // migration 20260930400000). A Postgres function body is implicitly one
+    // transaction: if any store's write fails partway through (e.g. an item
+    // resolves to a product id that fails a DB-level check this Node-side
+    // resolution above didn't catch), everything the function did rolls
+    // back automatically — including customer_orders and any earlier
+    // store(s) that had already succeeded. Previously each of these was a
+    // separate sequential Node round-trip with no transaction wrapping any
+    // of it, so a mid-request failure could leave some stores' orders fully
+    // committed and visible to those shopkeepers while the customer saw a
+    // failure and other stores got nothing at all. Verified live against
+    // production: a deliberately-broken second store leaves zero rows for
+    // the order (customer_orders included), not a partial one.
+    const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc('place_multi_store_order', {
+      p_customer_order: {
         customer_id: orderData.user_id,
         order_code: orderCode,
         status: 'pending_at_store',
@@ -1227,140 +1314,39 @@ export class DatabaseService {
         receiver_address: orderData.receiver_address || null,
         tip_amount: trustedTipAmount,
         delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
-      })
-      .select()
-      .single();
+      },
+      p_store_chunks: storeChunks,
+    });
 
-    if (coError || !customerOrder) {
-      throw new Error(coError?.message || 'Failed to create order');
+    if (rpcError || !rpcResult) {
+      throw new Error(rpcError?.message || 'Failed to create order');
     }
+    const orderId: string = (rpcResult as { id: string }).id;
+    const placedAt: string | undefined = (rpcResult as { placed_at?: string }).placed_at;
 
     if (appliedCouponId) {
       // Non-fatal by design (recordCouponUsage logs its own errors internally
       // rather than throwing) — the order itself is already placed at this
       // point, so a redemption-recording hiccup shouldn't fail the checkout.
-      await this.recordCouponUsage(appliedCouponId, orderData.user_id, customerOrder.id);
+      await this.recordCouponUsage(appliedCouponId, orderData.user_id, orderId);
     }
 
-    for (let i = 0; i < itemChunks.length; i++) {
-      const chunk = itemChunks[i];
-      const storeId = storeIdsToUse[i];
-      if (!chunk?.length || !storeId) continue;
-
-      const chunkSubtotal = chunk.reduce((sum, it) => sum + it.price * it.quantity, 0);
-      // trustedDeliveryFee is currently always 0, so this division is a no-op today,
-      // but keeps the per-store split correct if the promo ends and it's nonzero again.
-      const chunkDeliveryFee =
-        itemChunks.length > 1 ? trustedDeliveryFee / itemChunks.length : trustedDeliveryFee;
-
-      const { data: storeOrder, error: soError } = await supabaseAdmin
-        .from('store_orders')
-        .insert({
-          customer_order_id: customerOrder.id,
-          store_id: storeId,
-          subtotal_amount: chunkSubtotal,
-          delivery_fee: chunkDeliveryFee,
-          status: 'pending_at_store'
-        })
-        .select()
-        .single();
-
-      if (soError || !storeOrder) {
-        throw new Error(soError?.message || 'Failed to create store order');
-      }
-
-      const chunkMasterIds = chunk
-        .map((item) => item.product_id || item.id)
-        .filter((id): id is string => id != null && id !== '');
-
-      if (chunkMasterIds.length === 0) continue;
-
-      const { data: products, error: productsError } = await supabaseAdmin
-        .from('products')
-        .select('id, master_product_id')
-        .eq('store_id', storeId)
-        .in('master_product_id', chunkMasterIds)
-        .eq('is_active', true);
-
-      if (productsError) {
-        throw new Error('Failed to verify product availability');
-      }
-
-      const masterToProduct = new Map<string, string>();
-      for (const p of products || []) {
-        masterToProduct.set(p.master_product_id, p.id);
-      }
-
-      const orderItemsPayload = chunk.map((item) => {
-        const masterId = item.product_id || item.id;
-        // Prefer the store-specific product ID resolved via master_product_id;
-        // fall back to the raw product_id the frontend sent (may already be the store product id).
-        const productId = (masterId ? masterToProduct.get(masterId) : null) ?? masterId ?? null;
-        if (!productId) {
-          throw new Error(`Product "${item.name}" is not available from the store.`);
-        }
-        return {
-          store_order_id: storeOrder.id,
-          customer_order_id: customerOrder.id,
-          product_id: productId,
-          product_name: item.name,
-          unit: item.unit || null,
-          image_url: item.image || null,
-          unit_price: item.price,
-          quantity: item.quantity,
-          assigned_store_id: storeId,
-          item_status: 'pending',
-        };
+    // Notify each shopkeeper a new order is waiting. Previously this call only
+    // existed on the legacy, unused /api/orders/create path (orders.controller.ts) —
+    // the real checkout path (this function, backing /api/orders/place, which is
+    // what both the website and customer app actually call) never notified anyone,
+    // so shopkeepers only ever found out about new orders via a 10s foreground poll.
+    for (const chunk of storeChunks) {
+      notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode).catch((err) => {
+        console.error('[order placement] Failed to notify shopkeeper of new order:', err);
       });
-
-      const { error: itemsError } = await supabaseAdmin.from('order_items').insert(orderItemsPayload);
-
-      if (itemsError) {
-        throw new Error(itemsError.message || 'Failed to create order items');
-      }
-
-      // Create order_store_allocation for this store so shopkeeper can see & accept it.
-      // This row is what the entire accept/reject/timeout/driver-dispatch system is
-      // built on (shopkeeper.controller.ts) — if it fails to write, the store never
-      // gets an offer and the order silently stalls with no way to ever fulfill it.
-      // Previously logged as "non-fatal" and swallowed; now throws like every other
-      // write in this loop, so the customer sees a real failure instead of a false
-      // "order placed" for an order no store will ever see.
-      const { error: allocErr } = await supabaseAdmin.from('order_store_allocations').insert({
-        order_id: customerOrder.id,
-        store_id: storeId,
-        sequence_number: i + 1,
-        status: 'pending_acceptance',
-      });
-      // Note: pickup_code is set when shopkeeper accepts, not at creation time.
-      if (allocErr) {
-        throw new Error(allocErr.message || 'Failed to create store allocation');
-      }
-
-      // Notify the shopkeeper a new order is waiting. Previously this call only
-      // existed on the legacy, unused /api/orders/create path (orders.controller.ts) —
-      // the real checkout path (this function, backing /api/orders/place, which is
-      // what both the website and customer app actually call) never notified anyone,
-      // so shopkeepers only ever found out about new orders via a 10s foreground poll.
-      notificationService
-        .notifyShopkeeperNewOrder(storeId, customerOrder.id, customerOrder.order_code ?? customerOrder.id)
-        .catch((err) => {
-          console.error('[order placement] Failed to notify shopkeeper of new order:', err);
-        });
     }
-
-    await supabaseAdmin.from('order_status_history').insert({
-      customer_order_id: customerOrder.id,
-      status: 'pending_at_store',
-      notes: 'Order placed',
-      created_at: new Date().toISOString()
-    });
 
     // Keep customer_payments in sync from the moment order is created.
     // Do not block checkout if this mirror write fails (schema may be mid-migration).
     try {
       await this.upsertCustomerPaymentSnapshot({
-        customer_order_id: customerOrder.id,
+        customer_order_id: orderId,
         status: 'pending'
       });
     } catch (e) {
@@ -1368,7 +1354,7 @@ export class DatabaseService {
     }
 
     return {
-      id: customerOrder.id,
+      id: orderId,
       user_id: orderData.user_id,
       customer_name: orderData.customer_name,
       customer_email: orderData.customer_email,
@@ -1389,10 +1375,7 @@ export class DatabaseService {
       receiver_phone: orderData.receiver_phone,
       receiver_address: orderData.receiver_address,
       tip_amount: trustedTipAmount,
-      created_at:
-        (customerOrder as { placed_at?: string; created_at?: string }).placed_at ||
-        (customerOrder as { created_at?: string }).created_at ||
-        new Date().toISOString(),
+      created_at: placedAt || new Date().toISOString(),
       order_number: orderCode
     };
   }

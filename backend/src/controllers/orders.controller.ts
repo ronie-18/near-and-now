@@ -154,16 +154,6 @@ export class OrdersController {
         return { ...item, unit_price: trustedPrice, quantity };
       });
 
-      const customerOrder = await databaseService.createCustomerOrder({
-        customer_id,
-        delivery_address,
-        delivery_latitude,
-        delivery_longitude,
-        payment_method,
-        notes,
-        coupon_id
-      });
-
       const storeOrdersMap = new Map();
 
       for (const item of trustedCartItems) {
@@ -177,71 +167,15 @@ export class OrdersController {
       // (the real production checkout path). Revisit when the promo ends.
       const PER_STORE_DELIVERY_FEE = 0;
 
-      // Each store's writes are independent, so they run concurrently instead
-      // of one-store-at-a-time — checkout latency no longer scales with the
-      // number of distinct stores in the cart. sequence_number is assigned
-      // from each entry's fixed position in storeOrdersMap (Map preserves
-      // insertion order) before the async work starts, so pickup ordering
-      // stays deterministic even though the DB writes themselves interleave.
-      const storeEntries = Array.from(storeOrdersMap.entries());
-      const perStoreResults = await Promise.all(storeEntries.map(async ([storeId, items], index) => {
-        const subtotal = items.reduce((sum: number, item: any) =>
-          sum + (item.unit_price * item.quantity), 0
-        );
-
-        const storeOrder = await databaseService.createStoreOrder({
-          customer_order_id: customerOrder.id,
-          store_id: storeId,
-          subtotal_amount: subtotal,
-          delivery_fee: PER_STORE_DELIVERY_FEE
-        });
-
-        // Include customer_order_id and assigned_store_id so getPickupSequence
-        // can join items to their store allocation.
-        const orderItems = await databaseService.createOrderItems(
-          items.map((item: any) => ({
-            store_order_id: storeOrder.id,
-            customer_order_id: customerOrder.id,
-            product_id: item.product_id,
-            product_name: item.product_name,
-            unit: item.unit,
-            image_url: item.image_url,
-            unit_price: item.unit_price,
-            quantity: item.quantity,
-            assigned_store_id: storeId,
-            item_status: 'pending',
-          }))
-        );
-
-        // Create the allocation so the shopkeeper sees it and can accept it,
-        // which in turn triggers broadcastToNearbyDrivers → rider gets the offer.
-        // pickup_code is set when shopkeeper accepts, not at creation time.
-        const { error: allocErr } = await supabaseAdmin
-          .from('order_store_allocations')
-          .insert({
-            order_id: customerOrder.id,
-            store_id: storeId,
-            sequence_number: index + 1,
-            status: 'pending_acceptance',
-          });
-        if (allocErr) {
-          // Allocation failure means the shopkeeper will never see this order.
-          // Propagate the error so the caller knows the order is incomplete.
-          throw new Error(`[createOrder] allocation insert failed: ${allocErr.message}`);
-        }
-
-        // Notify the shopkeeper that a new order is waiting for acceptance.
-        notificationService.notifyShopkeeperNewOrder(storeId, customerOrder.id, customerOrder.order_code ?? customerOrder.id).catch((err) => {
-          console.error('[createOrder] shopkeeper push notification failed (non-fatal)', err);
-        });
-
-        return { subtotal, storeOrder: { ...storeOrder, items: orderItems } };
-      }));
-
-      const storeOrders = perStoreResults.map((r) => r.storeOrder);
-      const totalSubtotal = perStoreResults.reduce((sum, r) => sum + r.subtotal, 0);
-
-      // Back-fill the computed totals that createCustomerOrder wrote as zeros.
+      // Totals computed directly from trustedCartItems up front — previously
+      // this endpoint created customer_orders with zeros, wrote every store's
+      // orders, THEN back-filled the real totals via a separate UPDATE. Now
+      // totals (and the coupon discount, which needs them) are known before
+      // any write happens, so the whole order — customer_orders with its
+      // real totals, every store's rows, and the status-history entry — can
+      // be written in a single atomic call below instead of a create-then-
+      // update-then-per-store-insert sequence.
+      const totalSubtotal = trustedCartItems.reduce((sum: number, item: any) => sum + item.unit_price * item.quantity, 0);
       const totalDeliveryFee = storeOrdersMap.size * PER_STORE_DELIVERY_FEE;
 
       // Coupon: validate + compute the actual discount server-side, mirroring
@@ -268,31 +202,102 @@ export class OrdersController {
       }
 
       const totalAmount = totalSubtotal + totalDeliveryFee - discountAmount;
-      const { error: totalsErr } = await supabaseAdmin
-        .from('customer_orders')
-        .update({
+      const orderCode = await databaseService.generateNextOrderNumber();
+
+      const storeChunks = Array.from(storeOrdersMap.entries()).map(([storeId, items]: [string, any[]]) => ({
+        store_id: storeId,
+        subtotal: items.reduce((sum: number, item: any) => sum + item.unit_price * item.quantity, 0),
+        delivery_fee: PER_STORE_DELIVERY_FEE,
+        items: items.map((item: any) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          unit: item.unit,
+          image_url: item.image_url,
+          unit_price: item.unit_price,
+          quantity: item.quantity,
+        })),
+      }));
+
+      // Every write below — customer_orders, every store's store_orders/
+      // order_items/order_store_allocations, and order_status_history — now
+      // happens inside one Postgres function call (place_multi_store_order,
+      // migration 20260930400000), the same atomic write path placeCheckoutOrder
+      // uses. A Postgres function body is implicitly one transaction: if any
+      // store's write fails partway through, everything the function did
+      // rolls back automatically — including customer_orders and any earlier
+      // store(s) that had already succeeded. Previously this ran each store's
+      // writes concurrently via Promise.all with no transaction wrapping any
+      // of it, so a mid-request failure on one store could leave others
+      // fully committed and visible to those shopkeepers while the customer
+      // saw a failure. See bug_fixes_2026-07-23.md for the full writeup.
+      const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc('place_multi_store_order', {
+        p_customer_order: {
+          customer_id,
+          order_code: orderCode,
+          status: 'pending_at_store',
+          payment_status: 'pending',
+          payment_method,
           subtotal_amount: totalSubtotal,
           delivery_fee: totalDeliveryFee,
           discount_amount: discountAmount,
           total_amount: totalAmount,
-        })
-        .eq('id', customerOrder.id);
-      if (totalsErr) {
-        // customerOrder was created with these as zeros (see comment above) —
-        // a silent failure here would leave a real order persisted with
-        // total_amount: 0, undercharging the customer for the whole order.
-        throw new Error(`[createOrder] totals back-fill failed: ${totalsErr.message}`);
+          delivery_address,
+          delivery_latitude,
+          delivery_longitude,
+          notes: notes || null,
+          gstin: null,
+          gstin_business_name: null,
+          receiver_name: null,
+          receiver_phone: null,
+          receiver_address: null,
+          tip_amount: 0,
+          delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
+        },
+        p_store_chunks: storeChunks,
+      });
+
+      if (rpcError || !rpcResult) {
+        throw new Error(rpcError?.message || 'Failed to create order');
+      }
+      const orderId: string = rpcResult.id;
+      const placedAt: string | undefined = rpcResult.placed_at;
+      const rpcStoreOrders: Array<{ id: string; store_id: string; subtotal_amount: string; delivery_fee: string }> = rpcResult.store_orders || [];
+
+      for (const chunk of storeChunks) {
+        // Notify the shopkeeper that a new order is waiting for acceptance.
+        notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode).catch((err) => {
+          console.error('[createOrder] shopkeeper push notification failed (non-fatal)', err);
+        });
       }
 
       if (validatedCouponId && customer_id) {
-        databaseService.recordCouponUsage(validatedCouponId, customer_id, customerOrder.id).catch((err) => {
-          console.error('[COUPON] recordCouponUsage failed (non-fatal)', { coupon_id, orderId: customerOrder.id, err });
+        databaseService.recordCouponUsage(validatedCouponId, customer_id, orderId).catch((err) => {
+          console.error('[COUPON] recordCouponUsage failed (non-fatal)', { coupon_id, orderId, err });
         });
       }
 
       res.status(201).json({
-        customer_order: { ...customerOrder, subtotal_amount: totalSubtotal, delivery_fee: totalDeliveryFee, total_amount: totalAmount },
-        store_orders: storeOrders
+        customer_order: {
+          id: orderId,
+          customer_id,
+          order_code: orderCode,
+          status: 'pending_at_store',
+          payment_status: 'pending',
+          payment_method,
+          subtotal_amount: totalSubtotal,
+          delivery_fee: totalDeliveryFee,
+          discount_amount: discountAmount,
+          total_amount: totalAmount,
+          delivery_address,
+          delivery_latitude,
+          delivery_longitude,
+          notes: notes || null,
+          placed_at: placedAt,
+        },
+        store_orders: storeChunks.map((chunk) => {
+          const so = rpcStoreOrders.find((r) => r.store_id === chunk.store_id);
+          return { id: so?.id, customer_order_id: orderId, store_id: chunk.store_id, subtotal_amount: chunk.subtotal, delivery_fee: chunk.delivery_fee, items: chunk.items };
+        })
       });
     } catch (error: unknown) {
       console.error('Error creating order:', error);
