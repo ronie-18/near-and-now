@@ -1,0 +1,12 @@
+-- get_admin_dashboard_order_stats() (20260930380000) was granted EXECUTE to
+-- service_role only, copying the pattern used for backend-only functions
+-- called with a real service-role key. But admin/src/services/adminService.ts
+-- calls it via getAdminClient(), which authenticates with the anon key plus
+-- an x-admin-token header — the DB role for this call is anon, not
+-- service_role. Every other RPC the admin panel calls the same way (e.g.
+-- get_product_counts_by_category, current_admin_role) correctly grants to
+-- anon, authenticated. Without this, the admin dashboard's initial data load
+-- (Promise.all in AdminDashboardPage.tsx) throws "permission denied" and the
+-- entire page fails to render — reproduced live: `set role anon; select *
+-- from get_admin_dashboard_order_stats();` returns 42501.
+grant execute on function public.get_admin_dashboard_order_stats() to anon, authenticated;
