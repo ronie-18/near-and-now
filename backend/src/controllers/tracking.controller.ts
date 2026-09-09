@@ -53,9 +53,16 @@ export class TrackingController {
       // response the customer is actually waiting on. Any state they change
       // is picked up on the very next poll 5s later regardless (same
       // effective staleness window the unconditional 5s polling already has).
-      expireStaleAllocations(orderId).catch((err) => console.error('expireStaleAllocations:', err));
-      reBroadcastIfStuck(orderId).catch((err) => console.error('reBroadcastIfStuck:', err));
-      cancelIfPaymentAbandoned(orderId).catch((err) => console.error('cancelIfPaymentAbandoned:', err));
+      //
+      // All three take req.customerId and verify it against the order's owner
+      // before doing anything — they used to run keyed only on orderId from the
+      // URL, which meant any authenticated customer who obtained another
+      // customer's orderId could force-cancel/reallocate/rebroadcast that
+      // order (fixed 2026-09-09, see bug_fixes_2026-07-23.md).
+      const customerId = req.customerId!;
+      expireStaleAllocations(orderId, customerId).catch((err) => console.error('expireStaleAllocations:', err));
+      reBroadcastIfStuck(orderId, customerId).catch((err) => console.error('reBroadcastIfStuck:', err));
+      cancelIfPaymentAbandoned(orderId, customerId).catch((err) => console.error('cancelIfPaymentAbandoned:', err));
       const data = await databaseService.getOrderTrackingFull(orderId, req.customerId!);
 
       if (!data) {

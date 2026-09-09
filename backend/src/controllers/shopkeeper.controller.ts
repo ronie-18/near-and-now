@@ -447,13 +447,25 @@ export class ShopkeeperController {
 }
 
 const STALE_ALLOCATION_MS = 5 * 60 * 1000; // 5 minutes
+const lastExpireCheck = new Map<string, number>();
+const WATCHDOG_THROTTLE_MS = 10 * 1000; // matches the customer app's ~5s tracking poll with headroom
 
 // Called opportunistically from the order-tracking endpoint (which the customer app
 // polls while an order is active). Any store allocation that's been sitting in
 // pending_acceptance for too long is treated as an automatic reject — unassigned and
 // re-offered to the next nearest store via the same reallocateMissingItems() path,
 // so a store that never responds can't stall the order indefinitely.
-export async function expireStaleAllocations(orderId: string) {
+//
+// `customerId` is required and checked against the order's owner before anything
+// else runs — this function (along with cancelIfPaymentAbandoned/reBroadcastIfStuck)
+// is fired from the tracking endpoint keyed only on orderId from the URL, so without
+// this check any authenticated customer who obtained another customer's orderId
+// could trigger reallocation/cancellation/rebroadcast on an order they don't own.
+export async function expireStaleAllocations(orderId: string, customerId: string) {
+  const last = lastExpireCheck.get(orderId);
+  if (last && Date.now() - last < WATCHDOG_THROTTLE_MS) return;
+  lastExpireCheck.set(orderId, Date.now());
+
   // Online-payment orders are hidden from the shopkeeper's incoming list
   // until payment_status is 'paid' (getIncomingOrders/acceptAllocation) — a
   // store literally cannot have "not responded" to an order it was never
@@ -464,9 +476,10 @@ export async function expireStaleAllocations(orderId: string) {
   // misleading rejection history for stores that were never actually asked.
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
-    .select('payment_status, payment_method')
+    .select('customer_id, payment_status, payment_method')
     .eq('id', orderId)
     .maybeSingle();
+  if (!order || (order as any).customer_id !== customerId) return;
   if (order && (order as any).payment_method !== 'cod' && (order as any).payment_status !== 'paid') {
     return;
   }
@@ -804,6 +817,7 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
 }
 
 const UNPAID_ORDER_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const lastCancelCheck = new Map<string, number>();
 
 // Called opportunistically from the order-tracking endpoint, same pattern as
 // expireStaleAllocations/reBroadcastIfStuck. placeCheckoutOrder creates the
@@ -817,14 +831,23 @@ const UNPAID_ORDER_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // unpaid for too long, reusing cancelOrder() (which already correctly
 // no-ops if a driver is already assigned or it's reached a terminal state)
 // rather than duplicating its cancellation logic here.
-export async function cancelIfPaymentAbandoned(orderId: string) {
+//
+// `customerId` is required and checked against the order's owner — see
+// expireStaleAllocations' comment above for why (this function can otherwise
+// be used to force-cancel someone else's order by orderId alone).
+export async function cancelIfPaymentAbandoned(orderId: string, customerId: string) {
+  const last = lastCancelCheck.get(orderId);
+  if (last && Date.now() - last < WATCHDOG_THROTTLE_MS) return;
+  lastCancelCheck.set(orderId, Date.now());
+
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
-    .select('status, payment_status, payment_method, placed_at, created_at')
+    .select('customer_id, status, payment_status, payment_method, placed_at, created_at')
     .eq('id', orderId)
     .maybeSingle();
   if (!order) return;
   const o = order as any;
+  if (o.customer_id !== customerId) return;
   // COD has no payment-gateway step to abandon — payment_status is expected
   // to stay 'pending' until delivery, that's not a stuck order.
   if (o.payment_method === 'cod') return;
@@ -861,13 +884,18 @@ const lastReBroadcast = new Map<string, number>();
 // online *now* closes that gap; it's safe to call repeatedly (the
 // driver_order_offers upsert already no-ops for drivers already offered), so
 // only the push-notification burst needs throttling here.
-export async function reBroadcastIfStuck(orderId: string) {
+//
+// `customerId` is required and checked against the order's owner — see
+// expireStaleAllocations' comment above for why (this function can otherwise
+// be used to force a driver rebroadcast on someone else's order by orderId alone).
+export async function reBroadcastIfStuck(orderId: string, customerId: string) {
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
-    .select('status, assigned_driver_id')
+    .select('customer_id, status, assigned_driver_id')
     .eq('id', orderId)
     .maybeSingle();
-  if (!order || (order as any).status !== 'ready_for_pickup' || (order as any).assigned_driver_id) return;
+  if (!order || (order as any).customer_id !== customerId) return;
+  if ((order as any).status !== 'ready_for_pickup' || (order as any).assigned_driver_id) return;
 
   const last = lastReBroadcast.get(orderId);
   if (last && Date.now() - last < STUCK_READY_ORDER_MS) return;
