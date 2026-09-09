@@ -19,8 +19,6 @@ export interface CartItem {
   size?: string;
   weight?: string;
   isLoose?: boolean;
-  storeLatitude?: number;
-  storeLongitude?: number;
 }
 
 export const getDistanceBasedDeliveryFee = (distanceKm?: number, cartSubtotal = 0): number => {

@@ -139,11 +139,28 @@ export function useOrderTrackingRealtime(
     if (!orderId || !order) return;
 
     // Tracks whether the realtime channel is currently confirmed connected.
-    // The 3s interval below still ticks on a fixed schedule, but skips doing
-    // any work while realtime is healthy — it's a fallback for when realtime
-    // isn't (e.g. simulation updates that don't trigger it, a dropped
-    // connection), not a permanent second source of the same data.
+    // The 3s poll below is only actually running (a live setInterval) while
+    // realtime isn't healthy — it's a fallback for when realtime isn't (e.g.
+    // simulation updates that don't trigger it, a dropped connection), not a
+    // permanent second source of the same data. Previously the interval
+    // always ticked on a fixed schedule and only skipped the fetch inside —
+    // functionally fine, but a needless timer running the whole time a
+    // tracking page is open even once realtime is confirmed healthy. Found +
+    // fixed 2026-09-09.
     let realtimeHealthy = false;
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    const startPolling = () => {
+      if (pollInterval) return;
+      pollInterval = setInterval(() => {
+        if (!realtimeHealthy) refreshOrderAndHistory();
+      }, 3000);
+    };
+    const stopPolling = () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+    };
 
     const channel = supabaseNoSession
       .channel(`order-tracking-${orderId}`)
@@ -180,19 +197,19 @@ export function useOrderTrackingRealtime(
       .subscribe((status) => {
         realtimeHealthy = status === 'SUBSCRIBED';
         setIsRealtimeConnected(realtimeHealthy);
-        if (status === 'SUBSCRIBED') {
-          console.log('📡 Realtime tracking subscribed for order', orderId);
+        if (realtimeHealthy) {
+          stopPolling();
+        } else {
+          startPolling();
         }
       });
 
-    // Poll every 3 sec as fallback (simulation updates may not trigger realtime),
-    // but only actually fetch when realtime isn't confirmed healthy.
-    const pollInterval = setInterval(() => {
-      if (!realtimeHealthy) refreshOrderAndHistory();
-    }, 3000);
+    // Realtime's subscribe() callback hasn't resolved yet at this point, so
+    // start the fallback poll immediately rather than waiting.
+    startPolling();
 
     return () => {
-      clearInterval(pollInterval);
+      stopPolling();
       supabaseNoSession.removeChannel(channel);
       setIsRealtimeConnected(false);
     };
@@ -224,6 +241,7 @@ export function useOrderTrackingRealtime(
 
     const driverSeqRef = { current: 0 };
     let realtimeHealthy = false;
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
 
     const pollDriverLocations = async () => {
       if (realtimeHealthy) return;
@@ -232,6 +250,21 @@ export function useOrderTrackingRealtime(
       if (mySeq !== driverSeqRef.current) return; // a newer poll already won
       if (Object.keys(locations).length > 0) {
         setDriverLocations((prev) => ({ ...prev, ...locations }));
+      }
+    };
+
+    // Interval only actually runs while realtime isn't healthy for this
+    // channel — same fix as the order-status poll above (previously always
+    // ticked every 2s and just skipped the fetch inside). Found + fixed
+    // 2026-09-09.
+    const startPolling = () => {
+      if (pollInterval) return;
+      pollInterval = setInterval(pollDriverLocations, 2000);
+    };
+    const stopPolling = () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
       }
     };
 
@@ -271,12 +304,19 @@ export function useOrderTrackingRealtime(
         )
         .subscribe((status) => {
           realtimeHealthy = status === 'SUBSCRIBED';
+          if (realtimeHealthy) {
+            stopPolling();
+          } else {
+            startPolling();
+          }
         });
     }
 
-    const pollInterval = setInterval(pollDriverLocations, 2000);
+    // No driver ids yet (no channel created above) — realtimeHealthy can
+    // never become true, so this just keeps polling, same as before.
+    startPolling();
     return () => {
-      clearInterval(pollInterval);
+      stopPolling();
       if (channel) supabaseNoSession.removeChannel(channel);
     };
   }, [orderId, driverIdsKey]);

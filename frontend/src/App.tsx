@@ -53,10 +53,6 @@ import ShopkeeperApp from './pages/ShopkeeperApp';
 const AppContent: React.FC = () => {
   const { notifications, removeNotification } = useNotification();
 
-  React.useEffect(() => {
-    console.log('📦 App content loaded successfully');
-  }, []);
-
   return (
     <Routes>
       {/* Standalone Apps - No Layout wrapper */}
@@ -108,14 +104,6 @@ const AppContent: React.FC = () => {
 };
 
 function App() {
-  console.log('✅ [APP.TSX] App component rendering');
-
-  React.useEffect(() => {
-    console.log('✅ [APP.TSX] App mounted successfully');
-    console.log('📍 URL:', window.location.href);
-    console.log('🌍 Mode:', import.meta.env.MODE);
-  }, []);
-
   return (
     <ErrorBoundary>
       <Router basename="/">
