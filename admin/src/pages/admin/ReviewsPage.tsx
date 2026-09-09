@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getAdminToken } from '../../services/adminSession';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { Star, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, BadgeCheck } from 'lucide-react';
+import { Star, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, BadgeCheck, ChevronDown } from 'lucide-react';
+import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { hasPermission } from '../../services/adminAuthService';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -54,29 +56,61 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'all', label: 'All' },
 ];
 
+const PAGE_SIZE = 50;
+
 const ReviewsPage = () => {
+  const currentAdmin = getCurrentAdmin();
+  const canEditReviews = Boolean(currentAdmin && hasPermission(currentAdmin, 'reviews.edit'));
+
   const [tab, setTab] = useState<Tab>('pending');
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actingId, setActingId] = useState<string | null>(null);
 
+  // Backend caps this endpoint at 50 rows/page (reviews.controller.ts's
+  // adminListReviews, limit clamped to 100) and returns a `total` count that
+  // this page never read — any store with more than 50 pending/approved
+  // reviews had older ones permanently invisible with no indication more
+  // existed. Found 2026-09-09. Now paginated via offset/limit + a "Load More"
+  // control, matching NotificationsPage's existing pattern for the same bug class.
   const load = useCallback(async (status: Tab) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/reviews?status=${status}`, {
+      const res = await fetch(`${API_BASE}/api/admin/reviews?status=${status}&limit=${PAGE_SIZE}&offset=0`, {
         headers: adminAuthHeaders(),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load reviews');
       setReviews(json.reviews);
+      setTotal(json.total ?? json.reviews.length);
     } catch (err: any) {
       setError(err.message || 'Failed to load reviews');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/reviews?status=${tab}&limit=${PAGE_SIZE}&offset=${reviews.length}`, {
+        headers: adminAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load more reviews');
+      setReviews((prev) => [...prev, ...json.reviews]);
+      setTotal(json.total ?? reviews.length + json.reviews.length);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load more reviews');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => { load(tab); }, [load, tab]);
 
@@ -93,6 +127,7 @@ const ReviewsPage = () => {
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to approve review');
       if (tab === 'pending') {
         setReviews((prev) => prev.filter((r) => r.id !== id));
+        setTotal((prev) => Math.max(0, prev - 1));
       } else {
         setReviews((prev) => prev.map((r) => (r.id === id ? { ...r, isApproved: true } : r)));
       }
@@ -115,6 +150,7 @@ const ReviewsPage = () => {
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to delete review');
       setReviews((prev) => prev.filter((r) => r.id !== id));
+      setTotal((prev) => Math.max(0, prev - 1));
     } catch (err: any) {
       setError(err.message || 'Failed to delete review');
     } finally {
@@ -213,28 +249,53 @@ const ReviewsPage = () => {
                 {r.reviewText && <p className="text-sm text-gray-600 mt-1 max-w-2xl">{r.reviewText}</p>}
                 <p className="text-xs text-gray-400 mt-2">Submitted {new Date(r.createdAt).toLocaleString('en-IN')}</p>
 
-                <div className="flex gap-2 mt-4">
-                  {!r.isApproved && (
+                {/* Approve/Delete previously rendered for any authenticated admin,
+                    including manager/viewer roles that only hold reviews.view — the
+                    backend correctly gates the actual mutation on reviews.edit, so
+                    clicking either produced a raw 403 instead of the button simply
+                    not appearing (every other mutating admin page already does this
+                    gating, e.g. RiderPayoutsPage's canMarkPaid). Found 2026-09-09. */}
+                {canEditReviews && (
+                  <div className="flex gap-2 mt-4">
+                    {!r.isApproved && (
+                      <button
+                        disabled={actingId === r.id}
+                        onClick={() => approve(r.id)}
+                        className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:bg-emerald-700"
+                      >
+                        <CheckCircle size={16} className="mr-1.5" />
+                        Approve
+                      </button>
+                    )}
                     <button
                       disabled={actingId === r.id}
-                      onClick={() => approve(r.id)}
-                      className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:bg-emerald-700"
+                      onClick={() => remove(r.id)}
+                      className="inline-flex items-center px-4 py-2 bg-white border-2 border-red-200 text-red-600 rounded-xl font-semibold disabled:opacity-50 hover:bg-red-50"
                     >
-                      <CheckCircle size={16} className="mr-1.5" />
-                      Approve
+                      <Trash2 size={16} className="mr-1.5" />
+                      Delete
                     </button>
-                  )}
-                  <button
-                    disabled={actingId === r.id}
-                    onClick={() => remove(r.id)}
-                    className="inline-flex items-center px-4 py-2 bg-white border-2 border-red-200 text-red-600 rounded-xl font-semibold disabled:opacity-50 hover:bg-red-50"
-                  >
-                    <Trash2 size={16} className="mr-1.5" />
-                    Delete
-                  </button>
-                </div>
+                  </div>
+                )}
               </div>
             ))}
+
+            {reviews.length < total && (
+              <div className="flex justify-center pt-2">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="inline-flex items-center px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
+                >
+                  {loadingMore ? (
+                    <Loader2 size={16} className="mr-2 animate-spin" />
+                  ) : (
+                    <ChevronDown size={16} className="mr-2" />
+                  )}
+                  {loadingMore ? 'Loading…' : `Load More (${total - reviews.length} remaining)`}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAdminToken } from '../../services/adminSession';
 import {
   Bell, Check, Search, RefreshCw, ShoppingBag, Users, Package,
@@ -273,6 +273,12 @@ const NotificationsPage = () => {
   // missing. Fetched separately via an exact `count` query (head: true, no
   // rows returned) so it's never bounded by the list's own page size.
   const [unreadTotal, setUnreadTotal] = useState(0);
+  // Mirrors `notifications.length` without being a dependency of fetchNotifications
+  // itself — see fetchNotifications' silent-poll branch below for why.
+  const notificationsCountRef = useRef(0);
+  useEffect(() => {
+    notificationsCountRef.current = notifications.length;
+  }, [notifications]);
 
   const fetchUnreadTotal = useCallback(async () => {
     if (!currentAdmin?.id) return;
@@ -291,15 +297,23 @@ const NotificationsPage = () => {
     if (!silent) setLoading(true);
     try {
       const db = getAdminClient();
+      // The silent 15s poll used to always refetch just the first PAGE_SIZE
+      // rows and replace the array outright — if an admin had clicked "Load
+      // More" to see past PAGE_SIZE, the very next poll silently discarded
+      // that progress and snapped the list back to the first page with no
+      // warning. Found 2026-09-09. Re-fetch as many rows as are currently
+      // loaded (at least PAGE_SIZE) on a silent poll instead, so "Load More"
+      // progress survives a background refresh.
+      const rowCount = silent ? Math.max(notificationsCountRef.current, PAGE_SIZE) : PAGE_SIZE;
       const { data, error } = await db
         .from('admin_notifications')
         .select('id, type, title, message, data, read_by, created_at')
         .order('created_at', { ascending: false })
-        .range(0, PAGE_SIZE - 1);
+        .range(0, rowCount - 1);
 
       if (!error && data) {
         setNotifications(data);
-        setHasMore(data.length === PAGE_SIZE);
+        setHasMore(data.length === rowCount);
       }
     } catch (err) {
       console.error('Failed to fetch notifications:', err);

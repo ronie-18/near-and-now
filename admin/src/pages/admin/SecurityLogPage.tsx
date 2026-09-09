@@ -61,29 +61,42 @@ const SEVERITY_STYLE: Record<SecurityEventRow['severity'], string> = {
  * and failed-login attempts, more sensitive than the review-workflow data
  * ActivityLogPage shows, so it's scoped to admin/super_admin only.
  */
+const DEFAULT_LIMIT = 100;
+const LOAD_MORE_STEP = 100;
+
 const SecurityLogPage = () => {
   const [tab, setTab] = useState<Tab>('actions');
   const [actions, setActions] = useState<AuditLogRow[]>([]);
   const [events, setEvents] = useState<SecurityEventRow[]>([]);
   const [failedLogins, setFailedLogins] = useState<FailedLoginRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Each tab's own requested row count. All three tables' endpoints already cap
+  // at 100 rows server-side (adminSecurityLog.controller.ts, max 500) with no
+  // frontend pagination or "there's more" indicator — a fixed silent cap, same
+  // bug class already found/fixed for ReviewsPage/NotificationsPage. Found
+  // 2026-09-09. "Load More" here re-requests with a higher `limit` (these
+  // endpoints don't support offset-based pagination, only a row cap) rather
+  // than fetching an incremental page — simpler and adequate at this page's
+  // actual scale (an admin-only, low-traffic log).
+  const [limits, setLimits] = useState({ actions: DEFAULT_LIMIT, events: DEFAULT_LIMIT, failed_logins: DEFAULT_LIMIT });
 
   const currentAdmin = getCurrentAdmin();
   const canView = Boolean(currentAdmin && hasPermission(currentAdmin, 'security_log.view'));
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (currentLimits: typeof limits, silent = false) => {
     if (!canView) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const [actionsRes, eventsRes, loginsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/admin/audit-logs`, { headers: adminAuthHeaders() }),
-        fetch(`${API_BASE}/api/admin/security-events`, { headers: adminAuthHeaders() }),
-        fetch(`${API_BASE}/api/admin/failed-logins`, { headers: adminAuthHeaders() }),
+        fetch(`${API_BASE}/api/admin/audit-logs?limit=${currentLimits.actions}`, { headers: adminAuthHeaders() }),
+        fetch(`${API_BASE}/api/admin/security-events?limit=${currentLimits.events}`, { headers: adminAuthHeaders() }),
+        fetch(`${API_BASE}/api/admin/failed-logins?limit=${currentLimits.failed_logins}`, { headers: adminAuthHeaders() }),
       ]);
       const [actionsJson, eventsJson, loginsJson] = await Promise.all([
         actionsRes.json(),
@@ -100,10 +113,23 @@ const SecurityLogPage = () => {
       setError(err.message || 'Failed to load security log');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, [canView]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(limits); }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refresh = () => load(limits);
+
+  const loadMoreForTab = () => {
+    const nextLimits = { ...limits, [tab]: limits[tab] + LOAD_MORE_STEP };
+    setLimits(nextLimits);
+    setLoadingMore(true);
+    load(nextLimits, true);
+  };
+
+  const rowsForTab = tab === 'actions' ? actions : tab === 'events' ? events : failedLogins;
+  const hasMoreForTab = rowsForTab.length > 0 && rowsForTab.length === limits[tab];
 
   if (!canView) {
     return (
@@ -128,7 +154,7 @@ const SecurityLogPage = () => {
             <p className="text-gray-500 mt-1">Admin session activity, security events, and failed login attempts</p>
           </div>
           <button
-            onClick={load}
+            onClick={refresh}
             className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
           >
             <RefreshCw size={18} className="mr-2" />
@@ -269,6 +295,19 @@ const SecurityLogPage = () => {
                   </table>
                 </div>
               )
+            )}
+
+            {hasMoreForTab && (
+              <div className="flex justify-center pt-2">
+                <button
+                  onClick={loadMoreForTab}
+                  disabled={loadingMore}
+                  className="inline-flex items-center px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
+                >
+                  {loadingMore ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
+                  {loadingMore ? 'Loading…' : 'Load More'}
+                </button>
+              </div>
             )}
           </>
         )}
