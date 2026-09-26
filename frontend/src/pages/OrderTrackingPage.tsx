@@ -10,7 +10,8 @@ import { useOrderTrackingRealtime, type Order, type OrderStatus } from '../hooks
 import DeliveryMap from '../components/tracking/DeliveryMap';
 import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { geocodeAddress } from '../services/placesService';
-import { fetchOrderTrackingFull } from '../services/trackingApi';
+import { fetchOrderTrackingFull, lastTrackingError } from '../services/trackingApi';
+import { apiErrorFromResponse, describeError } from '../utils/apiErrors';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 import { useNotification } from '../context/NotificationContext';
 
@@ -151,6 +152,7 @@ const OrderTrackingPage = () => {
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+  const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
 
   // Resolve order_code → orderId
   useEffect(() => {
@@ -172,7 +174,13 @@ const OrderTrackingPage = () => {
       setLoading(true);
       setFetchError(false);
       const data = await fetchOrderTrackingFull(orderId);
-      if (!data) { setLoading(false); return; }
+      if (!data) {
+        // trackingApi returns null only on failure (auth, network, server) and records why.
+        setFetchError(true);
+        setFetchErrorMessage(lastTrackingError);
+        setLoading(false);
+        return;
+      }
       const { order: orderData, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
       const orderIdVal = orderData.id ?? orderId ?? '';
       const transformed: Order = {
@@ -197,8 +205,8 @@ const OrderTrackingPage = () => {
 
       setEtaMinutes(computeEtaMinutes(transformed.status, (orderData as any).eta_minutes));
     } catch (err) {
-      console.error('Error fetching order tracking:', err);
       setFetchError(true);
+      setFetchErrorMessage(describeError('OrderTrackingPage.fetchTracking', `Could not load tracking for order ${orderId}`, err));
     } finally {
       setLoading(false);
     }
@@ -319,7 +327,7 @@ const OrderTrackingPage = () => {
         <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 text-center">
           <Package className="w-14 h-14 text-red-300 mx-auto mb-4" />
           <h1 className="text-xl font-bold text-gray-800 mb-2">Couldn&apos;t Load Order</h1>
-          <p className="text-gray-500 mb-6 text-sm">Something went wrong while fetching this order. Please try again.</p>
+          <p className="text-gray-500 mb-6 text-sm break-words">{fetchErrorMessage ?? 'Something went wrong while fetching this order. Please try again.'}</p>
           <button
             onClick={() => fetchTracking()}
             className="w-full bg-primary text-white rounded-lg py-2.5 text-sm font-medium hover:bg-secondary transition-colors mb-4"
@@ -782,15 +790,16 @@ const OrderTrackingPage = () => {
                   try {
                     const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
                     const r = await authedFetch(`${apiBase}/api/orders/${orderId}/cancel`, { method: 'POST', headers: getAuthHeaders() });
-                    const d = await r.json();
-                    if (d.success) {
+                    const d = await r.json().catch(() => ({}));
+                    if (r.ok && d.success) {
                       navigate('/orders');
                     } else {
-                      showNotification(d.error || 'Failed to cancel order. Please try again.', 'error');
+                      const reason = d.error ? `${d.error}${d.where ? ` (${d.where})` : ''}${d.requestId ? ` [ref ${d.requestId}]` : ''}` : `HTTP ${r.status}`;
+                      showNotification(`Could not cancel order ${orderId} (OrderTrackingPage.cancel): ${reason}`, 'error');
                     }
                   } catch (err) {
                     console.error(err);
-                    showNotification('Failed to cancel order. Please check your connection and try again.', 'error');
+                    showNotification(describeError('OrderTrackingPage.apiBase', 'Could not cancel order', err), 'error');
                   } finally {
                     setCancelling(false);
                   }
@@ -823,11 +832,12 @@ const OrderTrackingPage = () => {
                   const res = await authedFetch(`${apiBase}/api/invoices/order/${orderId}/customer`, {
                     headers: getAuthHeaders(),
                   });
-                  if (!res.ok) throw new Error('Failed to fetch invoice');
+                  if (!res.ok) throw await apiErrorFromResponse(res, 'OrderTrackingPage.downloadInvoice');
                   const data = await res.json();
                   if (data.url) window.open(data.url, '_blank');
-                } catch {
-                  alert('Invoice download failed. Please try again.');
+                  else throw new Error('the server did not return a download link');
+                } catch (err) {
+                  showNotification(describeError('OrderTrackingPage.downloadInvoice', `Could not download the invoice for order ${orderId}`, err), 'error');
                 } finally {
                   setInvoiceLoading(false);
                 }

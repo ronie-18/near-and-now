@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
+import { describeError } from '../../utils/apiErrors';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -162,7 +163,7 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
       onClose();
     } catch (error) {
       console.error('Error verifying OTP:', error);
-      showNotification('Invalid OTP. Please try again.', 'error');
+      showNotification(describeError('AuthModal.handleOtpSubmit', 'Could not verify the OTP', error), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -192,7 +193,7 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
       await resendEmailCode();
       showNotification('Verification code resent', 'success');
     } catch (error: any) {
-      showNotification(error?.message || 'Failed to resend code', 'error');
+      showNotification(describeError('AuthModal.handleResendEmailCode', 'Could not resend code', error), 'error');
     } finally {
       setIsSubmitting(false);
     }

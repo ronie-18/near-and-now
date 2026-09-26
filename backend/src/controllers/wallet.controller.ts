@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { paymentService } from '../services/payment.service.js';
+import { sendError } from '../utils/httpError.js';
 
 const MIN_TOPUP_RUPEES = 10;
 const MAX_TOPUP_RUPEES = 50_000; // anti-abuse ceiling on a single top-up
@@ -21,9 +22,8 @@ export class WalletController {
         .maybeSingle();
       if (error) throw error;
       res.json({ success: true, balance: Number(data?.wallet_balance ?? 0) });
-    } catch (error: any) {
-      console.error('❌ getBalance error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to fetch wallet balance' });
+    } catch (error) {
+      return sendError(res, 'WalletController.getBalance', 'Could not load wallet balance', error, undefined, { success: false });
     }
   }
 
@@ -48,9 +48,8 @@ export class WalletController {
       if (error) throw error;
 
       res.json({ success: true, transactions: data ?? [] });
-    } catch (error: any) {
-      console.error('❌ getTransactions error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to fetch wallet transactions' });
+    } catch (error) {
+      return sendError(res, 'WalletController.getTransactions', 'Could not load wallet transactions', error, undefined, { success: false });
     }
   }
 
@@ -150,9 +149,8 @@ export class WalletController {
       if (rpcErr) throw rpcErr;
 
       res.json({ success: true, balance: Number(newBalance) });
-    } catch (error: any) {
-      console.error('❌ verifyTopup error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to verify top-up' });
+    } catch (error) {
+      return sendError(res, 'WalletController.verifyTopup', 'Could not verify the top-up', error, undefined, { success: false });
     }
   }
 
@@ -212,9 +210,8 @@ export class WalletController {
       }).catch(() => {/* ignore dynamic import failure */});
 
       res.json({ success: true, balance: newBalance });
-    } catch (error: any) {
-      console.error('❌ payOrderWithWallet error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to pay with wallet' });
+    } catch (error) {
+      return sendError(res, 'WalletController.payOrderWithWallet', 'Could not the pay with wallet', error, undefined, { success: false });
     }
   }
 }

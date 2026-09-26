@@ -6,12 +6,12 @@ import { Order } from '../services/supabase';
 import { fetchCustomerOrders } from '../services/orderService';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
+import { apiErrorFromResponse, describeError } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────
    Styles
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .op-root * { box-sizing: border-box; }
 
@@ -194,8 +194,35 @@ const statusConfig: Record<string, { bg: string; color: string; dot: string }> =
   Cancelled:  { bg: '#fef2f2', color: '#dc2626', dot: '#ef4444' },
 };
 
+/**
+ * The API returns the order pipeline statuses (pending_at_store …), not the legacy
+ * five. Map each to a customer-facing label and to the badge colour family above —
+ * before this every badge fell through to the grey default showing raw snake_case.
+ */
+const STATUS_LABELS: Record<string, { label: string; tone: keyof typeof statusConfig }> = {
+  placed: { label: 'Placed', tone: 'Placed' },
+  pending_at_store: { label: 'Waiting for store', tone: 'Placed' },
+  confirmed: { label: 'Confirmed', tone: 'Confirmed' },
+  store_accepted: { label: 'Accepted by store', tone: 'Confirmed' },
+  preparing_order: { label: 'Being prepared', tone: 'Processing' },
+  ready_for_pickup: { label: 'Ready for pickup', tone: 'Processing' },
+  delivery_partner_assigned: { label: 'Rider assigned', tone: 'Processing' },
+  picking_up: { label: 'Rider picking up', tone: 'Processing' },
+  order_picked_up: { label: 'Picked up', tone: 'Shipped' },
+  shipped: { label: 'Shipped', tone: 'Shipped' },
+  in_transit: { label: 'On the way', tone: 'Shipped' },
+  delivered: { label: 'Delivered', tone: 'Delivered' },
+  order_delivered: { label: 'Delivered', tone: 'Delivered' },
+  cancelled: { label: 'Cancelled', tone: 'Cancelled' },
+  order_cancelled: { label: 'Cancelled', tone: 'Cancelled' },
+};
+
+const humaniseStatus = (status: string) =>
+  status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
 const OrderStatusBadge = ({ status }: { status: string }) => {
-  const cfg = statusConfig[status] || { bg: '#f9fafb', color: '#6b7280', dot: '#9ca3af' };
+  const tone = STATUS_LABELS[status]?.tone ?? status;
+  const cfg = statusConfig[tone] || { bg: '#f9fafb', color: '#6b7280', dot: '#9ca3af' };
   return (
     <span className="op-badge" style={{ background: cfg.bg, color: cfg.color }}>
       <span className="op-badge-dot" style={{ background: cfg.dot }} />
@@ -228,7 +255,7 @@ const OrdersPage = () => {
       setOrders(userOrders);
     } catch (err: any) {
       console.error('Error fetching orders:', err);
-      setError('Failed to load orders. Please try again.');
+      setError(describeError('OrdersPage.fetchOrders', 'Could not load orders', err));
     } finally {
       setLoading(false);
     }
@@ -247,13 +274,7 @@ const OrdersPage = () => {
       hour: '2-digit', minute: '2-digit'
     });
 
-  const getStatusDisplay = (status: string) => {
-    const map: Record<string, string> = {
-      placed: 'Placed', confirmed: 'Confirmed', shipped: 'Shipped',
-      delivered: 'Delivered', cancelled: 'Cancelled'
-    };
-    return map[status] || status;
-  };
+  const getStatusDisplay = (status: string) => STATUS_LABELS[status]?.label ?? humaniseStatus(status);
 
   const handleCustomerInvoiceDownload = async (order: Order) => {
     if (!user?.id) return;
@@ -262,11 +283,12 @@ const OrdersPage = () => {
       const res = await authedFetch(apiUrl(`/api/invoices/order/${order.id}/customer`), {
         headers: getAuthHeaders(),
       });
-      if (!res.ok) throw new Error('Failed to fetch invoice');
+      if (!res.ok) throw await apiErrorFromResponse(res, 'OrdersPage.handleCustomerInvoiceDownload');
       const data = await res.json();
       if (data.url) window.open(data.url, '_blank');
-    } catch {
-      alert('Invoice download failed. Please try again.');
+      else throw new Error('the server did not return a download link');
+    } catch (err) {
+      setError(describeError('OrdersPage.handleCustomerInvoiceDownload', `Could not download the invoice for order ${order.order_number || order.id}`, err));
     } finally {
       setInvoiceLoading(null);
     }

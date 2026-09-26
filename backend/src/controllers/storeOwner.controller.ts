@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
+import { sendError } from '../utils/httpError.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -109,13 +110,12 @@ export async function getStores(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error fetching stores:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to fetch stores' });
+      return sendError(res, 'storeOwner.getStores', 'Could not load the stores', error, undefined, { success: false });
     }
 
     res.json({ success: true, stores: stores || [] });
-  } catch (error: any) {
-    console.error('❌ getStores error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch stores' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getStores', 'Could not load the stores', error, undefined, { success: false });
   }
 }
 
@@ -157,13 +157,12 @@ export async function updateStoreStatus(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error updating store status:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to update store status' });
+      return sendError(res, 'storeOwner.updateStoreStatus', 'Could not update store status', error, undefined, { success: false });
     }
 
     res.json({ success: true, store: data });
-  } catch (error: any) {
-    console.error('❌ updateStoreStatus error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update store status' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.updateStoreStatus', 'Could not update store status', error, undefined, { success: false });
   }
 }
 
@@ -212,9 +211,8 @@ export async function deleteStoreProduct(req: Request, res: Response) {
     if (error) throw error;
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('deleteStoreProduct error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to delete product' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.deleteStoreProduct', 'Could not delete product', error, undefined, { success: false });
   }
 }
 
@@ -264,7 +262,7 @@ export async function updateProductQuantity(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error updating product quantity:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to update product quantity' });
+      return sendError(res, 'storeOwner.updateProductQuantity', 'Could not update product quantity', error, undefined, { success: false });
     }
 
     if (!data || data.length === 0) {
@@ -272,9 +270,8 @@ export async function updateProductQuantity(req: Request, res: Response) {
     }
 
     res.json({ success: true, product: data[0] });
-  } catch (error: any) {
-    console.error('❌ updateProductQuantity error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update product quantity' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.updateProductQuantity', 'Could not update product quantity', error, undefined, { success: false });
   }
 }
 
@@ -327,7 +324,7 @@ export async function updateProductActiveState(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error updating product active state:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to update product' });
+      return sendError(res, 'storeOwner.updateProductActiveState', 'Could not update product', error, undefined, { success: false });
     }
 
     if (!data || data.length === 0) {
@@ -335,9 +332,8 @@ export async function updateProductActiveState(req: Request, res: Response) {
     }
 
     res.json({ success: true, product: data[0] });
-  } catch (error: any) {
-    console.error('❌ updateProductActiveState error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update product' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.updateProductActiveState', 'Could not update product', error, undefined, { success: false });
   }
 }
 
@@ -400,10 +396,7 @@ export async function signupComplete(req: Request, res: Response) {
 
     if (userError || !newUser) {
       console.error('❌ Store owner signup: app_users insert failed', userError);
-      return res.status(500).json({
-        success: false,
-        error: describeSignupDbError('account', userError)
-      });
+      return sendError(res, 'storeOwner.signupComplete', describeSignupDbError('account', userError), userError, undefined, { success: false });
     }
 
     const { error: storeError } = await supabaseAdmin
@@ -421,10 +414,7 @@ export async function signupComplete(req: Request, res: Response) {
     if (storeError) {
       console.error('❌ Store owner signup: stores insert failed', storeError);
       await supabaseAdmin.from('app_users').delete().eq('id', newUser.id);
-      return res.status(500).json({
-        success: false,
-        error: describeSignupDbError('store', storeError)
-      });
+      return sendError(res, 'storeOwner.signupComplete', describeSignupDbError('store', storeError), storeError, undefined, { success: false });
     }
 
     const token = crypto.randomUUID();
@@ -446,10 +436,7 @@ export async function signupComplete(req: Request, res: Response) {
     });
   } catch (error: any) {
     console.error('❌ Store owner signup error:', error);
-    res.status(500).json({
-      success: false,
-      error: error?.message || 'Registration failed'
-    });
+    return sendError(res, 'storeOwner.signupComplete', 'Could not complete the shopkeeper registration', error, undefined, { success: false });
   }
 }
 
@@ -501,7 +488,7 @@ export async function updateStore(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ updateStore error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.updateStore', 'Could not update the store', error, undefined, { success: false });
     }
 
     if (patch.owner_image_url) {
@@ -514,9 +501,8 @@ export async function updateStore(req: Request, res: Response) {
     }
 
     res.json({ success: true, store: data });
-  } catch (error: any) {
-    console.error('❌ updateStore error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update store' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.updateStore', 'Could not update store', error, undefined, { success: false });
   }
 }
 
@@ -651,13 +637,12 @@ export async function getProfileChangeRequest(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ getProfileChangeRequest error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.getProfileChangeRequest', 'Could not load the profile change request', error, undefined, { success: false });
     }
 
     res.json({ success: true, request: data ?? null });
-  } catch (error: any) {
-    console.error('❌ getProfileChangeRequest error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch change request' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getProfileChangeRequest', 'Could not load the change request', error, undefined, { success: false });
   }
 }
 
@@ -709,9 +694,8 @@ export async function requestProfileChange(req: Request, res: Response) {
     );
 
     res.json({ success: true, request: result.saved });
-  } catch (error: any) {
-    console.error('❌ requestProfileChange error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to submit change request' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.requestProfileChange', 'Could not submit the change request', error, undefined, { success: false });
   }
 }
 
@@ -772,13 +756,12 @@ export async function getStoreImages(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ getStoreImages error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.getStoreImages', 'Could not load the store images', error, undefined, { success: false });
     }
 
     res.json({ success: true, images: data ?? [] });
-  } catch (error: any) {
-    console.error('❌ getStoreImages error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch store images' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getStoreImages', 'Could not load store images', error, undefined, { success: false });
   }
 }
 
@@ -824,7 +807,7 @@ export async function addStoreImage(req: Request, res: Response) {
 
     if (insertErr) {
       console.error('❌ addStoreImage error:', insertErr);
-      return res.status(500).json({ success: false, error: insertErr.message });
+      return sendError(res, 'storeOwner.addStoreImage', 'Could not add the store image', insertErr, undefined, { success: false });
     }
 
     await syncStoreCoverImage(storeId);
@@ -838,9 +821,8 @@ export async function addStoreImage(req: Request, res: Response) {
     );
 
     res.json({ success: true, image: inserted });
-  } catch (error: any) {
-    console.error('❌ addStoreImage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to add store image' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.addStoreImage', 'Could not add store image', error, undefined, { success: false });
   }
 }
 
@@ -873,7 +855,7 @@ export async function deleteStoreImage(req: Request, res: Response) {
 
     if (deleteErr) {
       console.error('❌ deleteStoreImage error:', deleteErr);
-      return res.status(500).json({ success: false, error: deleteErr.message });
+      return sendError(res, 'storeOwner.deleteStoreImage', 'Could not delete the store image', deleteErr, undefined, { success: false });
     }
 
     // Best-effort — an orphaned Storage object is a much smaller problem than
@@ -897,9 +879,8 @@ export async function deleteStoreImage(req: Request, res: Response) {
     );
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ deleteStoreImage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to delete store image' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.deleteStoreImage', 'Could not delete store image', error, undefined, { success: false });
   }
 }
 
@@ -1045,7 +1026,7 @@ export async function getVerificationDocuments(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ getVerificationDocuments error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.getVerificationDocuments', 'Could not load the verification documents', error, undefined, { success: false });
     }
 
     const byType = new Map((rows ?? []).map((r) => [r.doc_type, r]));
@@ -1075,9 +1056,8 @@ export async function getVerificationDocuments(req: Request, res: Response) {
     );
 
     res.json({ success: true, documents });
-  } catch (error: any) {
-    console.error('❌ getVerificationDocuments error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch verification documents' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getVerificationDocuments', 'Could not load the verification documents', error, undefined, { success: false });
   }
 }
 
@@ -1140,7 +1120,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
         .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
       if (uploadError) {
         console.error('❌ saveVerificationDocument upload error:', uploadError);
-        return res.status(500).json({ success: false, error: uploadError.message });
+        return sendError(res, 'storeOwner.saveVerificationDocument', 'Could not save the verification document', uploadError, undefined, { success: false });
       }
 
       // upsert only overwrites an existing object at the exact same path —
@@ -1184,7 +1164,7 @@ export async function saveVerificationDocument(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ saveVerificationDocument upsert error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.saveVerificationDocument', 'Could not save the verification document', error, undefined, { success: false });
     }
 
     const { suspended: storeSuspended, name: storeName } = await suspendStoreIfApprovedAndGetName(storeId, docType);
@@ -1210,9 +1190,8 @@ export async function saveVerificationDocument(req: Request, res: Response) {
     }
 
     res.json({ success: true, document: data, storeSuspended });
-  } catch (error: any) {
-    console.error('❌ saveVerificationDocument error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to save document' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.saveVerificationDocument', 'Could not save the document', error, undefined, { success: false });
   }
 }
 
@@ -1263,7 +1242,7 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ deleteVerificationDocument error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.deleteVerificationDocument', 'Could not delete the verification document', error, undefined, { success: false });
     }
 
     // Removing an onboarding-required document (Aadhaar/PAN) ends the current
@@ -1288,9 +1267,8 @@ export async function deleteVerificationDocument(req: Request, res: Response) {
     );
 
     res.json({ success: true, storeSuspended });
-  } catch (error: any) {
-    console.error('❌ deleteVerificationDocument error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to delete document' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.deleteVerificationDocument', 'Could not delete the document', error, undefined, { success: false });
   }
 }
 
@@ -1343,9 +1321,8 @@ export async function getBillingInfo(req: Request, res: Response) {
         passbookUrl,
       },
     });
-  } catch (error: any) {
-    console.error('❌ getBillingInfo error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch billing info' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getBillingInfo', 'Could not load the billing info', error, undefined, { success: false });
   }
 }
 
@@ -1430,7 +1407,7 @@ export async function saveBillingInfo(req: Request, res: Response) {
         .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
       if (uploadError) {
         console.error('❌ saveBillingInfo upload error:', uploadError);
-        return res.status(500).json({ success: false, error: uploadError.message });
+        return sendError(res, 'storeOwner.saveBillingInfo', 'Could not save the billing info', uploadError, undefined, { success: false });
       }
       changes.bank_passbook_storage_path = { old: store.bank_passbook_storage_path ?? null, new: storagePath };
     }
@@ -1452,9 +1429,8 @@ export async function saveBillingInfo(req: Request, res: Response) {
     );
 
     res.json({ success: true, request: result.saved });
-  } catch (error: any) {
-    console.error('❌ saveBillingInfo error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to submit billing change' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.saveBillingInfo', 'Could not submit the billing change', error, undefined, { success: false });
   }
 }
 
@@ -1490,17 +1466,16 @@ export async function registerPushToken(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ registerPushToken update failed:', error);
-      return res.status(500).json({ success: false, error: 'Failed to register push token' });
+      return sendError(res, 'storeOwner.registerPushToken', 'Could not register push token', error, undefined, { success: false });
     }
     if (!updated || updated.length === 0) {
       console.error(`❌ registerPushToken: no store row updated for owner_id ${userId}`);
-      return res.status(500).json({ success: false, error: 'Failed to register push token' });
+      return sendError(res, 'storeOwner.registerPushToken', 'Could not register push token', undefined, undefined, { success: false });
     }
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ registerPushToken error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to register push token' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.registerPushToken', 'Could not register push token', error, undefined, { success: false });
   }
 }
 
@@ -1556,9 +1531,8 @@ export async function getStoreNotifications(req: Request, res: Response) {
     const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
-  } catch (error: any) {
-    console.error('❌ getStoreNotifications error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch notifications' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getStoreNotifications', 'Could not load the notifications', error, undefined, { success: false });
   }
 }
 
@@ -1585,9 +1559,8 @@ export async function markStoreNotificationRead(req: Request, res: Response) {
       .in('recipient_id', storeIds);
     if (error) throw error;
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ markStoreNotificationRead error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to mark notification as read' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.markStoreNotificationRead', 'Could not mark notification as read', error, undefined, { success: false });
   }
 }
 
@@ -1611,9 +1584,8 @@ export async function markAllStoreNotificationsRead(req: Request, res: Response)
       .eq('is_read', false);
     if (error) throw error;
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ markAllStoreNotificationsRead error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to mark all notifications as read' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.markAllStoreNotificationsRead', 'Could not mark all notifications as read', error, undefined, { success: false });
   }
 }
 
@@ -1664,9 +1636,8 @@ export async function createSupportMessage(req: Request, res: Response) {
     });
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ createSupportMessage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to send message' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.createSupportMessage', 'Could not send the message', error, undefined, { success: false });
   }
 }
 
@@ -1691,8 +1662,7 @@ export async function getMySupportMessages(req: Request, res: Response) {
     if (error) throw error;
 
     res.json({ success: true, messages: data || [] });
-  } catch (error: any) {
-    console.error('❌ getMySupportMessages error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch messages' });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getMySupportMessages', 'Could not load the messages', error, undefined, { success: false });
   }
 }

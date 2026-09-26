@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { hasPermission } from '../utils/adminPermissions.js';
+import { sendError } from '../utils/httpError.js';
 
 declare module 'express' {
   interface Request {
@@ -20,8 +21,9 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
       ? req.headers.authorization.slice(7).trim()
       : undefined);
 
+  const where = 'adminAuth.requireAdmin';
   if (!token) {
-    return res.status(401).json({ error: 'Missing admin token' });
+    return sendError(res, where, 'Admin login required (no x-admin-token or Authorization: Bearer token was sent).', undefined, 401);
   }
 
   // No try/catch previously — a thrown error (Supabase network/gateway
@@ -46,15 +48,17 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     // an admin-revoked token for up to the full session TTL while Supabase
     // calls correctly reject it. Found 2026-08-10 during an admin-panel
     // auth/permissions audit.
-    if (error || !session || session.logged_out_at) {
-      return res.status(401).json({ error: 'Invalid or expired admin session' });
+    if (error) {
+      return sendError(res, where, 'Could not check the admin session with the database.', error, 500);
+    }
+    if (!session || session.logged_out_at) {
+      return sendError(res, where, 'Your admin session is invalid or has expired — please log in again.', undefined, 401);
     }
 
     req.adminId = session.admin_id;
     next();
   } catch (err) {
-    console.error('requireAdmin auth check failed:', err);
-    res.status(500).json({ error: 'Authentication check failed' });
+    return sendError(res, where, 'Could not verify the admin session.', err, 500);
   }
 }
 

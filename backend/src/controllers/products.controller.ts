@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
+import { sendError } from '../utils/httpError.js';
 
 export class ProductsController {
   async getCategories(_req: Request, res: Response) {
@@ -7,8 +8,7 @@ export class ProductsController {
       const categories = await databaseService.getCategories();
       res.json(categories);
     } catch (error) {
-      console.error('Error fetching categories:', error);
-      res.status(500).json({ error: 'Failed to fetch categories' });
+      return sendError(res, 'ProductsController.getCategories', 'Could not load the categories', error);
     }
   }
 }

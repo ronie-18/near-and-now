@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
+import { describeError } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────
    Styles
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .pp-root * { box-sizing: border-box; }
 
@@ -187,7 +187,7 @@ const ProfilePage = () => {
       showNotification('Profile updated successfully', 'success');
     } catch (error) {
       console.error('Error updating profile:', error);
-      showNotification('Failed to update profile. Please try again.', 'error');
+      showNotification(describeError('ProfilePage.handleSubmit', 'Could not update profile', error), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -206,7 +206,7 @@ const ProfilePage = () => {
       setShowEmailCodeStep(true);
       showNotification('Verification code sent to your email', 'success');
     } catch (error: any) {
-      showNotification(error?.message || 'Failed to send verification code', 'error');
+      showNotification(describeError('ProfilePage.handleSendEmailCode', 'Could not send verification code', error), 'error');
     } finally {
       setIsEmailSubmitting(false);
     }
@@ -237,7 +237,7 @@ const ProfilePage = () => {
       await resendEmailCode();
       showNotification('Verification code resent', 'success');
     } catch (error: any) {
-      showNotification(error?.message || 'Failed to resend code', 'error');
+      showNotification(describeError('ProfilePage.handleResendEmailCode', 'Could not resend code', error), 'error');
     } finally {
       setIsEmailSubmitting(false);
     }
@@ -250,7 +250,7 @@ const ProfilePage = () => {
       showNotification('Logged out successfully', 'success');
     } catch (error) {
       console.error('Error logging out:', error);
-      showNotification('Failed to log out. Please try again.', 'error');
+      showNotification(describeError('ProfilePage.handleLogout', 'Could not log out', error), 'error');
     }
   };
 

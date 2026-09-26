@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * Admin CRUD over a single store's `products` rows (which master_products
@@ -58,7 +59,7 @@ export async function listStoreProducts(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listStoreProducts error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStoreProducts.listStoreProducts', 'Could not load the store products', error, undefined, { success: false });
     }
 
     const products = (data || []).map((row: any) => ({
@@ -72,9 +73,8 @@ export async function listStoreProducts(req: Request, res: Response) {
     }));
 
     res.json({ success: true, products });
-  } catch (error: any) {
-    console.error('❌ listStoreProducts error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch store products' });
+  } catch (error) {
+    return sendError(res, 'adminStoreProducts.listStoreProducts', 'Could not load store products', error, undefined, { success: false });
   }
 }
 
@@ -98,7 +98,7 @@ export async function addStoreProduct(req: Request, res: Response) {
 
     if (selectErr) {
       console.error('❌ addStoreProduct lookup error:', selectErr);
-      return res.status(500).json({ success: false, error: selectErr.message });
+      return sendError(res, 'adminStoreProducts.addStoreProduct', 'Could not add the store product', selectErr, undefined, { success: false });
     }
 
     let productId: string;
@@ -109,7 +109,7 @@ export async function addStoreProduct(req: Request, res: Response) {
         .eq('id', existing.id);
       if (updateErr) {
         console.error('❌ addStoreProduct restore error:', updateErr);
-        return res.status(500).json({ success: false, error: updateErr.message });
+        return sendError(res, 'adminStoreProducts.addStoreProduct', 'Could not add the store product', updateErr, undefined, { success: false });
       }
       productId = existing.id;
     } else {
@@ -120,7 +120,7 @@ export async function addStoreProduct(req: Request, res: Response) {
         .single();
       if (insertErr) {
         console.error('❌ addStoreProduct insert error:', insertErr);
-        return res.status(500).json({ success: false, error: insertErr.message });
+        return sendError(res, 'adminStoreProducts.addStoreProduct', 'Could not add the store product', insertErr, undefined, { success: false });
       }
       productId = inserted.id;
     }
@@ -153,9 +153,8 @@ export async function addStoreProduct(req: Request, res: Response) {
           }
         : null,
     });
-  } catch (error: any) {
-    console.error('❌ addStoreProduct error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to add store product' });
+  } catch (error) {
+    return sendError(res, 'adminStoreProducts.addStoreProduct', 'Could not add store product', error, undefined, { success: false });
   }
 }
 
@@ -177,7 +176,7 @@ export async function updateStoreProductActive(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ updateStoreProductActive error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStoreProducts.updateStoreProductActive', 'Could not update the store product active', error, undefined, { success: false });
     }
     if (!data) {
       return res.status(404).json({ success: false, error: 'Store product not found' });
@@ -191,9 +190,8 @@ export async function updateStoreProductActive(req: Request, res: Response) {
     );
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ updateStoreProductActive error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update store product' });
+  } catch (error) {
+    return sendError(res, 'adminStoreProducts.updateStoreProductActive', 'Could not update store product', error, undefined, { success: false });
   }
 }
 
@@ -211,7 +209,7 @@ export async function removeStoreProduct(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ removeStoreProduct error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStoreProducts.removeStoreProduct', 'Could not remove the store product', error, undefined, { success: false });
     }
     if (!data) {
       return res.status(404).json({ success: false, error: 'Store product not found' });
@@ -223,8 +221,7 @@ export async function removeStoreProduct(req: Request, res: Response) {
     });
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ removeStoreProduct error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to remove store product' });
+  } catch (error) {
+    return sendError(res, 'adminStoreProducts.removeStoreProduct', 'Could not remove store product', error, undefined, { success: false });
   }
 }

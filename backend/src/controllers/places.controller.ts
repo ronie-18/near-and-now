@@ -5,6 +5,7 @@
 
 import { Request, Response } from 'express';
 import { fetchRoadRoute } from '../services/directions.service.js';
+import { sendError } from '../utils/httpError.js';
 
 const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const AUTOCOMPLETE_URL = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
@@ -22,7 +23,7 @@ export async function autocomplete(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return res.status(500).json({ status: 'ERROR', error_message: 'Google Maps API key not configured' });
+    return sendError(res, 'places.if', 'Could not complete if', undefined);
   }
   if (!input || typeof input !== 'string') {
     return res.status(400).json({ status: 'INVALID_REQUEST', error_message: 'Missing input parameter' });
@@ -42,11 +43,7 @@ export async function autocomplete(req: Request, res: Response) {
     const data = await response.json();
     res.json(data);
   } catch (err: unknown) {
-    console.error('Places autocomplete error:', err);
-    res.status(500).json({
-      status: 'ERROR',
-      error_message: err instanceof Error ? err.message : 'Autocomplete request failed',
-    });
+    return sendError(res, 'places.autocomplete', 'Google Maps request failed: autocomplete', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Autocomplete request failed' });
   }
 }
 
@@ -55,7 +52,7 @@ export async function placeDetails(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return res.status(500).json({ status: 'ERROR', error_message: 'Google Maps API key not configured' });
+    return sendError(res, 'places.if', 'Could not complete if', undefined);
   }
   if (!place_id || typeof place_id !== 'string') {
     return res.status(400).json({ status: 'INVALID_REQUEST', error_message: 'Missing place_id parameter' });
@@ -74,11 +71,7 @@ export async function placeDetails(req: Request, res: Response) {
     const data = await response.json();
     res.json(data);
   } catch (err: unknown) {
-    console.error('Place details error:', err);
-    res.status(500).json({
-      status: 'ERROR',
-      error_message: err instanceof Error ? err.message : 'Place details request failed',
-    });
+    return sendError(res, 'places.placeDetails', 'Google Maps request failed: place details', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Place details request failed' });
   }
 }
 
@@ -87,7 +80,7 @@ export async function geocode(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return res.status(500).json({ status: 'ERROR', error_message: 'Google Maps API key not configured' });
+    return sendError(res, 'places.if', 'Could not complete if', undefined);
   }
   if (!address || typeof address !== 'string') {
     return res.status(400).json({ status: 'INVALID_REQUEST', error_message: 'Missing address parameter' });
@@ -103,11 +96,7 @@ export async function geocode(req: Request, res: Response) {
     const data = await response.json();
     res.json(data);
   } catch (err: unknown) {
-    console.error('Geocode error:', err);
-    res.status(500).json({
-      status: 'ERROR',
-      error_message: err instanceof Error ? err.message : 'Geocode request failed',
-    });
+    return sendError(res, 'places.geocode', 'Google Maps request failed: geocode', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Geocode request failed' });
   }
 }
 
@@ -116,7 +105,7 @@ export async function reverseGeocode(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return res.status(500).json({ status: 'ERROR', error_message: 'Google Maps API key not configured' });
+    return sendError(res, 'places.if', 'Could not complete if', undefined);
   }
   const latNum = parseFloat(String(lat));
   const lngNum = parseFloat(String(lng));
@@ -133,11 +122,7 @@ export async function reverseGeocode(req: Request, res: Response) {
     const data = await response.json();
     res.json(data);
   } catch (err: unknown) {
-    console.error('Reverse geocode error:', err);
-    res.status(500).json({
-      status: 'ERROR',
-      error_message: err instanceof Error ? err.message : 'Reverse geocode request failed',
-    });
+    return sendError(res, 'places.reverseGeocode', 'Google Maps request failed: reverse geocode', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Reverse geocode request failed' });
   }
 }
 
@@ -146,7 +131,7 @@ export async function directions(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return res.status(500).json({ status: 'ERROR', error_message: 'Google Maps API key not configured' });
+    return sendError(res, 'places.if', 'Could not complete if', undefined);
   }
   const originStr = typeof origin === 'string' ? origin : '';
   const destStr = typeof destination === 'string' ? destination : '';
@@ -168,11 +153,7 @@ export async function directions(req: Request, res: Response) {
     const data = await response.json();
     res.json(data);
   } catch (err: unknown) {
-    console.error('Directions error:', err);
-    res.status(500).json({
-      status: 'ERROR',
-      error_message: err instanceof Error ? err.message : 'Directions request failed',
-    });
+    return sendError(res, 'places.directions', 'Google Maps request failed: directions', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Directions request failed' });
   }
 }
 
@@ -193,7 +174,6 @@ export async function roadRoute(req: Request, res: Response) {
     const points = await fetchRoadRoute({ lat: oLat, lng: oLng }, { lat: dLat, lng: dLng });
     res.json({ status: 'OK', points });
   } catch (err: unknown) {
-    console.error('Road route error:', err);
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Road route failed' });
+    return sendError(res, 'places.if', 'Could not complete if', err);
   }
 }

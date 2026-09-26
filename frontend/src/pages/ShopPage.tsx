@@ -6,6 +6,7 @@ import { useLocation } from '../context/LocationContext';
 import { useNotification } from '../context/NotificationContext';
 import { formatCategoryName } from '../utils/formatters';
 import { Search, SlidersHorizontal, X, ChevronDown, Package, MapPin, Tag } from 'lucide-react';
+import { describeError } from '../utils/apiErrors';
 
 const PRODUCTS_PAGE_SIZE = 24;
 
@@ -25,6 +26,8 @@ const ShopPage = () => {
   const [loading, setLoading] = useState(true);
   const [noStoresNearby, setNoStoresNearby] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+  const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
+  const metaSeqRef = useRef(0);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [sortBy, setSortBy] = useState<ProductSortOption>('default');
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 1000]);
@@ -68,10 +71,13 @@ const ShopPage = () => {
     if (lastLocationKeyRef.current === locKey) return;
     lastLocationKeyRef.current = locKey;
 
+    // Ignore results from a superseded location (A→B switch: A's meta must not land after B's).
+    const mySeq = ++metaSeqRef.current;
     (async () => {
       try {
         if (userLocation?.latitude != null && userLocation?.longitude != null) {
           const storesExist = await hasNearbyStores(userLocation.latitude, userLocation.longitude);
+          if (mySeq !== metaSeqRef.current) return;
           if (!storesExist) {
             setNoStoresNearby(true);
             setCategories([]);
@@ -85,11 +91,13 @@ const ShopPage = () => {
           ? { lat: userLocation.latitude, lng: userLocation.longitude }
           : undefined;
         const meta = await getNearbyProductsMeta(opts);
+        if (mySeq !== metaSeqRef.current) return;
         setCategories(meta.categories);
         setMaxPrice(meta.maxPrice);
         setPriceRange([0, meta.maxPrice]);
       } catch (error) {
-        console.error('Error fetching product metadata:', error);
+        if (mySeq !== metaSeqRef.current) return;
+        showNotification(describeError('ShopPage.fetchMeta', 'Could not load the shop filters (categories and price range)', error), 'error');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -122,9 +130,10 @@ const ShopPage = () => {
       setPage(targetPage);
     } catch (error) {
       if (seq !== fetchSeqRef.current) return;
-      console.error('Error fetching products:', error);
-      showNotification('Failed to load products. Please try again.', 'error');
+      const message = describeError('ShopPage.fetchPage', 'Could not load the shop products', error);
+      showNotification(message, 'error');
       setFetchError(true);
+      setFetchErrorMessage(message);
       if (!append) { setPageProducts([]); setTotalProducts(0); }
     } finally {
       if (seq === fetchSeqRef.current) { setLoading(false); setLoadingMore(false); }
@@ -382,7 +391,7 @@ const ShopPage = () => {
                   <Package className="w-10 h-10 text-red-400" />
                 </div>
                 <h3 className="text-xl font-bold text-gray-800 mb-2">Couldn&apos;t Load Products</h3>
-                <p className="text-gray-600 mb-6">Something went wrong. Please check your connection and try again.</p>
+                <p className="text-gray-600 mb-6">{fetchErrorMessage ?? 'Something went wrong. Please check your connection and try again.'}</p>
                 <button
                   onClick={() => fetchPage(1, false)}
                   className="bg-primary hover:bg-secondary text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105"

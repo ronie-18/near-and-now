@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 // product_reviews stays service_role-only (no anon/authenticated grant —
 // see 20260718000002_fix_missing_table_grants.sql's own comment: the table
@@ -133,9 +134,8 @@ export class ReviewsController {
       });
 
       res.json({ success: true, deliverable: true, items });
-    } catch (error: any) {
-      console.error('❌ getReviewableItems error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to load reviewable items' });
+    } catch (error) {
+      return sendError(res, 'ReviewsController.getReviewableItems', 'Could not load the reviewable items', error, undefined, { success: false });
     }
   }
 
@@ -202,9 +202,8 @@ export class ReviewsController {
       }
 
       res.json({ success: true, review });
-    } catch (error: any) {
-      console.error('❌ createReview error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to submit review' });
+    } catch (error) {
+      return sendError(res, 'ReviewsController.createReview', 'Could not submit review', error, undefined, { success: false });
     }
   }
 
@@ -226,9 +225,8 @@ export class ReviewsController {
       if (error) throw error;
 
       res.json({ success: true, reviews: data ?? [], total: count ?? 0 });
-    } catch (error: any) {
-      console.error('❌ getProductReviews error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to load reviews' });
+    } catch (error) {
+      return sendError(res, 'ReviewsController.getProductReviews', 'Could not load reviews', error, undefined, { success: false });
     }
   }
 
@@ -268,9 +266,8 @@ export class ReviewsController {
       }));
 
       res.json({ success: true, reviews, total: count ?? 0 });
-    } catch (error: any) {
-      console.error('❌ adminListReviews error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to load reviews' });
+    } catch (error) {
+      return sendError(res, 'ReviewsController.adminListReviews', 'Could not load reviews', error, undefined, { success: false });
     }
   }
 
@@ -292,9 +289,8 @@ export class ReviewsController {
       // master_products.rating/rating_count recompute is handled by the
       // trg_recompute_master_product_rating_ins_upd DB trigger on this update.
       res.json({ success: true });
-    } catch (error: any) {
-      console.error('❌ adminModerateReview error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to moderate review' });
+    } catch (error) {
+      return sendError(res, 'ReviewsController.adminModerateReview', 'Could not the moderate review', error, undefined, { success: false });
     }
   }
 
@@ -305,9 +301,8 @@ export class ReviewsController {
       const { error } = await supabaseAdmin.from('product_reviews').delete().eq('id', id);
       if (error) throw error;
       res.json({ success: true });
-    } catch (error: any) {
-      console.error('❌ adminDeleteReview error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to delete review' });
+    } catch (error) {
+      return sendError(res, 'ReviewsController.adminDeleteReview', 'Could not delete review', error, undefined, { success: false });
     }
   }
 }

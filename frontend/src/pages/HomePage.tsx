@@ -7,6 +7,8 @@ import { useNotification } from '../context/NotificationContext';
 import { useLocation } from '../context/LocationContext';
 import { formatCategoryName } from '../utils/formatCategoryName';
 import ProductCard from '../components/products/ProductCard';
+import { placeholderFor, handleImageError } from '../utils/placeholderImage';
+import { describeError } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────────────────
    HomePage — redesigned UI, identical logic
@@ -17,6 +19,7 @@ const HomePage = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
+  const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
   const { showNotification } = useNotification();
   const { userLocation } = useLocation();
   const lastLocationKeyRef = useRef<string | null>(null);
@@ -58,9 +61,10 @@ const HomePage = () => {
       setCategories(uniqueCategories);
     } catch (error) {
       if (seq !== fetchSeqRef.current) return;
-      console.error('Error fetching data:', error);
+      const message = describeError('HomePage.fetchData', 'Could not load the home page products and categories', error);
       setFetchError(true);
-      showNotification('Failed to load data. Please try again.', 'error');
+      setFetchErrorMessage(message);
+      showNotification(message, 'error');
     } finally {
       if (seq === fetchSeqRef.current) setLoading(false);
     }
@@ -89,7 +93,6 @@ const HomePage = () => {
     <>
       {/* ── Global styles ── */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
         .hp-root { font-family: 'Plus Jakarta Sans', sans-serif; }
         .hp-root .font-display { font-family: 'Nunito', sans-serif; }
@@ -214,14 +217,11 @@ const HomePage = () => {
                     >
                       <div className="w-full aspect-square rounded-2xl overflow-hidden border border-gray-100 bg-gradient-to-br from-green-50 to-emerald-50/30 mb-1.5 shadow-sm">
                         <img
-                          src={category.image_url || `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`}
+                          src={category.image_url || placeholderFor(category.name)}
                           alt={category.name}
                           loading="lazy"
                           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.src = `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`;
-                          }}
+                          onError={(e) => handleImageError(e, placeholderFor(category.name))}
                         />
                       </div>
                       <p className="text-[10px] sm:text-[11px] font-semibold text-gray-600 text-center leading-snug line-clamp-2 group-hover:text-primary transition-colors px-0.5">
@@ -338,7 +338,7 @@ const HomePage = () => {
               </div>
               <h3 className="font-display text-xl font-black text-gray-700 mb-2">Couldn&apos;t Load Products</h3>
               <p className="text-gray-400 text-sm leading-relaxed max-w-xs mx-auto mb-5">
-                Something went wrong while loading products. Please try again.
+                {fetchErrorMessage ?? 'Something went wrong while loading products. Please try again.'}
               </p>
               <button
                 onClick={handleRetry}

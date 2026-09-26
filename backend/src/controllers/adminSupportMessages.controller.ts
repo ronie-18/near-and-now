@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * List support messages for admin review — the previously-missing "admin
@@ -20,9 +21,8 @@ export async function listSupportMessages(req: Request, res: Response) {
     const { data, error } = await query;
     if (error) throw error;
     res.json({ success: true, messages: data || [] });
-  } catch (error: any) {
-    console.error('❌ listSupportMessages error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch support messages' });
+  } catch (error) {
+    return sendError(res, 'adminSupportMessages.listSupportMessages', 'Could not load support messages', error, undefined, { success: false });
   }
 }
 
@@ -37,9 +37,8 @@ export async function getSupportMessage(req: Request, res: Response) {
     if (error) throw error;
     if (!data) return res.status(404).json({ success: false, error: 'Message not found' });
     res.json({ success: true, message: data });
-  } catch (error: any) {
-    console.error('❌ getSupportMessage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch support message' });
+  } catch (error) {
+    return sendError(res, 'adminSupportMessages.getSupportMessage', 'Could not load support message', error, undefined, { success: false });
   }
 }
 
@@ -85,9 +84,8 @@ export async function replySupportMessage(req: Request, res: Response) {
     }
 
     res.json({ success: true, message: data });
-  } catch (error: any) {
-    console.error('❌ replySupportMessage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to send reply' });
+  } catch (error) {
+    return sendError(res, 'adminSupportMessages.replySupportMessage', 'Could not send the reply', error, undefined, { success: false });
   }
 }
 
@@ -104,8 +102,7 @@ export async function resolveSupportMessage(req: Request, res: Response) {
     if (error) throw error;
     if (!data) return res.status(404).json({ success: false, error: 'Message not found' });
     res.json({ success: true, message: data });
-  } catch (error: any) {
-    console.error('❌ resolveSupportMessage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to resolve message' });
+  } catch (error) {
+    return sendError(res, 'adminSupportMessages.resolveSupportMessage', 'Could not resolve the message', error, undefined, { success: false });
   }
 }

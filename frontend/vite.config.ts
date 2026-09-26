@@ -107,7 +107,9 @@ export default defineConfig(({ mode }) => {
           // dompurify/crypto-js removed along with the dead sanitize.ts/csrf.ts
           // that were their only consumers — zod is still real, used by
           // src/schemas/*.
-          validation: ['zod']
+          validation: ['zod'],
+          // Maps wrapper changes rarely; keeping it separate lets it cache across deploys.
+          maps: ['@react-google-maps/api']
         }
       }
     },

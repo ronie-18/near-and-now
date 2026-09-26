@@ -1,10 +1,13 @@
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { MulterError } from 'multer';
+import { requestContext } from './middleware/requestContext.js';
+import { AppError, errorReason, inferStatus } from './utils/httpError.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import productsRoutes from './routes/products.routes.js';
@@ -62,6 +65,17 @@ if (!process.env.VERCEL) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Behind an AWS ALB / App Runner / CloudFront the client IP and protocol arrive in
+// X-Forwarded-* headers. Without this, rate limiting keys on the load balancer's IP.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+class CorsError extends AppError {
+  constructor(message: string) {
+    super(message, 403, { code: 'CORS_ORIGIN_REJECTED', expose: true });
+  }
+}
+
 // CORS: reflect any browser Origin (works with credentials). Same idea as a permissive Railway setup.
 // Optional: set ALLOWED_ORIGINS=comma,separated,origins to restrict; leave unset for allow-all via reflection.
 const allowlist = (process.env.ALLOWED_ORIGINS || '')
@@ -84,7 +98,7 @@ app.use(
         if (allowlist.includes(origin)) {
           callback(null, true);
         } else {
-          callback(new Error(`CORS: origin ${origin} not allowed`));
+          callback(new CorsError(`Requests from ${origin} are not allowed by this API's CORS policy (server.ts ALLOWED_ORIGINS).`));
         }
         return;
       }
@@ -92,16 +106,23 @@ app.use(
       if (isProd) {
         // Fail closed in production: operators MUST set ALLOWED_ORIGINS.
         console.error(`[CORS] Rejected origin "${origin}" — set ALLOWED_ORIGINS env var in production`);
-        callback(new Error(`CORS: ALLOWED_ORIGINS not configured for production`));
+        callback(new CorsError('This API has no ALLOWED_ORIGINS configured for production, so browser requests are rejected (server.ts).'));
       } else {
         // Development: allow all origins for convenience.
         callback(null, true);
       }
     },
-    credentials: true
+    credentials: true,
+    exposedHeaders: ['X-Request-Id']
   })
 );
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+
+// gzip compression: product/catalogue JSON shrinks 5-10x on the wire.
+app.use(compression({ threshold: 1024 }));
+
+// Request id + per-request latency log line (JSON, for CloudWatch Logs Insights).
+app.use(requestContext);
 
 // Capture raw body for the Razorpay webhook route BEFORE express.json() parses it.
 // verifyWebhook() needs the exact bytes that Razorpay signed; JSON.stringify of an
@@ -145,7 +166,18 @@ app.use('/api/reviews', reviewsRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), uptimeSeconds: Math.round(process.uptime()) });
+});
+
+// 404 as JSON (Express's default is an HTML "Cannot GET /x" page that the SPA cannot parse).
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    error: `No API route matches ${req.method} ${req.originalUrl.split('?')[0]}`,
+    where: 'server.notFound',
+    requestId: req.requestId
+  });
 });
 
 // Multer (e.g. the verification-document upload route) reports violations like
@@ -153,28 +185,65 @@ app.get('/health', (_req, res) => {
 // own try/catch runs — without this, Express's default handler would return a
 // non-JSON error body that client-side error parsing can't surface a useful
 // message from.
-app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+//
+// Every body has the same shape as controller errors (see utils/httpError.ts):
+// { success:false, error, where:'server.errorHandler', requestId, detail? } so the
+// client can show a sentence that points at the failing route and the log line.
+app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
   if (res.headersSent) return next(err);
+  const requestId = req.requestId;
+  const bodyParserType = (err as { type?: string })?.type;
+  let status = inferStatus(err);
+  let message: string;
+
   if (err instanceof MulterError) {
-    const message =
-      err.code === 'LIMIT_FILE_SIZE' ? 'File exceeds the maximum allowed size' : err.message;
-    return res.status(400).json({ success: false, error: message });
+    status = 400;
+    message = err.code === 'LIMIT_FILE_SIZE' ? 'File exceeds the maximum allowed size' : err.message;
+  } else if (err instanceof AppError) {
+    message = err.message;
+  } else if (bodyParserType === 'entity.parse.failed') {
+    status = 400;
+    message = `The request body sent to ${req.method} ${req.path} is not valid JSON.`;
+  } else if (bodyParserType === 'entity.too.large') {
+    // express.json({ limit }) throws this (via body-parser) when a request body
+    // exceeds the cap set above — a client/attacker error, not a server bug.
+    status = 413;
+    message = `The request body sent to ${req.method} ${req.path} is larger than this route allows.`;
+  } else if (status >= 500) {
+    message = `The server hit an unexpected error while handling ${req.method} ${req.path}.`;
+  } else {
+    message = errorReason(err) || `Request to ${req.method} ${req.path} failed.`;
   }
-  // express.json({ limit }) throws this (via body-parser) when a request body
-  // exceeds the cap set above — a client/attacker error, not a server bug.
-  if (err && typeof err === 'object' && (err as { type?: string }).type === 'entity.too.large') {
-    return res.status(413).json({ success: false, error: 'Request body too large' });
-  }
-  console.error('❌ Unhandled error:', err);
-  res.status(500).json({ success: false, error: 'Internal server error' });
+
+  const reason = errorReason(err);
+  console.error(`[${requestId ?? '-'}] server.errorHandler ${req.method} ${req.originalUrl} → ${status}: ${reason}`, err instanceof Error ? err.stack : err);
+  res.status(status).json({
+    success: false,
+    error: message,
+    where: 'server.errorHandler',
+    requestId,
+    ...(status < 500 || !isProd ? { detail: reason } : {})
+  });
 });
 
 // For local dev: listen so phone/device can reach API (Vercel uses api/index.ts, no listen)
 if (!process.env.VERCEL) {
   const port = Number(PORT) || 3000;
-  app.listen(port, '0.0.0.0', () => {
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${port} (and http://localhost:${port})`);
   });
+  // ALB/App Runner idle timeout is 60 s by default; keep ours slightly longer so the LB closes first.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
+  // Graceful shutdown so in-flight requests finish during ECS/App Runner deploys.
+  const shutdown = (signal: string) => {
+    console.log(`[process] ${signal} received, closing HTTP server`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 10_000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 export default app;

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { paymentService } from '../services/payment.service.js';
 import { validateQuantity } from '../utils/quantity.js';
+import { sendError } from '../utils/httpError.js';
 
 // The customer-facing confirmation screen's own countdown is 30s
 // (ADD_MORE_WINDOW_SECONDS in nearandnowcustomerapp); this is a server-side
@@ -319,8 +320,7 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
     }
 
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ verifyAdditionPayment error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to verify payment' });
+  } catch (error) {
+    return sendError(res, 'orderAdditions.verifyAdditionPayment', 'Could not verify payment', error, undefined, { success: false });
   }
 }

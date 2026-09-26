@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { expireStaleAllocations, reBroadcastIfStuck, cancelIfPaymentAbandoned } from './shopkeeper.controller.js';
 import type { OrderStatus } from '../types/database.types.js';
+import { sendError } from '../utils/httpError.js';
 
 const VALID_ORDER_STATUSES: OrderStatus[] = [
   'pending_at_store',
@@ -29,8 +30,7 @@ export class TrackingController {
 
       res.json(tracking);
     } catch (error) {
-      console.error('Error fetching order tracking:', error);
-      res.status(500).json({ error: 'Failed to fetch order tracking' });
+      return sendError(res, 'TrackingController.getOrderTracking', 'Could not load order tracking', error);
     }
   }
 
@@ -71,8 +71,7 @@ export class TrackingController {
 
       res.json(data);
     } catch (error) {
-      console.error('Error fetching order tracking (full):', error);
-      res.status(500).json({ error: 'Failed to fetch order tracking' });
+      return sendError(res, 'TrackingController.getOrderTrackingFull', 'Could not load order tracking', error);
     }
   }
 
@@ -86,8 +85,7 @@ export class TrackingController {
       }
       res.json(locations);
     } catch (error) {
-      console.error('Error fetching driver locations:', error);
-      res.status(500).json({ error: 'Failed to fetch driver locations' });
+      return sendError(res, 'TrackingController.getDriverLocations', 'Could not load the driver locations', error);
     }
   }
 
@@ -101,8 +99,7 @@ export class TrackingController {
       }
       res.json(history);
     } catch (error) {
-      console.error('Error fetching tracking history:', error);
-      res.status(500).json({ error: 'Failed to fetch tracking history' });
+      return sendError(res, 'TrackingController.getTrackingHistory', 'Could not load the tracking history', error);
     }
   }
 
@@ -132,8 +129,7 @@ export class TrackingController {
 
       res.status(201).json(update);
     } catch (error) {
-      console.error('Error adding tracking update:', error);
-      res.status(500).json({ error: 'Failed to add tracking update' });
+      return sendError(res, 'TrackingController.addTrackingUpdate', 'Could not add the tracking update', error);
     }
   }
 
@@ -149,8 +145,7 @@ export class TrackingController {
 
       res.json(location);
     } catch (error) {
-      console.error('Error fetching agent location:', error);
-      res.status(500).json({ error: 'Failed to fetch agent location' });
+      return sendError(res, 'TrackingController.getAgentLocation', 'Could not load the agent location', error);
     }
   }
 
@@ -171,8 +166,7 @@ export class TrackingController {
       const result = await databaseService.updateAgentLocation(agentId, latitude, longitude);
       res.json(result);
     } catch (error) {
-      console.error('Error updating agent location:', error);
-      res.status(500).json({ error: 'Failed to update agent location' });
+      return sendError(res, 'TrackingController.updateAgentLocation', 'Could not update the agent location', error);
     }
   }
 }

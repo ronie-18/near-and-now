@@ -2,16 +2,10 @@ import * as ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 
-console.log('🚀 [MAIN.TSX] Script loaded');
-
 const rootElement = document.getElementById('root');
 if (!rootElement) {
-  console.error('❌ [MAIN.TSX] Root element not found!');
+  // This is the only failure that cannot be shown inside React, so it goes to the console.
+  console.error('[main.tsx] Could not start the app: no <div id="root"> element was found in index.html.');
 } else {
-  console.log('✅ [MAIN.TSX] Root element found');
-  
-  const root = ReactDOM.createRoot(rootElement as HTMLElement);
-  root.render(<App />);
-  
-  console.log('✅ [MAIN.TSX] React render called');
+  ReactDOM.createRoot(rootElement as HTMLElement).render(<App />);
 }

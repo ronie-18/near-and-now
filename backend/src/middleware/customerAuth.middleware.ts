@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 const SESSION_TTL_MS = 25 * 24 * 60 * 60 * 1000; // 25 days of inactivity
 
@@ -28,13 +29,14 @@ declare module 'express' {
  * "logout".
  */
 export async function requireCustomer(req: Request, res: Response, next: NextFunction) {
+  const where = 'customerAuth.requireCustomer';
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing auth token' });
+    return sendError(res, where, 'You need to be logged in for this request (no Authorization: Bearer token was sent).', undefined, 401);
   }
   const token = auth.slice(7).trim();
   if (!token) {
-    return res.status(401).json({ error: 'Missing auth token' });
+    return sendError(res, where, 'You need to be logged in for this request (the Authorization token was empty).', undefined, 401);
   }
 
   // This runs on every authenticated customer request, ahead of every
@@ -53,12 +55,15 @@ export async function requireCustomer(req: Request, res: Response, next: NextFun
       .eq('role', 'customer')
       .maybeSingle();
 
-    if (error || !user) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
+    if (error) {
+      return sendError(res, where, 'Could not check your login session with the database.', error, 500);
+    }
+    if (!user) {
+      return sendError(res, where, 'Your login session is invalid or has expired — please log in again.', undefined, 401);
     }
 
     if ((user as any).is_suspended) {
-      return res.status(403).json({ error: 'This account has been suspended.' });
+      return sendError(res, where, 'This account has been suspended.', undefined, 403);
     }
 
     const issuedAtRaw = (user as any).session_token_issued_at;
@@ -76,7 +81,7 @@ export async function requireCustomer(req: Request, res: Response, next: NextFun
           // Best-effort cleanup — still expire the request either way; a failed
           // clear just means this row gets cleared on some future expired hit.
         }
-        return res.status(401).json({ error: 'Session expired — please log in again' });
+        return sendError(res, where, 'Your login session expired after 25 days without activity — please log in again.', undefined, 401);
       }
       // Renew on every request so the 25-day window always counts from the
       // customer's actual last activity. Fire-and-forget: don't hold up the
@@ -99,7 +104,6 @@ export async function requireCustomer(req: Request, res: Response, next: NextFun
     req.customerId = (user as any).id;
     next();
   } catch (err) {
-    console.error('requireCustomer auth check failed:', err);
-    res.status(500).json({ error: 'Authentication check failed' });
+    return sendError(res, where, 'Could not verify your login session.', err, 500);
   }
 }

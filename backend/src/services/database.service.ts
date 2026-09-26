@@ -211,14 +211,21 @@ export class DatabaseService {
     if (error) throw error;
   }
 
+  private categoriesCache: { value: Category[]; expiresAt: number } | null = null;
+
+  /** Categories change rarely; cache them for 60 s so the home page stays snappy under load. */
   async getCategories() {
+    const now = Date.now();
+    if (this.categoriesCache && this.categoriesCache.expiresAt > now) return this.categoriesCache.value;
     const { data, error } = await supabase
       .from('categories')
       .select('*')
       .order('display_order', { ascending: true });
 
     if (error) throw error;
-    return data as Category[];
+    const categories = (data ?? []) as Category[];
+    this.categoriesCache = { value: categories, expiresAt: now + 60_000 };
+    return categories;
   }
 
   async createCustomerOrder(orderData: {
@@ -1527,12 +1534,12 @@ export class DatabaseService {
       .select('*')
       .eq('code', code)
       .eq('is_active', true)
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
 
     if (!coupon) {
-      throw new Error('Invalid coupon code');
+      throw new Error(`Coupon code "${code}" is not valid or is no longer active`);
     }
 
     const now = new Date();

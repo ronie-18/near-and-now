@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -25,8 +26,7 @@ export class CustomersController {
       const addresses = await databaseService.getCustomerSavedAddressesResolved(userId, []);
       res.json(addresses);
     } catch (error) {
-      console.error('Error fetching resolved addresses:', error);
-      res.status(500).json({ error: 'Failed to fetch addresses' });
+      return sendError(res, 'CustomersController.getResolvedAddresses', 'Could not load the addresses', error);
     }
   }
 
@@ -42,8 +42,7 @@ export class CustomersController {
       if (!profile) return res.status(404).json({ error: 'User not found' });
       res.json({ success: true, user: profile.user, customer: profile.customer });
     } catch (error) {
-      console.error('Error fetching current user profile:', error);
-      res.status(500).json({ error: 'Failed to fetch profile' });
+      return sendError(res, 'CustomersController.getMe', 'Could not load profile', error);
     }
   }
 
@@ -66,8 +65,7 @@ export class CustomersController {
       const profile = await databaseService.updateCustomerProfile(req.customerId!, updates);
       res.json({ success: true, user: profile?.user, customer: profile?.customer });
     } catch (error) {
-      console.error('Error updating current user profile:', error);
-      res.status(500).json({ error: 'Failed to update profile' });
+      return sendError(res, 'CustomersController.updateMe', 'Could not update profile', error);
     }
   }
 
@@ -80,8 +78,7 @@ export class CustomersController {
       const addresses = await databaseService.getCustomerSavedAddresses(customerId);
       res.json(addresses);
     } catch (error) {
-      console.error('Error fetching addresses:', error);
-      res.status(500).json({ error: 'Failed to fetch addresses' });
+      return sendError(res, 'CustomersController.getAddresses', 'Could not load the addresses', error);
     }
   }
 
@@ -99,8 +96,7 @@ export class CustomersController {
       const address = await databaseService.createCustomerSavedAddress(addressData);
       res.status(201).json(address);
     } catch (error) {
-      console.error('Error creating address:', error);
-      res.status(500).json({ error: 'Failed to create address' });
+      return sendError(res, 'CustomersController.createAddress', 'Could not create the address', error);
     }
   }
 
@@ -131,7 +127,7 @@ export class CustomersController {
     } catch (error: any) {
       console.error('Error updating address:', error);
       if (error.message?.includes('not found')) return res.status(404).json({ error: error.message });
-      res.status(500).json({ error: 'Failed to update address' });
+      return sendError(res, 'CustomersController.updateAddress', 'Could not update address', error);
     }
   }
 
@@ -142,8 +138,7 @@ export class CustomersController {
       await databaseService.deleteCustomerSavedAddress(addressId, customerId);
       res.json({ success: true });
     } catch (error) {
-      console.error('Error deleting address:', error);
-      res.status(500).json({ error: 'Failed to delete address' });
+      return sendError(res, 'CustomersController.deleteAddress', 'Could not delete the address', error);
     }
   }
 
@@ -168,8 +163,7 @@ export class CustomersController {
       await databaseService.updateCustomerPushToken(customerId, token);
       res.json({ success: true });
     } catch (error) {
-      console.error('Error registering push token:', error);
-      res.status(500).json({ error: 'Failed to register push token' });
+      return sendError(res, 'CustomersController.registerPushToken', 'Could not register push token', error);
     }
   }
 
@@ -193,8 +187,7 @@ export class CustomersController {
 
       res.json({ success: true, message: 'Verification code sent' });
     } catch (error) {
-      console.error('Error changing email:', error);
-      res.status(500).json({ error: 'Failed to update email' });
+      return sendError(res, 'CustomersController.changeEmail', 'Could not update the email', error);
     }
   }
 
@@ -211,7 +204,7 @@ export class CustomersController {
       if (error.message?.includes('already verified')) {
         return res.status(400).json({ error: error.message });
       }
-      res.status(500).json({ error: 'Failed to resend verification code' });
+      return sendError(res, 'CustomersController.resendEmailVerification', 'Could not resend verification code', error);
     }
   }
 

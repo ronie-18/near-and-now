@@ -3,6 +3,7 @@ import { RazorpayApiError, paymentService } from '../services/payment.service.js
 import { databaseService } from '../services/database.service.js';
 import { invoiceService } from '../services/invoice.service.js';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 export class PaymentController {
   // Create payment order (for online payment)
@@ -72,7 +73,7 @@ export class PaymentController {
 
       const orderCtx = await databaseService.getOrderPaymentContext(internalOrderId);
       if (!orderCtx) {
-        return res.status(500).json({ error: 'Failed to verify payment' });
+        return sendError(res, 'PaymentController.verifyPayment', 'Could not verify payment', undefined);
       }
       if (orderCtx.customer_id !== customerId) {
         console.warn('[PAYMENT] Order does not belong to caller', { internalOrderId, customerId, orderOwnerId: orderCtx.customer_id });
@@ -162,7 +163,7 @@ export class PaymentController {
       if (error instanceof Error && error.message.toLowerCase().includes('not capturable')) {
         return res.status(400).json({ success: false, error: 'Payment not captured' });
       }
-      res.status(500).json({ error: 'Failed to verify payment' });
+      return sendError(res, 'PaymentController.verifyPayment', 'Could not verify payment', undefined);
     }
   }
 
@@ -179,8 +180,7 @@ export class PaymentController {
       const methods = await paymentService.getSavedMethods(userId);
       res.json({ methods });
     } catch (error) {
-      console.error('Error fetching saved payment methods:', error);
-      res.status(500).json({ error: 'Failed to fetch saved methods' });
+      return sendError(res, 'PaymentController.getSavedMethods', 'Could not load saved methods', error);
     }
   }
 
@@ -191,8 +191,7 @@ export class PaymentController {
       const details = await paymentService.getPaymentDetails(paymentId);
       res.json(details);
     } catch (error) {
-      console.error('Error fetching payment details:', error);
-      res.status(500).json({ error: 'Failed to fetch payment details' });
+      return sendError(res, 'PaymentController.getPaymentDetails', 'Could not load payment details', error);
     }
   }
 
@@ -213,8 +212,7 @@ export class PaymentController {
 
       res.json(refund);
     } catch (error) {
-      console.error('Error processing refund:', error);
-      res.status(500).json({ error: 'Failed to process refund' });
+      return sendError(res, 'PaymentController.processRefund', 'Could not process the refund', error);
     }
   }
 
@@ -315,8 +313,7 @@ export class PaymentController {
 
       res.json({ success: true, refund_method: refundMethod });
     } catch (error) {
-      console.error('Error resolving item refund:', error);
-      res.status(500).json({ error: 'Failed to process refund' });
+      return sendError(res, 'PaymentController.resolveItemRefund', 'Could not process the refund', error);
     }
   }
 
@@ -350,7 +347,7 @@ export class PaymentController {
       if (error instanceof RazorpayApiError) {
         return res.status(502).json({ error: 'Failed to handle webhook' });
       }
-      res.status(500).json({ error: 'Failed to handle webhook' });
+      return sendError(res, 'PaymentController.handleWebhook', 'Could not handle webhook', error);
     }
   }
 }

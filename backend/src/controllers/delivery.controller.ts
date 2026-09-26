@@ -4,6 +4,7 @@ import { runDeliverySimulation } from '../services/deliverySimulation.service.js
 import { notificationService } from '../services/notification.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { haversineKm } from '../utils/geo.js';
+import { sendError } from '../utils/httpError.js';
 
 export class DeliveryController {
   /** Start mock delivery simulation (driver follows road routes). Runs in background. */
@@ -18,8 +19,7 @@ export class DeliveryController {
         console.error('Delivery simulation error:', err)
       );
     } catch (error) {
-      console.error('Error starting simulation:', error);
-      res.status(500).json({ error: 'Failed to start simulation' });
+      return sendError(res, 'DeliveryController.startSimulation', 'Could not start the simulation', error);
     }
   }
   // Get all delivery partners
@@ -28,8 +28,7 @@ export class DeliveryController {
       const partners = await databaseService.getDeliveryPartners();
       res.json(partners);
     } catch (error) {
-      console.error('Error fetching delivery partners:', error);
-      res.status(500).json({ error: 'Failed to fetch delivery partners' });
+      return sendError(res, 'DeliveryController.getDeliveryPartners', 'Could not load delivery partners', error);
     }
   }
 
@@ -43,8 +42,7 @@ export class DeliveryController {
       }
       res.json(partner);
     } catch (error) {
-      console.error('Error fetching delivery partner:', error);
-      res.status(500).json({ error: 'Failed to fetch delivery partner' });
+      return sendError(res, 'DeliveryController.getDeliveryPartnerById', 'Could not load delivery partner', error);
     }
   }
 
@@ -62,7 +60,7 @@ export class DeliveryController {
       if (code === '23505') {
         return res.status(409).json({ error: message });
       }
-      res.status(500).json({ error: message });
+      return sendError(res, 'DeliveryController.createDeliveryPartner', 'Could not create the delivery partner', undefined);
     }
   }
 
@@ -73,8 +71,7 @@ export class DeliveryController {
       const result = await databaseService.updateDeliveryPartner(partnerId, req.body);
       res.json(result);
     } catch (error) {
-      console.error('Error updating delivery partner:', error);
-      res.status(500).json({ error: 'Failed to update delivery partner' });
+      return sendError(res, 'DeliveryController.updateDeliveryPartner', 'Could not update delivery partner', error);
     }
   }
 
@@ -85,8 +82,7 @@ export class DeliveryController {
       const result = await databaseService.deleteDeliveryPartner(partnerId);
       res.json(result);
     } catch (error) {
-      console.error('Error deleting delivery partner:', error);
-      res.status(500).json({ error: 'Failed to delete delivery partner' });
+      return sendError(res, 'DeliveryController.deleteDeliveryPartner', 'Could not delete delivery partner', error);
     }
   }
 
@@ -97,8 +93,7 @@ export class DeliveryController {
       const result = await databaseService.restoreDeliveryPartner(partnerId);
       res.json(result);
     } catch (error) {
-      console.error('Error restoring delivery partner:', error);
-      res.status(500).json({ error: 'Failed to restore delivery partner' });
+      return sendError(res, 'DeliveryController.restoreDeliveryPartner', 'Could not the restore delivery partner', error);
     }
   }
 
@@ -121,7 +116,7 @@ export class DeliveryController {
 
       if (error) {
         console.error('Error looking up delivery partner for approval notification:', error);
-        return res.status(500).json({ error: error.message });
+        return sendError(res, 'DeliveryController.notifyPartnerApproved', 'Could not complete partner approved', error);
       }
       if (!partner) {
         return res.status(404).json({ error: 'Delivery partner not found' });
@@ -133,8 +128,7 @@ export class DeliveryController {
       await notificationService.notifyRiderApproved(partnerId);
       res.json({ success: true });
     } catch (error: any) {
-      console.error('Error sending delivery partner approval notification:', error);
-      res.status(500).json({ error: error?.message || 'Failed to send approval notification' });
+      return sendError(res, 'DeliveryController.notifyPartnerApproved', 'Could not send approval notification', error);
     }
   }
 
@@ -159,7 +153,7 @@ export class DeliveryController {
       const { data, error } = await query;
       if (error) {
         console.error('❌ listRiderProfileChangeRequests error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        return sendError(res, 'DeliveryController.listRiderProfileChangeRequests', 'Could not load the rider profile change requests', error, undefined, { success: false });
       }
 
       const rows = data ?? [];
@@ -194,9 +188,8 @@ export class DeliveryController {
       }));
 
       res.json({ success: true, requests });
-    } catch (error: any) {
-      console.error('❌ listRiderProfileChangeRequests error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to fetch change requests' });
+    } catch (error) {
+      return sendError(res, 'DeliveryController.listRiderProfileChangeRequests', 'Could not load the change requests', error, undefined, { success: false });
     }
   }
 
@@ -233,7 +226,7 @@ export class DeliveryController {
           return res.status(409).json({ success: false, error: `This request was already ${already[1]}.` });
         }
         console.error('❌ reviewRiderProfileChangeRequest error:', rpcErr);
-        return res.status(500).json({ success: false, error: rpcErr.message });
+        return sendError(res, 'DeliveryController.reviewRiderProfileChangeRequest', 'Could not review the rider profile change request', rpcErr, undefined, { success: false });
       }
       if (!updated) {
         return res.status(404).json({ success: false, error: 'Change request not found' });
@@ -255,9 +248,8 @@ export class DeliveryController {
         .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
       res.json({ success: true, request: updated });
-    } catch (error: any) {
-      console.error('❌ reviewRiderProfileChangeRequest error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to review change request' });
+    } catch (error) {
+      return sendError(res, 'DeliveryController.reviewRiderProfileChangeRequest', 'Could not review change request', error, undefined, { success: false });
     }
   }
 
@@ -268,8 +260,7 @@ export class DeliveryController {
       const agents = await databaseService.getDeliveryAgents(partnerId);
       res.json(agents);
     } catch (error) {
-      console.error('Error fetching delivery agents:', error);
-      res.status(500).json({ error: 'Failed to fetch delivery agents' });
+      return sendError(res, 'DeliveryController.getDeliveryAgents', 'Could not load delivery agents', error);
     }
   }
 
@@ -305,8 +296,7 @@ export class DeliveryController {
         } catch { /* non-critical */ }
       });
     } catch (error) {
-      console.error('Error assigning delivery agent:', error);
-      res.status(500).json({ error: 'Failed to assign delivery agent' });
+      return sendError(res, 'DeliveryController.assignDeliveryAgent', 'Could not assign delivery agent', error);
     }
   }
 
@@ -328,8 +318,7 @@ export class DeliveryController {
 
       res.json(result);
     } catch (error) {
-      console.error('Error updating delivery status:', error);
-      res.status(500).json({ error: 'Failed to update delivery status' });
+      return sendError(res, 'DeliveryController.updateDeliveryStatus', 'Could not update delivery status', error);
     }
   }
 
@@ -341,7 +330,12 @@ export class DeliveryController {
       const { supabaseAdmin } = await import('../config/database.js');
 
       // Auto-offline stale drivers before broadcast (best-effort)
-      void supabaseAdmin.rpc('auto_offline_stale_drivers');
+      // Supabase queries are lazy — they only run when awaited/then'd, so `void rpc()` never executed.
+      supabaseAdmin
+        .rpc('auto_offline_stale_drivers')
+        .then(({ error }) => {
+          if (error) console.warn('[DeliveryController.broadcastToDrivers] auto_offline_stale_drivers failed:', error.message);
+        });
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
@@ -419,8 +413,7 @@ export class DeliveryController {
 
       res.json({ success: true, broadcast_count: (partners as any[]).length });
     } catch (err) {
-      console.error('broadcastToDrivers error:', err);
-      res.status(500).json({ error: 'Failed to broadcast' });
+      return sendError(res, 'DeliveryController.broadcastToDrivers', 'Could not broadcast the order to nearby drivers', err);
     }
   }
 }

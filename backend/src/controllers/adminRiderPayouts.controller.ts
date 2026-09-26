@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * delivery_partners_payouts rows were written on every delivery
@@ -49,9 +50,8 @@ export async function listRiderPayouts(req: Request, res: Response) {
     }));
 
     res.json({ success: true, payouts: enriched });
-  } catch (error: any) {
-    console.error('❌ listRiderPayouts error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch rider payouts' });
+  } catch (error) {
+    return sendError(res, 'adminRiderPayouts.listRiderPayouts', 'Could not load rider payouts', error, undefined, { success: false });
   }
 }
 
@@ -104,8 +104,7 @@ export async function markRiderPayoutPaid(req: Request, res: Response) {
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, payout: data });
-  } catch (error: any) {
-    console.error('❌ markRiderPayoutPaid error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to mark payout as paid' });
+  } catch (error) {
+    return sendError(res, 'adminRiderPayouts.markRiderPayoutPaid', 'Could not mark the payout as paid', error, undefined, { success: false });
   }
 }

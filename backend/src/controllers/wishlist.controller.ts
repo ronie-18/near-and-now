@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 // wishlist_items is service_role-only (no anon/authenticated grant) — same
 // reasoning as customer_saved_addresses/product_reviews: customer auth is a
@@ -47,9 +48,8 @@ export class WishlistController {
         }));
 
       res.json({ success: true, items });
-    } catch (error: any) {
-      console.error('❌ getWishlist error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to load wishlist' });
+    } catch (error) {
+      return sendError(res, 'WishlistController.getWishlist', 'Could not load wishlist', error, undefined, { success: false });
     }
   }
 
@@ -73,9 +73,8 @@ export class WishlistController {
       if (error) throw error;
 
       res.json({ success: true });
-    } catch (error: any) {
-      console.error('❌ addToWishlist error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to add to wishlist' });
+    } catch (error) {
+      return sendError(res, 'WishlistController.addToWishlist', 'Could not add the to wishlist', error, undefined, { success: false });
     }
   }
 
@@ -93,9 +92,8 @@ export class WishlistController {
       if (error) throw error;
 
       res.json({ success: true, inWishlist: Boolean(data) });
-    } catch (error: any) {
-      console.error('❌ checkWishlist error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to check wishlist' });
+    } catch (error) {
+      return sendError(res, 'WishlistController.checkWishlist', 'Could not the check wishlist', error, undefined, { success: false });
     }
   }
 
@@ -111,9 +109,8 @@ export class WishlistController {
       if (error) throw error;
 
       res.json({ success: true });
-    } catch (error: any) {
-      console.error('❌ removeFromWishlist error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to remove from wishlist' });
+    } catch (error) {
+      return sendError(res, 'WishlistController.removeFromWishlist', 'Could not remove the from wishlist', error, undefined, { success: false });
     }
   }
 }

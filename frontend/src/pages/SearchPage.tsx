@@ -4,6 +4,7 @@ import { searchProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
 import ProductGrid from '../components/products/ProductGrid';
 import { useNotification } from '../context/NotificationContext';
+import { describeError } from '../utils/apiErrors';
 
 const SearchPage = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -38,7 +39,7 @@ const SearchPage = () => {
         }
       } catch (error) {
         console.error('Error searching products:', error);
-        if (!cancelled) showNotification('Failed to load search results. Please try again.', 'error');
+        if (!cancelled) showNotification(describeError('SearchPage.fetchSearchResults', 'Could not load search results', error), 'error');
       } finally {
         if (!cancelled) setLoading(false);
       }

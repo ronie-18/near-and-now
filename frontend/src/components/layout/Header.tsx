@@ -9,6 +9,7 @@ import {
   LogOut, Package, UserCircle, LogIn, UserPlus, Clock, Sparkles
 } from 'lucide-react';
 import { searchProducts, Product, getUserAddresses, Address as DbAddress } from '../../services/supabase';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholderImage';
 
 const Header = () => {
   const navigate = useNavigate();
@@ -321,7 +322,7 @@ const Header = () => {
                                 onClick={() => handleSuggestionClick(product.id)}
                               >
                                 <img
-                                  src={product.image || 'https://via.placeholder.com/48?text=No+Image'}
+                                  src={product.image || PLACEHOLDER_IMAGE}
                                   alt={product.name}
                                   className="w-12 h-12 object-cover rounded-lg border border-gray-200 group-hover:border-primary/30 transition-all flex-shrink-0"
                                 />
@@ -646,7 +647,7 @@ const Header = () => {
                             onClick={() => handleSuggestionClick(product.id)}
                           >
                             <img
-                              src={product.image || 'https://via.placeholder.com/40?text=No+Image'}
+                              src={product.image || PLACEHOLDER_IMAGE}
                               alt={product.name}
                               className="w-10 h-10 object-cover rounded-lg border border-gray-200"
                             />

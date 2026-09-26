@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, ReactNode } from 'react';
 
 // Define notification types
 export type NotificationType = 'success' | 'error' | 'info' | 'warning';
@@ -30,8 +30,17 @@ interface NotificationProviderProps {
 export function NotificationProvider({ children }: NotificationProviderProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // Show notification
-  const showNotification = (
+  // Remove notification
+  const removeNotification = useCallback((id: string) => {
+    setNotifications(prevNotifications =>
+      prevNotifications.filter(notification => notification.id !== id)
+    );
+  }, []);
+
+  // Show notification. useCallback: several pages list showNotification in effect deps
+  // (CategoryPage, AddressesPage…). With a new identity per render, every toast add/remove
+  // re-ran those effects and refetched the page.
+  const showNotification = useCallback((
     message: string,
     type: NotificationType = 'info',
     duration = 3000
@@ -54,21 +63,13 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
     setTimeout(() => {
       removeNotification(id);
     }, duration);
-  };
+  }, [removeNotification]);
 
-  // Remove notification
-  const removeNotification = (id: string) => {
-    setNotifications(prevNotifications => 
-      prevNotifications.filter(notification => notification.id !== id)
-    );
-  };
-
-  // Context value
-  const value = {
-    notifications,
-    showNotification,
-    removeNotification
-  };
+  // Context value: consumers only re-render when the toast list itself changes.
+  const value = useMemo(
+    () => ({ notifications, showNotification, removeNotification }),
+    [notifications, showNotification, removeNotification]
+  );
 
   return (
     <NotificationContext.Provider value={value}>

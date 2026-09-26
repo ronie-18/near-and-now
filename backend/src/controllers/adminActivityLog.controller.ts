@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 type ActivityRow = {
   id: string;
@@ -87,7 +88,7 @@ export async function listActivityLog(req: Request, res: Response) {
     ] as const) {
       if (result.error) {
         console.error(`❌ listActivityLog (${label}) error:`, result.error);
-        return res.status(500).json({ success: false, error: result.error.message });
+        return sendError(res, 'adminActivityLog.listActivityLog', 'Could not load the activity log', undefined, undefined, { success: false });
       }
     }
 
@@ -236,8 +237,7 @@ export async function listActivityLog(req: Request, res: Response) {
     visible.sort((a, b) => new Date(b.reviewed_at).getTime() - new Date(a.reviewed_at).getTime());
 
     res.json({ success: true, activity: visible });
-  } catch (error: any) {
-    console.error('❌ listActivityLog error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch activity log' });
+  } catch (error) {
+    return sendError(res, 'adminActivityLog.listActivityLog', 'Could not load the activity log', error, undefined, { success: false });
   }
 }

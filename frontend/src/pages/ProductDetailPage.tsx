@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
-import { getAllProducts, Product } from '../services/supabase';
+import { getProductById, getProductsByCategory, Product } from '../services/supabase';
+import { describeError } from '../utils/apiErrors';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice, formatCategoryName } from '../utils/formatters';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
+import { PLACEHOLDER_IMAGE } from '../utils/placeholderImage';
 
 const apiBase = () => (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
 
@@ -14,7 +16,6 @@ const apiBase = () => (import.meta.env.VITE_API_URL || window.location.origin).r
    Inline styles & keyframes injected once
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .pdp-root * { box-sizing: border-box; }
 
@@ -223,18 +224,24 @@ const ProductDetailPage = () => {
       if (!productId) return;
       try {
         setLoading(true);
-        const allProducts = await getAllProducts();
+        // One indexed lookup for the product itself…
+        const currentProduct = await getProductById(productId);
         if (cancelled) return;
-        const currentProduct = allProducts.find(p => p.id === productId) || null;
         setProduct(currentProduct);
-        if (currentProduct) {
-          const related = allProducts
-            .filter(p => p.category === currentProduct.category && p.id !== currentProduct.id)
-            .slice(0, 4);
-          setRelatedProducts(related);
+        if (!currentProduct) {
+          setRelatedProducts([]);
+          return;
         }
+        // …then only the products in the same category for the "related" strip.
+        const sameCategory = await getProductsByCategory(currentProduct.category);
+        if (cancelled) return;
+        setRelatedProducts(sameCategory.filter((p) => p.id !== currentProduct.id).slice(0, 4));
       } catch (error) {
-        console.error('Error fetching product details:', error);
+        if (cancelled) return;
+        showNotification(
+          describeError('ProductDetailPage.fetchProductDetails', `Could not load product ${productId}`, error),
+          'error'
+        );
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -286,9 +293,9 @@ const ProductDetailPage = () => {
         });
         if (!res.ok) throw new Error('Failed to remove from wishlist');
       }
-    } catch {
+    } catch (err) {
       setInWishlist(!next);
-      showNotification('Something went wrong. Please try again.', 'error');
+      showNotification(describeError('ProductDetailPage.toggleWishlist', 'Could not complete the request', err), 'error');
     } finally {
       setWishlistBusy(false);
     }
@@ -379,7 +386,7 @@ const ProductDetailPage = () => {
             style={{ flex: '1 1 380px', animationDelay: '0.05s' }}
           >
             <img
-              src={product.image || 'https://via.placeholder.com/600x600?text=No+Image'}
+              src={product.image || PLACEHOLDER_IMAGE}
               alt={product.name}
             />
           </div>

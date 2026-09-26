@@ -14,6 +14,7 @@ import {
   PlaceSuggestion,
 } from '../../services/placesService';
 import MapLocationPicker from './MapLocationPicker';
+import { describeError } from '../../utils/apiErrors';
 
 interface DbAddress {
   id: string;
@@ -216,7 +217,7 @@ const LocationPicker = ({
       }
     } catch (err) {
       console.error('Place details error:', err);
-      setError('Failed to get place details.');
+      setError(describeError('LocationPicker.handleSuggestionClick', 'Could not get place details', err));
     } finally {
       setIsLoadingSuggestions(false);
     }

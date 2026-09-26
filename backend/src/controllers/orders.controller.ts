@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
 import { validateQuantity } from '../utils/quantity.js';
+import { sendError } from '../utils/httpError.js';
 
 // Normal forward order-of-progress, excluding order_cancelled (which is a
 // valid transition from any non-terminal status, not a sequence position).
@@ -322,8 +323,7 @@ export class OrdersController {
       const orders = await databaseService.getCustomerOrders(customerId);
       res.json(orders);
     } catch (error) {
-      console.error('Error fetching customer orders:', error);
-      res.status(500).json({ error: 'Failed to fetch orders' });
+      return sendError(res, 'OrdersController.getCustomerOrders', 'Could not load the orders', error);
     }
   }
 
@@ -339,8 +339,7 @@ export class OrdersController {
       }
       res.json(order);
     } catch (error) {
-      console.error('Error fetching order:', error);
-      res.status(500).json({ error: 'Failed to fetch order' });
+      return sendError(res, 'OrdersController.getOrderById', 'Could not load order', error);
     }
   }
 
@@ -448,8 +447,7 @@ export class OrdersController {
 
       res.json({ success: true, order: data });
     } catch (error) {
-      console.error('Error updating order status:', error);
-      res.status(500).json({ error: 'Failed to update order status' });
+      return sendError(res, 'OrdersController.updateOrderStatus', 'Could not update order status', error);
     }
   }
 
@@ -474,7 +472,7 @@ export class OrdersController {
       if (error.message?.includes('delivery partner') || error.message?.includes('already')) {
         return res.status(400).json({ error: error.message });
       }
-      res.status(500).json({ error: 'Failed to cancel order' });
+      return sendError(res, 'OrdersController.cancelOrder', 'Could not cancel order', error);
     }
   }
 }

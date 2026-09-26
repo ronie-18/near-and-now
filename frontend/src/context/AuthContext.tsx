@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import {
   sendOTP,
   verifyOTP,
@@ -118,7 +118,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   // Send OTP to phone number
-  const sendOTPCode = async (phone: string) => {
+  const sendOTPCode = useCallback(async (phone: string) => {
     try {
       setIsLoading(true);
       await sendOTP(phone);
@@ -128,10 +128,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   // Verify OTP and login/register
-  const verifyOTPCode = async (phone: string, otp: string, userData?: {
+  const verifyOTPCode = useCallback(async (phone: string, otp: string, userData?: {
     name: string;
     email?: string;
     landmark: string;
@@ -160,10 +160,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   // Logout
-  const logoutUser = async () => {
+  const logoutUser = useCallback(async () => {
     try {
       setIsLoading(true);
 
@@ -173,6 +173,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       localStorage.removeItem('userData');
       localStorage.removeItem('customerData');
       localStorage.removeItem('authLoginPhone');
+      // Header re-seeds LocationContext from this key on the next load; clearing only
+      // 'userLocation' (LocationContext) left the previous user's address in place.
+      localStorage.removeItem('currentLocation');
 
       setUser(null);
       setCustomer(null);
@@ -183,10 +186,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   // Update user profile
-  const updateUserProfile = async (data: any) => {
+  const updateUserProfile = useCallback(async (data: any) => {
     try {
       setIsLoading(true);
 
@@ -218,41 +221,45 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user, customer]);
 
   // Sets (or stages a change of) the user's email and sends a 4-digit code.
-  const changeEmail = async (email: string) => {
+  const changeEmail = useCallback(async (email: string) => {
     await changeCustomerEmail(email);
-  };
+  }, []);
 
   // Confirms the code and refreshes the locally cached user so email_verified_at updates.
-  const verifyEmailCode = async (code: string) => {
+  const verifyEmailCode = useCallback(async (code: string) => {
     const { email } = await verifyCustomerEmailCode(code);
     if (user) {
       const updatedUser = { ...user, email, email_verified_at: new Date().toISOString() };
       setUser(updatedUser);
       localStorage.setItem('userData', JSON.stringify(updatedUser));
     }
-  };
+  }, [user]);
 
-  const resendEmailCode = async () => {
+  const resendEmailCode = useCallback(async () => {
     await resendEmailVerificationCode();
-  };
+  }, []);
 
-  // Context value
-  const value = {
-    user,
-    customer,
-    isLoading,
-    isAuthenticated,
-    sendOTPCode,
-    verifyOTPCode,
-    logoutUser,
-    updateUserProfile,
-    changeEmail,
-    verifyEmailCode,
-    resendEmailCode
-  };
+  // Stable context value: every consumer (Header, Cart, pages) re-rendered on each
+  // AuthProvider render before, because this object was recreated every time.
+  const value = useMemo<AuthContextType>(
+    () => ({
+      user,
+      customer,
+      isLoading,
+      isAuthenticated,
+      sendOTPCode,
+      verifyOTPCode,
+      logoutUser,
+      updateUserProfile,
+      changeEmail,
+      verifyEmailCode,
+      resendEmailCode
+    }),
+    [user, customer, isLoading, isAuthenticated, sendOTPCode, verifyOTPCode, logoutUser, updateUserProfile, changeEmail, verifyEmailCode, resendEmailCode]
+  );
 
   return (
     <AuthContext.Provider value={value}>

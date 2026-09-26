@@ -9,6 +9,7 @@ import {
   isDocType,
 } from '../utils/deliveryPartnerVerificationDocuments.js';
 import { suspendRiderIfApprovedAndGetName } from './deliveryPartner.controller.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * List a delivery partner's verification documents for admin review, each
@@ -26,7 +27,7 @@ export async function getDeliveryPartnerVerificationDocuments(req: Request, res:
 
     if (error) {
       console.error('❌ getDeliveryPartnerVerificationDocuments error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminDeliveryDocuments.getDeliveryPartnerVerificationDocuments', 'Could not load the delivery partner verification documents', error, undefined, { success: false });
     }
 
     const byType = new Map((rows ?? []).map((r) => [r.doc_type, r]));
@@ -58,9 +59,8 @@ export async function getDeliveryPartnerVerificationDocuments(req: Request, res:
     );
 
     res.json({ success: true, documents });
-  } catch (error: any) {
-    console.error('❌ getDeliveryPartnerVerificationDocuments error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch verification documents' });
+  } catch (error) {
+    return sendError(res, 'adminDeliveryDocuments.getDeliveryPartnerVerificationDocuments', 'Could not load the verification documents', error, undefined, { success: false });
   }
 }
 
@@ -88,7 +88,7 @@ export async function getDeliveryPartnerBillingInfo(req: Request, res: Response)
 
     if (error) {
       console.error('❌ getDeliveryPartnerBillingInfo error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminDeliveryDocuments.getDeliveryPartnerBillingInfo', 'Could not load the delivery partner billing info', error, undefined, { success: false });
     }
 
     // A submitted UPI ID doesn't land in delivery_partners.upi_id until an
@@ -120,9 +120,8 @@ export async function getDeliveryPartnerBillingInfo(req: Request, res: Response)
         pendingUpiId,
       },
     });
-  } catch (error: any) {
-    console.error('❌ getDeliveryPartnerBillingInfo error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch billing info' });
+  } catch (error) {
+    return sendError(res, 'adminDeliveryDocuments.getDeliveryPartnerBillingInfo', 'Could not load the billing info', error, undefined, { success: false });
   }
 }
 
@@ -183,7 +182,7 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
 
     if (error) {
       console.error('❌ reviewDeliveryPartnerVerificationDocument error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminDeliveryDocuments.reviewDeliveryPartnerVerificationDocument', 'Could not review the delivery partner verification document', error, undefined, { success: false });
     }
 
     // Rejecting a document on an already-approved rider previously had no
@@ -218,8 +217,7 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, document: data, riderSuspended });
-  } catch (error: any) {
-    console.error('❌ reviewDeliveryPartnerVerificationDocument error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to review document' });
+  } catch (error) {
+    return sendError(res, 'adminDeliveryDocuments.reviewDeliveryPartnerVerificationDocument', 'Could not review document', error, undefined, { success: false });
   }
 }

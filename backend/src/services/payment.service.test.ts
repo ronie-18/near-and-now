@@ -83,7 +83,8 @@ describe('PaymentService', () => {
     chain.select = vi.fn(() => chain);
     chain.eq = vi.fn(() => chain);
     chain.maybeSingle = maybeSingle;
-    vi.spyOn(supabaseAdmin, 'from').mockReturnValue(chain);
+    // `from` lives on the SupabaseClient prototype, which vi.spyOn does not see on the instance.
+    (supabaseAdmin as unknown as { from: () => unknown }).from = () => chain;
   }
 
   it('createPaymentOrder maps API response and sets razorpay_mode test for test keys', async () => {

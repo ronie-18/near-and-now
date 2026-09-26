@@ -1,15 +1,17 @@
 # Near and Now — backend API (Express, npm workspaces monorepo)
 # Build:  docker build -t nearandnow-api .
-# Run:    docker run -p 3000:3000 --env-file .env nearandnow-api
+# Run:    docker run -p 3000:3000 --env-file backend/.env nearandnow-api
+#
+# Deployed to AWS App Runner (or ECS Fargate) from Amazon ECR — see AWS_MIGRATION_PLAN.md.
 
 # ---- build stage ----
 FROM node:22-alpine AS build
 WORKDIR /app
 
-# Install backend workspace deps using the root lockfile
+# Install backend workspace deps using the root lockfile (layer is cached until a manifest changes)
 COPY package.json package-lock.json ./
 COPY backend/package.json ./backend/
-RUN npm ci --workspace=backend
+RUN npm ci --workspace=backend --ignore-scripts
 
 # Compile TypeScript -> backend/dist
 COPY backend ./backend
@@ -18,12 +20,14 @@ RUN npm run build --workspace=backend
 # ---- runtime stage ----
 FROM node:22-alpine
 ENV NODE_ENV=production
+# Node's default heap sizing is conservative in small containers; let it use most of a 1 GB task.
+ENV NODE_OPTIONS="--max-old-space-size=768"
 WORKDIR /app
 
 # Production deps only
 COPY package.json package-lock.json ./
 COPY backend/package.json ./backend/
-RUN npm ci --workspace=backend --omit=dev && npm cache clean --force
+RUN npm ci --workspace=backend --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --from=build /app/backend/dist ./backend/dist
 

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 type SubmitBody = {
   name?: string;
@@ -111,13 +112,12 @@ export async function submitProductSubmission(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ submitProductSubmission error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'productSubmissions.submitProductSubmission', 'Could not submit the product submission', error, undefined, { success: false });
     }
 
     res.json({ success: true, submission: data });
-  } catch (error: any) {
-    console.error('❌ submitProductSubmission error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to submit product' });
+  } catch (error) {
+    return sendError(res, 'productSubmissions.submitProductSubmission', 'Could not submit product', error, undefined, { success: false });
   }
 }
 
@@ -135,13 +135,12 @@ export async function listMyProductSubmissions(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listMyProductSubmissions error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'productSubmissions.listMyProductSubmissions', 'Could not load the my product submissions', error, undefined, { success: false });
     }
 
     res.json({ success: true, submissions: data ?? [] });
-  } catch (error: any) {
-    console.error('❌ listMyProductSubmissions error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch submissions' });
+  } catch (error) {
+    return sendError(res, 'productSubmissions.listMyProductSubmissions', 'Could not load the submissions', error, undefined, { success: false });
   }
 }
 
@@ -163,7 +162,7 @@ export async function listProductSubmissions(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listProductSubmissions error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'productSubmissions.listProductSubmissions', 'Could not load the product submissions', error, undefined, { success: false });
     }
 
     const submissions = (data ?? []).map((row: any) => ({
@@ -173,9 +172,8 @@ export async function listProductSubmissions(req: Request, res: Response) {
     }));
 
     res.json({ success: true, submissions });
-  } catch (error: any) {
-    console.error('❌ listProductSubmissions error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch submissions' });
+  } catch (error) {
+    return sendError(res, 'productSubmissions.listProductSubmissions', 'Could not load the submissions', error, undefined, { success: false });
   }
 }
 
@@ -242,7 +240,7 @@ export async function editProductSubmission(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ editProductSubmission error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'productSubmissions.editProductSubmission', 'Could not complete product submission', error, undefined, { success: false });
     }
     if (!data) {
       // Either the id doesn't exist, or it's no longer pending — disambiguate
@@ -259,9 +257,8 @@ export async function editProductSubmission(req: Request, res: Response) {
     }
 
     res.json({ success: true, submission: data });
-  } catch (error: any) {
-    console.error('❌ editProductSubmission error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update submission' });
+  } catch (error) {
+    return sendError(res, 'productSubmissions.editProductSubmission', 'Could not update the submission', error, undefined, { success: false });
   }
 }
 
@@ -322,7 +319,7 @@ export async function reviewProductSubmission(req: Request, res: Response) {
         return res.status(400).json({ success: false, error: 'HSN code and GST rate are required to approve a product' });
       }
       console.error('❌ reviewProductSubmission error:', rpcErr);
-      return res.status(500).json({ success: false, error: rpcErr.message });
+      return sendError(res, 'productSubmissions.reviewProductSubmission', 'Could not review the product submission', rpcErr, undefined, { success: false });
     }
     if (!updated) {
       return res.status(404).json({ success: false, error: 'Submission not found' });
@@ -343,8 +340,7 @@ export async function reviewProductSubmission(req: Request, res: Response) {
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, submission: updated });
-  } catch (error: any) {
-    console.error('❌ reviewProductSubmission error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to review submission' });
+  } catch (error) {
+    return sendError(res, 'productSubmissions.reviewProductSubmission', 'Could not review submission', error, undefined, { success: false });
   }
 }

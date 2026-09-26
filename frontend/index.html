@@ -2,25 +2,27 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/Logo.png" />
+    <link rel="icon" type="image/png" href="/Logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Near & Now - Digital Dukan, Local Dil Se. Order fresh groceries online with fast delivery, best prices, and quality products!" />
+    <meta name="theme-color" content="#22c55e" />
     <title>Near & Now - Digital Dukan, Local Dil Se</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
-    <script>
-      // Debug logging
-      console.log('🌐 HTML loaded successfully');
-      console.log('📍 Page URL:', window.location.href);
-
-      // Log errors without manipulating DOM (React ErrorBoundary handles display)
-      window.addEventListener('error', function(e) {
-        console.error('❌ Global error:', e.error || e.message);
-      });
-
-      window.addEventListener('unhandledrejection', function(e) {
-        console.error('❌ Unhandled promise rejection:', e.reason);
-      });
-    </script>
+    <!-- Warm up the two origins every page talks to before the JS bundle even starts. -->
+    <link rel="preconnect" href="%VITE_SUPABASE_URL%" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      One non-blocking stylesheet for every Google font the pages use, instead of a
+      render-blocking @import inside each page's inline <style>. Font files are only
+      downloaded when a page actually uses that family.
+    -->
+    <link
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600&family=DM+Serif+Display:ital@0;1&family=Sora:wght@400;500;600;700&family=Syne:wght@400;600;700;800&family=Instrument+Sans:wght@300;400;500&display=swap"
+    />
+    <link rel="preload" as="image" href="/near_and_now_banner.png" fetchpriority="high" />
   </head>
   <body>
     <div id="root"></div>

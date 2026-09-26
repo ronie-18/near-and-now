@@ -21,21 +21,27 @@ const verifyOtpSchema = z.object({
 const router = Router();
 const authController = new AuthController();
 
+/** Key limiters on the digits only so "+91 98765 43210" and "9876543210" share one bucket. */
+const phoneKey = (req: { body?: { phone?: unknown }; ip?: string }) => {
+  const digits = String(req.body?.phone ?? '').replace(/\D/g, '');
+  return digits.length >= 10 ? `phone:${digits.slice(-10)}` : `ip:${req.ip}`;
+};
+
 // Allow max 5 OTP sends per phone per 10 minutes
 const sendOtpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 5,
-  keyGenerator: (req) => req.body?.phone || req.ip,
+  keyGenerator: phoneKey,
   message: { error: 'Too many OTP requests. Please wait 10 minutes before trying again.' },
   standardHeaders: true,
   legacyHeaders: false
 });
 
-// Allow max 10 verification attempts per IP per 15 minutes
+// Allow max 10 verification attempts per phone per 15 minutes
 const verifyOtpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  keyGenerator: (req) => req.body?.phone || req.ip,
+  keyGenerator: phoneKey,
   message: { error: 'Too many verification attempts. Please wait 15 minutes.' },
   standardHeaders: true,
   legacyHeaders: false

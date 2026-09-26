@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useNotification } from '../context/NotificationContext';
+import { PLACEHOLDER_IMAGE } from '../utils/placeholderImage';
 
 const AboutPage = () => {
   const { showNotification } = useNotification();
@@ -49,7 +50,7 @@ const AboutPage = () => {
                 className="rounded-lg w-full h-auto"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
-                  target.src = "https://via.placeholder.com/400x300?text=Our+Story";
+                  target.src = PLACEHOLDER_IMAGE;
                 }}
               />
             </div>
@@ -123,7 +124,7 @@ const AboutPage = () => {
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.src = "https://via.placeholder.com/128x128?text=Team";
+                    target.src = PLACEHOLDER_IMAGE;
                   }}
                 />
               </div>
@@ -139,7 +140,7 @@ const AboutPage = () => {
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.src = "https://via.placeholder.com/128x128?text=Team";
+                    target.src = PLACEHOLDER_IMAGE;
                   }}
                 />
               </div>
@@ -155,7 +156,7 @@ const AboutPage = () => {
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.src = "https://via.placeholder.com/128x128?text=Team";
+                    target.src = PLACEHOLDER_IMAGE;
                   }}
                 />
               </div>

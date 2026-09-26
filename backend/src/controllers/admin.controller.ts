@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * Same strength rules already defined (but only ever enforced client-side,
@@ -83,7 +84,7 @@ export class AdminController {
       });
       if (sessionError) {
         console.error('admin login: failed to create session row', sessionError);
-        return res.status(500).json({ error: 'Failed to create session' });
+        return sendError(res, 'AdminController.login', 'Could not create session', sessionError);
       }
 
       // Non-blocking: a failed last_login_at write is a display/audit detail,
@@ -113,8 +114,7 @@ export class AdminController {
       const { password_hash, ...adminData } = admin as any;
       res.json({ admin: adminData, token, expiresAt });
     } catch (err) {
-      console.error('admin login error:', err);
-      res.status(500).json({ error: 'Login failed' });
+      return sendError(res, 'AdminController.login', 'Login failed', err);
     }
   }
 
@@ -235,8 +235,7 @@ export class AdminController {
 
       res.status(201).json({ admin: data });
     } catch (err) {
-      console.error('admin createAdmin error:', err);
-      res.status(500).json({ error: 'Failed to create admin' });
+      return sendError(res, 'AdminController.createAdmin', 'Could not create admin', err);
     }
   }
 
@@ -353,8 +352,7 @@ export class AdminController {
 
       res.json({ admin: data });
     } catch (err) {
-      console.error('admin updateAdmin error:', err);
-      res.status(500).json({ error: 'Failed to update admin' });
+      return sendError(res, 'AdminController.updateAdmin', 'Could not update admin', err);
     }
   }
 
@@ -384,8 +382,7 @@ export class AdminController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('admin deleteAdmin error:', err);
-      res.status(500).json({ error: 'Failed to delete admin' });
+      return sendError(res, 'AdminController.deleteAdmin', 'Could not delete admin', err);
     }
   }
 }

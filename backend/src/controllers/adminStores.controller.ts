@@ -8,6 +8,7 @@ import {
   isDocType,
 } from '../utils/verificationDocuments.js';
 import { suspendStoreIfApprovedAndGetName } from './storeOwner.controller.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * List a store's verification documents for admin review, each with a
@@ -24,7 +25,7 @@ export async function getStoreVerificationDocuments(req: Request, res: Response)
 
     if (error) {
       console.error('❌ getStoreVerificationDocuments error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.getStoreVerificationDocuments', 'Could not load the store verification documents', error, undefined, { success: false });
     }
 
     const byType = new Map((rows ?? []).map((r) => [r.doc_type, r]));
@@ -56,9 +57,8 @@ export async function getStoreVerificationDocuments(req: Request, res: Response)
     );
 
     res.json({ success: true, documents });
-  } catch (error: any) {
-    console.error('❌ getStoreVerificationDocuments error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch verification documents' });
+  } catch (error) {
+    return sendError(res, 'adminStores.getStoreVerificationDocuments', 'Could not load the verification documents', error, undefined, { success: false });
   }
 }
 
@@ -81,7 +81,7 @@ export async function getStoreBillingInfo(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ getStoreBillingInfo error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.getStoreBillingInfo', 'Could not load the store billing info', error, undefined, { success: false });
     }
     if (!store) {
       return res.status(404).json({ success: false, error: 'Store not found' });
@@ -141,9 +141,8 @@ export async function getStoreBillingInfo(req: Request, res: Response) {
         pendingPassbookUrl,
       },
     });
-  } catch (error: any) {
-    console.error('❌ getStoreBillingInfo error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch billing info' });
+  } catch (error) {
+    return sendError(res, 'adminStores.getStoreBillingInfo', 'Could not load the billing info', error, undefined, { success: false });
   }
 }
 
@@ -205,7 +204,7 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
 
     if (error) {
       console.error('❌ reviewStoreVerificationDocument error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.reviewStoreVerificationDocument', 'Could not review the store verification document', error, undefined, { success: false });
     }
 
     // Rejecting a document on an already-approved store previously had no
@@ -242,9 +241,8 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, document: data, storeSuspended });
-  } catch (error: any) {
-    console.error('❌ reviewStoreVerificationDocument error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to review document' });
+  } catch (error) {
+    return sendError(res, 'adminStores.reviewStoreVerificationDocument', 'Could not review document', error, undefined, { success: false });
   }
 }
 
@@ -265,13 +263,12 @@ export async function getStoreImages(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ getStoreImages error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.getStoreImages', 'Could not load the store images', error, undefined, { success: false });
     }
 
     res.json({ success: true, images: rows ?? [] });
-  } catch (error: any) {
-    console.error('❌ getStoreImages error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch store images' });
+  } catch (error) {
+    return sendError(res, 'adminStores.getStoreImages', 'Could not load store images', error, undefined, { success: false });
   }
 }
 
@@ -321,7 +318,7 @@ export async function reviewStoreImage(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ reviewStoreImage error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.reviewStoreImage', 'Could not review the store image', error, undefined, { success: false });
     }
 
     const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
@@ -336,9 +333,8 @@ export async function reviewStoreImage(req: Request, res: Response) {
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, image: data });
-  } catch (error: any) {
-    console.error('❌ reviewStoreImage error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to review image' });
+  } catch (error) {
+    return sendError(res, 'adminStores.reviewStoreImage', 'Could not review image', error, undefined, { success: false });
   }
 }
 
@@ -363,7 +359,7 @@ export async function listProfileChangeRequests(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listProfileChangeRequests error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.listProfileChangeRequests', 'Could not load the profile change requests', error, undefined, { success: false });
     }
 
     // reviewed_by has no FK to admins (added later, nullable, no
@@ -385,9 +381,8 @@ export async function listProfileChangeRequests(req: Request, res: Response) {
     }));
 
     res.json({ success: true, requests });
-  } catch (error: any) {
-    console.error('❌ listProfileChangeRequests error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch change requests' });
+  } catch (error) {
+    return sendError(res, 'adminStores.listProfileChangeRequests', 'Could not load the change requests', error, undefined, { success: false });
   }
 }
 
@@ -434,7 +429,7 @@ export async function reviewProfileChangeRequest(req: Request, res: Response) {
         return res.status(409).json({ success: false, error: `This request was already ${already[1]}.` });
       }
       console.error('❌ reviewProfileChangeRequest error:', rpcErr);
-      return res.status(500).json({ success: false, error: rpcErr.message });
+      return sendError(res, 'adminStores.reviewProfileChangeRequest', 'Could not review the profile change request', rpcErr, undefined, { success: false });
     }
     if (!updated) {
       return res.status(404).json({ success: false, error: 'Change request not found' });
@@ -456,9 +451,8 @@ export async function reviewProfileChangeRequest(req: Request, res: Response) {
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
     res.json({ success: true, request: updated });
-  } catch (error: any) {
-    console.error('❌ reviewProfileChangeRequest error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to review change request' });
+  } catch (error) {
+    return sendError(res, 'adminStores.reviewProfileChangeRequest', 'Could not review change request', error, undefined, { success: false });
   }
 }
 
@@ -481,7 +475,7 @@ export async function notifyStoreApproved(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ notifyStoreApproved lookup error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminStores.notifyStoreApproved', 'Could not complete store approved', error, undefined, { success: false });
     }
     if (!store) {
       return res.status(404).json({ success: false, error: 'Store not found' });
@@ -492,8 +486,7 @@ export async function notifyStoreApproved(req: Request, res: Response) {
 
     await notificationService.notifyStoreApproved(storeId);
     res.json({ success: true });
-  } catch (error: any) {
-    console.error('❌ notifyStoreApproved error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to send approval notification' });
+  } catch (error) {
+    return sendError(res, 'adminStores.notifyStoreApproved', 'Could not send the approval notification', error, undefined, { success: false });
   }
 }

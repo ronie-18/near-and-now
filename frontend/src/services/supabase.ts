@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { parseGstRatePercent, priceWithGst } from '../utils/priceGst';
 import { apiUrl, shouldUseBackendApi } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
+import { cached, invalidateCache } from '../utils/queryCache';
 
 async function readApiErrorMessage(res: Response): Promise<string> {
   const text = await res.text();
@@ -95,17 +96,24 @@ async function getNearbyStoreIds(
   lng: number,
   radiusKm: number
 ): Promise<string[]> {
-  try {
-    const { data: storeIds, error } = await supabaseNoSession.rpc('get_nearby_store_ids', {
-      cust_lat: lat,
-      cust_lng: lng,
-      radius_km: radiusKm
-    });
-    if (error || !storeIds?.length) return [];
-    return storeIds as string[];
-  } catch {
-    return [];
-  }
+  // Round to ~110 m so GPS jitter does not defeat the cache.
+  const key = `nearby-stores:${lat.toFixed(3)},${lng.toFixed(3)}:${radiusKm}`;
+  return cached(
+    key,
+    async () => {
+      const { data: storeIds, error } = await supabaseNoSession.rpc('get_nearby_store_ids', {
+        cust_lat: lat,
+        cust_lng: lng,
+        radius_km: radiusKm
+      });
+      if (error) {
+        console.warn(`[supabase.getNearbyStoreIds] get_nearby_store_ids RPC failed (${radiusKm} km): ${error.message}`);
+        return [];
+      }
+      return (storeIds as string[] | null) ?? [];
+    },
+    5 * 60_000
+  );
 }
 
 /** Returns all store IDs within the max configured radius (4 km). */
@@ -126,6 +134,12 @@ export async function hasNearbyStores(lat: number, lng: number): Promise<boolean
 // PostgREST encodes .in() filters in the URL. Large ID lists exceed URL limits and cause Bad Request.
 // Chunk size to stay under limits (~100 UUIDs ≈ 4KB).
 const IN_FILTER_CHUNK_SIZE = 100;
+/** Rows per page when reading a store chunk's catalogue. */
+const PRODUCT_PAGE_SIZE = 500;
+/** How many catalogue pages to request concurrently after the first one. */
+const PRODUCT_PAGE_CONCURRENCY = 4;
+/** Catalogue data is cached in memory for this long (products, store snapshots, nearby stores). */
+const CATALOGUE_TTL_MS = 60_000;
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -152,6 +166,7 @@ interface ProductRow {
     is_loose?: boolean;
     is_active: boolean;
     created_at?: string;
+    updated_at?: string;
     gst_rate?: number | string | null;
     rating?: number | string | null;
     rating_count?: number | null;
@@ -164,48 +179,139 @@ interface ProductRow {
 // set below — resolved ONCE per fetchProductRows call rather than via a
 // live stores join re-evaluated on every paginated products query, so a
 // store's approval flipping mid-scan can't produce an inconsistent result
-// set across pages (the live-join version could).
+// set across pages (the live-join version could). Cached for a minute: the
+// header search box calls this on every debounced keystroke.
 async function getApprovedActiveStoreIds(): Promise<string[]> {
-  const { data, error } = await supabaseNoSession
-    .from('stores')
-    .select('id')
+  return cached(
+    'stores:approved-active',
+    async () => {
+      const { data, error } = await supabaseNoSession
+        .from('stores')
+        .select('id')
+        .eq('is_active', true)
+        .eq('is_approved', true);
+      if (error) throw productQueryError('supabase.getApprovedActiveStoreIds', error);
+      return (data ?? []).map((s: { id: string }) => s.id);
+    },
+    CATALOGUE_TTL_MS
+  );
+}
+
+/**
+ * Only the columns the UI needs. `!inner` makes the join mandatory so the
+ * category / name / is_active filters below run inside Postgres instead of
+ * downloading the whole catalogue and filtering in the browser.
+ */
+const PRODUCT_ROW_SELECT =
+  'id, store_id, master_product_id, product_name, is_active, ' +
+  'master_products!inner(id, name, category, base_price, discounted_price, unit, image_url, description, is_loose, is_active, created_at, updated_at, gst_rate, rating, rating_count)';
+
+interface ProductRowFilters {
+  /** Exact master_products.category match. */
+  category?: string;
+  /** Case-insensitive substring match on master product name, category or description. */
+  search?: string;
+  /** master_products.id */
+  masterProductId?: string;
+}
+
+/** Escape PostgREST pattern / filter-syntax characters so user input can be used in ilike safely. */
+function escapeIlike(value: string): string {
+  return value.replace(/[\\%_,().]/g, (c) => `\\${c}`);
+}
+
+type ProductQuery = ReturnType<ReturnType<typeof supabaseNoSession.from>['select']>;
+
+function buildProductQuery(filters: ProductRowFilters): ProductQuery {
+  let q = supabaseNoSession
+    .from('products')
+    .select(PRODUCT_ROW_SELECT)
     .eq('is_active', true)
-    .eq('is_approved', true);
-  if (error) throw new Error(`Database error: ${error.message}`);
-  return (data ?? []).map((s: { id: string }) => s.id);
+    .eq('master_products.is_active', true) as ProductQuery;
+  if (filters.category) q = q.eq('master_products.category', filters.category) as ProductQuery;
+  if (filters.masterProductId) q = q.eq('master_product_id', filters.masterProductId) as ProductQuery;
+  if (filters.search) {
+    const pattern = `%${escapeIlike(filters.search)}%`;
+    // Same fields ShopPage.tsx and the mobile app match on (name OR category OR description).
+    q = q.or(`name.ilike.${pattern},category.ilike.${pattern},description.ilike.${pattern}`, {
+      referencedTable: 'master_products'
+    }) as ProductQuery;
+  }
+  return q;
+}
+
+function productQueryError(where: string, error: { message: string; code?: string }): Error {
+  return new Error(
+    `Could not load products from the catalogue (${where}): ${error.message}${error.code ? ` [${error.code}]` : ''}`
+  );
 }
 
 // Fetch product rows (products joined with master_products), optionally filtered by store IDs.
 // `storeIds` null means "no location filter" — resolves the full approved+active store set as a
 // single snapshot instead, then reuses the same chunked+paginated query path below for both cases.
-async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]> {
+async function fetchProductRows(storeIds: string[] | null, filters: ProductRowFilters = {}): Promise<ProductRow[]> {
   const eligibleStoreIds = storeIds != null ? storeIds : await getApprovedActiveStoreIds();
   if (eligibleStoreIds.length === 0) return [];
 
-  const allRows: ProductRow[] = [];
-  const storeChunks = chunk(eligibleStoreIds, IN_FILTER_CHUNK_SIZE);
-  for (const ids of storeChunks) {
-    let from = 0;
-    const batchSize = 500;
-    let hasMore = true;
-    while (hasMore) {
-      const { data, error } = await supabaseNoSession
-        .from('products')
-        .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
-        .eq('is_active', true)
-        .in('store_id', ids)
-        .range(from, from + batchSize - 1);
-      if (error) throw new Error(`Database error: ${error.message}`);
-      if (data && data.length > 0) {
-        allRows.push(...(data as unknown as ProductRow[]));
-        from += batchSize;
-        hasMore = data.length === batchSize;
-      } else {
-        hasMore = false;
+  // Read one page of one store chunk.
+  const readPage = async (ids: string[], pageIndex: number, where: string): Promise<ProductRow[]> => {
+    const from = pageIndex * PRODUCT_PAGE_SIZE;
+    const { data, error } = await buildProductQuery(filters)
+      .in('store_id', ids)
+      .range(from, from + PRODUCT_PAGE_SIZE - 1);
+    if (error) throw productQueryError(where, error);
+    return (data ?? []) as unknown as ProductRow[];
+  };
+
+  // Each 100-store chunk is read independently and concurrently. Within a chunk the first
+  // page is read alone, then remaining pages are fanned out PRODUCT_PAGE_CONCURRENCY at a
+  // time until a short page says the chunk is exhausted. (Previously every page of every
+  // chunk was awaited one after another.)
+  const readChunk = async (ids: string[], chunkIndex: number): Promise<ProductRow[]> => {
+    const where = `supabase.fetchProductRows/chunk${chunkIndex}`;
+    const rows: ProductRow[] = [];
+    const first = await readPage(ids, 0, where);
+    rows.push(...first);
+    let nextPage = 1;
+    let lastBatchWasFull = first.length === PRODUCT_PAGE_SIZE;
+    while (lastBatchWasFull) {
+      const indices = Array.from({ length: PRODUCT_PAGE_CONCURRENCY }, (_, i) => nextPage + i);
+      const batch = await Promise.all(indices.map((i) => readPage(ids, i, where)));
+      nextPage += PRODUCT_PAGE_CONCURRENCY;
+      lastBatchWasFull = true;
+      for (const page of batch) {
+        rows.push(...page);
+        if (page.length < PRODUCT_PAGE_SIZE) {
+          lastBatchWasFull = false;
+          break;
+        }
       }
     }
-  }
-  return allRows;
+    return rows;
+  };
+
+  const chunks = await Promise.all(chunk(eligibleStoreIds, IN_FILTER_CHUNK_SIZE).map(readChunk));
+  return chunks.flat();
+}
+
+/**
+ * Cached wrapper around fetchProductRows so the home page, category pages, product
+ * pages and the header search box share one download per (stores, filter) within
+ * the TTL, and concurrent callers share one in-flight request.
+ */
+async function fetchProductRowsCached(storeIds: string[] | null, filters: ProductRowFilters = {}): Promise<ProductRow[]> {
+  const storeKey = storeIds && storeIds.length > 0 ? [...storeIds].sort().join(',') : 'all';
+  const key = `products:${storeKey}|cat=${filters.category ?? ''}|q=${(filters.search ?? '').toLowerCase()}|id=${filters.masterProductId ?? ''}`;
+  return cached(key, () => fetchProductRows(storeIds, filters), CATALOGUE_TTL_MS);
+}
+
+/** Resolve which stores to query for the current location (null = no location → whole catalogue). */
+async function resolveStoreIds(options?: ProductFetchOptions): Promise<string[] | null> {
+  const opts = options ?? getLocationFromStorage();
+  const { lat, lng } = opts || {};
+  if (lat == null || lng == null) return null;
+  const nearby = await getNearbyStoreIdsExpanding(lat, lng);
+  return nearby.length > 0 ? nearby : null;
 }
 
 // Dedupe product rows by master_product_id and transform to Product[]
@@ -253,29 +359,33 @@ function transformProductRowToProduct(row: ProductRow): Product {
     unit: mp.unit ?? 'piece',
     isLoose,
     created_at: mp.created_at,
-    updated_at: (mp as { updated_at?: string }).updated_at
+    updated_at: mp.updated_at
   };
 }
 
 // Get all products from products table (joined with master_products). Optionally filtered by stores near lat/lng.
 export async function getAllProducts(options?: ProductFetchOptions): Promise<Product[]> {
-  try {
-    const opts = options ?? getLocationFromStorage();
-    const { lat, lng } = opts || {};
-    const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIdsExpanding(lat, lng)
-      : null;
+  const storeIds = await resolveStoreIds(options);
+  const rows = await fetchProductRowsCached(storeIds);
+  return productRowsToProducts(rows);
+}
 
-    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
-    const rows = await fetchProductRows(storeIdsToUse);
-    const products = productRowsToProducts(rows);
-
-    console.log(`✅ Fetched ${products.length} products from products table` + (storeIdsToUse ? ' (nearby stores, 1→4 km)' : ''));
-    return products;
-  } catch (error) {
-    console.error('❌ Error in getAllProducts:', error);
-    throw error;
+// Get one product by master product id: one indexed query instead of the whole catalogue.
+// Falls back to every approved store when the product is not stocked nearby, so deep links keep working.
+export async function getProductById(productId: string, options?: ProductFetchOptions): Promise<Product | null> {
+  const storeIds = await resolveStoreIds(options);
+  let rows = await fetchProductRowsCached(storeIds, { masterProductId: productId });
+  if (rows.length === 0 && storeIds) {
+    rows = await fetchProductRowsCached(null, { masterProductId: productId });
   }
+  return productRowsToProducts(rows)[0] ?? null;
+}
+
+/** Forget cached catalogue data (e.g. after the user changes location or an admin edit). */
+export function invalidateProductCache(): void {
+  invalidateCache('products:');
+  invalidateCache('stores:');
+  invalidateCache('nearby-stores:');
 }
 
 export type ProductSortOption = 'default' | 'price-asc' | 'price-desc' | 'name-asc' | 'name-desc';
@@ -364,66 +474,24 @@ export async function getNearbyProductsMeta(
   }
 }
 
-// Get products by category from products table (joined with master_products), optionally filtered by nearby stores
+// Get products by category (filtered in Postgres), optionally restricted to nearby stores.
+// Throws on failure so CategoryPage's error/retry UI can fire (a DB failure must not look like an empty category).
 export async function getProductsByCategory(
   categoryName: string,
   options?: ProductFetchOptions
 ): Promise<Product[]> {
-  try {
-    const opts = options ?? getLocationFromStorage();
-    const { lat, lng } = opts || {};
-    const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIdsExpanding(lat, lng)
-      : null;
-    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
-
-    const rows = await fetchProductRows(storeIdsToUse);
-    const rowsInCategory = rows.filter((r) => r.master_products?.category === categoryName);
-    return productRowsToProducts(rowsInCategory);
-  } catch (error) {
-    // Previously swallowed to [] here (unlike getAllProducts, which rethrows)
-    // — a real DB failure rendered identical to "no products in this
-    // category," and CategoryPage.tsx's own error/retry UI could never fire
-    // for it. Rethrow so the caller's real error handling actually runs.
-    console.error('Error in getProductsByCategory:', error);
-    throw error;
-  }
+  const storeIds = await resolveStoreIds(options);
+  const rows = await fetchProductRowsCached(storeIds, { category: categoryName });
+  return productRowsToProducts(rows);
 }
 
-// Search products from products table (joined with master_products), optionally filtered by nearby stores
+// Search products by name / category / description (filtered in Postgres), optionally restricted to nearby stores.
+// Throws on failure so SearchPage's error toast can fire (a DB failure must not look like "no results").
 export async function searchProducts(query: string, options?: ProductFetchOptions): Promise<Product[]> {
-  try {
-    const opts = options ?? getLocationFromStorage();
-    const { lat, lng } = opts || {};
-    const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIdsExpanding(lat, lng)
-      : null;
-    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
-
-    const rows = await fetchProductRows(storeIdsToUse);
-    const q = query.trim().toLowerCase();
-    // Previously matched product name only — a search for a term that only
-    // appears in a product's category or description (e.g. "dairy") returned
-    // 0 results here even though ShopPage.tsx's own filter and the mobile
-    // app's searchProducts() both already match name OR category.
-    const matching = q
-      ? rows.filter((r) => {
-          const mp = r.master_products;
-          return (
-            mp?.name?.toLowerCase().includes(q) ||
-            mp?.category?.toLowerCase().includes(q) ||
-            mp?.description?.toLowerCase().includes(q)
-          );
-        })
-      : rows;
-    return productRowsToProducts(matching);
-  } catch (error) {
-    // Previously swallowed to [] here — a real DB failure rendered identical
-    // to "no results found," and SearchPage.tsx's own error toast could
-    // never fire for it. Rethrow so the caller's real error handling runs.
-    console.error('Error in searchProducts:', error);
-    throw error;
-  }
+  const q = query.trim();
+  const storeIds = await resolveStoreIds(options);
+  const rows = await fetchProductRowsCached(storeIds, q ? { search: q } : {});
+  return productRowsToProducts(rows);
 }
 
 // Authentication types

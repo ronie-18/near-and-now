@@ -12,6 +12,7 @@ import {
 import { geocodeAddress } from '../services/placesService';
 import { Home, Briefcase, MapPin, AlertCircle, Navigation } from 'lucide-react';
 import LocationPicker, { LocationData } from '../components/location/LocationPicker';
+import { describeError } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────
    Types
@@ -33,7 +34,6 @@ interface Address {
    Styles
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .ap-root * { box-sizing: border-box; }
 
@@ -236,6 +236,7 @@ const AddressesPage = () => {
 
   /* ── Fetch addresses ── */
   const [fetchError, setFetchError] = useState(false);
+  const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
   const fetchAddresses = useCallback(async () => {
     if (!user?.id) { setLoading(false); return; }
     try {
@@ -249,9 +250,10 @@ const AddressesPage = () => {
         phone: addr.phone, isDefault: addr.is_default
       })));
     } catch (error) {
-      console.error('Error fetching addresses:', error);
+      const message = describeError('AddressesPage.fetchAddresses', 'Could not load your saved addresses', error);
       setFetchError(true);
-      showNotification('Failed to load addresses', 'error');
+      setFetchErrorMessage(message);
+      showNotification(message, 'error');
     } finally {
       setLoading(false);
     }
@@ -373,7 +375,7 @@ const AddressesPage = () => {
       setPickedLocation(null);
     } catch (error) {
       console.error('Error saving address:', error);
-      showNotification('Failed to save address. Please try again.', 'error');
+      showNotification(describeError('AddressesPage.handleSubmit', 'Could not save address', error), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -390,7 +392,7 @@ const AddressesPage = () => {
       showNotification('Address deleted successfully', 'success');
     } catch (error) {
       console.error('Error deleting address:', error);
-      showNotification('Failed to delete address. Please try again.', 'error');
+      showNotification(describeError('AddressesPage.handleDelete', 'Could not delete address', error), 'error');
     }
   };
 
@@ -402,7 +404,7 @@ const AddressesPage = () => {
       showNotification('Default address updated', 'success');
     } catch (error) {
       console.error('Error setting default address:', error);
-      showNotification('Failed to set default address. Please try again.', 'error');
+      showNotification(describeError('AddressesPage.handleSetDefault', 'Could not set default address', error), 'error');
     }
   };
 
@@ -630,7 +632,7 @@ const AddressesPage = () => {
                 <AlertCircle size={28} color="#dc2626" />
               </div>
               <h2>Couldn&apos;t Load Addresses</h2>
-              <p>Something went wrong while loading your addresses. Please try again.</p>
+              <p>{fetchErrorMessage ?? 'Something went wrong while loading your addresses. Please try again.'}</p>
               <button className="ap-btn-primary" onClick={() => fetchAddresses()}>
                 Try Again
               </button>

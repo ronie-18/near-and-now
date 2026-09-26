@@ -4,6 +4,7 @@ import ProductGrid from '../components/products/ProductGrid';
 import { getProductsByCategory, Product } from '../services/supabase';
 import { useNotification } from '../context/NotificationContext';
 import { formatCategoryName } from '../utils/formatters';
+import { describeError } from '../utils/apiErrors';
 
 type SortOption = 'default' | 'price-asc' | 'price-desc' | 'name-asc' | 'name-desc';
 
@@ -17,7 +18,6 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 
 /* ─── Inline styles injected once ─────────────────────────────────────── */
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap');
 
   :root {
     --cream:   #f8f5f0;
@@ -337,15 +337,12 @@ const CategoryPage = () => {
     try {
       setLoading(true);
       setError(null);
-      console.log('🔍 CategoryPage - Fetching products for category:', categoryId);
       const categoryProducts = await getProductsByCategory(categoryId);
-      console.log('📦 CategoryPage - Products found:', categoryProducts.length);
       if (fetchSeqRef.current !== seq) return;
       setProducts(categoryProducts);
     } catch (err) {
       if (fetchSeqRef.current !== seq) return;
-      const errorMessage = 'Failed to load products. Please try again.';
-      console.error('Error fetching products:', err);
+      const errorMessage = describeError('CategoryPage.fetchProducts', `Could not load the "${categoryId}" category`, err);
       setError(errorMessage);
       showNotification(errorMessage, 'error');
       setProducts([]);
@@ -360,11 +357,8 @@ const CategoryPage = () => {
   const sortedProducts = useMemo(() => {
     const shuffled = [...products];
     if (sortBy === 'default') {
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      return shuffled;
+      // The option is labelled "Newest"; it used to shuffle randomly on every render/refetch.
+      return shuffled.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
     }
     return shuffled.sort((a, b) => {
       switch (sortBy) {
@@ -426,7 +420,7 @@ const CategoryPage = () => {
           {loading
             ? 'Loading products…'
             : error
-              ? 'Failed to load'
+              ? 'Could not load this category'
               : count === 1 ? '1 product found' : `${count} products found`}
         </div>
 
@@ -457,7 +451,7 @@ const CategoryPage = () => {
         {error ? (
           <div className="cp-error" role="alert">
             <div className="cp-error-icon">✕</div>
-            <p className="cp-error-title">Something went wrong</p>
+            <p className="cp-error-title">Couldn&apos;t load this category</p>
             <p className="cp-error-msg">{error}</p>
             <button className="cp-retry-btn" onClick={fetchProducts}>Try again</button>
           </div>

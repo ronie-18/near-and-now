@@ -6,6 +6,7 @@ import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { createSignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
+import { sendError } from '../utils/httpError.js';
 
 function extractErrorMessage(err: any, fallback: string): string {
   if (!err) return fallback;
@@ -101,12 +102,9 @@ export class AuthController {
         message: 'OTP sent successfully',
         status: verification.status
       });
-    } catch (error: any) {
-      console.error('❌ Error sending OTP:', error);
-      res.status(500).json({
-        error: 'Failed to send OTP',
-        message: error.message
-      });
+    } catch (error) {
+      // Twilio errors carry an HTTP status (e.g. 400 for an invalid phone number); sendError infers it.
+      return sendError(res, 'AuthController.sendOTP', 'Could not send the OTP SMS', error);
     }
   }
 
@@ -189,10 +187,7 @@ export class AuthController {
         // a real account as unregistered.
         if (byVariantError) {
           console.error(`❌ ${requestedRole} account lookup failed:`, byVariantError);
-          return res.status(500).json({
-            error: 'Failed to verify account',
-            message: 'Could not check your account right now. Please try again.'
-          });
+          return sendError(res, 'AuthController.verifyOTP', 'Could not check your account after the OTP was verified — please try again', byVariantError);
         }
 
         if (byVariant) {
@@ -202,7 +197,8 @@ export class AuthController {
 
         if (existingUser && existingUser.role === requestedRole) {
           const token = crypto.randomUUID();
-          const { password_hash: _, ...userWithoutPassword } = existingUser;
+          // Never echo credentials or verification codes back to the client.
+          const { password_hash: _, session_token: __, email_verification_code: ___, ...userWithoutPassword } = existingUser;
           console.log(`👤 Existing ${requestedRole}, logging in:`, existingUser.id, existingUser.name);
 
           // Persist token so delivery-partner / shopkeeper APIs can authenticate requests.
@@ -217,7 +213,7 @@ export class AuthController {
               .eq('user_id', existingUser.id);
             if (tokenError) {
               console.error('❌ Failed to persist delivery_partner session token:', tokenError);
-              return res.status(500).json({ error: 'Failed to complete login', message: 'Could not persist session token' });
+              return sendError(res, 'AuthController.verifyOTP', 'Could not complete login', tokenError);
             }
           }
           if (requestedRole === 'shopkeeper') {
@@ -227,7 +223,7 @@ export class AuthController {
               .eq('id', existingUser.id);
             if (tokenError) {
               console.error('❌ Failed to persist shopkeeper session token:', tokenError);
-              return res.status(500).json({ error: 'Failed to complete login', message: 'Could not persist session token' });
+              return sendError(res, 'AuthController.verifyOTP', 'Could not complete login', tokenError);
             }
           }
 
@@ -329,10 +325,7 @@ export class AuthController {
         if (userError || !newUser) {
           const errMsg = extractErrorMessage(userError, 'Failed to create user account');
           console.error('❌ Error creating user:', userError);
-          return res.status(500).json({
-            error: 'Failed to create user account',
-            message: errMsg
-          });
+          return sendError(res, 'AuthController.verifyOTP', 'Could not create your account after the OTP was verified', userError, undefined, { message: errMsg });
         }
 
         appUser = newUser;
@@ -354,10 +347,7 @@ export class AuthController {
           const errMsg = extractErrorMessage(customerError, 'Failed to create customer profile');
           console.error('❌ Error creating customer:', customerError);
           await supabaseAdmin.from('app_users').delete().eq('id', appUser.id);
-          return res.status(500).json({
-            error: 'Failed to create customer profile',
-            message: errMsg
-          });
+          return sendError(res, 'AuthController.verifyOTP', 'Could not create your customer profile after the OTP was verified', customerError, undefined, { message: errMsg });
         }
 
         customer = newCustomer;
@@ -382,12 +372,9 @@ export class AuthController {
 
       if (tokenError) {
         console.error('❌ Failed to persist customer session token:', tokenError);
-        return res.status(500).json({
-          error: 'Failed to complete login',
-          message: extractErrorMessage(tokenError, 'Could not persist session token')
-        });
+        return sendError(res, 'AuthController.verifyOTP', 'Could not complete the login (the session token could not be saved)', tokenError);
       }
-      const { password_hash: _, session_token: __, ...userWithoutPassword } = appUser;
+      const { password_hash: _, session_token: __, email_verification_code: ___, ...userWithoutPassword } = appUser;
 
       res.json({
         success: true,
@@ -397,12 +384,9 @@ export class AuthController {
         token,
         isNewUser
       });
-    } catch (error: any) {
-      console.error('❌ Error verifying OTP:', error);
-      res.status(500).json({
-        error: 'Failed to verify OTP',
-        message: error.message
-      });
+    } catch (error) {
+      // Twilio "invalid code" responses carry a 4xx status which sendError infers.
+      return sendError(res, 'AuthController.verifyOTP', 'Could not verify the OTP', error);
     }
   }
 }

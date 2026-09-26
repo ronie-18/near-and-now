@@ -625,7 +625,8 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
       if (activeRes?.ok) {
         const d = await activeRes.json();
         const active = (d.orders || []).find((o: any) =>
-          ['rider_assigned', 'en_route_delivery', 'picked_up'].includes(o.status)
+          // mapDbStatusToRider (backend) emits rider_assigned / picking_up / picked_up — never en_route_delivery.
+          ['rider_assigned', 'picking_up', 'en_route_delivery', 'picked_up'].includes(o.status)
         );
         if (active && !delivered) {
           setActiveOrderId(active.id);

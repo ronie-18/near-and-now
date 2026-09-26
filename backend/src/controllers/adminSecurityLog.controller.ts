@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 /**
  * Surfaces audit_logs/security_events/failed_login_attempts — all three are
@@ -24,7 +25,7 @@ export async function listAuditLogs(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listAuditLogs error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminSecurityLog.listAuditLogs', 'Could not load the audit logs', error, undefined, { success: false });
     }
 
     const adminIds = [...new Set((data ?? []).map((r: any) => r.admin_id).filter(Boolean))];
@@ -41,9 +42,8 @@ export async function listAuditLogs(req: Request, res: Response) {
     }));
 
     res.json({ success: true, logs: rows });
-  } catch (error: any) {
-    console.error('❌ listAuditLogs error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch audit logs' });
+  } catch (error) {
+    return sendError(res, 'adminSecurityLog.listAuditLogs', 'Could not load the audit logs', error, undefined, { success: false });
   }
 }
 
@@ -58,13 +58,12 @@ export async function listSecurityEvents(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listSecurityEvents error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminSecurityLog.listSecurityEvents', 'Could not load the security events', error, undefined, { success: false });
     }
 
     res.json({ success: true, events: data ?? [] });
-  } catch (error: any) {
-    console.error('❌ listSecurityEvents error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch security events' });
+  } catch (error) {
+    return sendError(res, 'adminSecurityLog.listSecurityEvents', 'Could not load the security events', error, undefined, { success: false });
   }
 }
 
@@ -79,12 +78,11 @@ export async function listFailedLogins(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ listFailedLogins error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'adminSecurityLog.listFailedLogins', 'Could not load the failed logins', error, undefined, { success: false });
     }
 
     res.json({ success: true, attempts: data ?? [] });
-  } catch (error: any) {
-    console.error('❌ listFailedLogins error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch failed login attempts' });
+  } catch (error) {
+    return sendError(res, 'adminSecurityLog.listFailedLogins', 'Could not load the failed login attempts', error, undefined, { success: false });
   }
 }

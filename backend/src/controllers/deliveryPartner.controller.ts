@@ -7,6 +7,7 @@ import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
+import { sendError } from '../utils/httpError.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -279,8 +280,7 @@ export async function requireRider(req: Request, res: Response, next: NextFuncti
     req.riderId = partner.user_id;
     next();
   } catch (err) {
-    console.error('requireRider auth check failed:', err);
-    res.status(500).json({ error: 'Authentication check failed' });
+    return sendError(res, 'DeliveryPartnerController.if', 'Authentication check failed', err);
   }
 }
 
@@ -474,9 +474,8 @@ export class DeliveryPartnerController {
         user: userWithoutPassword,
         ...(supabaseSession ? { supabaseSession } : {}),
       });
-    } catch (err: any) {
-      console.error('deliveryPartner signupComplete error:', err);
-      res.status(500).json({ success: false, error: err?.message || 'Registration failed' });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.signupComplete', 'Could not complete the registration', err, undefined, { success: false });
     }
   }
 
@@ -547,8 +546,7 @@ export class DeliveryPartnerController {
         },
       });
     } catch (err) {
-      console.error('getProfile error:', err);
-      res.status(500).json({ error: 'Failed to fetch profile' });
+      return sendError(res, 'DeliveryPartnerController.getProfile', 'Could not load profile', err);
     }
   }
 
@@ -578,8 +576,7 @@ export class DeliveryPartnerController {
         dispatchReadyOrdersToDriver(req.riderId!).catch(console.error);
       }
     } catch (err) {
-      console.error('updateStatus error:', err);
-      res.status(500).json({ error: 'Failed to update status' });
+      return sendError(res, 'DeliveryPartnerController.updateStatus', 'Could not update the status', err);
     }
   }
 
@@ -637,8 +634,7 @@ export class DeliveryPartnerController {
         dispatchReadyOrdersToDriver(req.riderId!).catch(console.error);
       }
     } catch (err) {
-      console.error('updateLocation error:', err);
-      res.status(500).json({ error: 'Failed to update location' });
+      return sendError(res, 'DeliveryPartnerController.updateLocation', 'Could not update the location', err);
     }
   }
 
@@ -762,8 +758,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, orders: mapped, has_more: limit != null && mapped.length === limit });
     } catch (err) {
-      console.error('getOrders error:', err);
-      res.status(500).json({ error: 'Failed to fetch orders' });
+      return sendError(res, 'DeliveryPartnerController.getOrders', 'Could not load the orders', err);
     }
   }
 
@@ -814,8 +809,7 @@ export class DeliveryPartnerController {
         },
       });
     } catch (err) {
-      console.error('getOrderById error:', err);
-      res.status(500).json({ error: 'Failed to fetch order' });
+      return sendError(res, 'DeliveryPartnerController.getOrderById', 'Could not load order', err);
     }
   }
 
@@ -867,8 +861,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('acceptOrder error:', err);
-      res.status(500).json({ error: 'Failed to accept order' });
+      return sendError(res, 'DeliveryPartnerController.acceptOrder', 'Could not accept order', err);
     }
   }
 
@@ -909,8 +902,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('rejectOrder error:', err);
-      res.status(500).json({ error: 'Failed to reject order' });
+      return sendError(res, 'DeliveryPartnerController.rejectOrder', 'Could not reject order', err);
     }
   }
 
@@ -962,8 +954,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('markPickedUp error:', err);
-      res.status(500).json({ error: 'Failed to update pickup status' });
+      return sendError(res, 'DeliveryPartnerController.markPickedUp', 'Could not update pickup status', err);
     }
   }
 
@@ -1052,8 +1043,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('markDelivered error:', err);
-      res.status(500).json({ error: 'Failed to update delivery status' });
+      return sendError(res, 'DeliveryPartnerController.markDelivered', 'Could not update delivery status', err);
     }
   }
 
@@ -1096,13 +1086,12 @@ export class DeliveryPartnerController {
         .eq('id', orderId);
       if (verifyErr) {
         console.error('verifyDeliveryOTP: failed to persist verification:', verifyErr, { orderId });
-        return res.status(500).json({ success: false, error: 'Could not confirm verification. Please try again.' });
+        return sendError(res, 'DeliveryPartnerController.verifyDeliveryOTP', 'Could not confirm verification', verifyErr, undefined, { success: false });
       }
 
       res.json({ success: true });
     } catch (err) {
-      console.error('verifyDeliveryOTP error:', err);
-      res.status(500).json({ error: 'Failed to verify OTP' });
+      return sendError(res, 'DeliveryPartnerController.verifyDeliveryOTP', 'Could not verify the OTP', err);
     }
   }
 
@@ -1124,13 +1113,12 @@ export class DeliveryPartnerController {
 
       if (error) {
         console.error('❌ getProfileChangeRequest error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        return sendError(res, 'DeliveryPartnerController.getProfileChangeRequest', 'Could not load the profile change request', error, undefined, { success: false });
       }
 
       res.json({ success: true, request: data ?? null });
-    } catch (err: any) {
-      console.error('❌ getProfileChangeRequest error:', err);
-      res.status(500).json({ success: false, error: err?.message || 'Failed to fetch change request' });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.getProfileChangeRequest', 'Could not load the change request', err, undefined, { success: false });
     }
   }
 
@@ -1277,9 +1265,8 @@ export class DeliveryPartnerController {
       );
 
       res.json({ success: true, request: result.saved });
-    } catch (err: any) {
-      console.error('❌ requestProfileChange error:', err);
-      res.status(500).json({ success: false, error: err?.message || 'Failed to submit change request' });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.requestProfileChange', 'Could not submit the change request', err, undefined, { success: false });
     }
   }
 
@@ -1327,8 +1314,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, profile_image_url });
     } catch (err) {
-      console.error('updateProfileImage error:', err);
-      res.status(500).json({ error: 'Failed to upload profile image' });
+      return sendError(res, 'DeliveryPartnerController.updateProfileImage', 'Could not upload profile image', err);
     }
   }
 
@@ -1348,8 +1334,7 @@ export class DeliveryPartnerController {
         .eq('user_id', req.riderId!);
       res.json({ success: true, vehicle_type });
     } catch (err) {
-      console.error('updateVehicleType error:', err);
-      res.status(500).json({ success: false, error: 'Failed to update vehicle type' });
+      return sendError(res, 'DeliveryPartnerController.updateVehicleType', 'Could not update the vehicle type', err, undefined, { success: false });
     }
   }
 
@@ -1396,8 +1381,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('updatePhotoUrls error:', err);
-      res.status(500).json({ success: false, error: 'Failed to update photo URLs' });
+      return sendError(res, 'DeliveryPartnerController.updatePhotoUrls', 'Could not update the photo URLs', err, undefined, { success: false });
     }
   }
 
@@ -1429,8 +1413,7 @@ export class DeliveryPartnerController {
         },
       });
     } catch (err) {
-      console.error('getBillingInfo error:', err);
-      res.status(500).json({ success: false, error: 'Failed to fetch billing info' });
+      return sendError(res, 'DeliveryPartnerController.getBillingInfo', 'Could not load the billing info', err, undefined, { success: false });
     }
   }
 
@@ -1481,8 +1464,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, request: result.saved });
     } catch (err) {
-      console.error('saveBillingInfo error:', err);
-      res.status(500).json({ success: false, error: 'Failed to submit billing change' });
+      return sendError(res, 'DeliveryPartnerController.saveBillingInfo', 'Could not submit the billing change', err, undefined, { success: false });
     }
   }
 
@@ -1505,7 +1487,7 @@ export class DeliveryPartnerController {
 
       if (error) {
         console.error('❌ getVerificationDocuments (rider) error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        return sendError(res, 'DeliveryPartnerController.getVerificationDocuments', 'Could not load the verification documents', error, undefined, { success: false });
       }
 
       const byType = new Map((rows ?? []).map((r) => [r.doc_type, r]));
@@ -1535,9 +1517,8 @@ export class DeliveryPartnerController {
       );
 
       res.json({ success: true, documents });
-    } catch (error: any) {
-      console.error('❌ getVerificationDocuments (rider) error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to fetch verification documents' });
+    } catch (error) {
+      return sendError(res, 'DeliveryPartnerController.getVerificationDocuments', 'Could not load the verification documents', error, undefined, { success: false });
     }
   }
 
@@ -1594,7 +1575,7 @@ export class DeliveryPartnerController {
           .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
         if (uploadError) {
           console.error('❌ saveVerificationDocument (rider) upload error:', uploadError);
-          return res.status(500).json({ success: false, error: uploadError.message });
+          return sendError(res, 'DeliveryPartnerController.saveVerificationDocument', 'Could not save the verification document', uploadError, undefined, { success: false });
         }
 
         if (existing?.storage_path && existing.storage_path !== storagePath) {
@@ -1632,7 +1613,7 @@ export class DeliveryPartnerController {
 
       if (error) {
         console.error('❌ saveVerificationDocument (rider) upsert error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        return sendError(res, 'DeliveryPartnerController.saveVerificationDocument', 'Could not save the verification document', error, undefined, { success: false });
       }
 
       // The Vehicle Registration (RC) document's own number field IS the
@@ -1692,9 +1673,8 @@ export class DeliveryPartnerController {
       }
 
       res.json({ success: true, document: data, riderSuspended });
-    } catch (error: any) {
-      console.error('❌ saveVerificationDocument (rider) error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to save document' });
+    } catch (error) {
+      return sendError(res, 'DeliveryPartnerController.saveVerificationDocument', 'Could not save the document', error, undefined, { success: false });
     }
   }
 
@@ -1740,7 +1720,7 @@ export class DeliveryPartnerController {
 
       if (error) {
         console.error('❌ deleteVerificationDocument (rider) error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        return sendError(res, 'DeliveryPartnerController.deleteVerificationDocument', 'Could not delete the verification document', error, undefined, { success: false });
       }
 
       // Removing any document ends the current "submission complete" cycle —
@@ -1773,9 +1753,8 @@ export class DeliveryPartnerController {
       );
 
       res.json({ success: true, riderSuspended });
-    } catch (error: any) {
-      console.error('❌ deleteVerificationDocument (rider) error:', error);
-      res.status(500).json({ success: false, error: error?.message || 'Failed to delete document' });
+    } catch (error) {
+      return sendError(res, 'DeliveryPartnerController.deleteVerificationDocument', 'Could not delete the document', error, undefined, { success: false });
     }
   }
 
@@ -1809,17 +1788,16 @@ export class DeliveryPartnerController {
 
       if (error) {
         console.error('updatePushToken error:', error);
-        return res.status(500).json({ error: 'Failed to save push token' });
+        return sendError(res, 'DeliveryPartnerController.updatePushToken', 'Could not save push token', error);
       }
       if (!updated || updated.length === 0) {
         console.error(`updatePushToken: no delivery_partners row updated for user_id ${req.riderId}`);
-        return res.status(500).json({ error: 'Failed to save push token' });
+        return sendError(res, 'DeliveryPartnerController.updatePushToken', 'Could not save push token', undefined);
       }
 
       res.json({ success: true });
     } catch (err) {
-      console.error('updatePushToken error:', err);
-      res.status(500).json({ error: 'Failed to save push token' });
+      return sendError(res, 'DeliveryPartnerController.updatePushToken', 'Could not save push token', err);
     }
   }
 
@@ -1846,8 +1824,7 @@ export class DeliveryPartnerController {
         },
       });
     } catch (err) {
-      console.error('getRiderNotificationPreferences error:', err);
-      res.status(500).json({ success: false, error: 'Failed to fetch notification preferences' });
+      return sendError(res, 'DeliveryPartnerController.getRiderNotificationPreferences', 'Could not load notification preferences', err, undefined, { success: false });
     }
   }
 
@@ -1862,8 +1839,7 @@ export class DeliveryPartnerController {
       if (error) throw error;
       res.json({ success: true });
     } catch (err) {
-      console.error('updateRiderNotificationPreferences error:', err);
-      res.status(500).json({ success: false, error: 'Failed to update notification preferences' });
+      return sendError(res, 'DeliveryPartnerController.updateRiderNotificationPreferences', 'Could not update notification preferences', err, undefined, { success: false });
     }
   }
 
@@ -1873,8 +1849,7 @@ export class DeliveryPartnerController {
       const notifications = await databaseService.getUserNotifications('rider', req.riderId!, unreadOnly === 'true');
       res.json(notifications);
     } catch (err) {
-      console.error('getNotifications error:', err);
-      res.status(500).json({ error: 'Failed to fetch notifications' });
+      return sendError(res, 'DeliveryPartnerController.getNotifications', 'Could not load the notifications', err);
     }
   }
 
@@ -1884,8 +1859,7 @@ export class DeliveryPartnerController {
       const result = await databaseService.markNotificationAsRead(notificationId, 'rider', req.riderId!);
       res.json(result);
     } catch (err) {
-      console.error('markNotificationRead error:', err);
-      res.status(500).json({ error: 'Failed to mark notification as read' });
+      return sendError(res, 'DeliveryPartnerController.markNotificationRead', 'Could not mark notification as read', err);
     }
   }
 
@@ -1894,8 +1868,7 @@ export class DeliveryPartnerController {
       const result = await databaseService.markAllNotificationsAsRead('rider', req.riderId!);
       res.json(result);
     } catch (err) {
-      console.error('markAllNotificationsRead error:', err);
-      res.status(500).json({ error: 'Failed to mark all notifications as read' });
+      return sendError(res, 'DeliveryPartnerController.markAllNotificationsRead', 'Could not mark all notifications as read', err);
     }
   }
 
@@ -1999,8 +1972,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, offers: result });
     } catch (err) {
-      console.error('getAvailableOrders error:', err);
-      res.status(500).json({ error: 'Failed to fetch available orders' });
+      return sendError(res, 'DeliveryPartnerController.getAvailableOrders', 'Could not load available orders', err);
     }
   }
 
@@ -2067,8 +2039,7 @@ export class DeliveryPartnerController {
       }
       return res.status(400).json({ success: false, result, error: result });
     } catch (err) {
-      console.error('acceptOffer error:', err);
-      res.status(500).json({ error: 'Failed to accept offer' });
+      return sendError(res, 'DeliveryPartnerController.acceptOffer', 'Could not accept the offer', err);
     }
   }
 
@@ -2160,8 +2131,7 @@ export class DeliveryPartnerController {
         stops,
       });
     } catch (err) {
-      console.error('getPickupSequence error:', err);
-      res.status(500).json({ error: 'Failed to fetch pickup sequence' });
+      return sendError(res, 'DeliveryPartnerController.getPickupSequence', 'Could not load pickup sequence', err);
     }
   }
 
@@ -2206,7 +2176,7 @@ export class DeliveryPartnerController {
       }).eq('id', allocationId);
       if (pickupErr) {
         console.error('verifyPickupCode: failed to persist pickup status:', pickupErr, { orderId, allocationId });
-        return res.status(500).json({ success: false, error: 'Could not confirm pickup. Please try again.' });
+        return sendError(res, 'DeliveryPartnerController.verifyPickupCode', 'Could not confirm pickup', pickupErr, undefined, { success: false });
       }
 
       // Check remaining (not yet picked up) allocations, ordered by sequence so we know what's next.
@@ -2255,8 +2225,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, all_stores_done: !remaining?.length });
     } catch (err) {
-      console.error('verifyPickupCode error:', err);
-      res.status(500).json({ error: 'Failed to verify code' });
+      return sendError(res, 'DeliveryPartnerController.verifyPickupCode', 'Could not verify the code', err);
     }
   }
 }

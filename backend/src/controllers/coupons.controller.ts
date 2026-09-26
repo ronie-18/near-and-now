@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
+import { sendError } from '../utils/httpError.js';
 
 export class CouponsController {
   // Get all coupons
@@ -8,8 +9,7 @@ export class CouponsController {
       const coupons = await databaseService.getCoupons();
       res.json(coupons);
     } catch (error) {
-      console.error('Error fetching coupons:', error);
-      res.status(500).json({ error: 'Failed to fetch coupons' });
+      return sendError(res, 'CouponsController.getCoupons', 'Could not load the coupons', error);
     }
   }
 
@@ -20,8 +20,7 @@ export class CouponsController {
       const coupon = await databaseService.getCouponById(couponId);
       res.json(coupon);
     } catch (error) {
-      console.error('Error fetching coupon:', error);
-      res.status(500).json({ error: 'Failed to fetch coupon' });
+      return sendError(res, 'CouponsController.getCouponById', 'Could not load coupon', error);
     }
   }
 
@@ -31,8 +30,7 @@ export class CouponsController {
       const coupon = await databaseService.createCoupon(req.body);
       res.status(201).json(coupon);
     } catch (error: any) {
-      console.error('Error creating coupon:', error);
-      res.status(500).json({ error: error.message || 'Failed to create coupon' });
+      return sendError(res, 'CouponsController.createCoupon', 'Could not create coupon', error);
     }
   }
 
@@ -43,8 +41,7 @@ export class CouponsController {
       const coupon = await databaseService.updateCoupon(couponId, req.body);
       res.json(coupon);
     } catch (error: any) {
-      console.error('Error updating coupon:', error);
-      res.status(500).json({ error: error.message || 'Failed to update coupon' });
+      return sendError(res, 'CouponsController.updateCoupon', 'Could not update coupon', error);
     }
   }
 
@@ -55,8 +52,7 @@ export class CouponsController {
       const result = await databaseService.deleteCoupon(couponId);
       res.json(result);
     } catch (error) {
-      console.error('Error deleting coupon:', error);
-      res.status(500).json({ error: 'Failed to delete coupon' });
+      return sendError(res, 'CouponsController.deleteCoupon', 'Could not delete coupon', error);
     }
   }
 
@@ -94,8 +90,7 @@ export class CouponsController {
       const coupons = await databaseService.getActiveCoupons();
       res.json(coupons);
     } catch (error) {
-      console.error('Error fetching active coupons:', error);
-      res.status(500).json({ error: 'Failed to fetch active coupons' });
+      return sendError(res, 'CouponsController.getActiveCoupons', 'Could not load active coupons', error);
     }
   }
 }

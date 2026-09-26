@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { haversineKm } from '../utils/geo.js';
 import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
+import { sendError } from '../utils/httpError.js';
 
 declare module 'express' {
   interface Request {
@@ -72,8 +73,7 @@ export async function requireShopkeeperAuth(req: Request, res: Response, next: N
     req.shopkeeperHasApprovedStore = stores.some((s: any) => s.is_approved);
     next();
   } catch (err) {
-    console.error('requireShopkeeperAuth auth check failed:', err);
-    res.status(500).json({ error: 'Authentication check failed' });
+    return sendError(res, 'ShopkeeperController.if', 'Authentication check failed', err);
   }
 }
 
@@ -105,8 +105,7 @@ export class ShopkeeperController {
       ]);
       res.json({ success: true, user, store });
     } catch (err) {
-      console.error('shopkeeper getProfile:', err);
-      res.status(500).json({ error: 'Failed to fetch profile' });
+      return sendError(res, 'ShopkeeperController.getProfile', 'Could not load profile', err);
     }
   }
 
@@ -213,8 +212,7 @@ export class ShopkeeperController {
 
       res.json({ success: true, orders: result });
     } catch (err) {
-      console.error('shopkeeper getIncomingOrders:', err);
-      res.status(500).json({ error: 'Failed to fetch orders' });
+      return sendError(res, 'ShopkeeperController.getIncomingOrders', 'Could not load the orders', err);
     }
   }
 
@@ -393,8 +391,7 @@ export class ShopkeeperController {
 
       res.json({ success: true, pickup_code: code, accepted: accepted_item_ids.length, unavailable: unavailableIds.length });
     } catch (err) {
-      console.error('shopkeeper acceptAllocation:', err);
-      res.status(500).json({ error: 'Failed to accept allocation' });
+      return sendError(res, 'ShopkeeperController.acceptAllocation', 'Could not accept the allocation', err);
     }
   }
 
@@ -420,7 +417,7 @@ export class ShopkeeperController {
       const { error: rejectErr } = await supabaseAdmin.from('order_store_allocations').update({ status: 'rejected' }).eq('id', allocationId);
       if (rejectErr) {
         console.error('rejectAllocation: failed to update allocation status:', rejectErr, { allocationId });
-        return res.status(500).json({ error: 'Failed to reject allocation' });
+        return sendError(res, 'ShopkeeperController.rejectAllocation', 'Could not reject allocation', rejectErr);
       }
 
       // Unassign all items from this store and trigger reallocation
@@ -440,8 +437,7 @@ export class ShopkeeperController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('shopkeeper rejectAllocation:', err);
-      res.status(500).json({ error: 'Failed to reject allocation' });
+      return sendError(res, 'ShopkeeperController.rejectAllocation', 'Could not reject the allocation', err);
     }
   }
 }
