@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { authenticateAdmin } from '../../services/adminAuthService';
 import { checkRateLimit } from '../../utils/rateLimit';
+import { describeError } from '../../utils/apiErrors';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
@@ -55,7 +56,7 @@ const AdminLoginPage = () => {
         stack: error.stack,
         name: error.name
       });
-      setError(error.message || 'An error occurred. Please try again.');
+      setError(describeError('AdminLoginPage.handleSubmit', 'Could not complete the request', error));
     } finally {
       setLoading(false);
     }

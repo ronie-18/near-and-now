@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { PLACEHOLDER_IMAGE } from '../utils/placeholderImage';
 
 const AboutPage = () => {
   return (
@@ -25,7 +26,7 @@ const AboutPage = () => {
                 className="rounded-lg w-full h-auto"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
-                  target.src = "https://via.placeholder.com/400x300?text=Our+Story";
+                  target.src = PLACEHOLDER_IMAGE;
                 }}
               />
             </div>
@@ -99,7 +100,7 @@ const AboutPage = () => {
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.src = "https://via.placeholder.com/128x128?text=Team";
+                    target.src = PLACEHOLDER_IMAGE;
                   }}
                 />
               </div>
@@ -115,7 +116,7 @@ const AboutPage = () => {
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.src = "https://via.placeholder.com/128x128?text=Team";
+                    target.src = PLACEHOLDER_IMAGE;
                   }}
                 />
               </div>
@@ -131,7 +132,7 @@ const AboutPage = () => {
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.src = "https://via.placeholder.com/128x128?text=Team";
+                    target.src = PLACEHOLDER_IMAGE;
                   }}
                 />
               </div>

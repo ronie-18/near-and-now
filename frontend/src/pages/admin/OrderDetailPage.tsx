@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { getOrderById, updateOrderStatus, Order } from '../../services/adminService';
 import { apiUrl } from '../../utils/apiBase';
+import { describeError } from '../../utils/apiErrors';
 
 const OrderDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -52,7 +53,7 @@ const OrderDetailPage = () => {
         setOrder(orderData);
       } catch (err) {
         console.error('Error fetching order:', err);
-        setError('Failed to load order. Please try again.');
+        setError(describeError('OrderDetailPage.fetchOrder', 'Could not load order', err));
       } finally {
         setLoading(false);
       }
@@ -73,7 +74,7 @@ const OrderDetailPage = () => {
       if (updatedOrder) {
         setOrder(updatedOrder);
       } else {
-        setError('Failed to update order status.');
+        setError(describeError('OrderDetailPage.handleStatusUpdate', 'Could not update order status'));
       }
     } catch (err: any) {
       setError(`Failed to update status: ${err?.message || 'Unknown error'}`);

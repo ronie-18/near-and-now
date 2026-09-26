@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -25,8 +26,7 @@ export class CustomersController {
       const addresses = await databaseService.getCustomerSavedAddressesResolved(userId, []);
       res.json(addresses);
     } catch (error) {
-      console.error('Error fetching resolved addresses:', error);
-      res.status(500).json({ error: 'Failed to fetch addresses' });
+      return sendError(res, 'CustomersController.getResolvedAddresses', 'Could not load the addresses', error);
     }
   }
 
@@ -39,8 +39,7 @@ export class CustomersController {
       const addresses = await databaseService.getCustomerSavedAddresses(customerId);
       res.json(addresses);
     } catch (error) {
-      console.error('Error fetching addresses:', error);
-      res.status(500).json({ error: 'Failed to fetch addresses' });
+      return sendError(res, 'CustomersController.getAddresses', 'Could not load the addresses', error);
     }
   }
 
@@ -58,8 +57,7 @@ export class CustomersController {
       const address = await databaseService.createCustomerSavedAddress(addressData);
       res.status(201).json(address);
     } catch (error) {
-      console.error('Error creating address:', error);
-      res.status(500).json({ error: 'Failed to create address' });
+      return sendError(res, 'CustomersController.createAddress', 'Could not create the address', error);
     }
   }
 
@@ -86,10 +84,9 @@ export class CustomersController {
 
       const address = await databaseService.updateCustomerSavedAddress(addressId, customerId, updates);
       res.json(address);
-    } catch (error: any) {
-      console.error('Error updating address:', error);
-      if (error.message?.includes('not found')) return res.status(404).json({ error: error.message });
-      res.status(500).json({ error: 'Failed to update address' });
+    } catch (error) {
+      const notFoundMsg = error instanceof Error && error.message.includes('not found');
+      return sendError(res, 'CustomersController.updateAddress', notFoundMsg ? error.message : 'Could not update the address', error, notFoundMsg ? 404 : undefined);
     }
   }
 
@@ -100,8 +97,7 @@ export class CustomersController {
       await databaseService.deleteCustomerSavedAddress(addressId, customerId);
       res.json({ success: true });
     } catch (error) {
-      console.error('Error deleting address:', error);
-      res.status(500).json({ error: 'Failed to delete address' });
+      return sendError(res, 'CustomersController.deleteAddress', 'Could not delete the address', error);
     }
   }
 
@@ -122,8 +118,7 @@ export class CustomersController {
       await databaseService.updateCustomerPushToken(customerId, token);
       res.json({ success: true });
     } catch (error) {
-      console.error('Error registering push token:', error);
-      res.status(500).json({ error: 'Failed to register push token' });
+      return sendError(res, 'CustomersController.registerPushToken', 'Could not register push token', error);
     }
   }
 
@@ -147,8 +142,7 @@ export class CustomersController {
 
       res.json({ success: true, message: 'Verification code sent' });
     } catch (error) {
-      console.error('Error changing email:', error);
-      res.status(500).json({ error: 'Failed to update email' });
+      return sendError(res, 'CustomersController.changeEmail', 'Could not update the email', error);
     }
   }
 
@@ -160,12 +154,9 @@ export class CustomersController {
         console.error('[resendEmailVerification] send failed (non-fatal)', err);
       });
       res.json({ success: true, message: 'Verification code sent' });
-    } catch (error: any) {
-      console.error('Error resending email verification:', error);
-      if (error.message?.includes('already verified')) {
-        return res.status(400).json({ error: error.message });
-      }
-      res.status(500).json({ error: 'Failed to resend verification code' });
+    } catch (error) {
+      const alreadyVerified = error instanceof Error && error.message.includes('already verified');
+      return sendError(res, 'CustomersController.resendEmailVerification', alreadyVerified ? error.message : 'Could not resend the verification code', error, alreadyVerified ? 400 : undefined);
     }
   }
 
@@ -178,11 +169,10 @@ export class CustomersController {
       }
       const { email } = await databaseService.verifyCustomerEmailCode(customerId, code.trim());
       res.json({ success: true, email, email_verified: true });
-    } catch (error: any) {
-      console.error('Error verifying email:', error);
-      const msg = error?.message || 'Failed to verify email';
-      const status = msg.includes('Invalid') || msg.includes('expired') ? 400 : 500;
-      res.status(status).json({ error: msg });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : '';
+      const isUserError = msg.includes('Invalid') || msg.includes('expired');
+      return sendError(res, 'CustomersController.verifyEmail', isUserError ? msg : 'Could not verify the email code', error, isUserError ? 400 : undefined);
     }
   }
 }

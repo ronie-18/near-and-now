@@ -14,6 +14,7 @@ import {
   Users
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { describeError } from '../../utils/apiErrors';
 
 interface StoreData {
   id: string;
@@ -51,7 +52,7 @@ const StoresPage = () => {
       setStores(data || []);
     } catch (err: any) {
       console.error('Error fetching stores:', err);
-      setError('Failed to load stores. Please try again.');
+      setError(describeError('StoresPage.fetchStores', 'Could not load stores', err));
     } finally {
       setLoading(false);
     }

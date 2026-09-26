@@ -5,12 +5,13 @@ import { formatPrice } from '../utils/formatters';
 import { Order } from '../services/supabase';
 import { fetchCustomerOrders } from '../services/orderService';
 import { apiUrl } from '../utils/apiBase';
+import { getAuthHeaders } from '../utils/authHeader';
+import { describeError, fetchJson } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────
    Styles
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .op-root * { box-sizing: border-box; }
 
@@ -220,7 +221,7 @@ const OrdersPage = () => {
         setOrders(userOrders);
       } catch (err: any) {
         console.error('Error fetching orders:', err);
-        setError('Failed to load orders. Please try again.');
+        setError(describeError('OrdersPage.fetchOrders', 'Could not load orders', err));
       } finally {
         setLoading(false);
       }
@@ -238,25 +239,33 @@ const OrdersPage = () => {
     });
 
   const getStatusDisplay = (status: string) => {
+    // The API returns the pipeline statuses (pending_at_store …), not the legacy five.
     const map: Record<string, string> = {
       placed: 'Placed', confirmed: 'Confirmed', shipped: 'Shipped',
-      delivered: 'Delivered', cancelled: 'Cancelled'
+      delivered: 'Delivered', cancelled: 'Cancelled',
+      pending_at_store: 'Waiting for store', store_accepted: 'Accepted by store',
+      preparing_order: 'Being prepared', ready_for_pickup: 'Ready for pickup',
+      picking_up: 'Rider picking up', delivery_partner_assigned: 'Rider assigned',
+      order_picked_up: 'Picked up', in_transit: 'On the way',
+      order_delivered: 'Delivered', order_cancelled: 'Cancelled'
     };
-    return map[status] || status;
+    return map[status] || status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
   const handleCustomerInvoiceDownload = async (order: Order) => {
     if (!user?.id) return;
     setInvoiceLoading(order.id);
     try {
-      const res = await fetch(apiUrl(`/api/invoices/order/${order.id}/customer`), {
-        headers: { Authorization: `Bearer ${user.id}` },
-      });
-      if (!res.ok) throw new Error('Failed to fetch invoice');
-      const data = await res.json();
+      // The invoice route validates the session token, not the user id.
+      const data = await fetchJson<{ url?: string }>(
+        apiUrl(`/api/invoices/order/${order.id}/customer`),
+        { headers: getAuthHeaders() },
+        'OrdersPage.handleCustomerInvoiceDownload'
+      );
       if (data.url) window.open(data.url, '_blank');
-    } catch {
-      alert('Invoice download failed. Please try again.');
+      else throw new Error('the server did not return a download link');
+    } catch (err) {
+      setError(describeError('OrdersPage.handleCustomerInvoiceDownload', `Could not download the invoice for order ${order.order_number || order.id}`, err));
     } finally {
       setInvoiceLoading(null);
     }

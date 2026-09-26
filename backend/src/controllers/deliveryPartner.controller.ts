@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
 import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
+import { sendError } from '../utils/httpError.js';
 
 // Throttle: check for missed orders at most once per 5 minutes per driver
 const lastDispatchCheck = new Map<string, number>();
@@ -128,9 +129,8 @@ export class DeliveryPartnerController {
         token,
         user: userWithoutPassword,
       });
-    } catch (err: any) {
-      console.error('deliveryPartner signupComplete error:', err);
-      res.status(500).json({ success: false, error: err?.message || 'Registration failed' });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.signupComplete', err instanceof Error && err.message ? err.message : 'Could not complete the delivery partner registration', err, undefined, { success: false });
     }
   }
 
@@ -174,8 +174,7 @@ export class DeliveryPartnerController {
         },
       });
     } catch (err) {
-      console.error('getProfile error:', err);
-      res.status(500).json({ error: 'Failed to fetch profile' });
+      return sendError(res, 'DeliveryPartnerController.getProfile', 'Could not load profile', err);
     }
   }
 
@@ -201,8 +200,7 @@ export class DeliveryPartnerController {
         dispatchReadyOrdersToDriver(req.riderId!).catch(console.error);
       }
     } catch (err) {
-      console.error('updateStatus error:', err);
-      res.status(500).json({ error: 'Failed to update status' });
+      return sendError(res, 'DeliveryPartnerController.updateStatus', 'Could not update the status', err);
     }
   }
 
@@ -240,8 +238,7 @@ export class DeliveryPartnerController {
         dispatchReadyOrdersToDriver(req.riderId!).catch(console.error);
       }
     } catch (err) {
-      console.error('updateLocation error:', err);
-      res.status(500).json({ error: 'Failed to update location' });
+      return sendError(res, 'DeliveryPartnerController.updateLocation', 'Could not update the location', err);
     }
   }
 
@@ -327,8 +324,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, orders: mapped });
     } catch (err) {
-      console.error('getOrders error:', err);
-      res.status(500).json({ error: 'Failed to fetch orders' });
+      return sendError(res, 'DeliveryPartnerController.getOrders', 'Could not load the orders', err);
     }
   }
 
@@ -379,8 +375,7 @@ export class DeliveryPartnerController {
         },
       });
     } catch (err) {
-      console.error('getOrderById error:', err);
-      res.status(500).json({ error: 'Failed to fetch order' });
+      return sendError(res, 'DeliveryPartnerController.getOrderById', 'Could not load order', err);
     }
   }
 
@@ -409,8 +404,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('acceptOrder error:', err);
-      res.status(500).json({ error: 'Failed to accept order' });
+      return sendError(res, 'DeliveryPartnerController.acceptOrder', 'Could not accept order', err);
     }
   }
 
@@ -440,8 +434,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('rejectOrder error:', err);
-      res.status(500).json({ error: 'Failed to reject order' });
+      return sendError(res, 'DeliveryPartnerController.rejectOrder', 'Could not reject order', err);
     }
   }
 
@@ -467,8 +460,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('markPickedUp error:', err);
-      res.status(500).json({ error: 'Failed to update pickup status' });
+      return sendError(res, 'DeliveryPartnerController.markPickedUp', 'Could not update pickup status', err);
     }
   }
 
@@ -506,8 +498,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('markDelivered error:', err);
-      res.status(500).json({ error: 'Failed to update delivery status' });
+      return sendError(res, 'DeliveryPartnerController.markDelivered', 'Could not update delivery status', err);
     }
   }
 
@@ -541,8 +532,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('verifyDeliveryOTP error:', err);
-      res.status(500).json({ error: 'Failed to verify OTP' });
+      return sendError(res, 'DeliveryPartnerController.verifyDeliveryOTP', 'Could not verify the OTP', err);
     }
   }
 
@@ -572,8 +562,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, profile: { ...user, ...profile } });
     } catch (err) {
-      console.error('updateProfile error:', err);
-      res.status(500).json({ error: 'Failed to update profile' });
+      return sendError(res, 'DeliveryPartnerController.updateProfile', 'Could not update profile', err);
     }
   }
 
@@ -606,8 +595,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, profile_image_url });
     } catch (err) {
-      console.error('updateProfileImage error:', err);
-      res.status(500).json({ error: 'Failed to upload profile image' });
+      return sendError(res, 'DeliveryPartnerController.updateProfileImage', 'Could not upload profile image', err);
     }
   }
 
@@ -620,8 +608,7 @@ export class DeliveryPartnerController {
       await supabaseAdmin.from('delivery_partners').update({ expo_push_token }).eq('user_id', req.riderId!);
       res.json({ success: true });
     } catch (err) {
-      console.error('updatePushToken error:', err);
-      res.status(500).json({ error: 'Failed to save push token' });
+      return sendError(res, 'DeliveryPartnerController.updatePushToken', 'Could not save push token', err);
     }
   }
 
@@ -696,8 +683,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, offers: result });
     } catch (err) {
-      console.error('getAvailableOrders error:', err);
-      res.status(500).json({ error: 'Failed to fetch available orders' });
+      return sendError(res, 'DeliveryPartnerController.getAvailableOrders', 'Could not load available orders', err);
     }
   }
 
@@ -742,8 +728,7 @@ export class DeliveryPartnerController {
       }
       return res.status(400).json({ success: false, result, error: result });
     } catch (err) {
-      console.error('acceptOffer error:', err);
-      res.status(500).json({ error: 'Failed to accept offer' });
+      return sendError(res, 'DeliveryPartnerController.acceptOffer', 'Could not accept the offer', err);
     }
   }
 
@@ -823,8 +808,7 @@ export class DeliveryPartnerController {
         stops,
       });
     } catch (err) {
-      console.error('getPickupSequence error:', err);
-      res.status(500).json({ error: 'Failed to fetch pickup sequence' });
+      return sendError(res, 'DeliveryPartnerController.getPickupSequence', 'Could not load pickup sequence', err);
     }
   }
 
@@ -899,8 +883,7 @@ export class DeliveryPartnerController {
 
       res.json({ success: true, all_stores_done: !remaining?.length });
     } catch (err) {
-      console.error('verifyPickupCode error:', err);
-      res.status(500).json({ error: 'Failed to verify code' });
+      return sendError(res, 'DeliveryPartnerController.verifyPickupCode', 'Could not verify the code', err);
     }
   }
 }

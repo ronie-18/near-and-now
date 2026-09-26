@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 /** Maps an order status to the customer-facing push notification type, if any. */
 function mapOrderStatusToNotificationType(status: string): string | null {
@@ -29,18 +30,15 @@ export class OrdersController {
       const order = await databaseService.placeCheckoutOrder(req.body);
       res.status(201).json(order);
     } catch (error: unknown) {
-      console.error('Error placing checkout order:', error);
-      const msg = error instanceof Error ? error.message : 'Failed to place order';
-      const status =
+      const msg = error instanceof Error ? error.message : '';
+      const isCheckoutRule =
         msg.includes('not available') ||
         msg.includes('No store') ||
         msg.includes('verify delivery') ||
         msg.includes('No valid products') ||
         msg.includes('No items') ||
-        msg.includes('verify your email')
-          ? 400
-          : 500;
-      res.status(status).json({ error: msg });
+        msg.includes('verify your email');
+      return sendError(res, 'OrdersController.placeCheckout', isCheckoutRule ? msg : 'Could not place the order', error, isCheckoutRule ? 400 : undefined);
     }
   }
 
@@ -164,10 +162,9 @@ export class OrdersController {
         store_orders: storeOrders
       });
     } catch (error: unknown) {
-      console.error('Error creating order:', error);
-      const msg = error instanceof Error ? error.message : 'Failed to create order';
-      const status = msg.includes('verify your email') ? 400 : 500;
-      res.status(status).json({ error: msg });
+      const msg = error instanceof Error ? error.message : '';
+      const needsEmail = msg.includes('verify your email');
+      return sendError(res, 'OrdersController.createOrder', needsEmail ? msg : 'Could not create the order', error, needsEmail ? 400 : undefined);
     }
   }
 
@@ -180,8 +177,7 @@ export class OrdersController {
       const orders = await databaseService.getCustomerOrders(customerId);
       res.json(orders);
     } catch (error) {
-      console.error('Error fetching customer orders:', error);
-      res.status(500).json({ error: 'Failed to fetch orders' });
+      return sendError(res, 'OrdersController.getCustomerOrders', 'Could not load the orders', error);
     }
   }
 
@@ -197,8 +193,7 @@ export class OrdersController {
       }
       res.json(order);
     } catch (error) {
-      console.error('Error fetching order:', error);
-      res.status(500).json({ error: 'Failed to fetch order' });
+      return sendError(res, 'OrdersController.getOrderById', 'Could not load order', error);
     }
   }
 
@@ -259,8 +254,7 @@ export class OrdersController {
 
       res.json({ success: true, order: data });
     } catch (error) {
-      console.error('Error updating order status:', error);
-      res.status(500).json({ error: 'Failed to update order status' });
+      return sendError(res, 'OrdersController.updateOrderStatus', 'Could not update order status', error);
     }
   }
 
@@ -280,12 +274,9 @@ export class OrdersController {
         message: 'Order cancelled successfully',
         order
       });
-    } catch (error: any) {
-      console.error('Error cancelling order:', error);
-      if (error.message?.includes('delivery partner')) {
-        return res.status(400).json({ error: error.message });
-      }
-      res.status(500).json({ error: 'Failed to cancel order' });
+    } catch (error) {
+      const tooLate = error instanceof Error && error.message.includes('delivery partner');
+      return sendError(res, 'OrdersController.cancelOrder', tooLate ? error.message : 'Could not cancel the order', error, tooLate ? 400 : undefined);
     }
   }
 }

@@ -1,11 +1,14 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { getAllProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
 import { getCategories, Category } from '../services/adminService';
 import { useNotification } from '../context/NotificationContext';
+import { useLocation } from '../context/LocationContext';
 import { formatCategoryName } from '../utils/formatCategoryName';
 import ProductCard from '../components/products/ProductCard';
+import { describeError } from '../utils/apiErrors';
+import { placeholderFor, handleImageError } from '../utils/placeholderImage';
 
 /* ─────────────────────────────────────────────────────────
    HomePage — redesigned UI, identical logic
@@ -17,15 +20,25 @@ const HomePage = () => {
   const [loading, setLoading] = useState(true);
   const { showNotification } = useNotification();
 
+  const { userLocation } = useLocation();
+  // Round to ~110 m so GPS jitter does not trigger a refetch.
+  const locationKey = userLocation
+    ? `${userLocation.latitude.toFixed(3)},${userLocation.longitude.toFixed(3)}`
+    : 'none';
+
   useEffect(() => {
+    let cancelled = false;
     const fetchData = async () => {
       try {
         setLoading(true);
-
+        const opts = userLocation ? { lat: userLocation.latitude, lng: userLocation.longitude } : undefined;
+        // Both requests are cached in memory (see utils/queryCache) so navigating back to
+        // the home page within a minute renders instantly.
         const [products, categoriesData] = await Promise.all([
-          getAllProducts(),
+          getAllProducts(opts),
           getCategories()
         ]);
+        if (cancelled) return;
 
         setAllProducts(products);
 
@@ -41,21 +54,38 @@ const HomePage = () => {
 
         setCategories(uniqueCategories);
       } catch (error) {
-        console.error('Error fetching data:', error);
-        showNotification('Failed to load data. Please try again.', 'error');
+        if (cancelled) return;
+        showNotification(
+          describeError('HomePage.fetchData', 'Could not load the home page products and categories', error),
+          'error'
+        );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchData();
-  }, []); // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationKey, showNotification]);
+
+  // Group once per data change instead of filtering the whole list for every category on every render.
+  const productsByCategory = useMemo(() => {
+    const map = new Map<string, Product[]>();
+    for (const product of allProducts) {
+      const list = map.get(product.category);
+      if (list) list.push(product);
+      else map.set(product.category, [product]);
+    }
+    return map;
+  }, [allProducts]);
 
   return (
     <>
       {/* ── Global styles ── */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
         .hp-root { font-family: 'Plus Jakarta Sans', sans-serif; }
         .hp-root .font-display { font-family: 'Nunito', sans-serif; }
@@ -180,14 +210,11 @@ const HomePage = () => {
                     >
                       <div className="w-full aspect-square rounded-2xl overflow-hidden border border-gray-100 bg-gradient-to-br from-green-50 to-emerald-50/30 mb-1.5 shadow-sm">
                         <img
-                          src={category.image_url || `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`}
+                          src={category.image_url || placeholderFor(category.name)}
                           alt={category.name}
                           loading="lazy"
                           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.src = `https://via.placeholder.com/300x300?text=${encodeURIComponent(category.name)}`;
-                          }}
+                          onError={(e) => handleImageError(e, placeholderFor(category.name))}
                         />
                       </div>
                       <p className="text-[10px] sm:text-[11px] font-semibold text-gray-600 text-center leading-snug line-clamp-2 group-hover:text-primary transition-colors px-0.5">
@@ -230,7 +257,7 @@ const HomePage = () => {
             /* ── Category sections ── */
             <div className="space-y-5">
               {categories.map((category, sectionIdx) => {
-                const categoryProducts = allProducts.filter(p => p.category === category.name);
+                const categoryProducts = productsByCategory.get(category.name) ?? [];
                 if (categoryProducts.length === 0) return null;
 
                 const displayProducts = categoryProducts.slice(0, 6);

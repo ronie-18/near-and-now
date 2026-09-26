@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 export class NotificationsController {
   // Get user notifications
@@ -16,8 +17,7 @@ export class NotificationsController {
 
       res.json(notifications);
     } catch (error) {
-      console.error('Error fetching notifications:', error);
-      res.status(500).json({ error: 'Failed to fetch notifications' });
+      return sendError(res, 'NotificationsController.getUserNotifications', 'Could not load the notifications', error);
     }
   }
 
@@ -28,8 +28,7 @@ export class NotificationsController {
       const result = await databaseService.markNotificationAsRead(notificationId);
       res.json(result);
     } catch (error) {
-      console.error('Error marking notification as read:', error);
-      res.status(500).json({ error: 'Failed to mark notification as read' });
+      return sendError(res, 'NotificationsController.markAsRead', 'Could not mark notification as read', error);
     }
   }
 
@@ -40,8 +39,7 @@ export class NotificationsController {
       const result = await databaseService.markAllNotificationsAsRead(userId);
       res.json(result);
     } catch (error) {
-      console.error('Error marking all notifications as read:', error);
-      res.status(500).json({ error: 'Failed to mark all notifications as read' });
+      return sendError(res, 'NotificationsController.markAllAsRead', 'Could not mark all notifications as read', error);
     }
   }
 
@@ -57,8 +55,7 @@ export class NotificationsController {
       await notificationService.sendOrderNotification(orderId, type);
       res.json({ success: true, message: 'Notification sent successfully' });
     } catch (error) {
-      console.error('Error sending notification:', error);
-      res.status(500).json({ error: 'Failed to send notification' });
+      return sendError(res, 'NotificationsController.sendOrderNotification', 'Could not send notification', error);
     }
   }
 
@@ -69,8 +66,7 @@ export class NotificationsController {
       const preferences = await databaseService.getNotificationPreferences(userId);
       res.json(preferences);
     } catch (error) {
-      console.error('Error fetching notification preferences:', error);
-      res.status(500).json({ error: 'Failed to fetch notification preferences' });
+      return sendError(res, 'NotificationsController.getNotificationPreferences', 'Could not load notification preferences', error);
     }
   }
 
@@ -83,8 +79,7 @@ export class NotificationsController {
       const result = await databaseService.updateNotificationPreferences(userId, preferences);
       res.json(result);
     } catch (error) {
-      console.error('Error updating notification preferences:', error);
-      res.status(500).json({ error: 'Failed to update notification preferences' });
+      return sendError(res, 'NotificationsController.updateNotificationPreferences', 'Could not update notification preferences', error);
     }
   }
 }

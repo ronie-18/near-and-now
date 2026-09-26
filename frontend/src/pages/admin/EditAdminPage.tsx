@@ -16,6 +16,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { getAdminById, updateAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
+import { describeError } from '../../utils/apiErrors';
 
 const EditAdminPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -68,7 +69,7 @@ const EditAdminPage = () => {
         });
       } catch (err) {
         console.error('Error fetching admin:', err);
-        setError('Failed to load admin details');
+        setError(describeError('EditAdminPage.fetchAdmin', 'Could not load admin details', err));
       } finally {
         setLoading(false);
       }
@@ -136,7 +137,7 @@ const EditAdminPage = () => {
       if (err.message?.includes('duplicate key')) {
         setError('An admin with this email already exists.');
       } else {
-        setError(err.message || 'Failed to update admin. Please try again.');
+        setError(describeError('EditAdminPage.handleSubmit', 'Could not update admin', err));
       }
     } finally {
       setSaving(false);

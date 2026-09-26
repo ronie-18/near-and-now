@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ProductCard from './ProductCard';
+import { MemoryRouter } from 'react-router-dom';
 import { CartContext } from '../../context/CartContext';
 import { NotificationContext } from '../../context/NotificationContext';
 
@@ -37,11 +38,13 @@ const mockNotificationContext = {
 // Mock component wrapper with contexts
 const renderWithContexts = (ui: React.ReactElement) => {
   return render(
+    <MemoryRouter>
     <NotificationContext.Provider value={mockNotificationContext}>
       <CartContext.Provider value={mockCartContext}>
         {ui}
       </CartContext.Provider>
     </NotificationContext.Provider>
+    </MemoryRouter>
   );
 };
 
@@ -71,14 +74,9 @@ describe('ProductCard', () => {
     const addToCartButton = screen.getByRole('button', { name: 'Add to cart' });
     fireEvent.click(addToCartButton);
 
-    // Check if addToCart was called with the correct product
+    // Check if addToCart was called with the correct product. Feedback is the card
+    // itself switching to the quantity stepper, so no toast is expected here.
     expect(mockCartContext.addToCart).toHaveBeenCalledWith(mockProduct);
-    
-    // Check if showNotification was called
-    expect(mockNotificationContext.showNotification).toHaveBeenCalledWith(
-      `${mockProduct.name} added to cart`,
-      'success'
-    );
   });
 
   it('renders quantity controls when product is in cart', () => {
@@ -89,11 +87,13 @@ describe('ProductCard', () => {
     };
 
     render(
-      <NotificationContext.Provider value={mockNotificationContext}>
-        <CartContext.Provider value={updatedCartContext}>
-          <ProductCard product={mockProduct} />
-        </CartContext.Provider>
-      </NotificationContext.Provider>
+      <MemoryRouter>
+        <NotificationContext.Provider value={mockNotificationContext}>
+          <CartContext.Provider value={updatedCartContext}>
+            <ProductCard product={mockProduct} />
+          </CartContext.Provider>
+        </NotificationContext.Provider>
+      </MemoryRouter>
     );
 
     // Check if quantity is displayed

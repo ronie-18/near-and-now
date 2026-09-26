@@ -15,6 +15,7 @@ import {
   FileText
 } from 'lucide-react';
 import { getCategoryById, updateCategory } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 const EditCategoryPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -59,7 +60,7 @@ const EditCategoryPage = () => {
         });
       } catch (err) {
         console.error('Error fetching category:', err);
-        setError('Failed to load category. Please try again.');
+        setError(describeError('EditCategoryPage.fetchCategory', 'Could not load category', err));
       } finally {
         setLoading(false);
       }
@@ -104,10 +105,10 @@ const EditCategoryPage = () => {
           navigate('/admin/categories');
         }, 1500);
       } else {
-        setError('Failed to update category. Please try again.');
+        setError(describeError('EditCategoryPage.handleSubmit', 'Could not update category'));
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred while updating the category.');
+      setError(describeError('EditCategoryPage.handleSubmit', 'Could not update the category', err));
       console.error('Error updating category:', err);
     } finally {
       setSaving(false);

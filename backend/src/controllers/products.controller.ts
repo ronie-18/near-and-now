@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
+import { sendError } from '../utils/httpError.js';
 
 export class ProductsController {
   async getCategories(_req: Request, res: Response) {
@@ -7,8 +8,7 @@ export class ProductsController {
       const categories = await databaseService.getCategories();
       res.json(categories);
     } catch (error) {
-      console.error('Error fetching categories:', error);
-      res.status(500).json({ error: 'Failed to fetch categories' });
+      return sendError(res, 'ProductsController.getCategories', 'Could not load the categories', error);
     }
   }
 
@@ -19,13 +19,13 @@ export class ProductsController {
       const products = await databaseService.getMasterProducts({
         category: category as string,
         search: search as string,
-        isActive: isActive === 'true'
+        // Only filter when the query param is present; previously a missing param meant is_active=false.
+        isActive: isActive === undefined ? undefined : isActive === 'true'
       });
       
       res.json(products);
     } catch (error) {
-      console.error('Error fetching master products:', error);
-      res.status(500).json({ error: 'Failed to fetch products' });
+      return sendError(res, 'ProductsController.getMasterProducts', 'Could not load the products', error);
     }
   }
 
@@ -43,25 +43,22 @@ export class ProductsController {
       
       res.json(products);
     } catch (error) {
-      console.error('Error fetching products:', error);
-      res.status(500).json({ error: 'Failed to fetch products' });
+      return sendError(res, 'ProductsController.getProducts', 'Could not load the products', error);
     }
   }
 
   async getProductById(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      const products = await databaseService.getProductsWithDetails();
-      const product = products.find(p => p.id === id);
-      
+      const product = await databaseService.getProductWithDetailsById(id);
+
       if (!product) {
-        return res.status(404).json({ error: 'Product not found' });
+        return sendError(res, 'ProductsController.getProductById', `No product with id ${id} exists`, undefined, 404);
       }
       
       res.json(product);
     } catch (error) {
-      console.error('Error fetching product:', error);
-      res.status(500).json({ error: 'Failed to fetch product' });
+      return sendError(res, 'ProductsController.getProductById', 'Could not load the product', error);
     }
   }
 
@@ -69,20 +66,21 @@ export class ProductsController {
     try {
       const { latitude, longitude, radiusKm } = req.query;
       
-      if (!latitude || !longitude) {
-        return res.status(400).json({ error: 'Latitude and longitude are required' });
+      const lat = parseFloat(String(latitude ?? ''));
+      const lng = parseFloat(String(longitude ?? ''));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return sendError(res, 'ProductsController.getNearbyStores', 'latitude and longitude query parameters must be numbers', undefined, 400);
       }
-      
+
       const stores = await databaseService.getNearbyStores(
-        parseFloat(latitude as string),
-        parseFloat(longitude as string),
+        lat,
+        lng,
         radiusKm ? parseFloat(radiusKm as string) : 5
       );
       
       res.json(stores);
     } catch (error) {
-      console.error('Error fetching nearby stores:', error);
-      res.status(500).json({ error: 'Failed to fetch nearby stores' });
+      return sendError(res, 'ProductsController.getNearbyStores', 'Could not load nearby stores', error);
     }
   }
 }

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { randomBytes } from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 declare module 'express' {
   interface Request {
@@ -78,8 +79,7 @@ export class ShopkeeperController {
       ]);
       res.json({ success: true, user, store });
     } catch (err) {
-      console.error('shopkeeper getProfile:', err);
-      res.status(500).json({ error: 'Failed to fetch profile' });
+      return sendError(res, 'ShopkeeperController.getProfile', 'Could not load profile', err);
     }
   }
 
@@ -174,8 +174,7 @@ export class ShopkeeperController {
 
       res.json({ success: true, orders: result });
     } catch (err) {
-      console.error('shopkeeper getIncomingOrders:', err);
-      res.status(500).json({ error: 'Failed to fetch orders' });
+      return sendError(res, 'ShopkeeperController.getIncomingOrders', 'Could not load the orders', err);
     }
   }
 
@@ -260,8 +259,7 @@ export class ShopkeeperController {
 
       res.json({ success: true, pickup_code: code, accepted: accepted_item_ids.length, unavailable: unavailableIds.length });
     } catch (err) {
-      console.error('shopkeeper acceptAllocation:', err);
-      res.status(500).json({ error: 'Failed to accept allocation' });
+      return sendError(res, 'ShopkeeperController.acceptAllocation', 'Could not accept the allocation', err);
     }
   }
 
@@ -311,8 +309,7 @@ export class ShopkeeperController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('shopkeeper completeAllocation:', err);
-      res.status(500).json({ error: 'Failed to complete allocation' });
+      return sendError(res, 'ShopkeeperController.completeAllocation', 'Could not complete the allocation', err);
     }
   }
 
@@ -350,8 +347,7 @@ export class ShopkeeperController {
 
       res.json({ success: true });
     } catch (err) {
-      console.error('shopkeeper rejectAllocation:', err);
-      res.status(500).json({ error: 'Failed to reject allocation' });
+      return sendError(res, 'ShopkeeperController.rejectAllocation', 'Could not reject the allocation', err);
     }
   }
 }

@@ -19,6 +19,7 @@ import {
   Ban
 } from 'lucide-react';
 import { getAdmins, deleteAdmin, Admin, getRoleDisplayName, hasPermission } from '../../services/adminAuthService';
+import { describeError } from '../../utils/apiErrors';
 
 // Stat Card
 interface StatCardProps {
@@ -132,7 +133,7 @@ const AdminManagementPage = () => {
       const data = await getAdmins();
       setAdmins(data);
     } catch (err) {
-      setError('Failed to load admins. Please try again.');
+      setError(describeError('AdminManagementPage.fetchAdmins', 'Could not load admins', err));
       console.error('Error fetching admins:', err);
     } finally {
       setLoading(false);
@@ -165,10 +166,10 @@ const AdminManagementPage = () => {
           setSuccess(`"${name}" has been deleted successfully.`);
           setTimeout(() => setSuccess(null), 3000);
         } else {
-          setError('Failed to delete admin. Please try again.');
+          setError(describeError('AdminManagementPage.handleDeleteAdmin', 'Could not delete admin'));
         }
       } catch (err) {
-        setError('An error occurred while deleting the admin.');
+        setError(describeError('AdminManagementPage.handleDeleteAdmin', 'Could not delete the admin', err));
         console.error('Error deleting admin:', err);
       } finally {
         setDeleteLoading(null);

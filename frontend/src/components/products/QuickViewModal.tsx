@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Product } from '../../services/supabase';
 import { useCart } from '../../context/CartContext';
 import { useNotification } from '../../context/NotificationContext';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholderImage';
 
 interface QuickViewModalProps {
   product: Product;
@@ -117,7 +118,7 @@ const QuickViewModal = ({ product, onClose }: QuickViewModalProps) => {
               </div>
             )}
             <img
-              src={product.image || 'https://via.placeholder.com/400x400?text=No+Image'}
+              src={product.image || PLACEHOLDER_IMAGE}
               alt={product.name}
               className="max-h-[400px] max-w-full object-contain"
             />

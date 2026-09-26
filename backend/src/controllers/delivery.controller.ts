@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { sendError } from '../utils/httpError.js';
 
 export class DeliveryController {
   /** Start mock delivery simulation (driver follows road routes). Runs in background. */
@@ -16,8 +17,7 @@ export class DeliveryController {
         console.error('Delivery simulation error:', err)
       );
     } catch (error) {
-      console.error('Error starting simulation:', error);
-      res.status(500).json({ error: 'Failed to start simulation' });
+      return sendError(res, 'DeliveryController.startSimulation', 'Could not start the simulation', error);
     }
   }
   // Get all delivery partners
@@ -26,8 +26,7 @@ export class DeliveryController {
       const partners = await databaseService.getDeliveryPartners();
       res.json(partners);
     } catch (error) {
-      console.error('Error fetching delivery partners:', error);
-      res.status(500).json({ error: 'Failed to fetch delivery partners' });
+      return sendError(res, 'DeliveryController.getDeliveryPartners', 'Could not load delivery partners', error);
     }
   }
 
@@ -41,8 +40,7 @@ export class DeliveryController {
       }
       res.json(partner);
     } catch (error) {
-      console.error('Error fetching delivery partner:', error);
-      res.status(500).json({ error: 'Failed to fetch delivery partner' });
+      return sendError(res, 'DeliveryController.getDeliveryPartnerById', 'Could not load delivery partner', error);
     }
   }
 
@@ -51,14 +49,9 @@ export class DeliveryController {
     try {
       const partner = await databaseService.createDeliveryPartner(req.body);
       res.status(201).json(partner);
-    } catch (error: any) {
-      console.error('Error creating delivery partner:', error);
-      const code = error?.code;
-      const message = error?.message || 'Failed to create delivery partner';
-      if (code === '23505') {
-        return res.status(409).json({ error: message });
-      }
-      res.status(500).json({ error: message });
+    } catch (error) {
+      // Unique-violation (23505) is inferred as 409 by sendError.
+      return sendError(res, 'DeliveryController.createDeliveryPartner', 'Could not create the delivery partner', error);
     }
   }
 
@@ -69,8 +62,7 @@ export class DeliveryController {
       const result = await databaseService.updateDeliveryPartner(partnerId, req.body);
       res.json(result);
     } catch (error) {
-      console.error('Error updating delivery partner:', error);
-      res.status(500).json({ error: 'Failed to update delivery partner' });
+      return sendError(res, 'DeliveryController.updateDeliveryPartner', 'Could not update delivery partner', error);
     }
   }
 
@@ -81,8 +73,7 @@ export class DeliveryController {
       const result = await databaseService.deleteDeliveryPartner(partnerId);
       res.json(result);
     } catch (error) {
-      console.error('Error deleting delivery partner:', error);
-      res.status(500).json({ error: 'Failed to delete delivery partner' });
+      return sendError(res, 'DeliveryController.deleteDeliveryPartner', 'Could not delete delivery partner', error);
     }
   }
 
@@ -93,8 +84,7 @@ export class DeliveryController {
       const agents = await databaseService.getDeliveryAgents(partnerId);
       res.json(agents);
     } catch (error) {
-      console.error('Error fetching delivery agents:', error);
-      res.status(500).json({ error: 'Failed to fetch delivery agents' });
+      return sendError(res, 'DeliveryController.getDeliveryAgents', 'Could not load delivery agents', error);
     }
   }
 
@@ -130,8 +120,7 @@ export class DeliveryController {
         } catch { /* non-critical */ }
       });
     } catch (error) {
-      console.error('Error assigning delivery agent:', error);
-      res.status(500).json({ error: 'Failed to assign delivery agent' });
+      return sendError(res, 'DeliveryController.assignDeliveryAgent', 'Could not assign delivery agent', error);
     }
   }
 
@@ -144,8 +133,7 @@ export class DeliveryController {
       const schedule = await databaseService.getAgentSchedule(agentId, date as string);
       res.json(schedule);
     } catch (error) {
-      console.error('Error fetching agent schedule:', error);
-      res.status(500).json({ error: 'Failed to fetch agent schedule' });
+      return sendError(res, 'DeliveryController.getAgentSchedule', 'Could not load the agent schedule', error);
     }
   }
 
@@ -167,8 +155,7 @@ export class DeliveryController {
 
       res.json(result);
     } catch (error) {
-      console.error('Error updating delivery status:', error);
-      res.status(500).json({ error: 'Failed to update delivery status' });
+      return sendError(res, 'DeliveryController.updateDeliveryStatus', 'Could not update delivery status', error);
     }
   }
 
@@ -180,7 +167,12 @@ export class DeliveryController {
       const { supabaseAdmin } = await import('../config/database.js');
 
       // Auto-offline stale drivers before broadcast (best-effort)
-      void supabaseAdmin.rpc('auto_offline_stale_drivers');
+      // Supabase queries are lazy: they only run when awaited/then'd. `void rpc()` never executed.
+      supabaseAdmin
+        .rpc('auto_offline_stale_drivers')
+        .then(({ error }) => {
+          if (error) console.warn('[DeliveryController.broadcastToDrivers] auto_offline_stale_drivers failed:', error.message);
+        });
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
@@ -242,8 +234,7 @@ export class DeliveryController {
 
       res.json({ success: true, broadcast_count: (partners as any[]).length });
     } catch (err) {
-      console.error('broadcastToDrivers error:', err);
-      res.status(500).json({ error: 'Failed to broadcast' });
+      return sendError(res, 'DeliveryController.broadcastToDrivers', 'Could not broadcast the order to nearby drivers', err);
     }
   }
 }

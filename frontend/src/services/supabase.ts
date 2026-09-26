@@ -3,6 +3,7 @@ import { geocodeAddress } from './placesService';
 import { parseGstRatePercent, priceWithGst } from '../utils/priceGst';
 import { apiUrl, shouldUseBackendApi } from '../utils/apiBase';
 import { getAuthHeaders } from '../utils/authHeader';
+import { cached, invalidateCache } from '../utils/queryCache';
 
 async function readApiErrorMessage(res: Response): Promise<string> {
   const text = await res.text();
@@ -22,22 +23,33 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 // Validate required environment variables
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('❌ Missing Supabase configuration!');
-  console.error('VITE_SUPABASE_URL:', SUPABASE_URL ? '✓ Set' : '✗ Missing');
-  console.error('VITE_SUPABASE_ANON_KEY:', SUPABASE_ANON_KEY ? '✓ Set' : '✗ Missing');
-  console.error('Available env vars:', Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
+  console.error(
+    '[supabase.ts] Supabase is not configured: ' +
+      `VITE_SUPABASE_URL is ${SUPABASE_URL ? 'set' : 'missing'}, ` +
+      `VITE_SUPABASE_ANON_KEY is ${SUPABASE_ANON_KEY ? 'set' : 'missing'}. ` +
+      'Set both in the project-root .env (Vite envDir) and rebuild.'
+  );
 }
 
-// Create Supabase client for public operations (anon key, RLS applies)
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Create Supabase client for public operations (anon key, RLS applies).
+// Placeholders keep the module importable (tests, misconfigured builds) — every
+// query will then fail with a clear network error instead of a crash at import.
+export const supabase = createClient(
+  SUPABASE_URL || 'https://supabase-url-not-configured.invalid',
+  SUPABASE_ANON_KEY || 'anon-key-not-configured'
+);
 
 // Frontend admin client uses anon key — privileged operations go through the backend API
-export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
+export const supabaseAdmin = createClient(
+  SUPABASE_URL || 'https://supabase-url-not-configured.invalid',
+  SUPABASE_ANON_KEY || 'anon-key-not-configured',
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
   }
-});
+);
 
 // Product types
 export interface Product {
@@ -83,6 +95,15 @@ function getLocationFromStorage(): ProductFetchOptions | undefined {
 /** Try 1 km first, then 2, 3, 4 km until at least one store is found (delivery coverage). */
 export const STORE_SEARCH_RADIUS_STEPS_KM = [1, 2, 3, 4] as const;
 
+/** Catalogue data is cached in memory for this long (products, categories, nearby stores). */
+const CATALOGUE_TTL_MS = 60_000;
+const NEARBY_STORES_TTL_MS = 5 * 60_000;
+
+/** Round to ~110 m so GPS jitter does not defeat the nearby-store cache. */
+function locationCacheKey(lat: number, lng: number): string {
+  return `${lat.toFixed(3)},${lng.toFixed(3)}`;
+}
+
 // Get store IDs from the stores table within radius of (lat, lng). No mock/dummy stores.
 // On RPC failure or no stores, returns empty array.
 async function getNearbyStoreIds(
@@ -90,17 +111,24 @@ async function getNearbyStoreIds(
   lng: number,
   radiusKm: number
 ): Promise<string[]> {
-  try {
-    const { data: storeIds, error } = await supabaseAdmin.rpc('get_nearby_store_ids', {
-      cust_lat: lat,
-      cust_lng: lng,
-      radius_km: radiusKm
-    });
-    if (error || !storeIds?.length) return [];
-    return storeIds as string[];
-  } catch {
-    return [];
-  }
+  return cached(
+    `nearby-stores:${locationCacheKey(lat, lng)}:${radiusKm}`,
+    async () => {
+      const { data: storeIds, error } = await supabaseAdmin.rpc('get_nearby_store_ids', {
+        cust_lat: lat,
+        cust_lng: lng,
+        radius_km: radiusKm
+      });
+      if (error) {
+        console.warn(
+          `[supabase.getNearbyStoreIds] get_nearby_store_ids RPC failed for ${locationCacheKey(lat, lng)} (${radiusKm} km): ${error.message}`
+        );
+        return [];
+      }
+      return (storeIds as string[] | null) ?? [];
+    },
+    NEARBY_STORES_TTL_MS
+  );
 }
 
 /** Returns all store IDs within the max configured radius (4 km). */
@@ -121,6 +149,10 @@ export async function hasNearbyStores(lat: number, lng: number): Promise<boolean
 // PostgREST encodes .in() filters in the URL. Large ID lists exceed URL limits and cause Bad Request.
 // Chunk size to stay under limits (~100 UUIDs ≈ 4KB).
 const IN_FILTER_CHUNK_SIZE = 100;
+/** Rows per page when reading the whole catalogue. */
+const PRODUCT_PAGE_SIZE = 500;
+/** How many catalogue pages to request concurrently after the first one. */
+const PRODUCT_PAGE_CONCURRENCY = 4;
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -147,48 +179,112 @@ interface ProductRow {
     is_loose?: boolean;
     is_active: boolean;
     created_at?: string;
+    updated_at?: string;
     gst_rate?: number | string | null;
     [key: string]: unknown;
   } | null;
 }
 
-// Fetch product rows (products joined with master_products), optionally filtered by store IDs
-async function fetchProductRows(storeIds: string[] | null): Promise<ProductRow[]> {
-  const allRows: ProductRow[] = [];
+/**
+ * Only the columns the UI needs. `!inner` makes the join mandatory so the
+ * category / name / is_active filters below run inside Postgres instead of
+ * downloading the whole catalogue and filtering in the browser.
+ */
+const PRODUCT_ROW_SELECT =
+  'id, store_id, master_product_id, product_name, is_active, ' +
+  'master_products!inner(id, name, category, base_price, discounted_price, unit, image_url, description, is_loose, is_active, created_at, updated_at, gst_rate)';
 
+interface ProductRowFilters {
+  category?: string;
+  /** Case-insensitive substring match on the master product name. */
+  search?: string;
+  /** master_products.id */
+  masterProductId?: string;
+}
+
+/** Escape PostgREST pattern characters so user input can be used in ilike safely. */
+function escapeIlike(value: string): string {
+  return value.replace(/[\\%_,()]/g, (c) => `\\${c}`);
+}
+
+type ProductQuery = ReturnType<ReturnType<typeof supabaseAdmin.from>['select']>;
+
+function buildProductQuery(filters: ProductRowFilters): ProductQuery {
+  let q = supabaseAdmin
+    .from('products')
+    .select(PRODUCT_ROW_SELECT)
+    .eq('is_active', true)
+    .eq('master_products.is_active', true) as ProductQuery;
+  if (filters.category) q = q.eq('master_products.category', filters.category) as ProductQuery;
+  if (filters.masterProductId) q = q.eq('master_product_id', filters.masterProductId) as ProductQuery;
+  if (filters.search) q = q.ilike('master_products.name', `%${escapeIlike(filters.search)}%`) as ProductQuery;
+  return q;
+}
+
+function productQueryError(where: string, error: { message: string; code?: string }): Error {
+  return new Error(
+    `Could not load products from the catalogue (${where}): ${error.message}${error.code ? ` [${error.code}]` : ''}`
+  );
+}
+
+// Fetch product rows (products joined with master_products), optionally filtered by store IDs.
+async function fetchProductRows(storeIds: string[] | null, filters: ProductRowFilters = {}): Promise<ProductRow[]> {
   if (storeIds != null && storeIds.length > 0) {
-    const storeChunks = chunk(storeIds, IN_FILTER_CHUNK_SIZE);
-    for (const ids of storeChunks) {
-      const { data, error } = await supabaseAdmin
-        .from('products')
-        .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
-        .eq('is_active', true)
-        .in('store_id', ids);
-      if (error) throw new Error(`Database error: ${error.message}`);
-      if (data?.length) allRows.push(...(data as unknown as ProductRow[]));
-    }
-    return allRows;
+    // One request per 100 stores, all in parallel.
+    const pages = await Promise.all(
+      chunk(storeIds, IN_FILTER_CHUNK_SIZE).map(async (ids) => {
+        const { data, error } = await buildProductQuery(filters).in('store_id', ids);
+        if (error) throw productQueryError('supabase.fetchProductRows/stores', error);
+        return (data ?? []) as unknown as ProductRow[];
+      })
+    );
+    return pages.flat();
   }
 
-  let from = 0;
-  const batchSize = 500;
-  let hasMore = true;
-  while (hasMore) {
-    const { data, error } = await supabaseAdmin
-      .from('products')
-      .select('id, store_id, master_product_id, product_name, is_active, master_products(*)')
-      .eq('is_active', true)
-      .range(from, from + batchSize - 1);
-    if (error) throw new Error(`Database error: ${error.message}`);
-    if (data && data.length > 0) {
-      allRows.push(...(data as unknown as ProductRow[]));
-      from += batchSize;
-      hasMore = data.length === batchSize;
-    } else {
-      hasMore = false;
+  // Whole catalogue: read the first page, then fan out the remaining pages in
+  // parallel batches until a short page tells us we are done.
+  const readPage = async (pageIndex: number): Promise<ProductRow[]> => {
+    const from = pageIndex * PRODUCT_PAGE_SIZE;
+    const { data, error } = await buildProductQuery(filters).range(from, from + PRODUCT_PAGE_SIZE - 1);
+    if (error) throw productQueryError(`supabase.fetchProductRows/page${pageIndex}`, error);
+    return (data ?? []) as unknown as ProductRow[];
+  };
+
+  const allRows: ProductRow[] = [];
+  const first = await readPage(0);
+  allRows.push(...first);
+  let nextPage = 1;
+  let lastBatchWasFull = first.length === PRODUCT_PAGE_SIZE;
+  while (lastBatchWasFull) {
+    const indices = Array.from({ length: PRODUCT_PAGE_CONCURRENCY }, (_, i) => nextPage + i);
+    const batch = await Promise.all(indices.map(readPage));
+    nextPage += PRODUCT_PAGE_CONCURRENCY;
+    lastBatchWasFull = true;
+    for (const page of batch) {
+      allRows.push(...page);
+      if (page.length < PRODUCT_PAGE_SIZE) {
+        lastBatchWasFull = false;
+        break;
+      }
     }
   }
   return allRows;
+}
+
+/** Cached wrapper around fetchProductRows so pages and the search box share one download. */
+async function fetchProductRowsCached(storeIds: string[] | null, filters: ProductRowFilters = {}): Promise<ProductRow[]> {
+  const storeKey = storeIds && storeIds.length > 0 ? [...storeIds].sort().join(',') : 'all';
+  const key = `products:${storeKey}|cat=${filters.category ?? ''}|q=${(filters.search ?? '').toLowerCase()}|id=${filters.masterProductId ?? ''}`;
+  return cached(key, () => fetchProductRows(storeIds, filters), CATALOGUE_TTL_MS);
+}
+
+/** Resolve which stores to query for the current location (null = no location → whole catalogue). */
+async function resolveStoreIds(options?: ProductFetchOptions): Promise<string[] | null> {
+  const opts = options ?? getLocationFromStorage();
+  const { lat, lng } = opts || {};
+  if (lat == null || lng == null) return null;
+  const nearby = await getNearbyStoreIdsExpanding(lat, lng);
+  return nearby.length > 0 ? nearby : null;
 }
 
 // Dedupe product rows by master_product_id and transform to Product[]
@@ -234,73 +330,50 @@ function transformProductRowToProduct(row: ProductRow): Product {
     unit: mp.unit ?? 'piece',
     isLoose,
     created_at: mp.created_at,
-    updated_at: (mp as { updated_at?: string }).updated_at
+    updated_at: mp.updated_at
   };
 }
 
 // Get all products from products table (joined with master_products). Optionally filtered by stores near lat/lng.
 export async function getAllProducts(options?: ProductFetchOptions): Promise<Product[]> {
-  try {
-    const opts = options ?? getLocationFromStorage();
-    const { lat, lng } = opts || {};
-    const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIdsExpanding(lat, lng)
-      : null;
-
-    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
-    const rows = await fetchProductRows(storeIdsToUse);
-    const products = productRowsToProducts(rows);
-
-    console.log(`✅ Fetched ${products.length} products from products table` + (storeIdsToUse ? ' (nearby stores, 1→4 km)' : ''));
-    return products;
-  } catch (error) {
-    console.error('❌ Error in getAllProducts:', error);
-    throw error;
-  }
+  const storeIds = await resolveStoreIds(options);
+  const rows = await fetchProductRowsCached(storeIds);
+  return productRowsToProducts(rows);
 }
 
-// Get products by category from products table (joined with master_products), optionally filtered by nearby stores
+// Get products by category (filtered in Postgres), optionally restricted to nearby stores.
 export async function getProductsByCategory(
   categoryName: string,
   options?: ProductFetchOptions
 ): Promise<Product[]> {
-  try {
-    const opts = options ?? getLocationFromStorage();
-    const { lat, lng } = opts || {};
-    const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIdsExpanding(lat, lng)
-      : null;
-    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
-
-    const rows = await fetchProductRows(storeIdsToUse);
-    const rowsInCategory = rows.filter((r) => r.master_products?.category === categoryName);
-    return productRowsToProducts(rowsInCategory);
-  } catch (error) {
-    console.error('Error in getProductsByCategory:', error);
-    return [];
-  }
+  const storeIds = await resolveStoreIds(options);
+  const rows = await fetchProductRowsCached(storeIds, { category: categoryName });
+  return productRowsToProducts(rows);
 }
 
-// Search products from products table (joined with master_products), optionally filtered by nearby stores
+// Search products by name (filtered in Postgres), optionally restricted to nearby stores.
 export async function searchProducts(query: string, options?: ProductFetchOptions): Promise<Product[]> {
-  try {
-    const opts = options ?? getLocationFromStorage();
-    const { lat, lng } = opts || {};
-    const nearbyStoreIds = (lat != null && lng != null)
-      ? await getNearbyStoreIdsExpanding(lat, lng)
-      : null;
-    const storeIdsToUse = (nearbyStoreIds != null && nearbyStoreIds.length > 0) ? nearbyStoreIds : null;
+  const q = query.trim();
+  const storeIds = await resolveStoreIds(options);
+  const rows = await fetchProductRowsCached(storeIds, q ? { search: q } : {});
+  return productRowsToProducts(rows);
+}
 
-    const rows = await fetchProductRows(storeIdsToUse);
-    const q = query.trim().toLowerCase();
-    const matching = q
-      ? rows.filter((r) => r.master_products?.name?.toLowerCase().includes(q))
-      : rows;
-    return productRowsToProducts(matching);
-  } catch (error) {
-    console.error('Error in searchProducts:', error);
-    return [];
+// Get one product by master product id. Falls back to the whole catalogue when the
+// product is not stocked by a nearby store, so deep links keep working.
+export async function getProductById(productId: string, options?: ProductFetchOptions): Promise<Product | null> {
+  const storeIds = await resolveStoreIds(options);
+  let rows = await fetchProductRowsCached(storeIds, { masterProductId: productId });
+  if (rows.length === 0 && storeIds) {
+    rows = await fetchProductRowsCached(null, { masterProductId: productId });
   }
+  return productRowsToProducts(rows)[0] ?? null;
+}
+
+/** Forget cached catalogue data (call after admin edits or when the user changes location). */
+export function invalidateProductCache(): void {
+  invalidateCache('products:');
+  invalidateCache('nearby-stores:');
 }
 
 // Authentication types
@@ -482,7 +555,6 @@ async function generateOrderNumber(): Promise<string> {
 // Create order (uses customer_orders, store_orders, order_items)
 export async function createOrder(orderData: CreateOrderData): Promise<Order> {
   try {
-    console.log('🛒 Creating order...', orderData);
 
     if (!orderData.user_id) {
       throw new Error('User ID is required to place an order');
@@ -750,9 +822,8 @@ export async function createOrder(orderData: CreateOrderData): Promise<Order> {
 }
 
 // Get user orders (from customer_orders with store_orders and order_items)
-export async function getUserOrders(userId?: string, userPhone?: string, userEmail?: string): Promise<Order[]> {
+export async function getUserOrders(userId?: string, _userPhone?: string, _userEmail?: string): Promise<Order[]> {
   try {
-    console.log('📦 Fetching orders for user:', userId, 'phone:', userPhone, 'email:', userEmail);
 
     if (!userId) {
       console.warn('⚠️ No user ID provided for order query');
@@ -1051,7 +1122,6 @@ export async function getUserAddresses(
   customerPhone?: string
 ): Promise<Address[]> {
   try {
-    console.log('📍 Fetching addresses for user:', userId, 'phone:', userPhone);
 
     if (shouldUseBackendApi()) {
       if (!userId) return [];

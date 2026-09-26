@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { invoiceService } from '../services/invoice.service.js';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 // ---------------------------------------------------------------------------
 // Type extensions
@@ -85,7 +86,7 @@ export class InvoiceController {
       }
 
       if (!signedUrl) {
-        return res.status(500).json({ error: 'Failed to generate invoice' });
+        return sendError(res, 'InvoiceController', 'Could not generate the invoice PDF (storage returned no download URL)', undefined, 500);
       }
 
       const record = await invoiceService.getDocumentRecord(orderId, 'customer');
@@ -98,8 +99,7 @@ export class InvoiceController {
         grand_total: (record?.invoice as any)?.grand_total,
       });
     } catch (err) {
-      console.error('[INVOICE] getCustomerInvoice error:', err);
-      res.status(500).json({ error: 'Failed to retrieve invoice' });
+      return sendError(res, 'InvoiceController.getCustomerInvoice', 'Could not load the invoice', err);
     }
   }
 
@@ -121,7 +121,7 @@ export class InvoiceController {
       }
 
       if (!signedUrl) {
-        return res.status(500).json({ error: 'Failed to generate store invoice' });
+        return sendError(res, 'InvoiceController', 'Could not generate the store invoice PDF (storage returned no download URL)', undefined, 500);
       }
 
       const record = await invoiceService.getDocumentRecord(orderId, 'store');
@@ -134,8 +134,7 @@ export class InvoiceController {
         grand_total: (record?.invoice as any)?.grand_total,
       });
     } catch (err) {
-      console.error('[INVOICE] getStoreInvoice error:', err);
-      res.status(500).json({ error: 'Failed to retrieve store invoice' });
+      return sendError(res, 'InvoiceController.getStoreInvoice', 'Could not load store invoice', err);
     }
   }
 
@@ -157,7 +156,7 @@ export class InvoiceController {
       }
 
       if (!signedUrl) {
-        return res.status(500).json({ error: 'Failed to generate delivery slip' });
+        return sendError(res, 'InvoiceController', 'Could not generate the delivery slip PDF (storage returned no download URL)', undefined, 500);
       }
 
       const record = await invoiceService.getDocumentRecord(orderId, 'delivery');
@@ -170,8 +169,7 @@ export class InvoiceController {
         grand_total: (record?.invoice as any)?.grand_total,
       });
     } catch (err) {
-      console.error('[INVOICE] getDeliveryInvoice error:', err);
-      res.status(500).json({ error: 'Failed to retrieve delivery slip' });
+      return sendError(res, 'InvoiceController.getDeliveryInvoice', 'Could not load delivery slip', err);
     }
   }
 
@@ -190,7 +188,7 @@ export class InvoiceController {
       }
 
       if (!signedUrl) {
-        return res.status(500).json({ error: 'Failed to generate invoice' });
+        return sendError(res, 'InvoiceController', 'Could not generate the invoice PDF (storage returned no download URL)', undefined, 500);
       }
 
       const record = await invoiceService.getDocumentRecord(orderId, docType as any);
@@ -203,8 +201,7 @@ export class InvoiceController {
         grand_total: (record?.invoice as any)?.grand_total,
       });
     } catch (err) {
-      console.error('[INVOICE] getAdminInvoice error:', err);
-      res.status(500).json({ error: 'Failed to retrieve invoice' });
+      return sendError(res, 'InvoiceController.getAdminInvoice', 'Could not load the invoice', err);
     }
   }
 
@@ -215,8 +212,7 @@ export class InvoiceController {
       const result = await invoiceService.regenerateForOrder(orderId);
       res.json({ success: true, ...result });
     } catch (err) {
-      console.error('[INVOICE] regenerateInvoice error:', err);
-      res.status(500).json({ error: 'Failed to regenerate invoice' });
+      return sendError(res, 'InvoiceController.regenerateInvoice', 'Could not regenerate the invoice', err);
     }
   }
 
@@ -227,8 +223,7 @@ export class InvoiceController {
       const result = await invoiceService.generateForOrder(orderId);
       res.json({ success: true, ...result });
     } catch (err) {
-      console.error('[INVOICE] generateInvoice error:', err);
-      res.status(500).json({ error: 'Failed to generate invoice' });
+      return sendError(res, 'InvoiceController.generateInvoice', 'Could not generate the invoice', err);
     }
   }
 }

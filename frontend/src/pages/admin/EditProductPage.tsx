@@ -18,6 +18,7 @@ import {
   FileImage
 } from 'lucide-react';
 import { getProductById, updateProduct, createCategory, uploadProductImage, getCategories } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 // Image item interface
 interface ImageData {
@@ -255,7 +256,7 @@ const EditProductPage = () => {
         setCategories(categoryNames);
       } catch (err) {
         console.error('Error fetching product:', err);
-        setError('Failed to load product. Please try again.');
+        setError(describeError('EditProductPage.fetchData', 'Could not load product', err));
       } finally {
         setLoading(false);
       }
@@ -493,7 +494,7 @@ const EditProductPage = () => {
 
         const newCategory = await createCategory(categoryPayload);
         if (!newCategory) {
-          setError('Failed to create new category. Please try again.');
+          setError(describeError('EditProductPage.handleSubmit', 'Could not create new category'));
           setSaving(false);
           return;
         }
@@ -526,10 +527,10 @@ const EditProductPage = () => {
           navigate('/admin/products');
         }, 1500);
       } else {
-        setError('Failed to update product. Please try again.');
+        setError(describeError('EditProductPage.handleSubmit', 'Could not update product'));
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred while updating the product.');
+      setError(describeError('EditProductPage.handleSubmit', 'Could not update the product', err));
       console.error('Error updating product:', err);
     } finally {
       setSaving(false);

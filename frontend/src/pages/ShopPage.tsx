@@ -5,6 +5,7 @@ import { useLocation } from '../context/LocationContext';
 import { useNotification } from '../context/NotificationContext';
 import { formatCategoryName } from '../utils/formatters';
 import { Search, SlidersHorizontal, X, ChevronDown, Package, MapPin } from 'lucide-react';
+import { describeError } from '../utils/apiErrors';
 
 const ShopPage = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -32,7 +33,10 @@ const ShopPage = () => {
     return newArray;
   };
 
+  const fetchSeqRef = useRef(0);
+
   const fetchProducts = async (lat?: number, lng?: number) => {
+    const seq = ++fetchSeqRef.current; // ignore responses from a superseded location
     try {
       setLoading(true);
       setNoStoresNearby(false);
@@ -40,6 +44,7 @@ const ShopPage = () => {
       // If we have a location, check whether any stores are nearby first.
       if (lat != null && lng != null) {
         const storesExist = await hasNearbyStores(lat, lng);
+        if (seq !== fetchSeqRef.current) return;
         if (!storesExist) {
           setNoStoresNearby(true);
           setProducts([]);
@@ -51,6 +56,7 @@ const ShopPage = () => {
 
       const opts = lat != null && lng != null ? { lat, lng } : undefined;
       const allProducts = await getAllProducts(opts);
+      if (seq !== fetchSeqRef.current) return;
       const randomizedProducts = shuffleArray(allProducts);
       setProducts(randomizedProducts);
       setFilteredProducts(randomizedProducts);
@@ -65,9 +71,9 @@ const ShopPage = () => {
       setPriceRange([0, calculatedMaxPrice]);
     } catch (error) {
       console.error('Error fetching products:', error);
-      showNotification('Failed to load products. Please try again.', 'error');
+      showNotification(describeError('ShopPage.fetchProducts', 'Could not load products', error), 'error');
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   };
 
@@ -121,7 +127,9 @@ const ShopPage = () => {
   const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => setSortBy(e.target.value);
 
   const handlePriceRangeChange = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
-    const value = parseInt(e.target.value);
+    const parsed = parseInt(e.target.value, 10);
+    // An emptied number input parses to NaN, which used to filter out every product.
+    const value = Number.isFinite(parsed) ? parsed : index === 0 ? 0 : maxPrice;
     setPriceRange(prev => {
       const newRange = [...prev] as [number, number];
       newRange[index] = value;

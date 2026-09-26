@@ -15,6 +15,7 @@ import {
   FileText
 } from 'lucide-react';
 import { createCategory } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 const AddCategoryPage = () => {
   const navigate = useNavigate();
@@ -64,10 +65,10 @@ const AddCategoryPage = () => {
           navigate('/admin/categories');
         }, 1500);
       } else {
-        setError('Failed to create category. Please try again.');
+        setError(describeError('AddCategoryPage.handleSubmit', 'Could not create category'));
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred while creating the category.');
+      setError(describeError('AddCategoryPage.handleSubmit', 'Could not create the category', err));
       console.error('Error creating category:', err);
     } finally {
       setLoading(false);

@@ -1,60 +1,60 @@
-import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useState, useEffect, FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { searchProducts } from '../services/supabase';
 import { Product } from '../services/supabase';
 import ProductGrid from '../components/products/ProductGrid';
 import { useNotification } from '../context/NotificationContext';
+import { describeError } from '../utils/apiErrors';
 
 const SearchPage = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = (searchParams.get('q') || '').trim();
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [loading, setLoading] = useState(Boolean(query));
+  const [searchTerm, setSearchTerm] = useState(query);
   const { showNotification } = useNotification();
-  const location = useLocation();
+
+  // Keep the input in sync when the URL changes (back/forward, header search).
+  useEffect(() => {
+    setSearchTerm(query);
+  }, [query]);
 
   useEffect(() => {
-    const queryParams = new URLSearchParams(location.search);
-    const query = queryParams.get('q') || '';
-    setSearchTerm(query);
-
-    const fetchSearchResults = async () => {
-      try {
-        setLoading(true);
-        if (query.trim()) {
-          const results = await searchProducts(query);
-          setProducts(results);
-        } else {
-          setProducts([]);
-        }
-      } catch (error) {
-        console.error('Error searching products:', error);
-        showNotification('Failed to load search results. Please try again.', 'error');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchSearchResults();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.search]);
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchTerm.trim()) {
-      window.history.pushState(
-        {},
-        '',
-        `/search?q=${encodeURIComponent(searchTerm)}`
-      );
-      // Force a re-render
-      window.dispatchEvent(new PopStateEvent('popstate'));
+    if (!query) {
+      setProducts([]);
+      setLoading(false);
+      return;
     }
+    let cancelled = false;
+    setLoading(true);
+    searchProducts(query)
+      .then((results) => {
+        if (!cancelled) setProducts(results);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setProducts([]);
+        showNotification(describeError('SearchPage.search', `Could not search for "${query}"`, error), 'error');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    // A slower earlier search must not overwrite the results of a newer one.
+    return () => {
+      cancelled = true;
+    };
+  }, [query, showNotification]);
+
+  const handleSearch = (e: FormEvent) => {
+    e.preventDefault();
+    const next = searchTerm.trim();
+    if (next) setSearchParams({ q: next });
   };
 
   return (
     <div className="container mx-auto px-4 py-8">
       <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6">
-        {searchTerm ? `Search Results for "${searchTerm}"` : 'Search Products'}
+        {query ? `Search Results for "${query}"` : 'Search Products'}
       </h1>
 
       {/* Search Form */}
@@ -77,7 +77,7 @@ const SearchPage = () => {
       </form>
 
       {/* Search Results */}
-      {searchTerm ? (
+      {query ? (
         <>
           <div className="mb-4 text-gray-600">
             {loading ? (
@@ -98,7 +98,7 @@ const SearchPage = () => {
               </div>
               <h2 className="text-xl font-semibold text-gray-800 mb-2">No results found</h2>
               <p className="text-gray-600 max-w-md mx-auto">
-                We couldn't find any products matching "{searchTerm}". Try using different keywords or check for typos.
+                We couldn't find any products matching "{query}". Try using different keywords or check for typos.
               </p>
             </div>
           )}

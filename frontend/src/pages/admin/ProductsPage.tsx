@@ -36,6 +36,7 @@ import {
   Category,
 } from "../../services/adminService";
 import { Product } from "../../services/supabase";
+import { describeError } from '../../utils/apiErrors';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -324,7 +325,7 @@ const QuickAddModal = ({
       onClose();
     } catch (err) {
       console.error("Error creating product:", err);
-      setError("Failed to create product. Please try again.");
+      setError(describeError('ProductsPage.handleSubmit', 'Could not create product', err));
     } finally {
       setIsSubmitting(false);
     }
@@ -733,7 +734,7 @@ const ProductsPage = () => {
       setCategories(categoriesData);
     } catch (err) {
       console.error("Error fetching data:", err);
-      setError("Failed to load products. Please try again.");
+      setError(describeError('ProductsPage.fetchData', 'Could not load products', err));
     } finally {
       setLoading(false);
     }
@@ -770,11 +771,11 @@ const ProductsPage = () => {
           setSuccess(`"${productName}" has been deleted successfully.`);
           setTimeout(() => setSuccess(null), 3000);
         } else {
-          setError("Failed to delete product. Please try again.");
+          setError(describeError('ProductsPage.handleDeleteProduct', 'Could not delete product'));
         }
       } catch (err) {
         console.error("Error deleting product:", err);
-        setError("An error occurred while deleting the product.");
+        setError(describeError('ProductsPage.handleDeleteProduct', 'Could not delete the product', err));
       } finally {
         setDeleteLoading(null);
       }
@@ -802,11 +803,11 @@ const ProductsPage = () => {
         setSuccess(`Stock status updated to "${newStatus}"`);
         setTimeout(() => setSuccess(null), 2000);
       } else {
-        setError("Failed to update stock status. Please try again.");
+        setError(describeError('ProductsPage.handleToggleStock', 'Could not update stock status'));
       }
     } catch (err) {
       console.error("Error toggling stock:", err);
-      setError("Failed to update stock status. Please try again.");
+      setError(describeError('ProductsPage.handleToggleStock', 'Could not update stock status', err));
     } finally {
       setToggleLoading(null);
     }

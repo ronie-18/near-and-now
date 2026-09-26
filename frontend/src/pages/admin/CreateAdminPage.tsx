@@ -15,6 +15,7 @@ import {
   Info
 } from 'lucide-react';
 import { createAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
+import { describeError } from '../../utils/apiErrors';
 
 const CreateAdminPage = () => {
   const navigate = useNavigate();
@@ -86,7 +87,7 @@ const CreateAdminPage = () => {
       if (err.message?.includes('duplicate key')) {
         setError('An admin with this email already exists.');
       } else {
-        setError(err.message || 'Failed to create admin. Please try again.');
+        setError(describeError('CreateAdminPage.handleSubmit', 'Could not create admin', err));
       }
     } finally {
       setLoading(false);

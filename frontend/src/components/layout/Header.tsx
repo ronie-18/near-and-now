@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useLocation as useUserLocation } from '../../context/LocationContext';
 import { useCart } from '../../context/CartContext';
 import LocationPicker, { LocationData } from '../location/LocationPicker';
 import {
@@ -8,10 +9,13 @@ import {
   LogOut, Package, UserCircle, LogIn, UserPlus, Clock, Sparkles
 } from 'lucide-react';
 import { searchProducts, Product, getUserAddresses, Address as DbAddress } from '../../services/supabase';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholderImage';
 
 const Header = () => {
+  const navigate = useNavigate();
   const { user, customer, isAuthenticated, logoutUser } = useAuth();
   const { cartCount } = useCart();
+  const { userLocation, setUserLocation } = useUserLocation();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -30,6 +34,15 @@ const Header = () => {
 
   // Load location and saved addresses: for logged-in users prefer saved address from DB
   useEffect(() => {
+    // Paint the last known location immediately; the saved-address lookup below may refine it.
+    if (!currentLocation) {
+      try {
+        const cachedLoc = localStorage.getItem('currentLocation');
+        if (cachedLoc) setCurrentLocation(JSON.parse(cachedLoc) as LocationData);
+      } catch {
+        /* ignore malformed cache */
+      }
+    }
     const loadLocation = async () => {
       if (isAuthenticated && user?.id) {
         try {
@@ -47,10 +60,11 @@ const Header = () => {
             };
             setCurrentLocation(loc);
             localStorage.setItem('currentLocation', JSON.stringify(loc));
+            if (!userLocation) publishLocation(loc);
             return;
           }
         } catch (e) {
-          console.error('Error loading user addresses:', e);
+          console.warn('[Header] Could not load saved addresses for the delivery location:', e);
         }
       } else {
         setUserSavedAddresses([]);
@@ -58,9 +72,11 @@ const Header = () => {
       const savedLocation = localStorage.getItem('currentLocation');
       if (savedLocation) {
         try {
-          setCurrentLocation(JSON.parse(savedLocation));
+          const parsed = JSON.parse(savedLocation) as LocationData;
+          setCurrentLocation(parsed);
+          if (!userLocation) publishLocation(parsed);
         } catch (e) {
-          console.error('Error loading saved location:', e);
+          console.warn('[Header] Saved location in localStorage was not valid JSON and was ignored:', e);
         }
       }
     };
@@ -123,19 +139,23 @@ const Header = () => {
     }
 
     // Set new timeout for debounced search
+    let stale = false;
     debounceRef.current = setTimeout(async () => {
       try {
         const products = await searchProducts(searchQuery);
+        if (stale) return; // a newer keystroke superseded this request
         setSearchSuggestions(products.slice(0, 8)); // show max 8 suggestions
       } catch (err) {
-        console.error('Search error:', err);
+        if (stale) return;
+        console.warn('[Header] product suggestions failed:', err);
         setSearchSuggestions([]);
       } finally {
-        setSuggestionsLoading(false);
+        if (!stale) setSuggestionsLoading(false);
       }
     }, 300); // 300ms debounce
 
     return () => {
+      stale = true;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
@@ -145,14 +165,15 @@ const Header = () => {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      window.location.href = `/search?q=${encodeURIComponent(searchQuery)}`;
+      // Client-side navigation: window.location.href reloaded the whole SPA on every search.
+      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
       setSearchQuery('');
       setIsSearchFocused(false);
     }
   };
 
   const handleSuggestionClick = (productId: string) => {
-    window.location.href = `/product/${productId}`;
+    navigate(`/product/${productId}`);
     setIsSearchFocused(false);
     setSearchQuery('');
   };
@@ -174,9 +195,26 @@ const Header = () => {
     }
   };
 
-  const handleLocationSelect = (location: LocationData) => {
+  const publishLocation = (location: LocationData) => {
     setCurrentLocation(location);
     localStorage.setItem('currentLocation', JSON.stringify(location));
+    // LocationContext is what ShopPage / the product catalogue read for nearby-store
+    // filtering. Before this, the header wrote a different localStorage key and the
+    // context stayed null forever, so every page showed products from every store.
+    if (typeof location.lat === 'number' && typeof location.lng === 'number') {
+      setUserLocation({
+        latitude: location.lat,
+        longitude: location.lng,
+        address: location.address,
+        city: location.city,
+        state: location.state,
+        pincode: location.pincode,
+      });
+    }
+  };
+
+  const handleLocationSelect = (location: LocationData) => {
+    publishLocation(location);
   };
 
   const toggleLocationPicker = () => {
@@ -298,7 +336,7 @@ const Header = () => {
                                 onClick={() => handleSuggestionClick(product.id)}
                               >
                                 <img
-                                  src={product.image || 'https://via.placeholder.com/48?text=No+Image'}
+                                  src={product.image || PLACEHOLDER_IMAGE}
                                   alt={product.name}
                                   className="w-12 h-12 object-cover rounded-lg border border-gray-200 group-hover:border-primary/30 transition-all flex-shrink-0"
                                 />
@@ -623,7 +661,7 @@ const Header = () => {
                             onClick={() => handleSuggestionClick(product.id)}
                           >
                             <img
-                              src={product.image || 'https://via.placeholder.com/40?text=No+Image'}
+                              src={product.image || PLACEHOLDER_IMAGE}
                               alt={product.name}
                               className="w-10 h-10 object-cover rounded-lg border border-gray-200"
                             />

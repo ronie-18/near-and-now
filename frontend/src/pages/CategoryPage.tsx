@@ -17,7 +17,6 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 
 /* ─── Inline styles injected once ─────────────────────────────────────── */
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap');
 
   :root {
     --cream:   #f8f5f0;
@@ -312,9 +311,7 @@ const CategoryPage = () => {
     try {
       setLoading(true);
       setError(null);
-      console.log('🔍 CategoryPage - Fetching products for category:', categoryId);
       const categoryProducts = await getProductsByCategory(categoryId);
-      console.log('📦 CategoryPage - Products found:', categoryProducts.length);
       setProducts(categoryProducts);
     } catch (err) {
       const errorMessage = 'Failed to load products. Please try again.';
@@ -331,15 +328,12 @@ const CategoryPage = () => {
 
   /* ── sort ── */
   const sortedProducts = useMemo(() => {
-    const shuffled = [...products];
+    const sorted = [...products];
     if (sortBy === 'default') {
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      return shuffled;
+      // The option is labelled "Newest"; it used to shuffle randomly on every render/refetch.
+      return sorted.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
     }
-    return shuffled.sort((a, b) => {
+    return sorted.sort((a, b) => {
       switch (sortBy) {
         case 'price-asc':  return a.price - b.price;
         case 'price-desc': return b.price - a.price;

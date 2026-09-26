@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { downloadCustomerInvoice, downloadShopkeeperInvoice } from './invoice';
 
 describe('invoice downloads', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.useFakeTimers(); // the blob URL is revoked in a setTimeout after the click
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('downloads customer invoice as html file', () => {
@@ -32,6 +37,7 @@ describe('invoice downloads', () => {
     expect(createElementSpy).toHaveBeenCalled();
     expect(appendSpy).toHaveBeenCalled();
     expect(clickSpy).toHaveBeenCalled();
+    vi.runAllTimers();
     expect(revokeSpy).toHaveBeenCalled();
   });
 

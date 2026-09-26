@@ -6,7 +6,37 @@ const TEST_SECRET = 'test_razorpay_key_secret';
 function setRazorpayEnv(keyId: string) {
   process.env.RAZORPAY_KEY_ID = keyId;
   process.env.RAZORPAY_KEY_SECRET = TEST_SECRET;
+  // Webhooks are signed with the dedicated webhook secret, not the API key secret.
+  process.env.RAZORPAY_WEBHOOK_SECRET = TEST_SECRET;
 }
+
+// createPaymentOrder looks up the order/customer in Supabase before calling Razorpay.
+// Stub the DB client so the stubbed global fetch only sees Razorpay calls.
+vi.mock('../config/database.js', () => {
+  const makeChain = (): any => {
+    const chain: any = {};
+    for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'insert', 'upsert', 'maybeSingle', 'single']) {
+      chain[m] = () => chain;
+    }
+    // One fake row satisfies every lookup createPaymentOrder makes: the order context
+    // (total_amount → trusted amount) and the app_users row (existing Razorpay customer).
+    const row = {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      customer_id: 'user-1',
+      total_amount: 100,
+      payment_status: 'pending',
+      razorpay_order_id: null,
+      razorpay_payment_id: null,
+      notes: null,
+      razorpay_customer_id: 'cust_test_existing'
+    };
+    chain.then = (onFulfilled: any, onRejected: any) =>
+      Promise.resolve({ data: row, error: null }).then(onFulfilled, onRejected);
+    return chain;
+  };
+  const client = { from: () => makeChain(), rpc: () => makeChain() };
+  return { supabaseAdmin: client, supabase: client, isSupabaseServiceRoleConfigured: false, default: client };
+});
 
 async function loadPaymentService() {
   vi.resetModules();

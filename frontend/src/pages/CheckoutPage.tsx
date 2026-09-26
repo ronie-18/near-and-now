@@ -9,6 +9,7 @@ import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway'
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
 import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
+import { describeError } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────
    Tiny reusable components
@@ -293,7 +294,7 @@ const CheckoutPage = () => {
       }
       showNotification('Address deleted', 'success');
     } catch (error) {
-      showNotification('Failed to delete address', 'error');
+      showNotification(describeError('CheckoutPage.handleDeleteAddress', 'Could not delete address', error), 'error');
     } finally {
       setLoadingAddresses(false);
     }
@@ -342,7 +343,7 @@ const CheckoutPage = () => {
         const updated = addresses.find(a => a.id === updatedAddressId);
         if (updated) { setSelectedAddressId(updatedAddressId); populateFormWithAddress(updated); }
       } catch (error) {
-        showNotification('Failed to update address', 'error');
+        showNotification(describeError('CheckoutPage.handleFormSubmit', 'Could not update address', error), 'error');
       } finally {
         setLoadingAddresses(false);
       }
@@ -607,7 +608,6 @@ const CheckoutPage = () => {
     <>
       {/* Global page styles */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600&display=swap');
         .checkout-root { font-family: 'DM Sans', sans-serif; }
         .checkout-root h1, .checkout-root h2, .checkout-root .font-display { font-family: 'Sora', sans-serif; }
         .step-dot { transition: all 0.3s ease; }

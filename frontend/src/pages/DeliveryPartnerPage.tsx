@@ -8,7 +8,6 @@ type Status = 'idle' | 'requesting' | 'tracking' | 'error' | 'stopped';
 
 /* ─── Styles ─────────────────────────────────────────────────────────── */
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Instrument+Sans:wght@300;400;500&display=swap');
 
   :root {
     --bg:       #0d0f14;

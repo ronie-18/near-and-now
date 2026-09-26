@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Tag, Search, Plus, CheckCircle, XCircle, Calendar, Users } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { describeError } from '../../utils/apiErrors';
 
 interface Coupon {
   id: string;
@@ -58,7 +59,7 @@ const OffersPage = () => {
       setCoupons(data);
     } catch (error) {
       console.error('Error fetching coupons:', error);
-      showNotification('Failed to load coupons', 'error');
+      showNotification(describeError('OffersPage.fetchCoupons', 'Could not load coupons', error), 'error');
     } finally {
       setLoading(false);
     }
@@ -92,7 +93,7 @@ const OffersPage = () => {
       fetchCoupons();
     } catch (error: any) {
       console.error('Error creating coupon:', error);
-      showNotification(error.message || 'Failed to create coupon', 'error');
+      showNotification(describeError('OffersPage.handleCreate', 'Could not create coupon', error), 'error');
     }
   };
 
@@ -126,7 +127,7 @@ const OffersPage = () => {
       fetchCoupons();
     } catch (error: any) {
       console.error('Error updating coupon:', error);
-      showNotification(error.message || 'Failed to update coupon', 'error');
+      showNotification(describeError('OffersPage.handleUpdate', 'Could not update coupon', error), 'error');
     }
   };
 
@@ -141,7 +142,7 @@ const OffersPage = () => {
       fetchCoupons();
     } catch (error) {
       console.error('Error deleting coupon:', error);
-      showNotification('Failed to delete coupon', 'error');
+      showNotification(describeError('OffersPage.handleDelete', 'Could not delete coupon', error), 'error');
     }
   };
 
@@ -156,7 +157,7 @@ const OffersPage = () => {
       fetchCoupons();
     } catch (error) {
       console.error('Error updating status:', error);
-      showNotification('Failed to update coupon status', 'error');
+      showNotification(describeError('OffersPage.toggleActive', 'Could not update coupon status', error), 'error');
     }
   };
 

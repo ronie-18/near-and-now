@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getDashboardStats, getAdminProducts, getOrders, Order } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 // Modern Stat Card (with optional link)
 interface StatCardProps {
@@ -357,7 +358,7 @@ const AdminDashboardPage = () => {
       
       setTopProducts(topProds);
     } catch (err) {
-      setError('Failed to load dashboard data. Please try again.');
+      setError(describeError('AdminDashboardPage.normalizedName', 'Could not load dashboard data', err));
       console.error('Error fetching dashboard data:', err);
     } finally {
       setLoading(false);

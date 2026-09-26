@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { randomUUID } from 'crypto';
+import { sendError } from '../utils/httpError.js';
 import twilio from 'twilio';
 import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from '../services/database.service.js';
@@ -101,12 +103,9 @@ export class AuthController {
         message: 'OTP sent successfully',
         status: verification.status
       });
-    } catch (error: any) {
-      console.error('❌ Error sending OTP:', error);
-      res.status(500).json({
-        error: 'Failed to send OTP',
-        message: error.message
-      });
+    } catch (error) {
+      // Twilio errors carry an HTTP status (e.g. 400 for an invalid phone number); sendError infers it.
+      return sendError(res, 'AuthController.sendOTP', 'Could not send the OTP SMS', error);
     }
   }
 
@@ -192,7 +191,7 @@ export class AuthController {
         }
 
         if (existingUser && existingUser.role === requestedRole) {
-          const token = crypto.randomUUID();
+          const token = randomUUID();
           const { password_hash: _, ...userWithoutPassword } = existingUser;
           console.log(`👤 Existing ${requestedRole}, logging in:`, existingUser.id, existingUser.name);
 
@@ -293,10 +292,7 @@ export class AuthController {
         if (userError || !newUser) {
           const errMsg = extractErrorMessage(userError, 'Failed to create user account');
           console.error('❌ Error creating user:', userError);
-          return res.status(500).json({
-            error: 'Failed to create user account',
-            message: errMsg
-          });
+          return sendError(res, 'AuthController.verifyOTP', 'Could not create your account after the OTP was verified', userError, undefined, { message: errMsg });
         }
 
         appUser = newUser;
@@ -318,10 +314,7 @@ export class AuthController {
           const errMsg = extractErrorMessage(customerError, 'Failed to create customer profile');
           console.error('❌ Error creating customer:', customerError);
           await supabaseAdmin.from('app_users').delete().eq('id', appUser.id);
-          return res.status(500).json({
-            error: 'Failed to create customer profile',
-            message: errMsg
-          });
+          return sendError(res, 'AuthController.verifyOTP', 'Could not create your customer profile after the OTP was verified', customerError, undefined, { message: errMsg });
         }
 
         customer = newCustomer;
@@ -334,7 +327,7 @@ export class AuthController {
       }
 
       const isNewUser = !existingUser;
-      const token = crypto.randomUUID();
+      const token = randomUUID();
 
       // Persist the session token so customer-authenticated routes can validate it,
       // matching the shopkeeper/delivery_partner flows above. Without this write the
@@ -346,10 +339,7 @@ export class AuthController {
 
       if (tokenError) {
         console.error('❌ Failed to persist customer session token:', tokenError);
-        return res.status(500).json({
-          error: 'Failed to complete login',
-          message: extractErrorMessage(tokenError, 'Could not persist session token')
-        });
+        return sendError(res, 'AuthController.verifyOTP', 'Could not complete the login (the session token could not be saved)', tokenError);
       }
       const { password_hash: _, session_token: __, ...userWithoutPassword } = appUser;
 
@@ -361,12 +351,9 @@ export class AuthController {
         token,
         isNewUser
       });
-    } catch (error: any) {
-      console.error('❌ Error verifying OTP:', error);
-      res.status(500).json({
-        error: 'Failed to verify OTP',
-        message: error.message
-      });
+    } catch (error) {
+      // Twilio "invalid code" responses carry a 4xx status which sendError infers.
+      return sendError(res, 'AuthController.verifyOTP', 'Could not verify the OTP', error);
     }
   }
 }

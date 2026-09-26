@@ -12,6 +12,7 @@ import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { SIMULATION_STORAGE_KEY } from '../services/deliverySimulation';
 import { geocodeAddress } from '../services/placesService';
 import { fetchOrderTrackingFull } from '../services/trackingApi';
+import { describeError } from '../utils/apiErrors';
 import { getAuthHeaders } from '../utils/authHeader';
 
 // DB statuses
@@ -134,6 +135,7 @@ const OrderTrackingPage = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [showItems, setShowItems] = useState(true);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Resolve order_code → orderId
   useEffect(() => {
@@ -155,7 +157,7 @@ const OrderTrackingPage = () => {
       try {
         setLoading(true);
         const data = await fetchOrderTrackingFull(orderId);
-        if (!data) { setLoading(false); return; }
+        setLoadError(null);
         const { order: orderData, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
         const orderIdVal = orderData.id ?? orderId ?? '';
         const transformed: Order = {
@@ -189,7 +191,7 @@ const OrderTrackingPage = () => {
           }
         }
       } catch (err) {
-        console.error('Error fetching order tracking:', err);
+        setLoadError(describeError('OrderTrackingPage.fetchOrder', `Could not load tracking for order ${orderId}`, err));
       } finally {
         setLoading(false);
       }
@@ -210,16 +212,19 @@ const OrderTrackingPage = () => {
     return () => { cancelled = true; };
   }, [order?.delivery_address, order?.delivery_latitude, order?.delivery_longitude]);
 
-  // Start simulation
+  // Start the delivery simulation (demo/dev only). Customers must never trigger this in production.
+  const simulationEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DELIVERY_SIMULATION === 'true';
   useEffect(() => {
-    if (!orderId || !order) return;
+    if (!simulationEnabled || !orderId || !order) return;
     const st = order.status;
     if (st !== 'pending_at_store' && st !== 'store_accepted') return;
     if (sessionStorage.getItem(`${SIMULATION_STORAGE_KEY}-${orderId}`)) return;
     sessionStorage.setItem(`${SIMULATION_STORAGE_KEY}-${orderId}`, '1');
     const apiBase = (import.meta.env.VITE_API_URL || window.location.origin).toString().replace(/\/$/, '');
-    fetch(`${apiBase}/api/delivery/simulate/${orderId}`, { method: 'POST' }).catch(console.error);
-  }, [orderId, order?.status]);
+    fetch(`${apiBase}/api/delivery/simulate/${orderId}`, { method: 'POST' }).catch((err) =>
+      console.warn('[OrderTrackingPage] delivery simulation request failed:', err)
+    );
+  }, [simulationEnabled, orderId, order?.status]);
 
   const formatStatusForDisplay = useCallback(
     (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
@@ -320,8 +325,10 @@ const OrderTrackingPage = () => {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 text-center">
           <Package className="w-14 h-14 text-gray-300 mx-auto mb-4" />
-          <h1 className="text-xl font-bold text-gray-800 mb-2">Order Not Found</h1>
-          <p className="text-gray-500 mb-6 text-sm">We couldn't find this order. Check the order number and try again.</p>
+          <h1 className="text-xl font-bold text-gray-800 mb-2">{loadError ? 'Tracking Unavailable' : 'Order Not Found'}</h1>
+          <p className="text-gray-500 mb-6 text-sm">
+            {loadError ?? "We couldn't find this order. Check the order number and try again."}
+          </p>
           <TrackByNumberForm loading={false} initialNumber="" />
           <Link to="/orders" className="mt-4 inline-block text-primary hover:text-secondary text-sm font-medium">
             View All Orders →

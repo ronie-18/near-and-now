@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, ReactNode } from 'react';
 import { calculateDistance } from '../utils/deliveryFees';
 
 export interface UserLocation {
@@ -23,49 +23,60 @@ interface LocationProviderProps {
   children: ReactNode;
 }
 
-export function LocationProvider({ children }: LocationProviderProps) {
-  const [userLocation, setUserLocationState] = useState<UserLocation | null>(null);
+const STORAGE_KEY = 'userLocation';
 
-  // Load location from localStorage on mount
-  useEffect(() => {
-    const storedLocation = localStorage.getItem('userLocation');
-    if (storedLocation) {
-      try {
-        const parsed = JSON.parse(storedLocation);
-        setUserLocationState(parsed);
-      } catch (error) {
-        console.error('Error loading location from storage:', error);
+function readStoredLocation(): UserLocation | null {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Partial<UserLocation>;
+    if (typeof parsed.latitude === 'number' && typeof parsed.longitude === 'number') {
+      return parsed as UserLocation;
+    }
+    return null;
+  } catch (error) {
+    console.warn('[LocationContext] Stored location was not valid JSON and was ignored:', error);
+    return null;
+  }
+}
+
+export function LocationProvider({ children }: LocationProviderProps) {
+  // Read synchronously on first render so pages do not flash the "no location" state
+  // and then re-fetch once the stored location arrives one tick later.
+  const [userLocation, setUserLocationState] = useState<UserLocation | null>(readStoredLocation);
+
+  // Save location to localStorage whenever it changes
+  const setUserLocation = useCallback((location: UserLocation | null) => {
+    setUserLocationState(location);
+    try {
+      if (location) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(location));
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
       }
+    } catch (error) {
+      console.warn('[LocationContext] Could not persist the location to localStorage:', error);
     }
   }, []);
 
-  // Save location to localStorage whenever it changes
-  const setUserLocation = (location: UserLocation | null) => {
-    setUserLocationState(location);
-    if (location) {
-      localStorage.setItem('userLocation', JSON.stringify(location));
-    } else {
-      localStorage.removeItem('userLocation');
-    }
-  };
-
   // Calculate distance from user location to a store
-  const calculateDistanceToStore = (storeLat: number, storeLng: number): number | null => {
-    if (!userLocation) return null;
-    return calculateDistance(
-      userLocation.latitude,
-      userLocation.longitude,
-      storeLat,
-      storeLng
-    );
-  };
+  const calculateDistanceToStore = useCallback(
+    (storeLat: number, storeLng: number): number | null => {
+      if (!userLocation) return null;
+      return calculateDistance(userLocation.latitude, userLocation.longitude, storeLat, storeLng);
+    },
+    [userLocation]
+  );
 
-  const value = {
-    userLocation,
-    setUserLocation,
-    calculateDistanceToStore,
-    isLocationSet: userLocation !== null
-  };
+  const value = useMemo(
+    () => ({
+      userLocation,
+      setUserLocation,
+      calculateDistanceToStore,
+      isLocationSet: userLocation !== null
+    }),
+    [userLocation, setUserLocation, calculateDistanceToStore]
+  );
 
   return (
     <LocationContext.Provider value={value}>

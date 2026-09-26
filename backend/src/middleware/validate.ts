@@ -9,7 +9,13 @@ export function validate(schema: ZodSchema) {
         field: e.path.join('.'),
         message: e.message
       }));
-      return res.status(400).json({ error: 'Validation failed', details: errors });
+      const summary = errors.map((e) => (e.field ? `${e.field}: ${e.message}` : e.message)).join('; ');
+      return res.status(400).json({
+        error: `The request to ${req.method} ${req.originalUrl.split('?')[0]} has invalid fields — ${summary}`,
+        where: 'validate.middleware',
+        requestId: req.requestId,
+        details: errors
+      });
     }
     req.body = result.data;
     next();

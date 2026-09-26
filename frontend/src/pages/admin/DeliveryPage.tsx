@@ -26,6 +26,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { describeError } from '../../utils/apiErrors';
 
 interface DeliveryPartner {
   id: string;
@@ -383,7 +384,7 @@ const DeliveryPage = () => {
       setPartners(data);
     } catch (err) {
       console.error(err);
-      setError('Failed to load delivery partners. Please try again.');
+      setError(describeError('DeliveryPage.fetchPartners', 'Could not load delivery partners', err));
     } finally {
       setLoading(false);
     }
@@ -418,7 +419,7 @@ const DeliveryPage = () => {
       setSuccess(`"${name}" has been removed.`);
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError('Failed to delete delivery partner.');
+      setError(describeError('DeliveryPage.handleDelete', 'Could not delete delivery partner', err));
     } finally {
       setDeleteLoading(null);
     }
@@ -440,8 +441,8 @@ const DeliveryPage = () => {
       });
       if (!res.ok) throw new Error('Failed');
       fetchPartners();
-    } catch {
-      setError('Failed to update partner status.');
+    } catch (err) {
+      setError(describeError('DeliveryPage.handleToggleStatus', 'Could not update partner status', err));
     }
   };
 

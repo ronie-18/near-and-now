@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback } from 'react';
+import { memo, useState, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Product } from '../../services/supabase';
 import { useCart } from '../../context/CartContext';
 import { truncateText } from '../../utils/formatters';
+import { PLACEHOLDER_IMAGE, handleImageError } from '../../utils/placeholderImage';
 
 interface ProductCardProps {
   product: Product;
@@ -11,7 +12,6 @@ interface ProductCardProps {
 
 const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
   const { addToCart, cartItems, updateCartQuantity, removeFromCart } = useCart();
-  const [isHovered, setIsHovered] = useState(false);
   const [looseQuantity, setLooseQuantity] = useState(0.25);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -98,11 +98,7 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
   }, [looseQuantity]);
 
   return (
-    <div
-      className="product-card bg-white rounded-lg shadow-md overflow-hidden transition-all duration-300 hover:shadow-xl relative"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
+    <div className="product-card group bg-white rounded-lg shadow-md overflow-hidden transition-all duration-300 hover:shadow-xl relative">
       <Link to={`/product/${product.id}`} className="block">
         <div className="relative h-36 sm:h-40 overflow-hidden bg-gray-100">
           {/* Discount Badge */}
@@ -114,14 +110,14 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
 
           {/* Product Image */}
           <img
-            src={product.image || 'https://via.placeholder.com/300x300?text=No+Image'}
+            src={product.image || PLACEHOLDER_IMAGE}
             alt={product.name}
             loading="lazy"
-            className={`w-full h-full object-cover transition-transform duration-300 ${!product.in_stock ? 'opacity-50 grayscale' : ''}`}
-            style={{ transform: isHovered ? 'scale(1.05)' : 'scale(1)' }}
-            onError={(e) => {
-              e.currentTarget.src = 'https://via.placeholder.com/300x300?text=No+Image';
-            }}
+            className={`w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 ${!product.in_stock ? 'opacity-50 grayscale' : ''}`}
+            width={300}
+            height={300}
+            decoding="async"
+            onError={handleImageError}
           />
 
           {/* Out of Stock Overlay */}
@@ -136,9 +132,7 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
           {/* Quick View Button (shown on hover) */}
           {onQuickView && (
             <div
-              className={`absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center transition-opacity duration-300 ${
-                isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
-              }`}
+              className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center transition-opacity duration-300 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
             >
               <button
                 onClick={handleQuickView}
@@ -268,4 +262,5 @@ const ProductCard = ({ product, onQuickView }: ProductCardProps) => {
   );
 };
 
-export default ProductCard;
+// Memoised: with a stable cart context value, only the cards whose product/cart line changed re-render.
+export default memo(ProductCard);

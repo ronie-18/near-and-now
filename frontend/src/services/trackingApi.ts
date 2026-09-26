@@ -1,10 +1,16 @@
 /**
  * Tracking API - fetches tracking data via backend (bypasses Supabase RLS 403).
  * Use this instead of direct Supabase for order_status_history and stores.
+ *
+ * All routes under /api/tracking require the customer's session token
+ * (requireCustomer on the backend). The previous version sent no
+ * Authorization header, so every call returned 401 and the tracking page
+ * silently showed "order not found" / never updated.
  */
 
-import { getApiBase } from '../utils/apiBase';
-const API_BASE = getApiBase();
+import { apiUrl } from '../utils/apiBase';
+import { getAuthHeaders } from '../utils/authHeader';
+import { fetchJson } from '../utils/apiErrors';
 
 export interface TrackingFullResponse {
   order: {
@@ -40,32 +46,21 @@ export interface TrackingFullResponse {
   deliveryAgents?: Record<string, { id: string; name: string; phone: string; vehicle_number?: string }>;
 }
 
-export async function fetchOrderTrackingFull(orderId: string): Promise<TrackingFullResponse | null> {
-  try {
-    const url = `${API_BASE || ''}/api/tracking/orders/${orderId}/full`;
-    console.log('🔍 Fetching order tracking from:', url);
+export type DriverLocationMap = Record<string, { latitude: number; longitude: number; updated_at: string }>;
 
-    const res = await fetch(url);
-
-    if (!res.ok) {
-      console.error('❌ Failed to fetch order tracking:', res.status, res.statusText);
-      const errorText = await res.text();
-      console.error('Error response:', errorText);
-      return null;
-    }
-
-    const data = await res.json();
-    console.log('✅ Order tracking data received:', data);
-    return data;
-  } catch (error) {
-    console.error('❌ Error fetching order tracking:', error);
-    return null;
-  }
+/** Throws ApiError (with `where`/`requestId`) on failure so the page can show a precise message. */
+export function fetchOrderTrackingFull(orderId: string): Promise<TrackingFullResponse> {
+  return fetchJson<TrackingFullResponse>(
+    apiUrl(`/api/tracking/orders/${encodeURIComponent(orderId)}/full`),
+    { headers: getAuthHeaders(), cache: 'no-store' },
+    'trackingApi.fetchOrderTrackingFull'
+  );
 }
 
-export async function fetchDriverLocations(orderId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }>> {
-  const url = `${API_BASE || ''}/api/tracking/orders/${orderId}/driver-locations`;
-  const res = await fetch(url);
-  if (!res.ok) return {};
-  return res.json();
+export function fetchDriverLocations(orderId: string): Promise<DriverLocationMap> {
+  return fetchJson<DriverLocationMap>(
+    apiUrl(`/api/tracking/orders/${encodeURIComponent(orderId)}/driver-locations`),
+    { headers: getAuthHeaders(), cache: 'no-store' },
+    'trackingApi.fetchDriverLocations'
+  );
 }

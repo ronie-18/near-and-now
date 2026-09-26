@@ -44,71 +44,57 @@ function resolveApiProxyTarget(raw: string): string {
   return normalized;
 }
 
-// This file is for Vite build configuration only
-export default defineConfig(({ mode }) => {
+/** Backend prefixes the SPA calls same-origin in dev (vercel.json / AWS routing forward the same ones). */
+const API_PREFIXES = ['/api', '/delivery-partner', '/shopkeeper', '/store-owner', '/health'];
+
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, projectRoot, '');
-  // Dev server proxy: forward /api → local Express only. Do NOT use VITE_API_URL here — that is the
-  // browser API base in production (often the same Vercel origin as the SPA) and is unrelated to where
-  // the Vite dev proxy should send traffic (localhost:3000). Misusing it caused ECONNREFUSED / wrong host.
+  // Dev server proxy: forward API prefixes → local Express only. Do NOT use VITE_API_URL here — that is the
+  // browser API base in production and is unrelated to where the Vite dev proxy should send traffic.
   const apiProxyTarget = resolveApiProxyTarget(env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3000');
   const proxySecure = apiProxyTarget.startsWith('https://');
+  const isBuild = command === 'build';
 
   return {
-  plugins: [react()],
-  // Always use absolute path for consistent routing in production
-  base: '/',
-  envDir: projectRoot, // Load .env from project root
-  server: {
-    proxy: {
-      '/api': {
-        // Local backend: set VITE_API_PROXY_TARGET=http://localhost:3000 in .env (same folder as vite envDir).
-        target: apiProxyTarget,
-        changeOrigin: true,
-        // `secure: true` with an http:// target can cause flaky proxy errors (e.g. ECONNRESET) on some setups.
-        secure: proxySecure
-      },
-      '/delivery-partner': {
-        target: apiProxyTarget,
-        changeOrigin: true,
-        secure: proxySecure
-      },
-      '/shopkeeper': {
-        target: apiProxyTarget,
-        changeOrigin: true,
-        secure: proxySecure
-      },
-      '/store-owner': {
-        target: apiProxyTarget,
-        changeOrigin: true,
-        secure: proxySecure
-      }
-    }
-  },
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          // Split vendor libraries
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          // Split UI libraries
-          ui: ['lucide-react'],
-          // Split Supabase
-          supabase: ['@supabase/supabase-js'],
-          // Split security utilities
-          security: ['dompurify', 'zod', 'crypto-js'],
-          // Split admin components
-          admin: [
-            './src/pages/admin/AdminDashboardPage.tsx',
-            './src/pages/admin/ProductsPage.tsx',
-            './src/pages/admin/OrdersPage.tsx',
-            './src/pages/admin/CustomersPage.tsx'
-          ]
-        }
-      }
+    plugins: [react()],
+    // Always use absolute path for consistent routing in production
+    base: '/',
+    envDir: projectRoot, // Load .env from project root
+    // Strip debug logging from production bundles. console.warn / console.error are kept
+    // so real failures still reach the browser console (and error reporting).
+    esbuild: isBuild ? { pure: ['console.log', 'console.debug', 'console.info', 'console.trace'] } : undefined,
+    server: {
+      proxy: Object.fromEntries(
+        API_PREFIXES.map((prefix) => [
+          prefix,
+          {
+            target: apiProxyTarget,
+            changeOrigin: true,
+            // `secure: true` with an http:// target can cause flaky proxy errors (ECONNRESET) on some setups.
+            secure: proxySecure
+          }
+        ])
+      )
     },
-    chunkSizeWarningLimit: 1000 // Increase warning limit to 1MB
-  }
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
+      sourcemap: false,
+      target: 'es2020',
+      rollupOptions: {
+        output: {
+          // Pages are code-split per route in App.tsx / AdminRoutes.tsx; here we only
+          // separate the big, rarely-changing vendor libraries so they cache across deploys.
+          manualChunks: {
+            vendor: ['react', 'react-dom', 'react-router-dom'],
+            icons: ['lucide-react'],
+            supabase: ['@supabase/supabase-js'],
+            maps: ['@react-google-maps/api'],
+            security: ['dompurify', 'zod', 'crypto-js']
+          }
+        }
+      },
+      chunkSizeWarningLimit: 600
+    }
   };
 });

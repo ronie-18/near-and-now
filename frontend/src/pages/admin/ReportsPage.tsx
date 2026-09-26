@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { getOrders, getAdminProducts, getCustomers, getCategories, Order, Category } from '../../services/adminService';
 import { Product } from '../../services/supabase';
+import { describeError } from '../../utils/apiErrors';
 
 // Types
 interface ReportStats {
@@ -457,7 +458,7 @@ const ReportsPage = () => {
       setCustomers(customersData);
       setCategories(categoriesData);
     } catch (err) {
-      setError('Failed to load report data. Please try again.');
+      setError(describeError('ReportsPage.fetchData', 'Could not load report data', err));
       console.error('Error fetching report data:', err);
     } finally {
       setLoading(false);
@@ -753,7 +754,7 @@ const ReportsPage = () => {
       }, 100);
     } catch (err) {
       console.error('Error exporting report:', err);
-      setError('Failed to export report. Please try again.');
+      setError(describeError('ReportsPage.handleExportReport', 'Could not export report', err));
     }
   };
 

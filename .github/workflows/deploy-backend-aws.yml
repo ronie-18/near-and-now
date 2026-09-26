@@ -1,0 +1,104 @@
+# Builds the Express API image, pushes it to Amazon ECR and tells App Runner to deploy it.
+#
+# One-time setup (see AWS_MIGRATION_PLAN.md, Phase 2 + 3):
+#   - ECR repository  : nearandnow-api
+#   - App Runner svc  : nearandnow-api  (source = ECR image, port 3000)
+#   - GitHub OIDC role: arn:aws:iam::<account>:role/github-deploy  (secrets.AWS_DEPLOY_ROLE_ARN)
+#   - Repo variables  : AWS_REGION (ap-south-1), APP_RUNNER_SERVICE_ARN
+name: Deploy backend to AWS (App Runner)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-backend-aws.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC → no long-lived AWS keys in GitHub
+  contents: read
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  ECR_REPOSITORY: nearandnow-api
+
+jobs:
+  test:
+    name: Typecheck & test backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --workspace=backend
+      - run: npx tsc --noEmit -p backend/tsconfig.json
+      - run: npx vitest run --root backend
+
+  build-and-deploy:
+    name: Build image → ECR → App Runner
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY"
+          docker build -t "$IMAGE:$SHA_TAG" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$SHA_TAG"
+          docker push "$IMAGE:latest"
+          echo "image=$IMAGE:$SHA_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to App Runner
+        env:
+          SERVICE_ARN: ${{ vars.APP_RUNNER_SERVICE_ARN }}
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          # Point the service at the new immutable tag and start a deployment.
+          aws apprunner update-service \
+            --service-arn "$SERVICE_ARN" \
+            --source-configuration "{\"ImageRepository\":{\"ImageIdentifier\":\"$IMAGE\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\"}},\"AutoDeploymentsEnabled\":false}" \
+            --output text --query 'Service.Status'
+          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --output text --query 'OperationId' || true
+
+      - name: Wait for the service to be healthy
+        env:
+          SERVICE_ARN: ${{ vars.APP_RUNNER_SERVICE_ARN }}
+        run: |
+          for i in $(seq 1 40); do
+            STATUS=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.Status' --output text)
+            echo "App Runner status: $STATUS"
+            if [ "$STATUS" = "RUNNING" ]; then
+              URL=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.ServiceUrl' --output text)
+              curl -fsS "https://$URL/health" && exit 0
+            fi
+            if [ "$STATUS" = "CREATE_FAILED" ] || [ "$STATUS" = "OPERATION_IN_PROGRESS" ]; then :; fi
+            sleep 15
+          done
+          echo "Timed out waiting for App Runner to report RUNNING" >&2
+          exit 1

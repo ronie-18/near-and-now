@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getOrders, updateOrderStatus, Order } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -168,7 +169,7 @@ const OrdersPage = () => {
       const data = await getOrders();
       setOrders(data);
     } catch (err) {
-      setError('Failed to load orders. Please try again.');
+      setError(describeError('OrdersPage.fetchOrders', 'Could not load orders', err));
       console.error('Error fetching orders:', err);
     } finally {
       setLoading(false);
@@ -192,7 +193,7 @@ const OrdersPage = () => {
           order.id === orderId ? { ...order, order_status: newStatus } : order
         ));
       } else {
-        setError('Failed to update order status.');
+        setError(describeError('OrdersPage.handleUpdateOrderStatus', 'Could not update order status'));
       }
     } catch (err: any) {
       setError(`Failed to update status: ${err?.message || 'Unknown error'}`);

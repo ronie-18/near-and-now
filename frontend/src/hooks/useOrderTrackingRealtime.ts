@@ -1,7 +1,8 @@
 /**
  * Real-time order tracking subscription hook.
- * Subscribes to customer_orders, store_orders, order_status_history,
- * and driver_locations for live updates on the tracking page.
+ * Subscribes to customer_orders, store_orders, order_status_history for live
+ * updates on the tracking page, with a slow polling fallback, and polls the
+ * driver positions for the map.
  */
 
 import { useEffect, useRef } from 'react';
@@ -49,6 +50,17 @@ type SetTrackingHistory = React.Dispatch<React.SetStateAction<OrderStatus[]>>;
 type SetDriverLocation = React.Dispatch<React.SetStateAction<DriverLocation | null>>;
 type SetDriverLocations = React.Dispatch<React.SetStateAction<Record<string, DriverLocation>>>;
 
+/**
+ * Realtime delivers status changes instantly; this poll only covers missed events
+ * (e.g. the simulation writing without triggering a publication). 3 s was hammering
+ * the API for every open tracking page.
+ */
+const ORDER_REFRESH_FALLBACK_MS = 10_000;
+/** Driver GPS pushes arrive every 5–10 s from the rider app, so polling faster than that is wasted. */
+const DRIVER_LOCATION_POLL_MS = 4_000;
+
+const TERMINAL_STATUSES = new Set(['order_delivered', 'order_cancelled']);
+
 export function useOrderTrackingRealtime(
   orderId: string | undefined,
   order: Order | null,
@@ -60,107 +72,108 @@ export function useOrderTrackingRealtime(
 ) {
   const buildRef = useRef(buildTrackingHistory);
   buildRef.current = buildTrackingHistory;
+  const inFlight = useRef(false);
+  const hasOrder = order !== null;
+  const isTerminal = order ? TERMINAL_STATUSES.has(order.status) : false;
 
   const refreshOrderAndHistory = async () => {
-    if (!orderId || !order) return;
-    const build = buildRef.current;
+    if (!orderId || inFlight.current) return;
+    inFlight.current = true;
+    try {
+      // Use backend API (bypasses Supabase RLS 403)
+      const data = await fetchOrderTrackingFull(orderId);
+      const { order: co, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
+      const storeOrders = co.store_orders || [];
+      const build = buildRef.current;
 
-    // Use backend API (bypasses Supabase RLS 403)
-    const data = await fetchOrderTrackingFull(orderId);
-    if (!data) return;
-
-    const { order: co, statusHistory, storeLocations, deliveryAgent, deliveryAgents } = data;
-    const storeOrders = co.store_orders || [];
-
-    const orderIdVal = co.id || order.id || '';
-    const updatedOrder: Order = {
-      ...order,
-      id: orderIdVal,
-      order_number: co.order_code || co.id?.substring(0, 8)?.toUpperCase() || '',
-      status: co.status || 'pending_at_store',
-      created_at: co.placed_at || co.created_at || '',
-      delivery_address: co.delivery_address || '',
-      total_amount: co.total_amount ?? 0,
-      delivery_agent: deliveryAgent || order.delivery_agent,
-      delivery_agents: deliveryAgents ?? order.delivery_agents,
-      estimated_delivery: co.estimated_delivery_time,
-      delivery_latitude: co.delivery_latitude,
-      delivery_longitude: co.delivery_longitude,
-      items: storeOrders.flatMap((so: any) => so.order_items || []),
-      store_locations: storeLocations.length > 0 ? storeLocations : order.store_locations,
-      store_orders: storeOrders,
-    };
-
-    setOrder(updatedOrder);
-    setTrackingHistory(build(updatedOrder, statusHistory));
+      // Functional update: merge into the *current* order, not the one captured when
+      // the effect was created (the old closure kept re-applying stale agents/locations).
+      setOrder((prev) => {
+        const updatedOrder: Order = {
+          ...(prev ?? ({} as Order)),
+          id: co.id || prev?.id || orderId,
+          order_number: co.order_code || co.id?.substring(0, 8)?.toUpperCase() || prev?.order_number || '',
+          status: co.status || 'pending_at_store',
+          created_at: co.placed_at || co.created_at || prev?.created_at || '',
+          delivery_address: co.delivery_address || prev?.delivery_address || '',
+          total_amount: co.total_amount ?? prev?.total_amount ?? 0,
+          payment_method: co.payment_method || prev?.payment_method || '',
+          delivery_agent: deliveryAgent || prev?.delivery_agent,
+          delivery_agents: deliveryAgents ?? prev?.delivery_agents,
+          estimated_delivery: co.estimated_delivery_time,
+          delivery_latitude: co.delivery_latitude,
+          delivery_longitude: co.delivery_longitude,
+          items: storeOrders.flatMap((so) => so.order_items || []),
+          store_locations: storeLocations.length > 0 ? storeLocations : prev?.store_locations,
+          store_orders: storeOrders,
+        };
+        setTrackingHistory(build(updatedOrder, statusHistory));
+        return updatedOrder;
+      });
+    } catch (err) {
+      // Polling failures are transient; the page keeps showing the last good state.
+      console.warn('[useOrderTrackingRealtime] refresh failed:', err);
+    } finally {
+      inFlight.current = false;
+    }
   };
 
-  // Subscribe to order/store_orders/status changes + polling fallback (runs when order loads)
+  // Subscribe to order/store_orders/status changes + slow polling fallback (runs when order loads)
   useEffect(() => {
-    if (!orderId || !order) return;
+    if (!orderId || !hasOrder || isTerminal) return;
 
     const channel = supabaseAdmin
       .channel(`order-tracking-${orderId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'customer_orders',
-          filter: `id=eq.${orderId}`,
-        },
-        () => refreshOrderAndHistory()
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'store_orders',
-          filter: `customer_order_id=eq.${orderId}`,
-        },
-        () => refreshOrderAndHistory()
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'order_status_history',
-          filter: `customer_order_id=eq.${orderId}`,
-        },
-        () => refreshOrderAndHistory()
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('📡 Realtime tracking subscribed for order', orderId);
-        }
-      });
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'customer_orders', filter: `id=eq.${orderId}` }, () => refreshOrderAndHistory())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_orders', filter: `customer_order_id=eq.${orderId}` }, () => refreshOrderAndHistory())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_status_history', filter: `customer_order_id=eq.${orderId}` }, () => refreshOrderAndHistory())
+      .subscribe();
 
-    // Poll every 3 sec as fallback (simulation updates may not trigger realtime)
-    const pollInterval = setInterval(refreshOrderAndHistory, 3000);
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshOrderAndHistory();
+    }, ORDER_REFRESH_FALLBACK_MS);
+
+    // Catch up immediately when the tab becomes visible again.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshOrderAndHistory();
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', onVisible);
       supabaseAdmin.removeChannel(channel);
     };
-  }, [orderId, !!order]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId, hasOrder, isTerminal]);
 
-  // Driver locations: poll backend API every 2 sec (backend gets partner IDs from DB)
-  // Poll whenever we have orderId - no need to wait for order.store_orders to have delivery_partner_id
+  // Driver locations: poll backend API (backend gets partner IDs from DB).
   useEffect(() => {
-    if (!orderId) return;
+    if (!orderId || isTerminal) return;
+    let cancelled = false;
+    let busy = false;
 
     const pollDriverLocations = async () => {
-      const locations = await fetchDriverLocations(orderId);
-      if (Object.keys(locations).length > 0) {
-        setDriverLocations((prev) => ({ ...prev, ...locations }));
+      if (busy || document.visibilityState !== 'visible') return;
+      busy = true;
+      try {
+        const locations = await fetchDriverLocations(orderId);
+        if (!cancelled && Object.keys(locations).length > 0) {
+          setDriverLocations((prev) => ({ ...prev, ...locations }));
+        }
+      } catch (err) {
+        console.warn('[useOrderTrackingRealtime] driver location poll failed:', err);
+      } finally {
+        busy = false;
       }
     };
 
     pollDriverLocations();
-
-    const pollInterval = setInterval(pollDriverLocations, 2000);
-    return () => clearInterval(pollInterval);
-  }, [orderId]);
+    const pollInterval = setInterval(pollDriverLocations, DRIVER_LOCATION_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(pollInterval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId, isTerminal]);
 }

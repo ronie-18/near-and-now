@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import ProductGrid from '../components/products/ProductGrid';
-import { getAllProducts, Product } from '../services/supabase';
+import { getProductById, getProductsByCategory, Product } from '../services/supabase';
+import { useNotification } from '../context/NotificationContext';
+import { describeError } from '../utils/apiErrors';
 import { useCart } from '../context/CartContext';
 import { formatPrice, formatCategoryName } from '../utils/formatters';
+import { PLACEHOLDER_IMAGE } from '../utils/placeholderImage';
 
 /* ─────────────────────────────────────────────
    Inline styles & keyframes injected once
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .pdp-root * { box-sizing: border-box; }
 
@@ -184,6 +186,7 @@ const globalStyles = `
 ───────────────────────────────────────────── */
 const ProductDetailPage = () => {
   const { productId } = useParams<{ productId: string }>();
+  const { showNotification } = useNotification();
   const [product, setProduct] = useState<Product | null>(null);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [quantity, setQuantity] = useState(1);
@@ -202,27 +205,38 @@ const ProductDetailPage = () => {
   const cartQuantity = productInCart?.quantity || 0;
 
   useEffect(() => {
+    if (!productId) return;
+    let cancelled = false;
     const fetchProductDetails = async () => {
-      if (!productId) return;
       try {
         setLoading(true);
-        const allProducts = await getAllProducts();
-        const currentProduct = allProducts.find(p => p.id === productId) || null;
+        // One indexed lookup for the product itself…
+        const currentProduct = await getProductById(productId);
+        if (cancelled) return;
         setProduct(currentProduct);
-        if (currentProduct) {
-          const related = allProducts
-            .filter(p => p.category === currentProduct.category && p.id !== currentProduct.id)
-            .slice(0, 4);
-          setRelatedProducts(related);
+        if (!currentProduct) {
+          setRelatedProducts([]);
+          return;
         }
+        // …then only the products in the same category for the "related" strip.
+        const sameCategory = await getProductsByCategory(currentProduct.category);
+        if (cancelled) return;
+        setRelatedProducts(sameCategory.filter((p) => p.id !== currentProduct.id).slice(0, 4));
       } catch (error) {
-        console.error('Error fetching product details:', error);
+        if (cancelled) return;
+        showNotification(
+          describeError('ProductDetailPage.fetchProductDetails', `Could not load product ${productId}`, error),
+          'error'
+        );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
     fetchProductDetails();
-  }, [productId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [productId, showNotification]);
 
   const incrementQuantity = () => setQuantity(prev => prev + 1);
   const decrementQuantity = () => setQuantity(prev => (prev > 1 ? prev - 1 : 1));
@@ -309,7 +323,7 @@ const ProductDetailPage = () => {
             style={{ flex: '1 1 380px', animationDelay: '0.05s' }}
           >
             <img
-              src={product.image || 'https://via.placeholder.com/600x600?text=No+Image'}
+              src={product.image || PLACEHOLDER_IMAGE}
               alt={product.name}
             />
           </div>

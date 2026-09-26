@@ -196,7 +196,9 @@ export default function DeliveryMap({
   const afterPickup = ['order_picked_up', 'in_transit', 'order_delivered'].includes(orderStatus);
   const showStores = beforePickup || allDrivers.length === 0;
 
-  const depKey = driversList.map(([k, v]) => `${k}:${v?.latitude?.toFixed(5)},${v?.longitude?.toFixed(5)}`).join('|') +
+  // 4 decimals ≈ 11 m. At 5 decimals (≈1 m) every GPS jitter re-requested Google Directions
+  // (one or two paid HTTP calls per driver per poll tick).
+  const depKey = driversList.map(([k, v]) => `${k}:${v?.latitude?.toFixed(4)},${v?.longitude?.toFixed(4)}`).join('|') +
     (storeLocations || []).map((s) => `${s.lat.toFixed(5)},${s.lng.toFixed(5)}`).join('|') +
     `${deliveryLat},${deliveryLng},${beforePickup},${afterPickup}`;
 
@@ -289,13 +291,16 @@ export default function DeliveryMap({
     }
   }, [deliveryLat, deliveryLng, allDrivers, showStores, storeLocations, routePaths]);
 
-  const driverPosKey = allDrivers.map((d) => `${d.latitude.toFixed(5)},${d.longitude.toFixed(5)}`).join('|');
+  // Re-fit the viewport when the route changes or the driver moves ~100 m+, not on every
+  // 1 m GPS tick — constant fitBounds calls fought the user's own pan/zoom.
+  const driverPosKey = allDrivers.map((d) => `${d.latitude.toFixed(3)},${d.longitude.toFixed(3)}`).join('|');
   const routePathsKey = routePaths.map((p) => p.length).join(',');
 
   useEffect(() => {
     if (!isLoaded || !mapRef.current) return;
     fitBoundsToFullRoute();
-  }, [isLoaded, driverPosKey, routePathsKey, fitBoundsToFullRoute]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, driverPosKey, routePathsKey]);
 
   const onMapLoad = useCallback(
     (map: google.maps.Map) => {

@@ -1,6 +1,7 @@
 import { useCart } from '../../context/CartContext';
 import { CartItem as CartItemType } from '../../context/CartContext';
 import { formatPrice } from '../../utils/formatters';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholderImage';
 
 interface CartItemProps {
   item: CartItemType;
@@ -39,7 +40,7 @@ const CartItem = ({ item }: CartItemProps) => {
       {/* Product Image */}
       <div className="w-20 h-20 flex-shrink-0 bg-gray-100 rounded-md overflow-hidden">
         <img 
-          src={item.image || 'https://via.placeholder.com/80x80?text=No+Image'} 
+          src={item.image || PLACEHOLDER_IMAGE} 
           alt={item.name}
           className="w-full h-full object-cover"
         />

@@ -4,8 +4,9 @@ import { formatPrice } from '../utils/formatters';
 import { Order, OrderItem } from '../services/supabase';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders } from '../utils/authHeader';
+import { describeError } from '../utils/apiErrors';
 
-const THANK_YOU_DISPLAY_SEC = 3;
+const THANK_YOU_DISPLAY_SEC = 7;
 
 const ThankYouPage = () => {
   const location = useLocation();
@@ -18,6 +19,11 @@ const ThankYouPage = () => {
 
   const [redirectCountdown, setRedirectCountdown] = useState<number>(THANK_YOU_DISPLAY_SEC);
   const redirectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (cancelNavTimerRef.current) clearTimeout(cancelNavTimerRef.current);
+  }, []);
 
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
   const [cancelError, setCancelError] = useState<string>('');
@@ -57,17 +63,17 @@ const ThankYouPage = () => {
     const checkDeliveryPartner = async () => {
       try {
         const res = await fetch(apiUrl(`/api/orders/${orderId}`), { headers: getAuthHeaders() });
-        if (!res.ok) throw new Error(`Failed: ${res.status}`);
+        if (!res.ok) throw new Error(`order lookup returned HTTP ${res.status}`);
         const data = await res.json();
 
         if (data?.store_orders) {
           const hasPartner = data.store_orders.some(
-            (so: any) => so.delivery_partner_id !== null
+            (so: { delivery_partner_id?: string | null }) => so.delivery_partner_id != null
           );
           setHasDeliveryPartner(hasPartner);
         }
       } catch (error) {
-        console.error('Error checking delivery partner status:', error);
+        console.warn('[ThankYouPage.checkDeliveryPartner] could not check for an assigned rider:', error);
       }
     };
 
@@ -96,15 +102,17 @@ const ThankYouPage = () => {
 
       if (data.success) {
         setCancelSuccess(true);
-        setTimeout(() => {
+        if (redirectTimerRef.current) {
+          clearInterval(redirectTimerRef.current); // stop the auto-redirect to /track
+          redirectTimerRef.current = null;
+        }
+        cancelNavTimerRef.current = setTimeout(() => {
           navigate('/orders');
         }, 2000);
       }
     } catch (error: any) {
       console.error('Error cancelling order:', error);
-      setCancelError(
-        error?.message || 'Failed to cancel order. Please try again.'
-      );
+      setCancelError(describeError('ThankYouPage.handleCancelOrder', 'Could not cancel the order', error));
     } finally {
       setIsCancelling(false);
     }

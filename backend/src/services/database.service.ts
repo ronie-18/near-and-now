@@ -197,14 +197,21 @@ export class DatabaseService {
     if (error) throw error;
   }
 
+  private categoriesCache: { value: Category[]; expiresAt: number } | null = null;
+
+  /** Categories change rarely; cache them for 60 s to keep the home page snappy under load. */
   async getCategories() {
-    const { data, error } = await supabase
+    const now = Date.now();
+    if (this.categoriesCache && this.categoriesCache.expiresAt > now) return this.categoriesCache.value;
+    const { data, error } = await supabaseAdmin
       .from('categories')
       .select('*')
       .order('display_order', { ascending: true });
 
     if (error) throw error;
-    return data as Category[];
+    const categories = (data ?? []) as Category[];
+    this.categoriesCache = { value: categories, expiresAt: now + 60_000 };
+    return categories;
   }
 
   async getMasterProducts(filters?: {
@@ -223,7 +230,9 @@ export class DatabaseService {
     }
 
     if (filters?.search) {
-      query = query.or(`name.ilike.%${filters.search}%,brand.ilike.%${filters.search}%`);
+      // Escape PostgREST filter syntax characters so user input cannot break the .or() expression.
+      const safe = filters.search.replace(/[\\%_,().]/g, (c) => `\\${c}`);
+      query = query.or(`name.ilike.%${safe}%,brand.ilike.%${safe}%`);
     }
 
     const { data, error } = await query.order('name');
@@ -270,8 +279,35 @@ export class DatabaseService {
     return products;
   }
 
+  /** One indexed lookup instead of downloading the whole products_with_details view. */
+  async getProductWithDetailsById(productId: string) {
+    const { data, error } = await supabaseAdmin
+      .from('products_with_details')
+      .select('*')
+      .eq('id', productId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as ProductsWithDetails | null) ?? null;
+  }
+
   async getNearbyStores(latitude: number, longitude: number, radiusKm: number = 5) {
-    const { data, error } = await supabase
+    // Prefer the PostGIS RPC (indexed) and fetch only the matching stores.
+    const { data: ids, error: rpcError } = await supabaseAdmin.rpc('get_nearby_store_ids', {
+      cust_lat: latitude,
+      cust_lng: longitude,
+      radius_km: radiusKm
+    });
+    if (!rpcError && Array.isArray(ids)) {
+      if (ids.length === 0) return [] as Store[];
+      const { data, error } = await supabaseAdmin.from('stores').select('*').in('id', ids as string[]).eq('is_active', true);
+      if (error) throw error;
+      return (data ?? []) as Store[];
+    }
+    if (rpcError) {
+      console.warn('[DatabaseService.getNearbyStores] get_nearby_store_ids RPC failed, falling back to a full scan:', rpcError.message);
+    }
+
+    const { data, error } = await supabaseAdmin
       .from('stores')
       .select('*')
       .eq('is_active', true);
@@ -1133,12 +1169,12 @@ export class DatabaseService {
       .select('*')
       .eq('code', code)
       .eq('is_active', true)
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
 
     if (!coupon) {
-      throw new Error('Invalid coupon code');
+      throw new Error(`Coupon code "${code}" is not valid or is no longer active`);
     }
 
     const now = new Date();
@@ -1755,11 +1791,30 @@ export class DatabaseService {
     return data ?? [];
   }
 
+  private backfillingStores = new Set<string>();
+
+  /** Reverse-geocode a store with a placeholder address and persist it (best-effort, deduped). */
+  private backfillStoreAddress(storeId: string, lat: number, lng: number): void {
+    if (this.backfillingStores.has(storeId)) return;
+    this.backfillingStores.add(storeId);
+    reverseGeocode(lat, lng)
+      .then(async (geocoded) => {
+        if (!geocoded) return;
+        const { error } = await supabaseAdmin
+          .from('stores')
+          .update({ address: geocoded, updated_at: new Date().toISOString() })
+          .eq('id', storeId);
+        if (error) console.warn(`[DatabaseService.backfillStoreAddress] could not save address for store ${storeId}: ${error.message}`);
+      })
+      .catch((err) => console.warn(`[DatabaseService.backfillStoreAddress] reverse geocode failed for store ${storeId}:`, err))
+      .finally(() => this.backfillingStores.delete(storeId));
+  }
+
   /** Full tracking data for tracking page: order + status history + store locations + delivery partner */
   async getOrderTrackingFull(orderId: string) {
-    const order = await this.getOrderTracking(orderId);
+    // The order, its status history are independent reads — run them together.
+    const [order, statusHistory] = await Promise.all([this.getOrderTracking(orderId), this.getTrackingHistory(orderId)]);
     if (!order) return null;
-    const statusHistory = await this.getTrackingHistory(orderId);
     const storeIds = [...new Set((order.store_orders || []).map((so: { store_id: string }) => so.store_id).filter(Boolean))];
     let storeLocations: { lat: number; lng: number; label?: string; address?: string; phone?: string; store_id?: string }[] = [];
     if (storeIds.length > 0) {
@@ -1770,14 +1825,12 @@ export class DatabaseService {
       const storeRows = stores || [];
       for (const s of storeRows) {
         const row = s as { id: string; latitude: number; longitude: number; name?: string; address?: string; phone?: string };
-        let address = row.address?.trim() || undefined;
+        const address = row.address?.trim() || undefined;
         const isGeneric = !address || /^Pickup point/i.test(address) || /^Local store/i.test(address);
         if (isGeneric && row.latitude != null && row.longitude != null) {
-          const geocoded = await reverseGeocode(Number(row.latitude), Number(row.longitude));
-          if (geocoded) {
-            address = geocoded;
-            await supabaseAdmin.from('stores').update({ address: geocoded, updated_at: new Date().toISOString() }).eq('id', row.id);
-          }
+          // Back-fill a readable address in the background; this GET is polled every few
+          // seconds by the tracking page and must not wait on Google + a DB write.
+          this.backfillStoreAddress(row.id, Number(row.latitude), Number(row.longitude));
         }
         storeLocations.push({
           lat: Number(row.latitude),
@@ -1882,6 +1935,17 @@ export class DatabaseService {
       .single();
     if (error) throw error;
     return data;
+  }
+
+  /** customer_id that owns an order (null when the order does not exist). */
+  async getOrderCustomerId(orderId: string): Promise<string | null> {
+    const { data, error } = await supabaseAdmin
+      .from('customer_orders')
+      .select('customer_id')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { customer_id?: string } | null)?.customer_id ?? null;
   }
 
   async getDriverLocationsForOrder(orderId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }>> {

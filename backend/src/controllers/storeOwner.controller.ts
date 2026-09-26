@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
+import { sendError } from '../utils/httpError.js';
 
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
   const authHeader = req.headers.authorization;
@@ -37,13 +38,13 @@ export async function getStores(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error fetching stores:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to fetch stores' });
+      return sendError(res, 'storeOwner.getStores', 'Could not load the stores', error, undefined, { success: false });
     }
 
     res.json({ success: true, stores: stores || [] });
   } catch (error: any) {
     console.error('❌ getStores error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to fetch stores' });
+    return sendError(res, 'storeOwner.getStores', 'Could not load the stores', error, undefined, { success: false });
   }
 }
 
@@ -85,13 +86,13 @@ export async function updateStoreStatus(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error updating store status:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to update store status' });
+      return sendError(res, 'storeOwner.updateStoreStatus', 'Could not update the store status', error, undefined, { success: false });
     }
 
     res.json({ success: true, store: data });
   } catch (error: any) {
     console.error('❌ updateStoreStatus error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update store status' });
+    return sendError(res, 'storeOwner.updateStoreStatus', 'Could not update the store status', error, undefined, { success: false });
   }
 }
 
@@ -146,7 +147,7 @@ export async function deleteStoreProduct(req: Request, res: Response) {
     res.json({ success: true });
   } catch (error: any) {
     console.error('deleteStoreProduct error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to delete product' });
+    return sendError(res, 'storeOwner.deleteStoreProduct', 'Could not delete the product', error, undefined, { success: false });
   }
 }
 
@@ -193,7 +194,7 @@ export async function updateProductQuantity(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ Error updating product quantity:', error);
-      return res.status(500).json({ success: false, error: error.message || 'Failed to update product quantity' });
+      return sendError(res, 'storeOwner.updateProductQuantity', 'Could not update the product quantity', error, undefined, { success: false });
     }
 
     if (!data || data.length === 0) {
@@ -203,7 +204,7 @@ export async function updateProductQuantity(req: Request, res: Response) {
     res.json({ success: true, product: data[0] });
   } catch (error: any) {
     console.error('❌ updateProductQuantity error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update product quantity' });
+    return sendError(res, 'storeOwner.updateProductQuantity', 'Could not update the product quantity', error, undefined, { success: false });
   }
 }
 
@@ -258,10 +259,7 @@ export async function signupComplete(req: Request, res: Response) {
 
     if (userError || !newUser) {
       console.error('❌ Store owner signup: app_users insert failed', userError);
-      return res.status(500).json({
-        success: false,
-        error: userError?.message || 'Failed to create account'
-      });
+      return sendError(res, 'storeOwner.signup', 'Could not create the shopkeeper account', userError, undefined, { success: false });
     }
 
     const { error: storeError } = await supabaseAdmin
@@ -279,10 +277,7 @@ export async function signupComplete(req: Request, res: Response) {
     if (storeError) {
       console.error('❌ Store owner signup: stores insert failed', storeError);
       await supabaseAdmin.from('app_users').delete().eq('id', newUser.id);
-      return res.status(500).json({
-        success: false,
-        error: storeError.message || 'Failed to create store'
-      });
+      return sendError(res, 'storeOwner.signup', 'Could not create the store record', storeError, undefined, { success: false });
     }
 
     const token = crypto.randomUUID();
@@ -304,10 +299,7 @@ export async function signupComplete(req: Request, res: Response) {
     });
   } catch (error: any) {
     console.error('❌ Store owner signup error:', error);
-    res.status(500).json({
-      success: false,
-      error: error?.message || 'Registration failed'
-    });
+    return sendError(res, 'storeOwner.signup', 'Could not complete the shopkeeper registration', error, undefined, { success: false });
   }
 }
 
@@ -356,13 +348,13 @@ export async function updateStore(req: Request, res: Response) {
 
     if (error) {
       console.error('❌ updateStore error:', error);
-      return res.status(500).json({ success: false, error: error.message });
+      return sendError(res, 'storeOwner.updateStore', 'Could not update the store', error, undefined, { success: false });
     }
 
     res.json({ success: true, store: data });
   } catch (error: any) {
     console.error('❌ updateStore error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to update store' });
+    return sendError(res, 'storeOwner.updateStore', 'Could not update the store', error, undefined, { success: false });
   }
 }
 
@@ -387,7 +379,7 @@ export async function registerPushToken(req: Request, res: Response) {
     res.json({ success: true });
   } catch (error: any) {
     console.error('❌ registerPushToken error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to register push token' });
+    return sendError(res, 'storeOwner.registerPushToken', 'Could not register the push token', error, undefined, { success: false });
   }
 }
 

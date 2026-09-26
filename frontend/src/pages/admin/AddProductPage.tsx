@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { createProduct, createCategory, uploadProductImage } from '../../services/adminService';
 import { getCategories } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 // Image item interface
 interface ImageData {
@@ -461,7 +462,7 @@ const AddProductPage = () => {
         const newCategory = await createCategory(categoryPayload);
 
         if (!newCategory) {
-          setError('Failed to create new category. Please try again.');
+          setError(describeError('AddProductPage.handleSubmit', 'Could not create new category'));
           setLoading(false);
           return;
         }
@@ -496,10 +497,10 @@ const AddProductPage = () => {
           navigate('/admin/products');
         }, 1500);
       } else {
-        setError('Failed to create product. Please try again.');
+        setError(describeError('AddProductPage.handleSubmit', 'Could not create product'));
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred while creating the product.');
+      setError(describeError('AddProductPage.handleSubmit', 'Could not create the product', err));
       console.error('Error creating product:', err);
     } finally {
       setLoading(false);

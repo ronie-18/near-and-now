@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { Product } from '../services/supabase';
 import { useAuth } from './AuthContext';
 import {
@@ -61,57 +61,49 @@ interface CartProviderProps {
   children: ReactNode;
 }
 
+const CART_STORAGE_KEY = 'nearNowCartItems';
+
+function readStoredCart(): CartItem[] {
+  try {
+    const stored = localStorage.getItem(CART_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed) ? (parsed as CartItem[]) : [];
+  } catch (error) {
+    console.warn('[CartContext] Stored cart was not valid JSON and was reset:', error);
+    return [];
+  }
+}
+
 // Cart provider component
 export function CartProvider({ children }: CartProviderProps) {
   const { isAuthenticated } = useAuth();
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
-  const [cartCount, setCartCount] = useState<number>(0);
-  const [cartTotal, setCartTotal] = useState<number>(0);
-  const [hasLoadedCart, setHasLoadedCart] = useState<boolean>(false);
-
-  // Effect: Load cart from localStorage on mount (works for both guests and logged-in users)
-  useEffect(() => {
-    const storedCart = localStorage.getItem('nearNowCartItems');
-    if (storedCart) {
-      try {
-        const parsedCart = JSON.parse(storedCart);
-        if (Array.isArray(parsedCart) && parsedCart.length > 0) {
-          setCartItems(parsedCart);
-        } else {
-          setCartItems([]);
-        }
-      } catch (error) {
-        console.error('Error loading cart from storage:', error);
-        setCartItems([]);
-      }
-    } else {
-      setCartItems([]);
-    }
-    setHasLoadedCart(true);
-  }, []);
+  // Read the stored cart synchronously on first render: no empty-cart flash, no extra
+  // render cycle, and the badge count is right from the first paint.
+  const [cartItems, setCartItems] = useState<CartItem[]>(readStoredCart);
 
   // Save cart to localStorage whenever it changes (works for both guests and logged-in users)
   useEffect(() => {
-    if (!hasLoadedCart) return;
     try {
-      localStorage.setItem('nearNowCartItems', JSON.stringify(cartItems));
-      const totalQuantity = cartItems.reduce(
-        (total, item) => total + (item.quantity || 0),
-        0
-      );
-      setCartCount(totalQuantity);
-      const total = cartItems.reduce(
-        (sum, item) => sum + (item.price * item.quantity),
-        0
-      );
-      setCartTotal(total);
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartItems));
     } catch (error) {
-      console.error('Error saving cart to storage:', error);
+      console.warn('[CartContext] Could not persist the cart to localStorage:', error);
     }
-  }, [cartItems, hasLoadedCart]);
+  }, [cartItems]);
+
+  // Derived values: computed during render instead of via a second setState pass,
+  // so the header badge and totals update in the same frame as the cart.
+  const cartCount = useMemo(
+    () => cartItems.reduce((total, item) => total + (item.quantity || 0), 0),
+    [cartItems]
+  );
+  const cartTotal = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    [cartItems]
+  );
 
   // Add product to cart (works for both guests and logged-in users)
-  const addToCart = (product: Product, quantity = 1, isLoose = false): boolean => {
+  const addToCart = useCallback((product: Product, quantity = 1, isLoose = false): boolean => {
     setCartItems(prevItems => {
       // Check if product already in cart
       const existingItemIndex = prevItems.findIndex(
@@ -119,10 +111,13 @@ export function CartProvider({ children }: CartProviderProps) {
       );
 
       if (existingItemIndex >= 0) {
-        // Update existing item
-        const updatedItems = [...prevItems];
-        updatedItems[existingItemIndex].quantity += quantity;
-        return updatedItems;
+        // Update existing item immutably. Mutating the shared object (`.quantity += n`)
+        // double-counted under React StrictMode and corrupted the previous state.
+        return prevItems.map((item, index) =>
+          index === existingItemIndex
+            ? { ...item, quantity: parseFloat((item.quantity + quantity).toFixed(2)) }
+            : item
+        );
       } else {
         // Add new item
         const cartItem: CartItem = {
@@ -139,20 +134,20 @@ export function CartProvider({ children }: CartProviderProps) {
     });
 
     return true; // Return true to indicate success
-  };
+  }, []);
 
   // Remove product from cart
-  const removeFromCart = (id: string, isLoose?: boolean): boolean => {
+  const removeFromCart = useCallback((id: string, isLoose?: boolean): boolean => {
     setCartItems(prevItems =>
       prevItems.filter(
         item => !(item.id === id && (isLoose === undefined || item.isLoose === isLoose))
       )
     );
     return true;
-  };
+  }, []);
 
   // Update product quantity in cart
-  const updateCartQuantity = (id: string, quantity: number, isLoose?: boolean): boolean => {
+  const updateCartQuantity = useCallback((id: string, quantity: number, isLoose?: boolean): boolean => {
     if (quantity <= 0) {
       removeFromCart(id, isLoose);
       return true;
@@ -167,10 +162,10 @@ export function CartProvider({ children }: CartProviderProps) {
     );
 
     return true;
-  };
+  }, [removeFromCart]);
 
   // Decrease product quantity in cart
-  const decreaseCartQuantity = (id: string, isLoose?: boolean): boolean => {
+  const decreaseCartQuantity = useCallback((id: string, isLoose?: boolean): boolean => {
     setCartItems(prevItems => {
       const existingItem = prevItems.find(
         item => item.id === id && (isLoose === undefined || item.isLoose === isLoose)
@@ -193,45 +188,60 @@ export function CartProvider({ children }: CartProviderProps) {
     });
 
     return true;
-  };
+  }, []);
 
   // Clear cart
-  const clearCart = () => {
+  const clearCart = useCallback(() => {
     setCartItems([]);
-    localStorage.removeItem('nearNowCartItems');
-  };
+    localStorage.removeItem(CART_STORAGE_KEY);
+  }, []);
 
   // Calculate cart total
-  const getCartTotal = () => {
-    return cartItems.reduce(
-      (total, item) => total + (item.price * item.quantity),
-      0
-    );
-  };
+  const getCartTotal = useCallback(() => cartTotal, [cartTotal]);
 
-  const getDeliveryFee = (distanceKm?: number) =>
-    calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal).deliveryFee;
+  const getDeliveryFee = useCallback(
+    (distanceKm?: number) => calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal).deliveryFee,
+    [cartTotal]
+  );
 
-  const getFeeBreakdown = (distanceKm?: number): DeliveryFeeBreakdown =>
-    calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal);
+  const getFeeBreakdown = useCallback(
+    (distanceKm?: number): DeliveryFeeBreakdown => calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartTotal),
+    [cartTotal]
+  );
 
-  // Context value
-  const value = {
-    cartItems,
-    cartCount,
-    cartTotal,
-    addToCart,
-    removeFromCart,
-    updateCartQuantity,
-    decreaseCartQuantity,
-    clearCart,
-    getCartTotal,
-    getDeliveryFee,
-    getFeeBreakdown,
-    platformFee: PLATFORM_FEE,
-    handlingFee: HANDLING_FEE,
-    isAuthenticated
-  };
+  // Stable context value so ProductCards / Header only re-render when the cart really changes.
+  const value = useMemo<CartContextType>(
+    () => ({
+      cartItems,
+      cartCount,
+      cartTotal,
+      addToCart,
+      removeFromCart,
+      updateCartQuantity,
+      decreaseCartQuantity,
+      clearCart,
+      getCartTotal,
+      getDeliveryFee,
+      getFeeBreakdown,
+      platformFee: PLATFORM_FEE,
+      handlingFee: HANDLING_FEE,
+      isAuthenticated
+    }),
+    [
+      cartItems,
+      cartCount,
+      cartTotal,
+      addToCart,
+      removeFromCart,
+      updateCartQuantity,
+      decreaseCartQuantity,
+      clearCart,
+      getCartTotal,
+      getDeliveryFee,
+      getFeeBreakdown,
+      isAuthenticated
+    ]
+  );
 
   return (
     <CartContext.Provider value={value}>

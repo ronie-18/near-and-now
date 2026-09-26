@@ -1,10 +1,14 @@
-import { render, screen } from '@testing-library/react/pure';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Button from './Button';
+import { MemoryRouter } from 'react-router-dom';
+
+// Button can render a react-router <Link>, so every render needs a router context.
+const renderInRouter = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 describe('Button component', () => {
   test('renders button with default props', () => {
-    render(<Button>Click me</Button>);
+    renderInRouter(<Button>Click me</Button>);
 
     const button = screen.getByTestId('button');
     expect(button).toBeInTheDocument();
@@ -13,7 +17,7 @@ describe('Button component', () => {
   });
 
   test('renders button with primary variant', () => {
-    render(<Button variant="primary">Primary</Button>);
+    renderInRouter(<Button variant="primary">Primary</Button>);
 
     const button = screen.getByTestId('button');
     expect(button).toHaveClass('bg-primary');
@@ -22,7 +26,7 @@ describe('Button component', () => {
   });
 
   test('renders button with secondary variant', () => {
-    render(<Button variant="secondary">Secondary</Button>);
+    renderInRouter(<Button variant="secondary">Secondary</Button>);
 
     const button = screen.getByTestId('button');
     expect(button).toHaveClass('bg-gray-200');
@@ -31,7 +35,7 @@ describe('Button component', () => {
   });
 
   test('renders button with outline variant', () => {
-    render(<Button variant="outline">Outline</Button>);
+    renderInRouter(<Button variant="outline">Outline</Button>);
 
     const button = screen.getByTestId('button');
     expect(button).toHaveClass('border');
@@ -42,7 +46,7 @@ describe('Button component', () => {
   });
 
   test('renders button with different sizes', () => {
-    const { rerender } = render(<Button size="sm">Small</Button>);
+    const { rerender } = renderInRouter(<Button size="sm">Small</Button>);
     expect(screen.getByTestId('button')).toHaveClass('px-3');
     expect(screen.getByTestId('button')).toHaveClass('py-1.5');
     expect(screen.getByTestId('button')).toHaveClass('text-sm');
@@ -59,12 +63,12 @@ describe('Button component', () => {
   });
 
   test('renders full width button', () => {
-    render(<Button fullWidth>Full Width</Button>);
+    renderInRouter(<Button fullWidth>Full Width</Button>);
     expect(screen.getByTestId('button')).toHaveClass('w-full');
   });
 
   test('renders disabled button', () => {
-    render(<Button disabled>Disabled</Button>);
+    renderInRouter(<Button disabled>Disabled</Button>);
 
     const button = screen.getByTestId('button');
     expect(button).toBeDisabled();
@@ -74,7 +78,7 @@ describe('Button component', () => {
 
   test('calls onClick handler when clicked', async () => {
     const handleClick = vi.fn();
-    render(<Button onClick={handleClick}>Click me</Button>);
+    renderInRouter(<Button onClick={handleClick}>Click me</Button>);
 
     await userEvent.click(screen.getByTestId('button'));
     expect(handleClick).toHaveBeenCalledTimes(1);
@@ -82,7 +86,7 @@ describe('Button component', () => {
 
   test('does not call onClick when disabled', async () => {
     const handleClick = vi.fn();
-    render(<Button onClick={handleClick} disabled>Click me</Button>);
+    renderInRouter(<Button onClick={handleClick} disabled>Click me</Button>);
 
     await userEvent.click(screen.getByTestId('button'));
     expect(handleClick).not.toHaveBeenCalled();

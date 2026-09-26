@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { PaymentController } from '../controllers/payment.controller.js';
+import { requireCustomer } from '../middleware/customerAuth.middleware.js';
+import { requireAdmin } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const paymentController = new PaymentController();
@@ -12,13 +14,13 @@ router.post('/verify', paymentController.verifyPayment.bind(paymentController));
 
 // Saved payment methods for the logged-in user (cards/UPIs). Must be declared
 // before the '/:paymentId' catch-all below or Express will route to it.
-router.get('/methods', paymentController.getSavedMethods.bind(paymentController));
+router.get('/methods', requireCustomer, paymentController.getSavedMethods.bind(paymentController));
 
 // Get payment details
-router.get('/:paymentId', paymentController.getPaymentDetails.bind(paymentController));
+router.get('/:paymentId', requireCustomer, paymentController.getPaymentDetails.bind(paymentController));
 
-// Process refund
-router.post('/refund', paymentController.processRefund.bind(paymentController));
+// Process refund — admin only (was previously callable by anyone with a payment id)
+router.post('/refund', requireAdmin, paymentController.processRefund.bind(paymentController));
 
 // Webhook handler for payment gateway
 router.post('/webhook', paymentController.handleWebhook.bind(paymentController));

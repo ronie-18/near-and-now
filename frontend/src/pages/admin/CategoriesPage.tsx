@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getCategories, deleteCategory, getProductCountsByCategory, Category } from '../../services/adminService';
+import { describeError } from '../../utils/apiErrors';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
@@ -161,7 +162,7 @@ const CategoriesPage = () => {
       });
       setProductCounts(counts);
     } catch (err) {
-      setError('Failed to load categories. Please try again.');
+      setError(describeError('CategoriesPage.fetchData', 'Could not load categories', err));
       console.error('Error fetching categories:', err);
     } finally {
       setLoading(false);
@@ -190,10 +191,10 @@ const CategoriesPage = () => {
           setSuccess(`"${categoryName}" has been deleted successfully.`);
           setTimeout(() => setSuccess(null), 3000);
         } else {
-          setError('Failed to delete category. Please try again.');
+          setError(describeError('CategoriesPage.handleDeleteCategory', 'Could not delete category'));
         }
       } catch (err) {
-        setError('An error occurred while deleting the category.');
+        setError(describeError('CategoriesPage.handleDeleteCategory', 'Could not delete the category', err));
         console.error('Error deleting category:', err);
       } finally {
         setDeleteLoading(null);

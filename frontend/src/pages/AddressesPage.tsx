@@ -11,6 +11,7 @@ import {
 } from '../services/supabase';
 import { geocodeAddress } from '../services/placesService';
 import { Home, Briefcase, MapPin } from 'lucide-react';
+import { describeError } from '../utils/apiErrors';
 
 /* ─────────────────────────────────────────────
    Types
@@ -32,7 +33,6 @@ interface Address {
    Styles
 ───────────────────────────────────────────── */
 const globalStyles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
   .ap-root * { box-sizing: border-box; }
 
@@ -240,7 +240,7 @@ const AddressesPage = () => {
         })));
       } catch (error) {
         console.error('Error fetching addresses:', error);
-        showNotification('Failed to load addresses', 'error');
+        showNotification(describeError('AddressesPage.fetchAddresses', 'Could not load addresses', error), 'error');
       } finally {
         setLoading(false);
       }
@@ -325,7 +325,7 @@ const AddressesPage = () => {
       setShowAddForm(false);
     } catch (error) {
       console.error('Error saving address:', error);
-      showNotification('Failed to save address. Please try again.', 'error');
+      showNotification(describeError('AddressesPage.handleSubmit', 'Could not save address', error), 'error');
     }
   };
 
@@ -340,7 +340,7 @@ const AddressesPage = () => {
       showNotification('Address deleted successfully', 'success');
     } catch (error) {
       console.error('Error deleting address:', error);
-      showNotification('Failed to delete address. Please try again.', 'error');
+      showNotification(describeError('AddressesPage.handleDelete', 'Could not delete address', error), 'error');
     }
   };
 
@@ -352,7 +352,7 @@ const AddressesPage = () => {
       showNotification('Default address updated', 'success');
     } catch (error) {
       console.error('Error setting default address:', error);
-      showNotification('Failed to set default address. Please try again.', 'error');
+      showNotification(describeError('AddressesPage.handleSetDefault', 'Could not set default address', error), 'error');
     }
   };
 
