@@ -55,6 +55,24 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
       return sendError(res, where, 'Your admin session is invalid or has expired — please log in again.', undefined, 401);
     }
 
+    // `status='active'` was previously checked only at login (admin.controller.ts's login()).
+    // A super_admin deactivating another admin via AdminManagementPage did not revoke that
+    // admin's existing session — every already-issued token kept working here and in
+    // requirePermission below until it expired on its own. Found 2026-10-01 during an
+    // access-control audit; mirrors the is_suspended check customerAuth.middleware.ts already
+    // has for customers.
+    const { data: admin, error: adminError } = await supabaseAdmin
+      .from('admins')
+      .select('status')
+      .eq('id', session.admin_id)
+      .maybeSingle();
+    if (adminError) {
+      return sendError(res, where, 'Could not check the admin account with the database.', adminError, 500);
+    }
+    if (!admin || (admin as { status: string }).status !== 'active') {
+      return sendError(res, where, 'Your admin account is no longer active — please contact a super admin.', undefined, 401);
+    }
+
     req.adminId = session.admin_id;
     next();
   } catch (err) {

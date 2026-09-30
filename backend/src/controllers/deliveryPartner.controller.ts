@@ -830,26 +830,48 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'Go online to accept orders.' });
       }
 
-      // Atomically claim only if no rider is already assigned — prevents a rider
-      // from grabbing an order another rider (or acceptOffer) already accepted.
+      // Atomically claim only if no rider is already assigned AND the order isn't
+      // already cancelled/delivered — without the status guard, cancelOrder
+      // (database.service.ts) can race this: it cancels order_store_allocations/
+      // store_orders/customer_orders in separate, non-atomic steps, so a claim
+      // landing between those steps previously found delivery_partner_id still
+      // null and succeeded anyway, on an order that's actually being cancelled.
+      // Found 2026-10-01 during an order-state-machine race audit (backlog item 7).
       const { data: claimed, error: claimError } = await supabaseAdmin
         .from('store_orders')
         .update({ status: 'delivery_partner_assigned', delivery_partner_id: riderId })
         .eq('customer_order_id', orderId)
         .is('delivery_partner_id', null)
+        .not('status', 'in', '(order_cancelled,order_delivered)')
         .select('id');
 
       if (claimError) throw claimError;
       if (!claimed || claimed.length === 0) {
-        return res.status(409).json({ error: 'Order not found or already assigned to another rider.' });
+        return res.status(409).json({ error: 'Order not found, already assigned to another rider, or no longer available.' });
       }
 
-      const { error } = await supabaseAdmin
+      // Second guard on the same narrow window, one level up: cancelOrder's own
+      // atomic customer_orders update (its one truly atomic step) could still win
+      // a race that lands after the store_orders claim above but before this
+      // update. Roll back the claim rather than leave the rider holding a
+      // "delivery_partner_assigned" store_order for an order that's actually
+      // cancelled — same reset shape rejectOrder already uses for a released claim.
+      const { data: orderUpdated, error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'delivery_partner_assigned', assigned_driver_id: riderId, updated_at: new Date().toISOString() })
-        .eq('id', orderId);
+        .eq('id', orderId)
+        .not('status', 'in', '(order_cancelled,order_delivered)')
+        .select('id');
 
       if (error) throw error;
+      if (!orderUpdated || orderUpdated.length === 0) {
+        await supabaseAdmin
+          .from('store_orders')
+          .update({ status: 'ready_for_pickup', delivery_partner_id: null })
+          .eq('customer_order_id', orderId)
+          .eq('delivery_partner_id', riderId);
+        return res.status(409).json({ error: 'This order was cancelled or completed before your acceptance could be confirmed.' });
+      }
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,

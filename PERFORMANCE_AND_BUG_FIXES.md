@@ -60,43 +60,52 @@ that no page is lazy-loaded; that decision is respected here.
 
 ## 4. Backlog — found by the audits, not fixed here
 
-Ordered by risk. Line numbers refer to `origin/main` at `89bd719`.
+Ordered by risk. Line numbers refer to `origin/main` at `89bd719`. **Status column re-verified
+against live code on 2026-10-01** (see section 6.2) — items not re-verified keep their original text.
 
 **Payments / orders (high)**
-1. Webhooks can downgrade a `paid` order (`payment.service.ts` `payment.authorized` / `payment.failed` have no status guard); `refund.processed` marks partial refunds as full.
-2. Payment is captured before amount/notes validation (`payment.controller.ts`, `wallet.controller.ts`, `orderAdditions.controller.ts`); a customer can pay for an order that `cancelIfPaymentAbandoned` already cancelled.
-3. Admin refund never updates `refunded_amount` / `payment_status`, so a later cancel refunds twice; `amount: 0` triggers a full refund.
-4. `cancelOrder` cancels allocations/offers/store_orders before the atomic status guard and races with rider acceptance.
-5. Pickup-code submit has no `status='accepted'` guard (double submit) and counts rejected allocations.
+1. `[STILL OPEN]` Webhooks can downgrade a `paid` order (`payment.service.ts` `payment.authorized` / `payment.failed` have no status guard, lines 546-562/613-625); `refund.processed` (626-639) marks partial refunds as full.
+2. `[STILL OPEN]` Payment is captured before amount/notes validation (`payment.controller.ts:84`, `orderAdditions.controller.ts:298` — `ensurePaymentCaptured` runs before the cross-check that follows); a customer can pay for an order that `cancelIfPaymentAbandoned` already cancelled.
+3. `[PARTIALLY MITIGATED]` The generic `POST /refund` (`payment.controller.ts:199-217`) still never updates `refunded_amount`/`payment_status`, so a later cancel refunds twice, and `amount: 0` still triggers a full refund (`payment.service.ts:509`'s `if (data.amount)` is falsy for 0). But a new, correctly-built `resolveItemRefund` endpoint (`payment.controller.ts:223-318`) was added since — it updates both fields, caps at the paid total, and rejects `amount<=0`.
+4. `[MITIGATED 2026-10-01]` `cancelOrder` (`database.service.ts:360-461`) still cancels allocations/offers/store_orders (398-438) before its own atomic status-guarded `customer_orders` update (447-456) — internally still a multi-step, non-transactional sequence. The exploitable consequence (a rider's `acceptOrder` winning a race landing between those steps) is now closed from the other side instead — see item 7's fix. A future caller that reads/writes `store_orders`/`customer_orders` state without the same defensive status guard `acceptOrder` now has could still hit a similar race; `cancelOrder` itself would ideally become one atomic Postgres function (matching `finalize_order_if_ready`'s pattern) rather than relying on every consumer to defend against its non-atomicity individually.
+5. `[FIXED]` `acceptAllocation` (`shopkeeper.controller.ts`) now has a read-check (238) and an atomic `.eq('status','pending_acceptance')` write guard (317-325) against double-submit; migration `20260930340000_finalize_order_if_ready_require_accepted.sql` closed the related "all-rejected still marked ready" gap.
 
 **Access control (high)**
-6. Saved-address resolution merges other customers whose `contact_phone` fuzzy-matches and returns **their** addresses (`database.service.ts` `getCustomerSavedAddressesResolved`).
-7. Riders can claim any order regardless of status (`acceptOrder`), set any order status via `/api/tracking/orders/:id/updates` (skips OTP and forward-only guards), and read customer name/phone before accepting.
-8. Deactivated admins, suspended shopkeepers and offboarded riders keep access (no status checks in `requireAdmin`, `requireShopkeeper`, `requireRider`, `resolveShopkeeperFromToken`).
-9. Customers can keep reading a rider's live location after delivery (no active-order filter).
-10. `customers.controller.ts` address create spreads `req.body` into the insert (mass assignment).
-11. Store-owner document upload routes run `multer` before authentication.
+6. `[STILL OPEN]` Saved-address resolution (`database.service.ts:582-687` `getCustomerSavedAddressesResolved`) still does `ilike '%tendigits%'` substring matching on `contact_phone` across all customers and merges in their addresses.
+7. `[FIXED 2026-10-01]` `acceptOrder` (`deliveryPartner.controller.ts:816-845`) claimed via `.is('delivery_partner_id', null)` with no `store_orders.status` filter; `addTrackingUpdate` (`tracking.controller.ts:107-134`, `database.service.ts:2406-2446`) let any assigned rider set any `VALID_ORDER_STATUSES` value directly, with no forward-only/OTP guard.
+   Fix, two parts:
+   - `acceptOrder`'s `store_orders` claim now also requires `.not('status', 'in', '(order_cancelled,order_delivered)')`, closing the race where `cancelOrder`'s non-atomic multi-step sequence (item 4) could let a claim land between steps and succeed on an order actually being cancelled. A second, narrower-window guard was added on the follow-up `customer_orders` update too (same status exclusion); if that one loses the race instead, the `store_orders` claim is rolled back (`delivery_partner_id: null`, `status: 'ready_for_pickup'` — the same reset `rejectOrder` already uses) rather than leaving the rider holding a live claim on a cancelled order. Note: confirmed via grep that `POST /delivery-partner/orders/:orderId/accept` (`acceptOrder`) has zero live callers today — every app (rider app, website's `DriverApp.tsx`, legacy `DeliveryPartnerPage.tsx`) only ever calls the offer-based `/delivery-partner/offers/:offerId/accept` (`acceptOffer`), whose underlying `accept_driver_offer()` Postgres function was already fully atomic and correctly order-status-gated (checked during this same audit). So the day-to-day accept flow was never actually exposed to this race — `acceptOrder` is hardened as a matter of principle (same "dead but reachable, still worth closing" reasoning as `addTrackingUpdate` below), not because real traffic was hitting it.
+   - `addTrackingUpdate` (`database.service.ts`) now enforces a forward-only `ORDER_STATUS_SEQUENCE` (rejects any transition that isn't strictly forward, `order_cancelled` excepted as a separate terminal branch reachable from anywhere) and requires `customer_orders.delivery_otp_verified_at` to already be set before accepting a transition to `order_delivered` — closing the second, unguarded path to a status the dedicated `markDelivered` endpoint otherwise gates properly on OTP verification. Confirmed via grep that this route (`POST /api/tracking/orders/:orderId/updates`) has zero live callers in either the rider app or the website today — hardened rather than removed, since it's still a registered, `requireRider`-gated endpoint reachable directly.
+   Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing).
+8. `[MOSTLY FIXED 2026-10-01]` `requireAdmin` (`adminAuth.middleware.ts:17-63`) only checked session validity, never `admins.status`; `requireRider` (`deliveryPartner.controller.ts:247-285`) never checks `is_approved`; `resolveShopkeeperFromToken` (`storeOwner.controller.ts:65-96`) never checked store approval at all. Contrast: `customerAuth.middleware.ts:65-67` *does* check `is_suspended` — the gap was specific to admin/shopkeeper/rider gates. The admin panel had the same gap independently — see section 6.1, finding A1.
+   Fix: `requireAdmin` now does a second lookup on `admins.status` and rejects with 401 unless `'active'`. The Supabase migration `20261001000000_is_admin_authenticated_checks_status.sql` adds the same `admins.status = 'active'` join to the `is_admin_authenticated()` SECURITY DEFINER function that gates the `admin_full_access` RLS policy on 9 tables (including `admin_sessions` itself) — this closes the admin-panel side (finding A1) for free, since `secureAdminAuth.ts`'s own session-validity check already treats "no row returned" as "session invalid" and logs out, and that query is itself RLS-gated by this same function. **`[APPLIED 2026-10-01]`** — see section 7 for verification.
+   For shopkeepers, `resolveShopkeeperFromToken` deliberately stays approval-agnostic (many callers — document upload/delete, billing info, support messages, profile-change requests — must keep working for a pending/suspended shopkeeper so they can act on admin's feedback); instead, the two customer-facing storefront-gallery mutations that were missing the check pending stores already had elsewhere (`deleteStoreProduct`, `updateProductQuantity`, `updateProductActiveState`) — `addStoreImage` and `deleteStoreImage` — now go through a new `assertOwnsApprovedStore()` helper instead of the approval-agnostic `assertOwnsStore()`.
+   For riders, `requireRider` is intentionally left unchanged: it's documented in-code (deliveryPartner.controller.ts:311-317) as deliberately approval-agnostic so a pending rider can still view their own profile/status, and every actual order-mutating action (`acceptOrder`, `acceptOffer`, going online) already re-checks `is_approved` fresh from the DB on every call via `getRiderApprovalState()`/inline checks — confirmed this isn't a stale-session gap like the admin case, since there's no "checked once at login" pattern here to begin with.
+   Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing, unaffected).
+9. `[STILL OPEN]` `getDriverLocationsForOrder` (`database.service.ts` ~2490) still has no filter excluding `order_delivered`/`order_cancelled`.
+10. `[STILL OPEN]` `customers.controller.ts:85-101` `createAddress` still spreads `...req.body` into the insert; `updateAddress` right below it correctly uses an allowlist — the fix was applied inconsistently between the two.
+11. `[STILL OPEN]` `storeOwner.routes.ts:19,22` still wire `docUpload.single('file')` ahead of the controller; the auth check in `resolveShopkeeperFromToken` runs as the first line *inside* the handler, after multer already parsed the upload.
 
 **Data / multi-store (medium)**
-12. `.maybeSingle()` on multi-row results: shopkeepers with several stores get `store: null`; riders/shopkeepers on multi-store orders get 403/404 for invoices and order detail.
-13. `assignDeliveryAgent` never sets `customer_orders.assigned_driver_id`, so admin-assigned riders get 403 on pickup.
-14. Invoices generate for unpaid/cancelled orders and default `payment_status` to `paid`.
-15. Simulation can mark a cancelled order delivered.
+12. `[STILL OPEN]` `invoice.controller.ts` `verifyOrderBelongsToShopkeeper` still uses `.maybeSingle()` on a join; a shopkeeper whose two stores are both allocated on one order gets a silently-swallowed multi-row error → 403.
+13. `[STILL OPEN]` `assignDeliveryAgent` (`database.service.ts:1888-1911`) still only writes `store_orders`, never `customer_orders.assigned_driver_id`.
+14. `[STILL OPEN]` `getCustomerInvoice` (`invoice.controller.ts:67-100`) still auto-generates via `generateForOrder` with zero order/payment-status check; `invoice.service.ts:515` still defaults `payment_status` to `'paid'`.
+15. `[STILL OPEN]` `deliverySimulation.service.ts:452` still writes `order_delivered` unconditionally; the only cancellation check is a one-time read at function start (223-224), not re-checked before the final write.
 
 **Performance (medium)**
-16. Tracking poll runs three watchdog reads plus the order read per request; `reBroadcastIfStuck` checks its throttle after querying.
-17. Whole-table scans filtered in JS: `driver_locations` (delivery + shopkeeper controllers), all stores by haversine, all `ready_for_pickup` orders, `adminActivityLog` (six unbounded reads).
-18. Unbounded list endpoints (rider orders/history, coupons, admin lists) will be silently truncated by PostgREST's row cap.
-19. No outbound `fetch` timeout anywhere (Razorpay, Google, Expo push, Resend).
-20. `requireCustomer` writes `session_token_issued_at` on every request (one DB write per tracking poll).
+16. `[PARTIALLY MITIGATED]` The 3 tracking watchdogs are now fire-and-forget (no longer blocking the response), but they still run every poll, and `reBroadcastIfStuck` (`shopkeeper.controller.ts:887-897`) still does a DB read before its in-memory throttle check.
+17. `[STILL OPEN]` `assignCandidatesInRadius` (580-589) and the driver-online catch-up path (757-788) still pull all active/approved stores or all `ready_for_pickup` orders and filter by `haversineKm` in JS; `adminActivityLog.controller.ts:57-77` still has six unbounded `.select()`s with no `.limit()` — **the admin panel's own `ActivityLogPage` has no pagination UI either**, see section 6.1, finding A3.
+18. `[PARTIALLY MITIGATED]` Rider `getOrders` gained an opt-in `?limit=` (capped 200) but defaults to unbounded by design (documented); `coupons.controller.ts` → `database.service.ts:1420-1432` `getCoupons()` is still fully unbounded. **`adminRiderPayouts.controller.ts`'s `listRiderPayouts` is also unbounded**, see section 6.1, finding A3.
+19. `[STILL OPEN]` No `AbortController`/`signal` on any fetch in `directions.service.ts`, `geocoding.service.ts`, `notification.service.ts`, `payment.service.ts`, `roads.service.ts`.
+20. `[PARTIALLY MITIGATED]` `customerAuth.middleware.ts:91-101` still writes `session_token_issued_at` every request, but it's now fire-and-forget (`void (async...)`), so it no longer blocks the response.
 
 **Frontend (medium/low)**
-21. `DeliveryPartnerPage` (legacy `/driver-legacy`) pushes GPS with no auth header → always 401.
-22. `ShopPage` calls the nearby-store RPC three times per location change (now served from cache, but still three calls).
-23. Timeouts/listeners not cleared in `MapLocationPicker`, `LocationPicker`, `DeliveryMap`.
-24. `WishlistPage` optimistic-remove restores a stale snapshot on failure; `DriverApp` online toggle has no rollback and collapses expanded stops every 6 s.
-25. `CheckoutPage` prefills only from `currentLocation`, not `LocationContext`.
-26. ESLint cannot run: `.eslintrc.json` references `eslint-plugin-react`, which is not installed.
+21. `[STILL OPEN]` `DeliveryPartnerPage.tsx:380-382` still sends no `Authorization` header.
+22. `[FIXED]` `ShopPage.tsx` was rewritten around server-side `get_nearby_products_page`/`getNearbyProductsMeta`/`hasNearbyStores`; the old triple-RPC-call pattern is gone.
+23. `[PARTIALLY MITIGATED]` `DeliveryMap.tsx` now has real cleanup (`cancelled` flags, `zoomListenerRef.current?.remove()`); `MapLocationPicker.tsx` still has zero `useEffect`/cleanup for its `idle` listener or debounce timeouts.
+24. `[STILL OPEN]` `WishlistPage.tsx:77-92` `remove()` still captures a stale `previous` snapshot vulnerable to concurrent-remove races; `DriverApp.tsx:577-587` `toggleOnline` still has no rollback; `fetchSequence` (295-313) still force-collapses `expandedStops` every 6s.
+25. `[STILL OPEN]` `CheckoutPage.tsx:182` still reads raw `localStorage.getItem('currentLocation')`, never `LocationContext`.
+26. `[FIXED]` `npx eslint . --ext ts,tsx --max-warnings 0` in `frontend/` now runs cleanly (4 errors/85 warnings, no config crash) — the broken `eslint-plugin-react` reference is gone.
 
 ## 5. New findings — 2026-09-30 deep-dive audit
 
@@ -239,3 +248,237 @@ which were fixed here — this is a record for the next pass.
     `lib/addressService.ts:105-161` whitelists fields before POSTing (correct client behavior), but a
     modified/replayed request bypassing the client can still hit backend backlog item 10; also passes
     `google_place_data` through as an arbitrary, unstripped object.
+
+## 6. 2026-10-01 deep-dive — admin panel (new), backend backlog re-verification, and fresh areas of all three mobile apps
+
+Section 4's 26-item backlog was re-verified line-by-line against live code (statuses now inline in
+section 4). This section covers what that pass found that wasn't already in section 4 or 5: the
+admin panel (audited for the first time) and new areas of each mobile app not covered by the
+2026-09-30 pass (section 5).
+
+### 6.1 near-and-now/admin (admin panel — first audit)
+
+**A1. (High, FIXED 2026-10-01) Deactivating/suspending an admin does not revoke their live session.**
+`status='active'` was checked only at login (`admin.controller.ts:62`). None of
+`adminAuth.middleware.ts`'s `requireAdmin` (17-63) / `requirePermission` (79-83), the RLS function
+`is_admin_authenticated()` (`20260815000000_security_definer_search_path_hardening.sql:50-87`), or
+the admin panel's own client-side guard (`admin/src/services/secureAdminAuth.ts:74-123`) ever checked
+`admins.status` after login. A super_admin could set another admin to `inactive`, but that admin's
+existing token kept working — API and admin panel both — until it expired or they logged out
+themselves. Same root cause as backend backlog item 8, confirmed independently present at the
+RLS/admin-panel layer too, not just the one Express middleware spot.
+Fix: `requireAdmin` now re-checks `admins.status` on every request (see item 8's fix note above);
+migration `20261001000000_is_admin_authenticated_checks_status.sql` adds the same check inside
+`is_admin_authenticated()`, so every RLS-gated admin-panel query — including `secureAdminAuth.ts`'s
+own session-validity check, since it reads `admin_sessions` through this same RLS policy — fails
+closed for a deactivated admin with no separate client-side change needed. **`[APPLIED 2026-10-01]`**
+— see section 7.
+
+**A2. (Medium) Store-approval "documents complete" check is UI-only, not enforced by RLS.**
+`admin/src/pages/admin/StoresPage.tsx`'s `toggleApproval()` (~line 1019) gates `is_approved=true` on
+a client-side `approvalReadiness()` check against locally-fetched document rows, then writes directly
+to `stores` via Supabase. The RLS policy `admin_update_requires_permission`
+(`20260919000000_stores_delivery_partners_permission_rls.sql:48`) only checks the caller's
+`store_verification` permission — it never re-validates that required documents are actually
+approved. Any admin with that permission can bypass the UI gate via a direct REST call and approve a
+store with missing/rejected KYC documents.
+
+**A3. (Medium) Unbounded queries, no pagination.**
+`backend/src/controllers/adminActivityLog.controller.ts` (54-77): 6 parallel queries across
+profile-change-requests, product-submissions and verification-document tables, none with
+`.limit()`/`.range()`; `admin/src/pages/admin/ActivityLogPage.tsx` calls it with no limit param and
+has no "load more" UI (unlike `SecurityLogPage`/`NotificationsPage`, which both paginate).
+`backend/src/controllers/adminRiderPayouts.controller.ts`'s `listRiderPayouts` (19-26) is also
+unbounded.
+
+**A4. (Minor) Route-level guards check auth only, not permission.**
+`admin/src/routes/AdminRoutes.tsx`'s `AdminAuthGuard` checks `isAdminAuthenticated()` for every
+route, not role/permission — pages self-gate via `hasPermission`/`hasRole` inside the component
+(confirmed present), so a low-privilege admin typing a URL directly gets a client-side "no
+permission" render rather than real data. Low risk since backend endpoints are separately
+permission-checked; worth a shared route-level guard for consistency.
+
+**What's left (admin panel):** rider payouts explicitly "records the outcome, doesn't move money" —
+no real disbursement/payment-gateway integration exists yet (documented in the controller's own
+header comment). Two independent "notification" concepts coexist under similar names —
+`admin/src/context/NotificationContext.tsx` (toast/alert only) vs. the real `admin_notifications`
+per-admin-read-state system used by `NotificationsPage.tsx` — not a bug, but a naming collision
+worth resolving before it causes one.
+
+### 6.2 near-and-now backend — 2 new bugs found in previously-unreviewed files
+
+**B1. (Medium) `createWalletTopupOrder` sends no idempotency key.**
+`payment.service.ts` (~line 285) calls `razorpayRequest('POST','/orders', orderBody)` with no
+idempotency key, unlike its two siblings `createPaymentOrder` (168) and
+`createAdditionPaymentOrder` (234), which both set one. A retried/double-tapped wallet top-up can
+create two separate Razorpay orders for the same intent.
+
+**B2. (Medium) Admin-only `updateDeliveryStatus` has no status validation.**
+`delivery.controller.ts:304-323` only checks `if (!status)` — never validates against the
+`VALID_ORDER_STATUSES` enum the rider-facing equivalent (`tracking.controller.ts`) enforces, and has
+no forward-only guard. A malformed status value from the admin panel can write straight into
+`customer_orders.status`.
+
+### 6.3 near-now-store_owner (shopkeeper app) — new area
+
+**S1. (Medium) Partial multi-photo upload failure creates duplicate gallery entries on retry.**
+`components/kyc/useStoreImages.ts:102-134` (`saveAll`) uploads+registers each staged photo
+sequentially; if photo 2 of 3 fails to register (network blip), `pending` is never trimmed for the
+already-succeeded photo 1 (only cleared via `setPending([])` on full success) and `reload()` never
+runs. Retrying re-uploads and re-registers photo 1, creating a duplicate gallery entry. Shared by
+both `app/upload-documents.tsx` (`useVerificationDocuments`) and `app/profile.tsx`
+(`useStoreGallery` — likely the same pattern, not yet inspected). Fix direction: remove each URI from
+`pending` as soon as its own upload+register succeeds, not just at the end.
+
+Everything else in this pass (onboarding, KYC upload, billing/payouts, profile edit, settings,
+help/support, notifications, signup, custom-product submission, caching) came back clean — already
+hardened with explicit audit-trail comments from prior fixes. No incomplete features found.
+
+### 6.4 NAT_Near-Now_Rider- (driver app) — new area
+
+**D1. (Medium) No double-tap guard on profile save.**
+`app/(tabs)/profile.tsx:229` `handleSave` gates re-entry only via `saving` state, not a synchronous
+ref like `billing-info.tsx:175` (`savingRef`) or `delivery/[orderId].tsx:126` (`verifyingRef`) use for
+this exact race. A fast double-tap fires two concurrent profile-change-request POSTs.
+
+**D2. (Medium) No email format validation before submitting a profile change.**
+`app/(tabs)/profile.tsx:241` pushes `email.trim()` straight into the admin-review patch with no
+validation, unlike `billing-info.tsx:180` (UPI regex) or `documents.tsx`'s per-doc-type regex checks.
+
+**D3. (Low-Medium) Optimistic-revert race on concurrent notification actions.**
+`notifications.tsx`'s `markOneRead`/`markAllRead` (84-112) and `notification-preferences.tsx`'s
+`toggle` (92-107) each snapshot `previous` state before their async PUT resolves. Two such actions
+fired close together can have the earlier one's failure revert to a snapshot taken before *both*,
+silently erasing the second action's successful change.
+
+**D4. (Low) Unhandled promise rejections from `Linking.openURL()`.**
+No `.catch()` on calls in `delivery/[orderId].tsx:162,166,504`, `pending-verification.tsx:385`, or
+`home.tsx:976,1110,1142` — rejects with no app installed to handle the scheme (e.g. no dialer/maps
+app).
+
+**D5. (Low) Same missing-ref double-tap pattern on image pickers.**
+`profile.tsx:190` `handlePickImage` and `billing-info.tsx:127` `pickProfileImage` gate only on state.
+Low real-world risk since the native picker modal blocks re-taps.
+
+**What's left (driver app):** no support/chat screen (tel: links to hardcoded numbers only); no
+ratings/reviews screen for riders; no dedicated trip-history/analytics screen; `orders.tsx:138`
+fetches `has_more` but never uses it — the "Past" tab is hard-capped at 50 with no pagination
+(earnings totals are unaffected — fetched separately and unbounded).
+
+### 6.5 nearandnowcustomerapp (customer app) — new area
+
+**C1. (Medium-High) Home catalog cache is dead code, silently defeating a perf optimization.**
+`app/(tabs)/home.tsx:883-942` (`fetchFresh`/`fetchFreshFast`) only writes the AsyncStorage/memory
+cache `if (!filter)`. Every real call site now passes a truthy `Set` (cold start passes
+`getAllActiveProductIds()`; the location-driven refresh passes `filter.productIds`, truthy even when
+empty) — so `!filter` only fires if zero active+approved stores exist platform-wide, which never
+happens live. Net effect: `readHomeCatalogCache()`/`getMemoryHomeCache()`, consumed by
+`order-again.tsx:329-357` and `categories.tsx:151-205` for instant-paint, return `null` on every app
+run, silently falling through to the slower live-fetch fallback every time. Looks like a regression
+from when the mandatory nearby/active-store filtering was added (the 2026-09-03 radius fix) without
+updating this caching condition to match. Not a correctness bug — a real, provable perf regression.
+Fix direction (needs a product-intent decision first): cache under a location-keyed key, or cache the
+platform-wide fetch specifically when the filter is the *global* active-ids one.
+
+**C2. (Low) Coupon list never checks expiry client-side.**
+`app/product/coupons.tsx:54-57` (`isApplicable`) only checks `min_order_value` against subtotal,
+never `expires_at`. Depends entirely on the backend's "active" coupon list correctly excluding
+expired ones — no defense-in-depth check like the min-order-value one got.
+
+**What's left (customer app):** `app/verify-email.tsx` is orphaned dead code — the post-signup
+redirect to it is commented out in `otp.tsx` (112-118, "Email verification step disabled for now"),
+new users go straight to `/onboarding` instead, and email verification now happens inline in
+`app/settings/profile.tsx`'s own code-entry UI; zero live references to `verify-email.tsx` remain. No
+referral/rewards screens exist anywhere in the app (not started).
+
+### 6.6 Recommended priority
+
+1. **`[DONE + APPLIED 2026-10-01]` Backend item 8 + admin panel A1** (same root cause) — added an
+   `admins.status` check to `requireAdmin` and the `is_admin_authenticated()` RLS function (migration
+   applied to the live database, see section 7), and an `is_approved` check to the shopkeeper
+   storefront-gallery mutations that were missing it. `requireRider` was deliberately left unchanged
+   after confirming every order-mutating rider action already re-checks `is_approved` fresh per call —
+   not the same stale-session pattern as the admin case. Applying this migration also surfaced 2 new,
+   unrelated live vulnerabilities (V1, V2 — section 7), now also fixed and applied.
+2. **`[DONE 2026-10-01]` Backend items 4 and 7** — the `cancelOrder`/`acceptOrder`/`addTrackingUpdate`
+   race conditions. `acceptOrder`'s claim now excludes cancelled/delivered orders (with a rollback if
+   the narrower `customer_orders` update loses the race instead); `addTrackingUpdate` now enforces
+   forward-only transitions and requires OTP verification before `order_delivered`. `cancelOrder`
+   itself is still internally non-atomic (see item 4's updated note) — the exploitable consequence is
+   closed, but a fully atomic rewrite (matching `finalize_order_if_ready`'s pattern) remains a
+   worthwhile follow-up, not done here.
+3. **Admin panel A2** — close the store-approval RLS gap so the UI check can't be bypassed.
+4. Mobile-app mediums (S1, D1, D2, C1) — smaller, independent, safe to pick up any time.
+
+## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
+
+While preparing to push `20261001000000_is_admin_authenticated_checks_status.sql` (section 6's fix),
+`supabase migration list` showed ~37 local migration files (everything from `20260930060000` onward,
+plus two files both timestamped `20260926000000` — a pre-existing filename collision, left unresolved,
+flagged for manual cleanup) with no corresponding row in the remote history table. Confirmed live via
+direct anon-key REST calls (not just trusting the CLI) that this entire range **was** actually already
+applied to the production database (`get_nearby_products_page`, `wishlist_items`,
+`place_multi_store_order`, `store_images.status`, `app_users.is_suspended`, `stores.deleted_at` all
+exist/behave exactly as their migration files specify) — just never recorded, presumably applied via
+the Supabase SQL editor rather than the CLI. Ran `supabase migration repair --status applied` for the
+confirmed range (bookkeeping only, no SQL re-executed) so future `db push` calls don't try to re-run
+already-live changes.
+
+Reading through that whole previously-unaudited batch turned up two real, currently-live
+vulnerabilities — neither existed in the code before Sept 30; both are regressions introduced by
+migrations *within* that same batch undoing a fix an earlier migration in the same batch had just made:
+
+**V1. (Critical) `finalize_order_if_ready` is callable by anyone with the public anon key,
+completely bypassing order-acceptance business logic.**
+`20260930260000_revoke_public_grant_order_verification_rpcs.sql` correctly revoked `PUBLIC`/`anon`/
+`authenticated` EXECUTE on this function specifically because anon-callable access lets any client
+force-advance any order straight to `ready_for_pickup` before any store accepted it. Ten migrations
+later the same day, `20260930340000_finalize_order_if_ready_require_accepted.sql` (an unrelated,
+correct fix adding a "require at least one accepted allocation" check) did
+`CREATE OR REPLACE FUNCTION finalize_order_if_ready(...)` and copied the function's *original*,
+pre-260000 grant line (`GRANT EXECUTE ... TO service_role, authenticated, anon`) — silently re-opening
+the hole 260000 had just closed. `CREATE OR REPLACE` doesn't reset grants on its own; this migration's
+own explicit `GRANT` statement is what undid it.
+Confirmed live 2026-10-01: an anon-key RPC call with a fake order id returned `200 false` (a real
+execution) rather than a `42501` permission error — while the sibling functions revoked by the same
+260000 migration (`mark_verification_submitted_if_ready`, `mark_rider_verification_submitted_if_ready`)
+correctly still return 401, since neither was `CREATE OR REPLACE`'d again afterward.
+Fix: `20261001010000_finalize_order_if_ready_revoke_anon.sql` re-revokes `PUBLIC`/`anon`/`authenticated`
+EXECUTE on this one function. Verified the only live caller is `shopkeeper.controller.ts:551`'s
+`supabaseAdmin.rpc('finalize_order_if_ready', ...)` (service_role client, unaffected by the revoke) —
+no legitimate caller regresses.
+
+**V2. (High) `get_admin_dashboard_order_stats()` leaks platform-wide business metrics to
+unauthenticated callers.**
+`20260930380000_admin_dashboard_order_stats_rpc.sql` created this aggregation function (total orders,
+total customers, total revenue, order counts by status) with no internal auth check in its body —
+unlike its same-day siblings `admin_get_delivery_partner_push_tokens()`/`admin_get_customer_push_tokens()`
+(`20260930290000`), which both correctly `RAISE EXCEPTION` unless `is_admin_authenticated()` first.
+`20260930390000_fix_admin_dashboard_order_stats_grant.sql` then granted EXECUTE to `anon, authenticated`
+(necessary — the admin panel calls it via `getAdminClient()`, an anon-key client) without ever adding
+the internal check this function was missing from creation.
+Confirmed live 2026-10-01: an unauthenticated anon-key RPC call returned real aggregated data
+(`{"total_orders":14,"total_customers":6,"total_sales":6100,...}`) with HTTP 200, no session required.
+Fix: `20261001020000_admin_dashboard_order_stats_require_auth.sql` converts the function to `plpgsql`
+and adds the same `is_admin_authenticated()` guard its sibling functions already use; the aggregation
+query itself is unchanged. Verified the only live caller, `admin/src/services/adminService.ts:1372`'s
+`getAdminClient().rpc('get_admin_dashboard_order_stats')`, already sends the `x-admin-token` header this
+check reads — no legitimate admin-panel usage regresses.
+
+**`[APPLIED 2026-10-01]`** All three `20261001*` migrations were applied to the live database by the
+user (outside the CLI, same channel as the Sept 30 batch). Verified directly via anon-key RPC calls
+after applying:
+- `finalize_order_if_ready` → `401 { code: '42501', message: 'permission denied for function
+  finalize_order_if_ready' }` (was `200 false`) — V1 closed.
+- `get_admin_dashboard_order_stats` → `400 { code: 'P0001', message: 'Not authorized' }` (was `200`
+  with real revenue/order data) — V2 closed.
+- `is_admin_authenticated_checks_status` (item 8 / A1) couldn't be tested directly without a live admin
+  session, but since Postgres/Supabase migrations apply strictly in timestamp order and both later
+  migrations above are confirmed live, this one — timestamped before both — must have applied
+  successfully first; a failed migration would have stopped the batch before either later one ran.
+- Ran `supabase migration repair --status applied` for all three afterward to sync the CLI's remote
+  history bookkeeping (same reconciliation step as the Sept 30 batch) — no SQL re-executed, tracking
+  only.
+
+Regression checks: `npx tsc --noEmit` clean for `backend/`, `frontend/`, and `admin/`; `npx vitest run`
+22/22 passing in `backend/` (none of this touches frontend/admin runtime code, only DB migrations).

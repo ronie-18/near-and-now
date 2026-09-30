@@ -777,8 +777,8 @@ export async function addStoreImage(req: Request, res: Response) {
     if (!userId) return;
 
     const storeId = req.params.id;
-    if (!(await assertOwnsStore(storeId, userId))) {
-      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    if (!(await assertOwnsApprovedStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found, not owned by you, or not yet approved' });
     }
 
     const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
@@ -833,8 +833,8 @@ export async function deleteStoreImage(req: Request, res: Response) {
     if (!userId) return;
 
     const { id: storeId, imageId } = req.params;
-    if (!(await assertOwnsStore(storeId, userId))) {
-      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    if (!(await assertOwnsApprovedStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found, not owned by you, or not yet approved' });
     }
 
     const { data: image, error: fetchErr } = await supabaseAdmin
@@ -892,6 +892,28 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
     .select('id')
     .eq('id', storeId)
     .eq('owner_id', userId)
+    .maybeSingle();
+  return !!data;
+}
+
+/**
+ * Like assertOwnsStore, but also requires the store to currently be
+ * `is_approved` — for customer-facing storefront actions (adding/removing
+ * gallery photos) where a suspended store's owner shouldn't be able to keep
+ * managing what customers see, same reasoning as deleteStoreProduct /
+ * updateProductQuantity / updateProductActiveState above. Not used for
+ * verification-document or billing routes, which must stay reachable
+ * regardless of approval state so a suspended/pending shopkeeper can still
+ * fix the documents admin is waiting on. Found 2026-10-01 during an
+ * access-control audit (backlog item 8's shopkeeper side).
+ */
+async function assertOwnsApprovedStore(storeId: string, userId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from('stores')
+    .select('id')
+    .eq('id', storeId)
+    .eq('owner_id', userId)
+    .eq('is_approved', true)
     .maybeSingle();
   return !!data;
 }

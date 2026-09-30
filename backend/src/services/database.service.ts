@@ -2,6 +2,7 @@ import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../con
 import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { notificationService } from './notification.service.js';
+import { AppError } from '../utils/httpError.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -73,6 +74,23 @@ function lastTenIndianMobileDigits(phone: string): string | null {
 function isApprovedStatus(status: 'pending_verification' | 'active' | 'inactive' | 'suspended' | 'offboarded'): boolean {
   return status === 'active' || status === 'inactive';
 }
+
+/**
+ * Forward-only order-status progression enforced by addTrackingUpdate() below.
+ * 'order_cancelled' is deliberately excluded — it's a separate terminal branch
+ * reachable from any of these, not a step in the sequence itself.
+ */
+const ORDER_STATUS_SEQUENCE: OrderStatus[] = [
+  'pending_at_store',
+  'store_accepted',
+  'preparing_order',
+  'ready_for_pickup',
+  'delivery_partner_assigned',
+  'picking_up',
+  'order_picked_up',
+  'in_transit',
+  'order_delivered'
+];
 
 export class DatabaseService {
   private isMissingColumnError(error: unknown, columnName: string): boolean {
@@ -2414,11 +2432,29 @@ export class DatabaseService {
   }) {
     const { data: order } = await supabaseAdmin
       .from('customer_orders')
-      .select('id')
+      .select('id, status, delivery_otp_verified_at')
       .eq('id', params.order_id)
       .eq('assigned_driver_id', params.rider_id)
       .maybeSingle();
     if (!order) return null;
+
+    // No forward-only or delivery-confirmation guard previously — any assigned rider
+    // could POST any VALID_ORDER_STATUSES value here (tracking.controller.ts's only
+    // check), moving an order backward or straight to 'order_delivered' without the
+    // customer ever having given the delivery OTP the dedicated, properly-guarded
+    // markDelivered endpoint (deliveryPartner.controller.ts) requires. This route has
+    // zero live callers in either client app today, but it's a registered, reachable
+    // endpoint behind nothing but requireRider — found 2026-10-01 during an
+    // order-state-machine race audit (backlog item 7).
+    const currentStatus = (order as { status: OrderStatus }).status;
+    const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(currentStatus);
+    const nextIndex = ORDER_STATUS_SEQUENCE.indexOf(params.status);
+    if (params.status !== 'order_cancelled' && (currentIndex === -1 || nextIndex === -1 || nextIndex <= currentIndex)) {
+      throw new AppError(`Cannot move order from '${currentStatus}' to '${params.status}'`, 409);
+    }
+    if (params.status === 'order_delivered' && !(order as { delivery_otp_verified_at: string | null }).delivery_otp_verified_at) {
+      throw new AppError('Delivery OTP has not been verified for this order yet', 403);
+    }
 
     const { data, error } = await supabaseAdmin
       .from('order_status_history')
