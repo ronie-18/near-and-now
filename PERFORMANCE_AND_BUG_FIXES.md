@@ -166,10 +166,17 @@ which were fixed here — this is a record for the next pass.
      (`batch.every((page) => page.length === PRODUCT_PAGE_SIZE)`).
    Verified with `npx tsc --noEmit` (clean), `npx vitest run` (26/26 passing), and `npx vite build`
    (succeeds, same chunk sizes).
-5. **(Low) Client-supplied `X-Request-Id`/`X-Amzn-Trace-Id` header is trusted almost as-is.**
-   `backend/src/middleware/requestContext.ts` only length-caps it to 128 chars before echoing it via
-   `res.setHeader` and embedding it in error bodies/logs; a value with characters invalid for an
-   HTTP header throws before any route handler runs.
+5. **(Low, FIXED 2026-10-01) Client-supplied `X-Request-Id`/`X-Amzn-Trace-Id` header was trusted
+   almost as-is.** `backend/src/middleware/requestContext.ts` only length-capped it to 128 chars
+   before echoing it via `res.setHeader` and embedding it in error bodies/logs; a value with
+   characters invalid for an HTTP header threw before any route handler ran.
+   Fix: added a `SAFE_REQUEST_ID` allowlist regex (`/^[\x20-\x7E]{1,128}$/` — printable ASCII only,
+   no control characters, so no CR/LF header injection and nothing `res.setHeader()` would reject).
+   A client-supplied id that fails the check is discarded wholesale (not truncated) and a fresh
+   `randomUUID()` is generated instead, so no attacker-controlled fragment ever reaches the response
+   header, error bodies, or the log line as a "correlation id". Verified with `npx tsc --noEmit`
+   (clean), `npx vitest run` (22/22 backend, 26/26 frontend — unaffected), and a standalone check of
+   the regex against valid ids, over-length ids, CR/LF, non-ASCII and empty input.
 
 *(Checked and found clean: `AuthContext`/`NotificationContext` memoization — no stale closures;
 `server.ts`'s JSON 404 and unified error handler are ordered correctly.)*

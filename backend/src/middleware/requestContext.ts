@@ -10,6 +10,18 @@ declare module 'express' {
   }
 }
 
+// Printable ASCII only, no control characters (so no CR/LF header injection or a value
+// res.setHeader() would reject), capped at 128 chars. A client-supplied id that fails this
+// is discarded wholesale — not truncated — so no attacker-controlled fragment ever reaches
+// res.setHeader(), error bodies, or the log line as a "correlation id".
+const SAFE_REQUEST_ID = /^[\x20-\x7E]{1,128}$/;
+
+function sanitizeRequestId(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return SAFE_REQUEST_ID.test(trimmed) ? trimmed : null;
+}
+
 /**
  * Attaches a request id (reusing an upstream X-Request-Id / ALB trace id when
  * present), echoes it back, and logs one line per request with the latency
@@ -21,7 +33,7 @@ export function requestContext(req: Request, res: Response, next: NextFunction):
   const incoming =
     (req.headers['x-request-id'] as string | undefined) ||
     (req.headers['x-amzn-trace-id'] as string | undefined);
-  const id = incoming?.slice(0, 128) || randomUUID();
+  const id = sanitizeRequestId(incoming) ?? randomUUID();
   req.requestId = id;
   req.startedAt = performance.now();
   res.setHeader('X-Request-Id', id);
