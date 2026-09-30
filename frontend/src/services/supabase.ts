@@ -106,9 +106,13 @@ async function getNearbyStoreIds(
         cust_lng: lng,
         radius_km: radiusKm
       });
+      // Must throw, not swallow to []: cached() only stores a loader's resolved
+      // value, so returning [] here would cache a transient RPC failure as a
+      // genuine "no stores in range" result for 5 minutes, and resolveStoreIds
+      // treats an empty result as "no filter" — every caller would silently
+      // fall back to the whole unfiltered catalogue. See bug_fixes doc, 2026-10-01.
       if (error) {
-        console.warn(`[supabase.getNearbyStoreIds] get_nearby_store_ids RPC failed (${radiusKm} km): ${error.message}`);
-        return [];
+        throw new Error(`get_nearby_store_ids RPC failed (${radiusKm} km): ${error.message}`);
       }
       return (storeIds as string[] | null) ?? [];
     },
@@ -227,7 +231,12 @@ function buildProductQuery(filters: ProductRowFilters): ProductQuery {
     .from('products')
     .select(PRODUCT_ROW_SELECT)
     .eq('is_active', true)
-    .eq('master_products.is_active', true) as ProductQuery;
+    .eq('master_products.is_active', true)
+    // Required for correct .range() pagination: without an explicit order, Postgres/PostgREST
+    // does not guarantee the same row order across separate offset requests, so concurrent
+    // page fetches (readChunk below) can duplicate or skip rows. `id` is the products table's
+    // primary key, so this is stable even while rows are inserted/updated mid-scan.
+    .order('id', { ascending: true }) as ProductQuery;
   if (filters.category) q = q.eq('master_products.category', filters.category) as ProductQuery;
   if (filters.masterProductId) q = q.eq('master_product_id', filters.masterProductId) as ProductQuery;
   if (filters.search) {
@@ -278,14 +287,12 @@ async function fetchProductRows(storeIds: string[] | null, filters: ProductRowFi
       const indices = Array.from({ length: PRODUCT_PAGE_CONCURRENCY }, (_, i) => nextPage + i);
       const batch = await Promise.all(indices.map((i) => readPage(ids, i, where)));
       nextPage += PRODUCT_PAGE_CONCURRENCY;
-      lastBatchWasFull = true;
-      for (const page of batch) {
-        rows.push(...page);
-        if (page.length < PRODUCT_PAGE_SIZE) {
-          lastBatchWasFull = false;
-          break;
-        }
-      }
+      // Keep every already-fetched row, even past the first short page: `indices`/`batch` stay
+      // in ascending page order (Promise.all preserves it), so a short page confirms there's no
+      // more data to fetch afterwards, but it doesn't mean a later page in this same batch was
+      // empty — discarding it would silently drop rows a store added mid-scan.
+      for (const page of batch) rows.push(...page);
+      lastBatchWasFull = batch.every((page) => page.length === PRODUCT_PAGE_SIZE);
     }
     return rows;
   };

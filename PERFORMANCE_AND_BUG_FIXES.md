@@ -116,25 +116,56 @@ which were fixed here — this is a record for the next pass.
 
 ### near-and-now — regressions introduced by commit 31d285e
 
-1. **(Medium) `where` label mangled to `"...Controller.if"`.** `places.controller.ts` (lines 26, 55,
-   83, 108, 134, 177), `deliveryPartner.controller.ts:283`, `shopkeeper.controller.ts:76` — a
-   mechanical find/replace keyed on the enclosing `if` block, not the function name. Every places/
-   geocode/directions failure and every rider/shopkeeper auth-middleware failure logs the same
-   useless location, defeating this commit's stated goal of locatable errors.
-2. **(Medium) Dropped `{status, error_message}` body on "missing API key" branches.**
-   `places.controller.ts` lines 26/55/83/108/134 call `sendError` with no `extra`; the frontend's
-   `placesService.ts` reads `error_message`/`message`, which no longer exist, so users see a generic
-   "Search failed (500)" instead of a real message — worse than pre-commit behavior.
-3. **(Medium) A failed nearby-store RPC call is cached as a successful empty result.**
-   `frontend/src/services/supabase.ts` `getNearbyStoreIds` catches the Supabase error and returns
-   `[]`, and `cached()` stores that `[]` for 5 minutes as if it were valid. One transient RPC
-   failure → the radius filter silently drops and customers are served the **entire unfiltered
-   catalogue** for up to 5 minutes, no error shown.
-4. **(Medium) Concurrent product-page fetch has no `.order()` clause.** `fetchProductRows`'s
-   `readChunk` now fans out 4 `.range()` pages concurrently (previously serial) with no stable sort
-   key — Postgres doesn't guarantee row order across separate offset requests. A product's
-   `is_active`/`store_id` changing mid-scan can duplicate/skip rows, and a short page mid-batch
-   discards already-fetched later pages; the result is then cached for 60 s.
+1. **(Medium, FIXED 2026-10-01) `where` label mangled to `"...Controller.if"`.**
+   `places.controller.ts` (lines 26, 55, 83, 108, 134, 177), `deliveryPartner.controller.ts:283`,
+   `shopkeeper.controller.ts:76` — a mechanical find/replace keyed on the enclosing `if` block, not
+   the function name. Every places/geocode/directions failure and every rider/shopkeeper
+   auth-middleware failure logged the same useless location, defeating this commit's stated goal of
+   locatable errors.
+   Fix: each site now reports its real location — `places.autocomplete` / `places.placeDetails` /
+   `places.geocode` / `places.reverseGeocode` / `places.directions` / `places.roadRoute`,
+   `DeliveryPartnerController.requireRider`, `ShopkeeperController.requireShopkeeperAuth` — matching
+   the `<module>.<function>` convention already used everywhere else (e.g.
+   `customerAuth.middleware.ts`'s `where = 'customerAuth.requireCustomer'`).
+2. **(Medium, FIXED 2026-10-01) Dropped `{status, error_message}` body on "missing API key"
+   branches.** `places.controller.ts` lines 26/55/83/108/134 called `sendError` with no `extra`; the
+   frontend's `placesService.ts` reads `error_message`/`message`, which didn't exist, so users saw a
+   generic "Search failed (500)" instead of a real message — worse than pre-commit behavior.
+   Fix: each of the 5 "missing API key" branches now passes
+   `extra: { status: 'ERROR', error_message: '<specific message>' }`, matching the shape each
+   function's own catch block already sends on a Google API failure, so `placesService.ts` renders a
+   real message either way. `roadRoute`'s catch block only needed the `where`/`friendly` fix (#1) — its
+   only caller, `fetchDirections()` in `placesService.ts`, checks `response.ok` and falls back to the
+   legacy `/directions` endpoint rather than reading `error_message`, so no body-shape change was
+   needed there. Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing).
+3. **(Medium, FIXED 2026-10-01) A failed nearby-store RPC call is cached as a successful empty
+   result.** `frontend/src/services/supabase.ts` `getNearbyStoreIds` caught the Supabase error and
+   returned `[]`, and `cached()` stored that `[]` for 5 minutes as if it were valid. One transient
+   RPC failure → the radius filter silently dropped and customers were served the **entire
+   unfiltered catalogue** for up to 5 minutes, no error shown.
+   Fix: the loader now throws instead of swallowing the error, so `cached()` never stores a failed
+   call (it only caches a loader's resolved value) and the next caller retries instead of reusing a
+   stale "empty" result. This matches the file's existing documented intent elsewhere
+   (`getProductsByCategory`/`searchProducts`: "Throws on failure ... a DB failure must not look like
+   an empty category") — `resolveStoreIds` and every caller already propagate the error uncaught to
+   page-level `catch` blocks that call `describeError()` and show a real error card, so no downstream
+   changes were needed. Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (26/26 passing).
+4. **(Medium, FIXED 2026-10-01) Concurrent product-page fetch has no `.order()` clause.**
+   `fetchProductRows`'s `readChunk` fans out 4 `.range()` pages concurrently (previously serial) with
+   no stable sort key — Postgres doesn't guarantee row order across separate offset requests. A
+   product's `is_active`/`store_id` changing mid-scan could duplicate/skip rows, and a short page
+   mid-batch discarded already-fetched later pages; the result was then cached for 60 s.
+   Fix, two parts in `frontend/src/services/supabase.ts`:
+   - `buildProductQuery` now adds `.order('id', { ascending: true })` — `id` is the `products` table's
+     primary key, so every `.range()` page is a deterministic slice of the same row order, even while
+     rows are inserted/updated concurrently.
+   - `readChunk`'s batch loop no longer `break`s out on the first short page mid-batch (which
+     discarded already-fetched, already-paid-for rows from later pages in the same
+     `Promise.all` batch); it now pushes every page's rows unconditionally and only stops issuing
+     further batches once every page in the current batch came back full
+     (`batch.every((page) => page.length === PRODUCT_PAGE_SIZE)`).
+   Verified with `npx tsc --noEmit` (clean), `npx vitest run` (26/26 passing), and `npx vite build`
+   (succeeds, same chunk sizes).
 5. **(Low) Client-supplied `X-Request-Id`/`X-Amzn-Trace-Id` header is trusted almost as-is.**
    `backend/src/middleware/requestContext.ts` only length-caps it to 128 chars before echoing it via
    `res.setHeader` and embedding it in error bodies/logs; a value with characters invalid for an
@@ -161,14 +192,19 @@ which were fixed here — this is a record for the next pass.
 
 ### NAT_Near-Now_Rider- (driver app)
 
-9. **(High) Background GPS tracking is never stopped on session invalidation.**
-   `lib/backgroundLocationTask.ts`'s `stopBackgroundLocationTracking()` is only called from
+9. **(High, FIXED 2026-10-01) Background GPS tracking is never stopped on session invalidation.**
+   `lib/backgroundLocationTask.ts`'s `stopBackgroundLocationTracking()` was only called from
    `home.tsx`'s mount lifecycle and the explicit Logout button in `profile.tsx:326` — never from the
-   401/`onSessionExpired` handler in `app/_layout.tsx:55` (which only does `setIsLoggedIn(false)`),
+   401/`onSessionExpired` handler in `app/_layout.tsx:55` (which only did `setIsLoggedIn(false)`),
    and never checked on cold start with an already-invalid session. An offboarded/force-expired
-   rider, or one who force-kills and relaunches the app mid-delivery, keeps a live foreground-service
+   rider, or one who force-kills and relaunches the app mid-delivery, kept a live foreground-service
    GPS notification and continuous location polling running indefinitely, draining battery, until
-   they manually revoke permission or reinstall.
+   they manually revoked permission or reinstalled.
+   Fix: `app/_layout.tsx`'s `setSessionExpiredHandler` callback now also calls
+   `stopBackgroundLocationTracking()` alongside `setIsLoggedIn(false)`, and the initial session-check
+   effect calls it too whenever `getSession()` resolves with no token on cold start — covering both
+   the "401 arrives while a screen other than home.tsx is mounted" case and the "app relaunched with
+   an already-expired/cleared session" case. Verified with `npx tsc --noEmit` (clean).
 10. **(Low) `useRiderVerificationGate.ts` fail-open window.** A network error during a verification
     check keeps an already-verified rider verified; a genuine admin-side revoke racing a connectivity
     blip isn't caught for up to ~30 s / until the next successful poll or foreground check.
@@ -178,13 +214,20 @@ which were fixed here — this is a record for the next pass.
 
 ### nearandnowcustomerapp (customer app)
 
-12. **(High) Search can bypass the delivery-radius filter.** `app/support/search.tsx`: the nearby-
-    store filter (`nearbyIdsRef`) is populated by a separate, asynchronous effect while the debounced
-    search effect reads it synchronously at fire time. Since the search `TextInput` auto-focuses, a
-    user can type and get results before the filter loads; `undefined` is treated as "no filter" by
-    `lib/productService.ts`, so search returns the **entire platform catalogue** unrestricted by the
-    4 km radius — every other screen (`home.tsx`, `category/[slug].tsx`, `checkout.tsx`,
-    `order/confirmation/[id].tsx`) awaits the same filter inline and is unaffected.
+12. **(High, FIXED 2026-09-30) Search can bypass the delivery-radius filter.**
+    `app/support/search.tsx`: the nearby-store filter (`nearbyIdsRef`) was populated by a separate,
+    asynchronous effect while the debounced search effect read it synchronously at fire time. Since
+    the search `TextInput` auto-focuses, a user could type and get results before the filter loaded;
+    `undefined` is treated as "no filter" by `lib/productService.ts`, so search returned the
+    **entire platform catalogue** unrestricted by the 4 km radius — every other screen (`home.tsx`,
+    `category/[slug].tsx`, `checkout.tsx`, `order/confirmation/[id].tsx`) awaits the same filter
+    inline and was unaffected.
+    Fix: added a `nearbyVersion` counter bumped whenever the filter finishes loading; the search
+    effect now bails out (staying in its loading state) while `location` is set but
+    `nearbyIdsRef.current` is still `undefined`, and re-fires once `nearbyVersion` changes — so a
+    query never runs against an unloaded filter. `nearbyIdsRef.current` is also reset to `undefined`
+    when a new location fetch starts, so a stale filter from a previous location can't leak into the
+    new one. Verified with `npx tsc --noEmit` (clean).
 13. **(Low) Client address payload adds no defense against the backend's mass-assignment gap.**
     `lib/addressService.ts:105-161` whitelists fields before POSTing (correct client behavior), but a
     modified/replayed request bypassing the client can still hit backend backlog item 10; also passes

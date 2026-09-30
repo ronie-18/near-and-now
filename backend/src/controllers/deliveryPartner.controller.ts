@@ -280,7 +280,7 @@ export async function requireRider(req: Request, res: Response, next: NextFuncti
     req.riderId = partner.user_id;
     next();
   } catch (err) {
-    return sendError(res, 'DeliveryPartnerController.if', 'Authentication check failed', err);
+    return sendError(res, 'DeliveryPartnerController.requireRider', 'Authentication check failed', err);
   }
 }
 

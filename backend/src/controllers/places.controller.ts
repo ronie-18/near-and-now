@@ -23,7 +23,7 @@ export async function autocomplete(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return sendError(res, 'places.if', 'Could not complete if', undefined);
+    return sendError(res, 'places.autocomplete', 'Places autocomplete is not configured', undefined, undefined, { status: 'ERROR', error_message: 'Places autocomplete is not configured (missing API key)' });
   }
   if (!input || typeof input !== 'string') {
     return res.status(400).json({ status: 'INVALID_REQUEST', error_message: 'Missing input parameter' });
@@ -52,7 +52,7 @@ export async function placeDetails(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return sendError(res, 'places.if', 'Could not complete if', undefined);
+    return sendError(res, 'places.placeDetails', 'Place details is not configured', undefined, undefined, { status: 'ERROR', error_message: 'Place details is not configured (missing API key)' });
   }
   if (!place_id || typeof place_id !== 'string') {
     return res.status(400).json({ status: 'INVALID_REQUEST', error_message: 'Missing place_id parameter' });
@@ -80,7 +80,7 @@ export async function geocode(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return sendError(res, 'places.if', 'Could not complete if', undefined);
+    return sendError(res, 'places.geocode', 'Geocoding is not configured', undefined, undefined, { status: 'ERROR', error_message: 'Geocoding is not configured (missing API key)' });
   }
   if (!address || typeof address !== 'string') {
     return res.status(400).json({ status: 'INVALID_REQUEST', error_message: 'Missing address parameter' });
@@ -105,7 +105,7 @@ export async function reverseGeocode(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return sendError(res, 'places.if', 'Could not complete if', undefined);
+    return sendError(res, 'places.reverseGeocode', 'Reverse geocoding is not configured', undefined, undefined, { status: 'ERROR', error_message: 'Reverse geocoding is not configured (missing API key)' });
   }
   const latNum = parseFloat(String(lat));
   const lngNum = parseFloat(String(lng));
@@ -131,7 +131,7 @@ export async function directions(req: Request, res: Response) {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    return sendError(res, 'places.if', 'Could not complete if', undefined);
+    return sendError(res, 'places.directions', 'Directions is not configured', undefined, undefined, { status: 'ERROR', error_message: 'Directions is not configured (missing API key)' });
   }
   const originStr = typeof origin === 'string' ? origin : '';
   const destStr = typeof destination === 'string' ? destination : '';
@@ -174,6 +174,6 @@ export async function roadRoute(req: Request, res: Response) {
     const points = await fetchRoadRoute({ lat: oLat, lng: oLng }, { lat: dLat, lng: dLng });
     res.json({ status: 'OK', points });
   } catch (err: unknown) {
-    return sendError(res, 'places.if', 'Could not complete if', err);
+    return sendError(res, 'places.roadRoute', 'Could not compute the road route', err);
   }
 }

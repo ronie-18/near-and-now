@@ -73,7 +73,7 @@ export async function requireShopkeeperAuth(req: Request, res: Response, next: N
     req.shopkeeperHasApprovedStore = stores.some((s: any) => s.is_approved);
     next();
   } catch (err) {
-    return sendError(res, 'ShopkeeperController.if', 'Authentication check failed', err);
+    return sendError(res, 'ShopkeeperController.requireShopkeeperAuth', 'Authentication check failed', err);
   }
 }
 
