@@ -72,7 +72,8 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
 
 **Access control (high)**
 6. `[STILL OPEN]` Saved-address resolution (`database.service.ts:582-687` `getCustomerSavedAddressesResolved`) still does `ilike '%tendigits%'` substring matching on `contact_phone` across all customers and merges in their addresses.
-7. `[FIXED 2026-10-01]` `acceptOrder` (`deliveryPartner.controller.ts:816-845`) claimed via `.is('delivery_partner_id', null)` with no `store_orders.status` filter; `addTrackingUpdate` (`tracking.controller.ts:107-134`, `database.service.ts:2406-2446`) let any assigned rider set any `VALID_ORDER_STATUSES` value directly, with no forward-only/OTP guard.
+7. `[PARTIALLY FIXED 2026-10-01]` `acceptOrder` (`deliveryPartner.controller.ts:816-845`) claimed via `.is('delivery_partner_id', null)` with no `store_orders.status` filter; `addTrackingUpdate` (`tracking.controller.ts:107-134`, `database.service.ts:2406-2446`) let any assigned rider set any `VALID_ORDER_STATUSES` value directly, with no forward-only/OTP guard; and riders could read customer name/phone before accepting.
+   `[STILL OPEN]` The third sub-issue — `getAvailableOrders` (`deliveryPartner.controller.ts:1917,1931,1966-1967`) returns `customer_name`/`customer_phone` (from `receiver_name`/`receiver_phone` or the `app_users` row) directly in every offer payload sent to any online rider browsing available orders, before they've accepted anything — was not addressed in this pass. Not fixed here; carried forward.
    Fix, two parts:
    - `acceptOrder`'s `store_orders` claim now also requires `.not('status', 'in', '(order_cancelled,order_delivered)')`, closing the race where `cancelOrder`'s non-atomic multi-step sequence (item 4) could let a claim land between steps and succeed on an order actually being cancelled. A second, narrower-window guard was added on the follow-up `customer_orders` update too (same status exclusion); if that one loses the race instead, the `store_orders` claim is rolled back (`delivery_partner_id: null`, `status: 'ready_for_pickup'` — the same reset `rejectOrder` already uses) rather than leaving the rider holding a live claim on a cancelled order. Note: confirmed via grep that `POST /delivery-partner/orders/:orderId/accept` (`acceptOrder`) has zero live callers today — every app (rider app, website's `DriverApp.tsx`, legacy `DeliveryPartnerPage.tsx`) only ever calls the offer-based `/delivery-partner/offers/:offerId/accept` (`acceptOffer`), whose underlying `accept_driver_offer()` Postgres function was already fully atomic and correctly order-status-gated (checked during this same audit). So the day-to-day accept flow was never actually exposed to this race — `acceptOrder` is hardened as a matter of principle (same "dead but reachable, still worth closing" reasoning as `addTrackingUpdate` below), not because real traffic was hitting it.
    - `addTrackingUpdate` (`database.service.ts`) now enforces a forward-only `ORDER_STATUS_SEQUENCE` (rejects any transition that isn't strictly forward, `order_cancelled` excepted as a separate terminal branch reachable from anywhere) and requires `customer_orders.delivery_otp_verified_at` to already be set before accepting a transition to `order_delivered` — closing the second, unguarded path to a status the dedicated `markDelivered` endpoint otherwise gates properly on OTP verification. Confirmed via grep that this route (`POST /api/tracking/orders/:orderId/updates`) has zero live callers in either the rider app or the website today — hardened rather than removed, since it's still a registered, `requireRider`-gated endpoint reachable directly.
@@ -274,14 +275,26 @@ own session-validity check, since it reads `admin_sessions` through this same RL
 closed for a deactivated admin with no separate client-side change needed. **`[APPLIED 2026-10-01]`**
 — see section 7.
 
-**A2. (Medium) Store-approval "documents complete" check is UI-only, not enforced by RLS.**
+**A2. (Medium, FIXED 2026-10-01) Store-approval "documents complete" check is UI-only, not enforced by RLS.**
 `admin/src/pages/admin/StoresPage.tsx`'s `toggleApproval()` (~line 1019) gates `is_approved=true` on
 a client-side `approvalReadiness()` check against locally-fetched document rows, then writes directly
 to `stores` via Supabase. The RLS policy `admin_update_requires_permission`
-(`20260919000000_stores_delivery_partners_permission_rls.sql:48`) only checks the caller's
-`store_verification` permission — it never re-validates that required documents are actually
-approved. Any admin with that permission can bypass the UI gate via a direct REST call and approve a
+(`20260919000000_stores_delivery_partners_permission_rls.sql:48`) only checked the caller's
+`store_verification` permission — it never re-validated that required documents are actually
+approved. Any admin with that permission could bypass the UI gate via a direct REST call and approve a
 store with missing/rejected KYC documents.
+Fix: `20261001030000_stores_approval_requires_docs_approved.sql` adds a `store_required_docs_approved()`
+SECURITY DEFINER function mirroring `approvalReadiness()`'s own check exactly (all 4 onboarding-required
+doc types — aadhaar_front/back, pan_front/back — have at least one `status = 'approved'` row), and
+requires it in the `stores` UPDATE policy's `WITH CHECK` whenever the write would leave
+`is_approved = true`. Revoking approval is never gated by this, matching `toggleApproval()`'s own
+"only gate the approve direction" comment. Confirmed via grep that `toggleApproval()` is the only
+client-side write to `stores.is_approved` anywhere in the admin panel, and that no other write
+(`toggleStoreActive`, `handleDeleteStore`, `handleRestoreStore`) touches `is_approved` in a way this
+check could block — each either omits it (keeping the existing value, which is already consistent with
+document status per the codebase's approve/revoke invariant) or explicitly sets it to `false`. Needs
+this migration applied to the live database (see section 7's note on how — `supabase db push` is a
+harness-blocked action requiring the user to run it directly).
 
 **A3. (Medium) Unbounded queries, no pagination.**
 `backend/src/controllers/adminActivityLog.controller.ts` (54-77): 6 parallel queries across
@@ -407,7 +420,8 @@ referral/rewards screens exist anywhere in the app (not started).
    itself is still internally non-atomic (see item 4's updated note) — the exploitable consequence is
    closed, but a fully atomic rewrite (matching `finalize_order_if_ready`'s pattern) remains a
    worthwhile follow-up, not done here.
-3. **Admin panel A2** — close the store-approval RLS gap so the UI check can't be bypassed.
+3. **`[DONE 2026-10-01]` Admin panel A2** — closed the store-approval RLS gap so the UI check can't be
+   bypassed; migration still needs to be applied to the live database.
 4. Mobile-app mediums (S1, D1, D2, C1) — smaller, independent, safe to pick up any time.
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
