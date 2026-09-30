@@ -97,3 +97,95 @@ Ordered by risk. Line numbers refer to `origin/main` at `89bd719`.
 24. `WishlistPage` optimistic-remove restores a stale snapshot on failure; `DriverApp` online toggle has no rollback and collapses expanded stops every 6 s.
 25. `CheckoutPage` prefills only from `currentLocation`, not `LocationContext`.
 26. ESLint cannot run: `.eslintrc.json` references `eslint-plugin-react`, which is not installed.
+
+## 5. New findings — 2026-09-30 deep-dive audit
+
+Covers regressions introduced by commit `31d285e` (this repo) plus first full-depth reviews of the
+three mobile apps (`near-now-store_owner`, `NAT_Near-Now_Rider-`, `nearandnowcustomerapp`), none of
+which were fixed here — this is a record for the next pass.
+
+**Count by app / severity**
+
+| App | High | Medium | Low | Total |
+| --- | --- | --- | --- | --- |
+| near-and-now (backend/frontend, commit `31d285e` regressions) | 0 | 4 | 1 | 5 |
+| near-now-store_owner (shopkeeper app) | 2 | 1 | 0 | 3 |
+| NAT_Near-Now_Rider- (driver app) | 1 | 0 | 2 | 3 |
+| nearandnowcustomerapp (customer app) | 1 | 0 | 1 | 2 |
+| **Total** | **4** | **5** | **4** | **13** |
+
+### near-and-now — regressions introduced by commit 31d285e
+
+1. **(Medium) `where` label mangled to `"...Controller.if"`.** `places.controller.ts` (lines 26, 55,
+   83, 108, 134, 177), `deliveryPartner.controller.ts:283`, `shopkeeper.controller.ts:76` — a
+   mechanical find/replace keyed on the enclosing `if` block, not the function name. Every places/
+   geocode/directions failure and every rider/shopkeeper auth-middleware failure logs the same
+   useless location, defeating this commit's stated goal of locatable errors.
+2. **(Medium) Dropped `{status, error_message}` body on "missing API key" branches.**
+   `places.controller.ts` lines 26/55/83/108/134 call `sendError` with no `extra`; the frontend's
+   `placesService.ts` reads `error_message`/`message`, which no longer exist, so users see a generic
+   "Search failed (500)" instead of a real message — worse than pre-commit behavior.
+3. **(Medium) A failed nearby-store RPC call is cached as a successful empty result.**
+   `frontend/src/services/supabase.ts` `getNearbyStoreIds` catches the Supabase error and returns
+   `[]`, and `cached()` stores that `[]` for 5 minutes as if it were valid. One transient RPC
+   failure → the radius filter silently drops and customers are served the **entire unfiltered
+   catalogue** for up to 5 minutes, no error shown.
+4. **(Medium) Concurrent product-page fetch has no `.order()` clause.** `fetchProductRows`'s
+   `readChunk` now fans out 4 `.range()` pages concurrently (previously serial) with no stable sort
+   key — Postgres doesn't guarantee row order across separate offset requests. A product's
+   `is_active`/`store_id` changing mid-scan can duplicate/skip rows, and a short page mid-batch
+   discards already-fetched later pages; the result is then cached for 60 s.
+5. **(Low) Client-supplied `X-Request-Id`/`X-Amzn-Trace-Id` header is trusted almost as-is.**
+   `backend/src/middleware/requestContext.ts` only length-caps it to 128 chars before echoing it via
+   `res.setHeader` and embedding it in error bodies/logs; a value with characters invalid for an
+   HTTP header throws before any route handler runs.
+
+*(Checked and found clean: `AuthContext`/`NotificationContext` memoization — no stale closures;
+`server.ts`'s JSON 404 and unified error handler are ordered correctly.)*
+
+### near-now-store_owner (shopkeeper app)
+
+6. **(High) No store-switcher; `selected_store_id` is set once at first login and never updated.**
+   `lib/useSelectedStore.ts:37-40`, seeded only in `app/(tabs)/home.tsx:160-165` (`if (!id)`). A
+   shopkeeper with 2+ stores is permanently locked to whichever store the backend returned first —
+   inventory, add-products, profile and billing for any other store are silently inaccessible.
+7. **(High) Store approval/suspension gate always checks `stores[0]`, not the store actually in
+   use.** `lib/storeApproval.ts` (`getPrimaryStore`, `checkStoreApproval`) never honors
+   `selected_store_id`, unlike `useSelectedStore`. For a multi-store account this can either lock the
+   shopkeeper out of the whole app (store[0] suspended, real store approved) or let them keep
+   managing/accepting orders on a store an admin already suspended (store[0] approved, real store
+   suspended) — the client-side mirror of backend backlog item 8.
+8. **(Medium) Inconsistent multi-store scoping.** Order badges (`incomingOrdersContext.tsx`) and
+   invoices (`app/invoice/[orderId].tsx`) correctly aggregate across every store the account owns;
+   inventory, profile, billing and the approval gate do not.
+
+### NAT_Near-Now_Rider- (driver app)
+
+9. **(High) Background GPS tracking is never stopped on session invalidation.**
+   `lib/backgroundLocationTask.ts`'s `stopBackgroundLocationTracking()` is only called from
+   `home.tsx`'s mount lifecycle and the explicit Logout button in `profile.tsx:326` — never from the
+   401/`onSessionExpired` handler in `app/_layout.tsx:55` (which only does `setIsLoggedIn(false)`),
+   and never checked on cold start with an already-invalid session. An offboarded/force-expired
+   rider, or one who force-kills and relaunches the app mid-delivery, keeps a live foreground-service
+   GPS notification and continuous location polling running indefinitely, draining battery, until
+   they manually revoke permission or reinstall.
+10. **(Low) `useRiderVerificationGate.ts` fail-open window.** A network error during a verification
+    check keeps an already-verified rider verified; a genuine admin-side revoke racing a connectivity
+    blip isn't caught for up to ~30 s / until the next successful poll or foreground check.
+11. **(Low) Foreground/background GPS watch toggling on rapid backgrounding.** `home.tsx` and the
+    background task hand off `watchPositionAsync` on every background/foreground transition; both
+    start/stop calls are idempotent so this is log noise, not a functional bug.
+
+### nearandnowcustomerapp (customer app)
+
+12. **(High) Search can bypass the delivery-radius filter.** `app/support/search.tsx`: the nearby-
+    store filter (`nearbyIdsRef`) is populated by a separate, asynchronous effect while the debounced
+    search effect reads it synchronously at fire time. Since the search `TextInput` auto-focuses, a
+    user can type and get results before the filter loads; `undefined` is treated as "no filter" by
+    `lib/productService.ts`, so search returns the **entire platform catalogue** unrestricted by the
+    4 km radius — every other screen (`home.tsx`, `category/[slug].tsx`, `checkout.tsx`,
+    `order/confirmation/[id].tsx`) awaits the same filter inline and is unaffected.
+13. **(Low) Client address payload adds no defense against the backend's mass-assignment gap.**
+    `lib/addressService.ts:105-161` whitelists fields before POSTing (correct client behavior), but a
+    modified/replayed request bypassing the client can still hit backend backlog item 10; also passes
+    `google_place_data` through as an arbitrary, unstripped object.
