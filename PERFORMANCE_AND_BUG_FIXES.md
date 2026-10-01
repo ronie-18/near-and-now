@@ -83,6 +83,7 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
    covered `processWebhookEvent`, so this is verified by code review and type-checking, not new
    automated coverage). Confirmed via grep that `payment.controller.ts`'s webhook handler is the only
    caller and treats a normal return as success/no-retry, consistent with the new skip paths.
+   **Now covered by automated tests** (`bugfixes.regression.test.ts`, "Item 1") — see section 8.
 2. `[FIXED 2026-10-01]` Payment was captured before amount/notes validation (`payment.controller.ts:84`, `orderAdditions.controller.ts:298`, `wallet.controller.ts:104` — `ensurePaymentCaptured` ran before the cross-check that followed); a customer could pay for an order that `cancelIfPaymentAbandoned` already cancelled, or capture real money for a payment that turned out not to actually belong to the thing it was being verified for.
    Fix, same reordering across all three files — fetch payment details read-only first, run every
    validation check (amount, notes-based ownership, and a new order-not-already-cancelled check) against
@@ -122,6 +123,11 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
    still worth closing" reasoning as earlier fixes this session), not because real traffic was hitting
    it, but it does handle real money if called directly by anyone holding an admin session.
    Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing).
+   **Follow-up edge case, fixed later the same day:** an omitted `amount` on an order that was already
+   fully refunded computed `requestedAmount = total − refunded = 0`, passed the overshoot check, and
+   reached `paymentService.processRefund`, whose `if (data.amount)` again treats 0 as "no amount" (=
+   full refund at Razorpay). The controller now returns 409 "already fully refunded" when the amount to
+   refund is ≤ 0, before calling Razorpay. Covered by `bugfixes.regression.test.ts` ("Item 3").
 4. `[MITIGATED 2026-10-01]` `cancelOrder` (`database.service.ts:360-461`) still cancels allocations/offers/store_orders (398-438) before its own atomic status-guarded `customer_orders` update (447-456) — internally still a multi-step, non-transactional sequence. The exploitable consequence (a rider's `acceptOrder` winning a race landing between those steps) is now closed from the other side instead — see item 7's fix. A future caller that reads/writes `store_orders`/`customer_orders` state without the same defensive status guard `acceptOrder` now has could still hit a similar race; `cancelOrder` itself would ideally become one atomic Postgres function (matching `finalize_order_if_ready`'s pattern) rather than relying on every consumer to defend against its non-atomicity individually.
 5. `[FIXED]` `acceptAllocation` (`shopkeeper.controller.ts`) now has a read-check (238) and an atomic `.eq('status','pending_acceptance')` write guard (317-325) against double-submit; migration `20260930340000_finalize_order_if_ready_require_accepted.sql` closed the related "all-rejected still marked ready" gap.
 
@@ -188,6 +194,11 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
    `assigned_driver_id` is never cleared after delivery (kept as history), so a customer could pull a
    past rider's location by id alone the same way. Added
    `.not('status', 'in', '(order_delivered,order_cancelled)')` to its query.
+   **Follow-up, fixed later the same day:** `isAgentAssignedToCustomer` also used `.maybeSingle()`, so a
+   customer with two active orders on the same rider got a multi-row error, swallowed as "not assigned",
+   and was denied the location (same bug class as item 12). Now `.limit(1)` + an array-length check,
+   and a real DB error throws instead of reading as "not yours". Covered by `bugfixes.regression.test.ts`
+   ("Item 9").
    Confirmed both controllers already treat the resulting empty `{}`/`null` as valid, pre-existing
    states (`getDriverLocations` already returns `{}` for "no rider assigned yet";
    `getAgentLocation` already 404s on `null`), so no frontend changes were needed.
@@ -222,10 +233,70 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
     changes were needed.
 
 **Data / multi-store (medium)**
-12. `[STILL OPEN]` `invoice.controller.ts` `verifyOrderBelongsToShopkeeper` still uses `.maybeSingle()` on a join; a shopkeeper whose two stores are both allocated on one order gets a silently-swallowed multi-row error → 403.
-13. `[STILL OPEN]` `assignDeliveryAgent` (`database.service.ts:1888-1911`) still only writes `store_orders`, never `customer_orders.assigned_driver_id`.
-14. `[STILL OPEN]` `getCustomerInvoice` (`invoice.controller.ts:67-100`) still auto-generates via `generateForOrder` with zero order/payment-status check; `invoice.service.ts:515` still defaults `payment_status` to `'paid'`.
-15. `[STILL OPEN]` `deliverySimulation.service.ts:452` still writes `order_delivered` unconditionally; the only cancellation check is a one-time read at function start (223-224), not re-checked before the final write.
+12. `[FIXED 2026-10-01]` `invoice.controller.ts` `verifyOrderBelongsToShopkeeper` used `.maybeSingle()` on a join; a shopkeeper whose two stores are both allocated on one order got a silently-swallowed multi-row error → 403.
+    The sibling `verifyOrderBelongsToRider` had the same bug and a more common trigger. On a multi-store
+    pickup, one rider is set on *every* `store_orders` row, so every multi-store delivery slip 403'd for
+    its own rider.
+    Fix: both now use `.limit(1)` + `data.length > 0` ("is there at least one matching row?"), and a real
+    DB error now throws (500 with a located error) instead of reading as "not yours" (403).
+    `verifyOrderBelongsToCustomer` matches on the `customer_orders` primary key, so it can only ever
+    return one row and was left unchanged.
+13. `[FIXED 2026-10-01]` `assignDeliveryAgent` (`database.service.ts`, admin `POST /api/delivery/orders/:orderId/assign`) only wrote `store_orders`, never `customer_orders.assigned_driver_id`.
+    That meant every `assigned_driver_id`-gated path ignored an admin-assigned rider: the rider app's
+    `getPickupSequence`, `addTrackingUpdate`, and customer live-location reads. The customer's tracking
+    also stayed on the old status. The audit turned up three more problems in the same function:
+    - no order-status check, so a cancelled or delivered order could be assigned;
+    - no rider approval check;
+    - `.select().single()` on the `store_orders` update threw on any multi-store order *after* the
+      update had already been applied. The admin got a 500, the DB had changed anyway, and no
+      history row was written.
+    Fix: now mirrors `accept_driver_offer()` (`20260721000000`), the canonical rider-accept path:
+    - the rider must be `is_approved` and `status='active'`. `is_online` is deliberately not
+      required, because an admin may assign a rider who is about to come online;
+    - `customer_orders` gets `assigned_driver_id` + `delivery_partner_assigned` under an atomic
+      `.in('status', [pending_at_store, store_accepted, preparing_order, ready_for_pickup])` guard.
+      A zero-row match returns 404/409 naming the current status, before `store_orders` is touched;
+    - every `store_orders` row is updated (no `.single()`);
+    - pending `driver_order_offers` for the order are expired so no other rider can still accept it;
+    - the history row is written.
+
+    The response body is now the array of updated `store_orders` rows instead of one row. Grep
+    confirms the endpoint has zero callers in the admin panel, website, or any mobile app, so nothing
+    reads the old shape.
+14. `[FIXED 2026-10-01]` Every `GET /api/invoices/order/:id/*` route (customer, store, delivery, admin) auto-generated via `generateForOrder` with zero order/payment-status check, and `invoice.service.ts` defaulted a missing `payment_status` to `'paid'`. A customer could get a tax invoice for an online order they never paid for, or for a cancelled COD order, and the PDF could read "PAID".
+    Fix: new exported `assertOrderInvoiceable()`, called inside `fetchOrderData`, so it covers both
+    `generateForOrder` and `regenerateForOrder`. The rules:
+    - **COD** orders are invoiceable unless `order_cancelled`. COD orders stay at `payment_status='pending'`
+      by design; the shopkeeper gates already treat `payment_method === 'cod'` as payment-ready, so a
+      blanket "must be paid" rule would have broken every COD invoice.
+    - **Every other method** (razorpay / wallet / split) is invoiceable only once `payment_status` is
+      `paid`, `partially_refunded` or `refunded`. A paid-then-refunded order keeps its invoice, since real
+      money moved; its PDF shows the refunded status.
+
+    A refused generation returns 409 with a readable message. The `'paid'` fallback is now `'pending'`.
+    Invoices that already exist are unaffected, because `getSignedUrl()` serves them before generation is
+    attempted. All three automatic generation triggers write `payment_status='paid'` *before*
+    generating, so the new guard doesn't race them: `verifyPayment` (`payment.controller.ts`),
+    the `payment.captured` webhook, and `payOrderWithWallet` (via the `pay_order_with_wallet` RPC,
+    which sets `paid` in the same transaction).
+15. `[FIXED 2026-10-01]` The delivery simulation wrote `order_delivered` unconditionally, after one status read at the start of the run.
+    The problem was wider than the final write. The simulation runs for about 5 minutes and writes
+    `customer_orders.status` at six points, so a cancellation at *any* point was walked back
+    forward: by the customer, a store rejection, or the payment-abandon sweep. During the 2-minute
+    shopkeeper wait, its timeout fallback also auto-accepted allocations on an order that had since
+    been cancelled.
+    Fix (`deliverySimulation.service.ts`):
+    - every `customer_orders` status write goes through a new `guardedOrderUpdate()`, which only
+      matches rows not in `(order_cancelled, order_delivered)` and aborts the run on a zero-row match;
+    - every `store_orders` write carries the same guard;
+    - a cheap `assertStillActive()` read runs on each shopkeeper-wait poll, before the timeout
+      auto-accept, and before each pickup stop;
+    - the history row is now written only after the guarded update matched. It was previously
+      `Promise.all`'d alongside the update, so it was written even when the update did nothing;
+    - the run ends quietly through a `SimulationAborted` sentinel caught in `runDeliverySimulation`.
+
+    Also removed a dead try/catch fallback on the driver-assignment write. Supabase reports failures in
+    `error` and never throws, so the catch branch could never run.
 
 **Performance (medium)**
 16. `[PARTIALLY MITIGATED]` The 3 tracking watchdogs are now fire-and-forget (no longer blocking the response), but they still run every poll, and `reBroadcastIfStuck` (`shopkeeper.controller.ts:887-897`) still does a DB read before its in-memory throttle check.
@@ -470,17 +541,45 @@ worth resolving before it causes one.
 
 ### 6.2 near-and-now backend — 2 new bugs found in previously-unreviewed files
 
-**B1. (Medium) `createWalletTopupOrder` sends no idempotency key.**
+**B1. (Re-assessed 2026-10-01 → Low, deliberately not changed) `createWalletTopupOrder` sends no idempotency key.**
 `payment.service.ts` (~line 285) calls `razorpayRequest('POST','/orders', orderBody)` with no
 idempotency key, unlike its two siblings `createPaymentOrder` (168) and
 `createAdditionPaymentOrder` (234), which both set one. A retried/double-tapped wallet top-up can
 create two separate Razorpay orders for the same intent.
+Why this wasn't changed:
+- **The siblings key off a persistent row; a top-up has none.** The other two flows use
+  `customer_orders.id` / `order_addition_requests.id`. A real key for a top-up would have to come from
+  the client, which means changes in three repos (backend, website `walletService.ts`, customer app
+  `lib/walletService.ts`).
+- **Double taps are already blocked.** Both clients' `handleAddMoney` take a synchronous
+  `inFlight` ref guard before the create call (`WalletPage.tsx:146`, `app/wallet.tsx`).
+- **The worst case moves no money.** A network-level retry can leave a second Razorpay order in the
+  `created` state. Nothing is charged unless the customer pays through that specific checkout sheet,
+  and an unpaid order expires on its own.
+- **Double-crediting is already impossible.** Wallet credit is idempotent on `razorpay_payment_id`
+  (`credit_wallet` RPC, `20260910000000`).
 
-**B2. (Medium) Admin-only `updateDeliveryStatus` has no status validation.**
+The remaining effect is cosmetic (an extra unpaid order in the Razorpay dashboard). Worth doing only
+alongside some other change to the top-up flow.
+
+**B2. (Medium, FIXED 2026-10-01) Admin-only `updateDeliveryStatus` has no status validation.**
 `delivery.controller.ts:304-323` only checks `if (!status)` — never validates against the
 `VALID_ORDER_STATUSES` enum the rider-facing equivalent (`tracking.controller.ts`) enforces, and has
 no forward-only guard. A malformed status value from the admin panel can write straight into
 `customer_orders.status`.
+Fix: `databaseService.updateDeliveryStatus` now applies the same rules as the admin panel's real
+status endpoint (`orders.controller.ts` `updateOrderStatus`):
+- an unknown status → 400, before any DB call;
+- an already delivered or cancelled order → 409;
+- a backward move → 409;
+- skip-ahead and cancel-from-anywhere stay allowed, matching the admin data-correction escape hatch
+  there.
+
+Errors are `AppError`s, so `sendError` returns the right status with a readable message, not a 500.
+Also switched the existence read from the anon `supabase` client + `.single()` to `supabaseAdmin` +
+`.maybeSingle()`, so a missing order is a clean 404. Grep confirms
+`PUT /api/delivery/orders/:orderId/status` has zero live callers in the admin panel, website, or
+apps; it was hardened because the route is registered and reachable.
 
 ### 6.3 near-now-store_owner (shopkeeper app) — new area
 
@@ -611,6 +710,15 @@ referral/rewards screens exist anywhere in the app (not started).
    per-change, plus grep-confirmed caller/consumer checks — see each item's own note in section 4 for
    details. This closes every High-severity item in the `near-and-now` repo that didn't require a
    product decision beyond the one already made (item 7's sub-issue).
+7. `[DONE 2026-10-01]` **Backend Mediums 12–15 and B2**, plus two follow-up edge cases found while
+   writing tests (item 3's fully-refunded path, item 9's sibling `maybeSingle`). B1 was re-assessed as
+   Low and deliberately left alone (see its note). All of them, and the earlier High fixes that
+   previously had no automated coverage, are now pinned by a regression suite (section 8).
+8. **Next up:** shopkeeper-app Highs 6/7 (no store switcher; approval gate reads `stores[0]` instead
+   of the selected store). These are open in section 5. Item 6 needs a UI/product decision on how a
+   store switcher should look. Item 7's gate fix is mechanical, but should land with or after 6, since
+   today `selected_store_id` is never changed after first login. After that: Performance items 16–20
+   and Frontend 21/23–25.
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -684,3 +792,65 @@ after applying:
 
 Regression checks: `npx tsc --noEmit` clean for `backend/`, `frontend/`, and `admin/`; `npx vitest run`
 22/22 passing in `backend/` (none of this touches frontend/admin runtime code, only DB migrations).
+
+## 8. 2026-10-01 — regression suite and full verification run
+
+Until now, most backlog fixes were verified by `tsc` + the pre-existing 22 tests + code review. None of
+those tests touched the changed code (item 1's note said so explicitly). This pass added automated
+regression coverage for every backend fix made on 2026-10-01 and re-ran the full check across all six
+projects.
+
+**New files**
+- `backend/src/test/fakeSupabase.ts` is a recording fake of the Supabase query builder. Each awaited
+  chain is recorded with its table, operation, payload, filters and terminal (`single`/`maybeSingle`),
+  and returns programmable results. It reproduces PostgREST's row-count rules for
+  `.single()`/`.maybeSingle()`, including the multi-row `PGRST116` error, because several of these bugs
+  were "maybeSingle errored on 2 rows and the error was ignored". Tests can therefore assert *which
+  writes happened and with which guard filter*, not just the return value. Every original bug in
+  this list was "the write happened anyway".
+- `backend/src/services/bugfixes.regression.test.ts` has 47 tests, grouped by backlog item:
+
+| Backlog item | What the tests pin down |
+| --- | --- |
+| 1 — webhook guards / refund accounting | `payment.authorized`/`payment.failed` updates carry the `not in (paid,refunded,partially_refunded)` guard, and a zero-row match is a no-op, not an error. `refund.processed` accumulates partial refunds, caps at the order total, and classifies `partially_refunded` vs `refunded`. |
+| 3 — `POST /refund` | `amount: 0` → 400; omitted amount on a fully refunded order → 409; overshoot → 409. Razorpay is never called in any of these. A partial refund is recorded on the order. |
+| 7 — `addTrackingUpdate` | Backward move → 409; `order_delivered` without a verified OTP → 403. No write in either case. Delivered-with-OTP is allowed. |
+| 9 — rider location | Delivered or cancelled order → `{}` without reading `driver_locations`. `getAgentLocation` has the status filter and works with two active orders on one rider. |
+| 10 — `createAddress` | Non-allowlisted fields (`id`, `created_at`, a forged `customer_id`) are dropped; the URL customer id always wins. |
+| 12 — invoice ownership | A shopkeeper with two stores on one order, and a multi-store-pickup rider, both get their document. No match → 403. A DB error → 500, not 403. |
+| 13 — `assignDeliveryAgent` | An unapproved rider, or a non-dispatchable order, → 409 with no writes to `store_orders`. Success sets `customer_orders.assigned_driver_id` under the status guard, updates every `store_orders` row without `.single()`, expires pending offers, and writes history. |
+| 14 — invoice eligibility | A 9-case matrix covering COD / online × paid / refunded / pending / failed / cancelled. `generateForOrder` refuses an unpaid online order before creating any `invoices`/`invoice_documents` row. |
+| 15 — delivery simulation | Cancelled during the shopkeeper wait → stops with zero writes. A guarded write matching no row → stops with no history row and no `store_orders` write. |
+| B2 — admin `updateDeliveryStatus` | Unknown status → 400 with no DB call. Missing → 404. Delivered/cancelled → 409. Backward → 409. Forward writes `customer_orders`, `store_orders` and history. Cancel from mid-flight is allowed. |
+| §5 #5 — request ids | A well-formed id is echoed. CRLF, over-length, non-ASCII and empty ids are each replaced with a fresh UUID in both `req.requestId` and the header. |
+
+**Proving the tests can fail (mutation check).** Passing tests only count if they would have caught the bug:
+- *Today's fixes:* the suite was run against the pre-fix source (fix files stashed, tests kept).
+  **27 of 47 tests failed**, covering every test for items 12, 13, 14, 15, B2, the item-3
+  fully-refunded case, and the item-9 `getAgentLocation` case. The first run exposed a gap: the item-12
+  "multi-store owner can download" tests passed against the buggy code, because the fake didn't yet
+  reproduce `maybeSingle`'s multi-row error. The fake was fixed and those tests now fail on the old
+  code as they should.
+- *Fixes already committed earlier today:* each guard was knocked out one at a time (authorized-webhook
+  status guard, partial-refund classification, `amount <= 0` check, forward-only check, OTP check,
+  delivered/cancelled location check, address allowlist, request-id allowlist). **Every mutation
+  turned at least one test red**, and each file was restored afterwards (`git status` unchanged).
+
+**Full verification run (2026-10-01, after all fixes in this document)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — `near-and-now/backend`, `frontend`, `admin` | clean ×3 |
+| `npx tsc --noEmit` — `near-now-store_owner`, `NAT_Near-Now_Rider-`, `nearandnowcustomerapp` | clean ×3 |
+| `npx vitest run` — backend | **69/69** (22 pre-existing + 47 new) |
+| `npx vitest run` — frontend | 26/26 |
+| `npm run build` (backend `tsc`) | succeeds |
+| `npx vite build` — frontend, admin | both succeed |
+
+Not covered by automated tests, and still verified only by type-checking and review:
+- the mobile-app fixes (S1, D1, D2, C1, section 5 #9/#12). None of the three apps has a test runner
+  configured;
+- the Supabase migrations (A1/A2/V1/V2). These were verified live against the database, per section 7.
+
+`tsc` also emits the test files into `backend/dist/`. That was already true of the existing
+`*.test.ts` files, and `dist/` is gitignored, so it was left as-is.

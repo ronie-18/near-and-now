@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import { supabaseAdmin } from '../config/database.js';
+import { AppError } from '../utils/httpError.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -192,6 +193,37 @@ function amountToWords(amount: number): string {
 // Fetch order data from Supabase
 // ---------------------------------------------------------------------------
 
+// Payment states in which real money has moved for an online (non-COD) order.
+// A paid-then-refunded order still gets an invoice — its PDF shows the
+// refunded status — because a real transaction took place.
+const SETTLED_PAYMENT_STATUSES = new Set(['paid', 'partially_refunded', 'refunded']);
+
+/**
+ * Invoices used to be generated for any order on first access (every
+ * GET /api/invoices/order/:id/* route auto-generates when no PDF exists), with
+ * no order/payment state check — so a customer could get a tax invoice for an
+ * online order they never paid for, or for a cancelled COD order. Combined
+ * with the old `payment_status || 'paid'` fallback in buildInvoiceData, that
+ * PDF could even read "PAID". Rules now:
+ *  - COD: invoiceable unless cancelled (payment_status stays 'pending' for COD
+ *    by design — the shopkeeper gates treat 'cod' as payment-ready the same way).
+ *  - Everything else (razorpay/wallet/split): only once payment has settled.
+ * Invoices that already exist are unaffected — getSignedUrl() serves them
+ * before generation is ever attempted. (Backlog item 14, fixed 2026-10-01.)
+ */
+export function assertOrderInvoiceable(order: { status?: string | null; payment_status?: string | null; payment_method?: string | null }): void {
+  const isCod = String(order.payment_method || '').toLowerCase() === 'cod';
+  if (isCod) {
+    if (order.status === 'order_cancelled') {
+      throw new AppError('No invoice is issued for a cancelled cash-on-delivery order', 409);
+    }
+    return;
+  }
+  if (!SETTLED_PAYMENT_STATUSES.has(String(order.payment_status || ''))) {
+    throw new AppError('An invoice is only available once the order has been paid', 409);
+  }
+}
+
 async function fetchOrderData(orderId: string) {
   const { data: order, error: orderErr } = await supabaseAdmin
     .from('customer_orders')
@@ -204,6 +236,7 @@ async function fetchOrderData(orderId: string) {
     .eq('id', orderId)
     .single();
   if (orderErr) throw new Error(`Order not found: ${orderErr.message}`);
+  assertOrderInvoiceable(order as { status?: string; payment_status?: string; payment_method?: string });
 
   const { data: customer } = await supabaseAdmin
     .from('customers')
@@ -512,7 +545,8 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
     amount_in_words: amountToWords(grandTotal),
 
     payment_method: String(o.payment_method || 'razorpay'),
-    payment_status: String(o.payment_status || 'paid'),
+    // Never default to 'paid' — a missing status must not print "PAID" on a tax document.
+    payment_status: String(o.payment_status || 'pending'),
     razorpay_payment_id: o.razorpay_payment_id || '',
     razorpay_order_id: (payment as any)?.razorpay_order_id || '',
 

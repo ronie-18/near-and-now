@@ -1867,11 +1867,47 @@ export class DatabaseService {
   }
 
   async assignDeliveryAgent(orderId: string, agentId: string, _partnerId: string) {
-    const { data: storeOrders } = await supabase
-      .from('store_orders')
-      .select('id')
-      .eq('customer_order_id', orderId);
-    if (!storeOrders?.length) throw new Error('Order not found');
+    // Admin manual assignment. Previously wrote only store_orders — never
+    // customer_orders.assigned_driver_id/status — so the rider's own
+    // assigned_driver_id-gated endpoints (getPickupSequence, addTrackingUpdate,
+    // live-location reads) never saw the order, and the customer's tracking stayed
+    // on the old status. It also had no order-status or rider-eligibility check,
+    // and its `.single()` on a multi-store order threw *after* the update had
+    // already been applied (500 with the DB changed, history row never written).
+    // Now mirrors accept_driver_offer() (20260721000000): same dispatchable
+    // statuses, same rider checks minus is_online (an admin may deliberately
+    // assign a rider who is about to come online), same writes, and pending
+    // offers for the order are expired so no other rider can still accept it.
+    // Backlog item 13, fixed 2026-10-01; zero live callers today.
+    const DISPATCHABLE: OrderStatus[] = ['pending_at_store', 'store_accepted', 'preparing_order', 'ready_for_pickup'];
+
+    const { data: rider, error: riderError } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('user_id, is_approved, status')
+      .eq('user_id', agentId)
+      .maybeSingle();
+    if (riderError) throw riderError;
+    if (!rider || rider.is_approved !== true || rider.status !== 'active') {
+      throw new AppError('This delivery partner is not approved and active', 409);
+    }
+
+    const { data: claimed, error: coError } = await supabaseAdmin
+      .from('customer_orders')
+      .update({
+        assigned_driver_id: agentId,
+        status: 'delivery_partner_assigned',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId)
+      .in('status', DISPATCHABLE)
+      .select('id');
+    if (coError) throw coError;
+    if (!claimed?.length) {
+      const { data: exists } = await supabaseAdmin.from('customer_orders').select('status').eq('id', orderId).maybeSingle();
+      if (!exists) throw new AppError('Order not found', 404);
+      throw new AppError(`Order can't be assigned while it is '${(exists as { status: string }).status}'`, 409);
+    }
+
     const { data, error } = await supabaseAdmin
       .from('store_orders')
       .update({
@@ -1880,9 +1916,16 @@ export class DatabaseService {
         assigned_at: new Date().toISOString()
       })
       .eq('customer_order_id', orderId)
-      .select()
-      .single();
+      .select();
     if (error) throw error;
+
+    const { error: offersError } = await supabaseAdmin
+      .from('driver_order_offers')
+      .update({ status: 'expired', responded_at: new Date().toISOString() })
+      .eq('order_id', orderId)
+      .eq('status', 'pending');
+    if (offersError) console.warn('[assignDeliveryAgent] could not expire pending offers', { orderId, error: offersError.message });
+
     await supabaseAdmin.from('order_status_history').insert({
       customer_order_id: orderId,
       status: 'delivery_partner_assigned',
@@ -1892,12 +1935,35 @@ export class DatabaseService {
   }
 
   async updateDeliveryStatus(orderId: string, params: { status: string; location?: string; notes?: string }) {
-    const { data: co } = await supabase
+    // Previously only checked `if (!status)` in the controller — any string was
+    // written straight into customer_orders.status/store_orders.status, with no
+    // terminal-state or backward-move guard. Mirrors the rules the admin panel's
+    // real status endpoint (orders.controller.ts updateOrderStatus) already
+    // enforces: known status only, no change once delivered/cancelled, no
+    // backward move (skip-ahead and cancel-from-anywhere stay allowed).
+    // Found 2026-10-01 (audit item B2); zero live callers today.
+    const nextStatus = params.status as OrderStatus;
+    if (nextStatus !== 'order_cancelled' && !ORDER_STATUS_SEQUENCE.includes(nextStatus)) {
+      throw new AppError(`Unknown order status '${params.status}'`, 400);
+    }
+    const { data: co, error: readError } = await supabaseAdmin
       .from('customer_orders')
-      .select('id')
+      .select('id, status')
       .eq('id', orderId)
-      .single();
-    if (!co) throw new Error('Order not found');
+      .maybeSingle();
+    if (readError) throw readError;
+    if (!co) throw new AppError('Order not found', 404);
+    const currentStatus = (co as { status: OrderStatus }).status;
+    if (currentStatus === 'order_delivered' || currentStatus === 'order_cancelled') {
+      throw new AppError(`Order is already ${currentStatus === 'order_delivered' ? 'delivered' : 'cancelled'} and its status cannot be changed`, 409);
+    }
+    if (nextStatus !== 'order_cancelled') {
+      const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(currentStatus);
+      const nextIndex = ORDER_STATUS_SEQUENCE.indexOf(nextStatus);
+      if (currentIndex !== -1 && nextIndex < currentIndex) {
+        throw new AppError(`Cannot move order backward from '${currentStatus}' to '${nextStatus}'`, 409);
+      }
+    }
     const { error: coError } = await supabaseAdmin
       .from('customer_orders')
       .update({
@@ -2455,14 +2521,19 @@ export class DatabaseService {
    * order was delivered or cancelled. Found 2026-10-01 (bug_fixes doc, item 9).
    */
   private async isAgentAssignedToCustomer(agentId: string, customerId: string): Promise<boolean> {
-    const { data } = await supabaseAdmin
+    // `.limit(1)`, not `.maybeSingle()`: a customer with two active orders on
+    // the same rider matched 2 rows, maybeSingle errored, the error was ignored
+    // and the customer was denied a location they're entitled to (same bug
+    // class as invoice backlog item 12; found 2026-10-01).
+    const { data, error } = await supabaseAdmin
       .from('customer_orders')
       .select('id')
       .eq('customer_id', customerId)
       .eq('assigned_driver_id', agentId)
       .not('status', 'in', '(order_delivered,order_cancelled)')
-      .maybeSingle();
-    return !!data;
+      .limit(1);
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
   }
 
   /** Returns null if `agentId` isn't currently assigned to any of `customerId`'s orders — any logged-in customer could otherwise pull any rider's raw live location by id alone. */

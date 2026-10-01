@@ -134,16 +134,48 @@ async function moveDriverAlongRoute(
   }
 }
 
+// The simulation runs for minutes. It used to read the order's status once at
+// the start and then write every later status unconditionally, so an order
+// cancelled mid-run (by the customer, a store rejection, or the payment-abandon
+// sweep) was walked straight back to 'order_delivered' — triggering the
+// delivered-side effects on a cancelled, possibly refunded order. Every
+// customer_orders write now goes through guardedOrderUpdate(), which only
+// matches a non-terminal row; a zero-row match aborts the run. store_orders
+// writes carry the same guard. (Backlog item 15, fixed 2026-10-01.)
+class SimulationAborted extends Error {}
+
+const NOT_TERMINAL = '(order_cancelled,order_delivered)';
+
+async function guardedOrderUpdate(orderId: string, fields: Record<string, unknown>): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from('customer_orders')
+    .update({ ...fields, updated_at: new Date().toISOString() })
+    .eq('id', orderId)
+    .not('status', 'in', NOT_TERMINAL)
+    .select('id');
+  if (error) throw error;
+  if (!data?.length) throw new SimulationAborted(`order ${orderId} was cancelled or finished outside the simulation`);
+}
+
+/** Cheap liveness check for the steps that don't write customer_orders themselves. */
+async function assertStillActive(orderId: string): Promise<void> {
+  const { data } = await supabaseAdmin.from('customer_orders').select('status').eq('id', orderId).maybeSingle();
+  const status = (data as { status?: string } | null)?.status;
+  if (!status || status === 'order_cancelled' || status === 'order_delivered') {
+    throw new SimulationAborted(`order ${orderId} is ${status ?? 'gone'}`);
+  }
+}
+
 async function updateOrderStatus(orderId: string, status: string, notes: string, etaMinutes?: number): Promise<void> {
-  const fields: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+  const fields: Record<string, unknown> = { status };
   if (etaMinutes != null) {
     fields.eta_minutes = etaMinutes;
     fields.eta_updated_at = new Date().toISOString();
   }
-  await Promise.all([
-    supabaseAdmin.from('customer_orders').update(fields).eq('id', orderId),
-    supabaseAdmin.from('order_status_history').insert({ customer_order_id: orderId, status, notes }),
-  ]);
+  // Sequential, not Promise.all: the history row is only written once the
+  // guarded status update actually matched.
+  await guardedOrderUpdate(orderId, fields);
+  await supabaseAdmin.from('order_status_history').insert({ customer_order_id: orderId, status, notes });
 }
 
 async function updateEta(orderId: string, etaMinutes: number): Promise<void> {
@@ -158,7 +190,11 @@ async function updateAllStoreOrders(
   fields: Record<string, unknown>
 ): Promise<void> {
   for (const id of storeOrderIds) {
-    await supabaseAdmin.from('store_orders').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
+    await supabaseAdmin
+      .from('store_orders')
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .not('status', 'in', NOT_TERMINAL);
   }
 }
 
@@ -210,6 +246,18 @@ async function findRealDriver(excludeOrderId: string): Promise<string | null> {
 // ── Main simulation ───────────────────────────────────────────────────────────
 
 export async function runDeliverySimulation(orderId: string): Promise<void> {
+  try {
+    await simulate(orderId);
+  } catch (err) {
+    if (err instanceof SimulationAborted) {
+      console.log(`[Sim] Stopped: ${err.message}`);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function simulate(orderId: string): Promise<void> {
   console.log(`[Sim] Starting simulation for order ${orderId}`);
 
   // 1. Fetch order
@@ -247,6 +295,7 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
   let allocations: any[] = [];
 
   while (Date.now() - waitStart < SHOPKEEPER_WAIT_MAX_MS) {
+    await assertStillActive(orderId);
     const { data: current } = await supabaseAdmin
       .from('order_store_allocations')
       .select('id, store_id, sequence_number, status, pickup_code, accepted_item_ids')
@@ -268,6 +317,7 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
   // Timeout fallback: auto-accept any remaining pending allocations
   const stillPending = allocations.filter((a: any) => a.status === 'pending_acceptance');
   if (stillPending.length > 0) {
+    await assertStillActive(orderId);
     console.log(`[Sim] Timeout — auto-accepting ${stillPending.length} remaining allocation(s)`);
     for (const alloc of stillPending) {
       const { data: items } = await supabaseAdmin
@@ -324,32 +374,22 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
   }
   console.log(`[Sim] Using driver ${driverId}`);
 
-  // 6. Assign driver
-  try {
-    await supabaseAdmin.from('customer_orders').update({
-      status: 'delivery_partner_assigned',
-      assigned_driver_id: driverId,
-      updated_at: new Date().toISOString(),
-    }).eq('id', orderId);
-  } catch {
-    await supabaseAdmin.from('customer_orders').update({
-      status: 'delivery_partner_assigned',
-      updated_at: new Date().toISOString(),
-    }).eq('id', orderId);
-  }
+  // 6. Assign driver. (The old try/catch fallback here was dead code: a
+  // Supabase update reports failure in `error`, it never throws.)
+  await guardedOrderUpdate(orderId, {
+    status: 'delivery_partner_assigned',
+    assigned_driver_id: driverId,
+  });
 
   await supabaseAdmin.from('order_status_history').insert({
     customer_order_id: orderId, status: 'delivery_partner_assigned', notes: 'Driver assigned',
   });
 
-  for (const so of storeOrders) {
-    await supabaseAdmin.from('store_orders').update({
-      status: 'delivery_partner_assigned',
-      delivery_partner_id: driverId,
-      assigned_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', (so as any).id);
-  }
+  await updateAllStoreOrders(soIds, {
+    status: 'delivery_partner_assigned',
+    delivery_partner_id: driverId,
+    assigned_at: new Date().toISOString(),
+  });
 
   // Create a pending offer first so the rider app shows the offer card,
   // then immediately accept it (mirrors what happens in the real dispatch flow).
@@ -399,6 +439,7 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
   for (const stop of orderedStops) {
     const store = storeMap.get(stop.storeId);
     if (!store) continue;
+    await assertStillActive(orderId);
 
     const storeLat = Number(store.latitude);
     const storeLng = Number(store.longitude);
@@ -416,11 +457,10 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
 
     const matchingSO = storeOrders.find((so: any) => so.store_id === stop.storeId);
     if (matchingSO) {
-      await supabaseAdmin.from('store_orders').update({
+      await updateAllStoreOrders([(matchingSO as any).id], {
         status: 'order_picked_up',
         picked_up_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq('id', (matchingSO as any).id);
+      });
     }
 
     await supabaseAdmin.from('order_status_history').insert({
@@ -435,12 +475,11 @@ export async function runDeliverySimulation(orderId: string): Promise<void> {
 
   // 10. All stores done → in_transit
   const customerEtaMins = Math.ceil((STEPS_TO_CUSTOMER * STEP_MS) / 60000);
-  await supabaseAdmin.from('customer_orders').update({
+  await guardedOrderUpdate(orderId, {
     status: 'order_picked_up',
     eta_minutes: customerEtaMins,
     eta_updated_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  }).eq('id', orderId);
+  });
 
   await updateOrderStatus(orderId, 'in_transit', 'Order out for delivery', customerEtaMins);
   await updateAllStoreOrders(soIds, { status: 'in_transit' });

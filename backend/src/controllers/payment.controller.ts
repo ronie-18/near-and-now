@@ -256,6 +256,12 @@ export class PaymentController {
       const alreadyRefunded = Number(order.refunded_amount || 0);
       const totalAmount = Number(order.total_amount || 0);
       const requestedAmount = amount != null ? Number(amount) : totalAmount - alreadyRefunded;
+      // An omitted amount on an already fully-refunded order computes to 0,
+      // which paymentService.processRefund's `if (data.amount)` would again
+      // turn into "no amount" (= full refund). Nothing left to refund is a 409.
+      if (requestedAmount <= 0.009) {
+        return res.status(409).json({ error: 'This payment has already been fully refunded' });
+      }
       if (alreadyRefunded + requestedAmount > totalAmount + 0.01) {
         return res.status(409).json({ error: 'Refund would exceed the amount paid for this order' });
       }

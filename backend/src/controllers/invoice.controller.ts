@@ -37,24 +37,34 @@ async function verifyOrderBelongsToCustomer(orderId: string, customerId: string)
   return Boolean(data);
 }
 
+// The two store_orders checks below can legitimately match several rows for
+// one customer order: a shopkeeper owning two stores that were both allocated
+// to the same order, or one rider doing a multi-store pickup (the rider is set
+// on every store_orders row). They used `.maybeSingle()`, which errors on >1
+// row; the error was ignored, `data` was null, and the owner got a 403 for
+// their own order. `.limit(1)` + an array check asks the real question —
+// "is there at least one matching row?" — and a real DB error now throws
+// instead of masquerading as "not yours". (Backlog item 12, fixed 2026-10-01.)
 async function verifyOrderBelongsToShopkeeper(orderId: string, shopkeeperId: string): Promise<boolean> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('store_orders')
-    .select('stores!inner(owner_id)')
+    .select('id, stores!inner(owner_id)')
     .eq('customer_order_id', orderId)
     .eq('stores.owner_id', shopkeeperId)
-    .maybeSingle();
-  return Boolean(data);
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
 async function verifyOrderBelongsToRider(orderId: string, riderId: string): Promise<boolean> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('store_orders')
     .select('id')
     .eq('customer_order_id', orderId)
     .eq('delivery_partner_id', riderId)
-    .maybeSingle();
-  return Boolean(data);
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
 // ---------------------------------------------------------------------------
