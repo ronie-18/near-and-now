@@ -359,108 +359,41 @@ export class DatabaseService {
     return data;
   }
 
+  /**
+   * Cancels the order's database state atomically via cancel_customer_order()
+   * and returns the updated order row (payment fields unchanged — the caller
+   * uses them for the refund) plus the stores whose store_orders were cancelled.
+   * Error codes from the function map to the same messages this method has
+   * always thrown; OrdersController.cancelOrder turns "delivery partner" /
+   * "already" messages into a 400.
+   */
+  private async cancelOrderState(orderId: string): Promise<{ order: any; storeIds: string[] }> {
+    const { data, error } = await supabaseAdmin.rpc('cancel_customer_order', { p_order_id: orderId });
+    if (!error) {
+      const { cancelled_store_ids, ...order } = (data ?? {}) as Record<string, unknown> & { cancelled_store_ids?: string[] };
+      return { order, storeIds: cancelled_store_ids ?? [] };
+    }
+    const message = String(error.message || '');
+    if (message.includes('ORDER_NOT_FOUND')) throw new AppError('Order not found', 404);
+    if (message.includes('ORDER_DELIVERED')) throw new Error('Cannot cancel order - it has already been delivered');
+    if (message.includes('ORDER_ALREADY_CANCELLED')) throw new Error('Order is already cancelled');
+    if (message.includes('DRIVER_ASSIGNED')) throw new Error('Cannot cancel order - delivery partner already assigned');
+    // (The legacy multi-step fallback for a not-yet-applied migration was
+    // removed on 2026-10-02 once 20261002000000 was confirmed live.)
+    throw error;
+  }
+
   async cancelOrder(orderId: string) {
     console.log('Attempting to cancel order:', orderId);
 
-    const { data: storeOrders, error: fetchError } = await supabaseAdmin
-      .from('store_orders')
-      .select('*')
-      .eq('customer_order_id', orderId);
-
-    if (fetchError) {
-      console.error('Error fetching store orders:', fetchError);
-      throw fetchError;
-    }
-
-    console.log('Store orders found:', storeOrders);
-
-    const hasDeliveryPartner = storeOrders?.some((order: StoreOrder) => order.delivery_partner_id !== null);
-
-    if (hasDeliveryPartner) {
-      throw new Error('Cannot cancel order - delivery partner already assigned');
-    }
-
-    // Fetch customer order to check payment/order status before cancelling
-    const { data: customerOrder } = await supabaseAdmin
-      .from('customer_orders')
-      .select('status, payment_status, razorpay_payment_id, total_amount, refunded_amount, payment_method, customer_id, order_code')
-      .eq('id', orderId)
-      .single();
-
-    if (customerOrder?.status === 'order_delivered') {
-      throw new Error('Cannot cancel order - it has already been delivered');
-    }
-    if (customerOrder?.status === 'order_cancelled') {
-      throw new Error('Order is already cancelled');
-    }
-
-    // Cancel all store allocations so shopkeepers and riders stop seeing this order.
-    // Checked — a silent failure would leave a "cancelled" order still
-    // visible/actionable to a shopkeeper or rider as if it were live.
-    const { error: allocCancelErr } = await supabaseAdmin
-      .from('order_store_allocations')
-      .update({ status: 'cancelled' })
-      .eq('order_id', orderId);
-    if (allocCancelErr) {
-      console.error('Error cancelling order store allocations:', allocCancelErr);
-      throw allocCancelErr;
-    }
-
-    // Also expire any pending rider offers for this order — order_store_allocations
-    // (above) is what shopkeepers see, but driver_order_offers is a separate
-    // table riders see, and nothing else ever wrote 'expired'/'cancelled' to
-    // it on cancellation. Left unfixed, a rider who was already offered this
-    // order keeps seeing it as "available" forever (including across app
-    // restarts), and tapping Accept on it returns a generic error instead of
-    // "this order was cancelled." Non-fatal: an offer that fails to expire
-    // here still gets rejected at accept-time by accept_driver_offer()'s own
-    // status check, so this is a UX cleanup, not a correctness dependency.
-    const { error: offerExpireErr } = await supabaseAdmin
-      .from('driver_order_offers')
-      .update({ status: 'expired' })
-      .eq('order_id', orderId)
-      .eq('status', 'pending');
-    if (offerExpireErr) {
-      console.error('Error expiring driver order offers (non-fatal):', offerExpireErr);
-    }
-
-    console.log('Updating store orders status...');
-    const { data: cancelledStoreOrders, error: updateStoreOrdersError } = await supabaseAdmin
-      .from('store_orders')
-      .update({
-        status: 'order_cancelled',
-        cancelled_at: new Date().toISOString()
-      })
-      .eq('customer_order_id', orderId)
-      .select('store_id');
-
-    if (updateStoreOrdersError) {
-      console.error('Error updating store orders:', updateStoreOrdersError);
-      throw updateStoreOrdersError;
-    }
-
-    console.log('Updating customer order status...');
-    // The WHERE-clause status guard (not just the earlier read-then-check
-    // above) is what actually closes the double-cancel/double-refund race —
-    // two concurrent cancel requests can both pass the read-time check above,
-    // but only one can match this update's status filter; the other affects
-    // zero rows and throws, never reaching the refund logic below. Same
-    // pattern as markDelivered's atomic status guard.
-    const { data, error } = await supabaseAdmin
-      .from('customer_orders')
-      .update({
-        status: 'order_cancelled',
-        cancelled_at: new Date().toISOString()
-      })
-      .eq('id', orderId)
-      .not('status', 'in', '(order_delivered,order_cancelled)')
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error updating customer order (already cancelled/delivered by a concurrent request?):', error);
-      throw new Error('Order is already cancelled or was just delivered');
-    }
+    // The database state change is one atomic Postgres function now
+    // (cancel_customer_order, migration 20261002000000 — backlog item 4). It
+    // used to be five separate statements from here, so a concurrent rider
+    // accept could land mid-way and leave the order half-cancelled. Refunds,
+    // coupon release and notifications below call external services, so they
+    // still run here, after the cancellation has committed.
+    const { order: customerOrder, storeIds: cancelledStoreIds } = await this.cancelOrderState(orderId);
+    const data = customerOrder;
 
     // Refund whatever's still owed — total_amount minus anything already
     // refunded (e.g. a prior per-item "unavailable" refund, which sets
@@ -548,7 +481,7 @@ export class DatabaseService {
     try {
       const { notificationService } = await import('./notification.service.js');
       await notificationService.sendOrderNotification(orderId, 'order_cancelled');
-      const storeIds = [...new Set((cancelledStoreOrders || []).map((so: any) => so.store_id).filter(Boolean))];
+      const storeIds = cancelledStoreIds;
       await Promise.all(
         storeIds.map((storeId) =>
           notificationService.notifyShopkeeperOrderCancelled(storeId, orderId, customerOrder?.order_code || orderId)

@@ -128,7 +128,35 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
    reached `paymentService.processRefund`, whose `if (data.amount)` again treats 0 as "no amount" (=
    full refund at Razorpay). The controller now returns 409 "already fully refunded" when the amount to
    refund is ≤ 0, before calling Razorpay. Covered by `bugfixes.regression.test.ts` ("Item 3").
-4. `[MITIGATED 2026-10-01]` `cancelOrder` (`database.service.ts:360-461`) still cancels allocations/offers/store_orders (398-438) before its own atomic status-guarded `customer_orders` update (447-456) — internally still a multi-step, non-transactional sequence. The exploitable consequence (a rider's `acceptOrder` winning a race landing between those steps) is now closed from the other side instead — see item 7's fix. A future caller that reads/writes `store_orders`/`customer_orders` state without the same defensive status guard `acceptOrder` now has could still hit a similar race; `cancelOrder` itself would ideally become one atomic Postgres function (matching `finalize_order_if_ready`'s pattern) rather than relying on every consumer to defend against its non-atomicity individually.
+4. `[FIXED 2026-10-02 — migration needs applying]` `cancelOrder` (`database.service.ts:360-461`) still cancels allocations/offers/store_orders (398-438) before its own atomic status-guarded `customer_orders` update (447-456) — internally still a multi-step, non-transactional sequence. The exploitable consequence (a rider's `acceptOrder` winning a race landing between those steps) is now closed from the other side instead — see item 7's fix. A future caller that reads/writes `store_orders`/`customer_orders` state without the same defensive status guard `acceptOrder` now has could still hit a similar race; `cancelOrder` itself would ideally become one atomic Postgres function (matching `finalize_order_if_ready`'s pattern) rather than relying on every consumer to defend against its non-atomicity individually.
+   **Now one atomic Postgres function.** Migration `20261002000000_cancel_customer_order_atomic.sql`
+   adds `cancel_customer_order(order_id)`. In a single transaction it locks the order and checks it
+   (not found / delivered / already cancelled / rider assigned, the same rules as before), then
+   cancels the allocations, expires pending rider offers, and cancels the store orders and the
+   order itself, all or nothing. It returns the updated order plus the store ids to notify.
+   - **Lock order** matches `accept_driver_offer()` (offer rows first, then the order), so the two
+     can't deadlock. A rider accepting mid-cancel gets `offer_not_found` immediately. A cancel
+     arriving mid-accept waits for it, then refuses with `DRIVER_ASSIGNED`.
+   - **Permissions:** backend (`service_role`) only. Lesson from V1: never grant an
+     order-changing `SECURITY DEFINER` function to anon/authenticated.
+   - **The driver check is deliberately unchanged:** it looks at `store_orders.delivery_partner_id`
+     only, not also `customer_orders.assigned_driver_id`. `rejectOrder`'s second write is
+     unchecked, so a stale `assigned_driver_id` could otherwise make an order uncancellable.
+
+   `databaseService.cancelOrder()` now calls the function and maps its codes to the **same**
+   messages as before. `OrdersController.cancelOrder` turns "delivery partner"/"already" messages
+   into a 400, so the wording had to stay identical. Refunds (Razorpay / wallet), coupon release and
+   notifications are unchanged and run in Node after the cancel commits, because they call external
+   services that can't join a database transaction.
+   **`[APPLIED 2026-10-02]`** by the owner, and verified live two ways:
+   - an anon-key call returns `42501 permission denied` (the function exists and is locked to the
+     backend; a missing function would give `PGRST202`);
+   - a backend (service-role) call with a non-existent order id returns `P0001 ORDER_NOT_FOUND`, so
+     the full function body runs, with nothing changed.
+
+   The temporary deploy-order fallback (the old multi-step code, used only if the function was
+   missing) was then **removed**. A missing function is now a hard error rather than a silent switch
+   back to non-atomic writes; `cancelOrder.test.ts` pins this.
 5. `[FIXED]` `acceptAllocation` (`shopkeeper.controller.ts`) now has a read-check (238) and an atomic `.eq('status','pending_acceptance')` write guard (317-325) against double-submit; migration `20260930340000_finalize_order_if_ready_require_accepted.sql` closed the related "all-rejected still marked ready" gap.
 
 **Access control (high)**
@@ -563,8 +591,19 @@ hit them. See the note after item 8.)*
      `stores` insert anywhere).
 
    A read-only check of the live `stores` table (2026-10-02, public anon key) found 9 owners: 8 with
-   exactly one store, and one holding 29 seeded demo stores ("Near & Now Store #1–#29", created
-   2026-02-24 to 02-28, none approved, none active). No real shopkeeper can reach these bugs today.
+   exactly one store, and one placeholder shopkeeper account ("Store Owner (Dynamic)", created
+   2026-02-09) holding 29 stores, none approved or active, with zero products, orders or allocations.
+   **Correction:** an earlier version of this note called all 29 "Near & Now Store #1–#29". That
+   was based on sampling only the first few names. Actually 12 are "Near & Now Store #1–#6" (each
+   twice), and 17 have real shop names with phone numbers (e.g. "Sonty Stores", "Ganguli Bhandar"),
+   all created 2026-02-24. No real shopkeeper can reach these bugs today.
+   **Cleanup (2026-10-02, owner's decision):** only the 12 "Near & Now Store #N" stores were removed,
+   using the admin panel's own soft delete (`deleted_at` set, `is_active`/`is_approved` false),
+   which is reversible with its Restore button. The update was filtered by exact id, the placeholder
+   owner and `deleted_at IS NULL`, and returned exactly 12 rows. The 17 named shops were kept on
+   purpose, in case they're a real list of local shops to onboard. Live stores platform-wide went
+   from 37 to 25. A pre-change copy of the 12 rows is in the session scratchpad
+   (`demo-stores/backup_12_before.json`).
    They become real only if multi-store ownership is ever built. At that point #6 (a store switcher —
    a product/UI decision), #7 (make the approval gate read the selected store) and #8 should be done
    together.
@@ -934,6 +973,8 @@ referral/rewards screens exist anywhere in the app (not started).
     as intended behaviour (section 14).
 13. **Backlog status:** every bug item in this document is now fixed or deliberately parked with a
     reason. See section 15.
+14. `[DONE + APPLIED 2026-10-02]` #4: atomic cancel (section 16). Migration verified live; legacy
+    fallback removed.
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -1289,9 +1330,7 @@ backs the backend (107 tests) and website (56 tests); the regression tests were 
 effort and each was checked to fail against the pre-fix code.
 
 **Deliberately not changed, with reasons inline:**
-- **#4:** `cancelOrder` is still internally multi-step. The exploitable race is closed from the
-  `acceptOrder` side. A single atomic Postgres function would be the clean long-term fix, and it's
-  the only remaining *engineering* follow-up.
+- ~~**#4:** `cancelOrder` is still internally multi-step.~~ Fixed and applied 2026-10-02 (section 16).
 - **#18:** the admin coupon list has no limit (hand-created rows; a cap without Load More would hide
   data).
 - **A4:** admin route guards check login only, not permission (pages self-gate, the backend
@@ -1301,5 +1340,55 @@ effort and each was checked to fail against the pre-fix code.
 - **Shopkeeper #6, #7, #8:** latent. No path creates a multi-store owner. Revisit if multi-store
   support is built.
 
-**Product/data decisions left with the owner:** the 29 demo stores on one test account (section 5
-#8), and whether multi-store ownership is on the roadmap.
+**Product/data decisions left with the owner:** whether multi-store ownership is on the roadmap.
+The demo stores were handled on 2026-10-02: 12 test stores removed, 17 named shops kept (section 5
+#8).
+
+## 16. 2026-10-02 — atomic order cancellation (item 4)
+
+The fix details are inline under item 4 in section 4.
+
+**Backend tests: `backend/src/services/cancelOrder.test.ts` (new, 12 tests)**
+
+| Group | What it pins down |
+| --- | --- |
+| Atomic path | `cancelOrder` calls `cancel_customer_order` and makes **no** direct writes to allocations, offers or store orders. Then a Razorpay refund of the full amount, the order marked refunded, the coupon released, and the customer plus both stores notified. Only the remainder is refunded after a partial refund. A wallet-paid order is credited back to the wallet. An unpaid COD order moves no money. The returned order doesn't leak the internal `cancelled_store_ids` field. |
+| Refusals | `DRIVER_ASSIGNED`, `ORDER_DELIVERED` and `ORDER_ALREADY_CANCELLED` map to exactly the old messages, with no refund, coupon release or notification. `ORDER_NOT_FOUND` → 404. An unexpected database error is rethrown with no refund. The customer endpoint still answers 400 with the message. |
+| Fallback | For `PGRST202` and `42883` (function not deployed), the legacy steps run and the order is still cancelled and notified. |
+
+Mutation check: with `database.service.ts` swapped back to `HEAD`, 9 of 12 failed. The 3 that
+passed are the 2 fallback tests, which mirror the old behaviour by design, and the generic-error
+test. Restored and confirmed byte-identical.
+
+**SQL function tested against a real Postgres**
+
+A throwaway PostgreSQL 14 cluster was started in the session scratchpad, on localhost TCP only,
+and deleted afterwards. It had a minimal schema with the columns these functions use, plus the
+**actual** migration files `20260721000000_accept_driver_offer_eligibility_check.sql` and
+`20261002000000_cancel_customer_order_atomic.sql`. (Production Supabase runs a newer Postgres; the
+function uses only standard PL/pgSQL.)
+
+| Test | Result |
+| --- | --- |
+| T1: cancel a ready, two-store order with a pending rider offer | The order and both store orders are `order_cancelled` with `cancelled_at` set, both allocations are `cancelled`, the offer is `expired`. Returns the payment fields unchanged plus both store ids. |
+| T2: refusals | Delivered → `ORDER_DELIVERED`; already cancelled → `ORDER_ALREADY_CANCELLED`; rider assigned → `DRIVER_ASSIGNED` (store order untouched); unknown id → `ORDER_NOT_FOUND`. |
+| T3: all-or-nothing | A trigger forced the **last** step (the `customer_orders` update) to fail. Every earlier step rolled back: allocations still `accepted`, store orders still `ready_for_pickup`, offer still `pending`. |
+| T4: permissions | `anon` and `authenticated` can't execute it (`permission denied`). `service_role` can. No `PUBLIC` grant. |
+| T5: cancel holds its locks, rider accepts at the same moment | The accept returned `offer_not_found` in 0.04 s, without waiting. Final state: cancelled, no rider on any store order, offer expired. |
+| T6: rider accepts first and holds, cancel arrives | The cancel waited about 2 s for the accept to commit, then refused with `DRIVER_ASSIGNED`. The accept succeeded and the allocations were untouched. |
+| T7: two cancels at once | One returned `order_cancelled`. The other waited, then got `ORDER_ALREADY_CANCELLED`, so only one refund can ever run. |
+| Deadlocks | 0 in the server log across all runs. |
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | **119/119** (107 before + 12 new) |
+| `npx vitest run` — frontend | 56/56 |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+
+**Applied and verified live on 2026-10-02** (see item 4). The legacy fallback was removed
+afterwards. `cancelOrder.test.ts` now asserts that a missing function is a hard error with no
+writes or refunds; it's still 12 tests, the 2 fallback tests having been replaced. Backend
+119/119.
