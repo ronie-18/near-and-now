@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from './database.service.js';
+import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS } from '../utils/fetchWithTimeout.js';
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
@@ -23,13 +24,12 @@ function razorpayRequest(method: string, path: string, body?: object, idempotenc
   if (idempotencyKey) {
     headers['X-Razorpay-Idempotency-Key'] = idempotencyKey;
   }
-  return fetch(`${RAZORPAY_BASE_URL}${path}`, {
+  return fetchJsonWithTimeout<any>('Razorpay', `${RAZORPAY_BASE_URL}${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined
-  }).then(async (res) => {
-    const json = await res.json();
-    if (!res.ok) throw new RazorpayApiError((json as any).error?.description || 'Razorpay API error');
+  }, UPSTREAM_TIMEOUTS_MS.razorpay).then(({ response, json }) => {
+    if (!response.ok) throw new RazorpayApiError(json?.error?.description || 'Razorpay API error');
     return json;
   });
 }

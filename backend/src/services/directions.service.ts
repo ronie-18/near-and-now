@@ -5,6 +5,7 @@
 
 const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
 import { getRoadPathViaSnap } from './roads.service.js';
+import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS } from '../utils/fetchWithTimeout.js';
 
 function getApiKey(): string {
   // Prefer server-side API key (no referrer restrictions)
@@ -93,12 +94,11 @@ export async function fetchRoadRoute(
     url.searchParams.set('alternatives', 'false');
     url.searchParams.set('region', 'in');
 
-    const response = await fetch(url.toString());
-    const data = (await response.json()) as {
+    const { response, json: data } = await fetchJsonWithTimeout<{
       status?: string;
       routes?: Array<{ overview_polyline?: { points: string }; legs?: Array<{ steps?: Array<{ start_location: { lat: number; lng: number }; end_location: { lat: number; lng: number } }> }> }>;
       error_message?: string;
-    };
+    }>('Google Directions', url, {}, UPSTREAM_TIMEOUTS_MS.google);
 
     if (response.ok && data.status === 'OK') {
       const route = data.routes?.[0];

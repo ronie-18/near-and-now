@@ -308,7 +308,37 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
 16. `[PARTIALLY MITIGATED]` The 3 tracking watchdogs are now fire-and-forget (no longer blocking the response), but they still run every poll, and `reBroadcastIfStuck` (`shopkeeper.controller.ts:887-897`) still does a DB read before its in-memory throttle check.
 17. `[STILL OPEN]` `assignCandidatesInRadius` (580-589) and the driver-online catch-up path (757-788) still pull all active/approved stores or all `ready_for_pickup` orders and filter by `haversineKm` in JS. `adminActivityLog.controller.ts`'s six queries are `[FIXED 2026-10-01]` — see section 6.1, finding A3.
 18. `[PARTIALLY MITIGATED]` Rider `getOrders` gained an opt-in `?limit=` (capped 200) but defaults to unbounded by design (documented); `coupons.controller.ts` → `database.service.ts:1420-1432` `getCoupons()` is still fully unbounded. `adminRiderPayouts.controller.ts`'s `listRiderPayouts` is `[FIXED 2026-10-01]` — see section 6.1, finding A3.
-19. `[STILL OPEN]` No `AbortController`/`signal` on any fetch in `directions.service.ts`, `geocoding.service.ts`, `notification.service.ts`, `payment.service.ts`, `roads.service.ts`.
+19. `[FIXED 2026-10-02]` No `AbortController`/`signal` on any fetch in `directions.service.ts`, `geocoding.service.ts`, `notification.service.ts`, `payment.service.ts`, `roads.service.ts`.
+    The full inventory was 12 call sites. Besides the five services above, `places.controller.ts` had
+    5 direct Google calls. Node's built-in `fetch` has no overall deadline (undici gives up only after
+    its 5-minute header/body defaults), so a stalled upstream held the caller's request open for
+    minutes. Twilio was checked and needs nothing: its SDK already has a 30 s request timeout.
+    Fix: a new `utils/fetchWithTimeout.ts`.
+    - `fetchJsonWithTimeout()` runs fetch + `response.json()` under one `AbortSignal.timeout()`.
+      The signal stays attached to the body stream, so a server that sends headers and then stalls
+      is cut off too.
+    - On timeout it throws `UpstreamTimeoutError`, e.g. "Google Maps did not respond within 8 s",
+      with `status: 504`. `sendError`'s existing status inference therefore answers 504 with a
+      readable message, with no per-controller handling needed.
+    - Otherwise the semantics are the same as the bare calls: a non-JSON body still throws, and a
+      refused connection passes through unchanged.
+
+    Deadlines are in one exported object:
+    - **Google: 8 s.** Interactive lookups that normally answer in under a second.
+    - **Expo push: 10 s.** Background sends, never awaited by a user request.
+    - **Razorpay: 30 s, deliberately generous.** Capture and refund move money, and aborting a slow
+      call that would have succeeded is worse than waiting.
+
+    All 12 sites now go through the helper, and grep confirms no bare `fetch(` remains in the
+    backend. The places endpoints map a timeout to 504 (other upstream failures stay 502).
+    Callers that already degraded gracefully on errors are unchanged in behaviour, just bounded:
+    geocoding returns `null`, directions/roads fall back and then return `[]`, push logs and skips.
+    **Razorpay timeouts are safe to surface.**
+    - A timed-out capture leaves the order to the `payment.captured` webhook.
+    - A timed-out refund that Razorpay actually processed is recorded by the `refund.processed`
+      webhook, which accumulates `refunded_amount` (item 1).
+
+    Both of these were already true with the old 5-minute failure. The deadline only shortens it.
 20. `[PARTIALLY MITIGATED]` `customerAuth.middleware.ts:91-101` still writes `session_token_issued_at` every request, but it's now fire-and-forget (`void (async...)`), so it no longer blocks the response.
 
 **Frontend (medium/low)**
@@ -774,10 +804,9 @@ referral/rewards screens exist anywhere in the app (not started).
    previously had no automated coverage, are now pinned by a regression suite (section 8).
 8. `[DONE 2026-10-02]` Shopkeeper-app 6/7/8 re-assessed as latent (no path creates a multi-store
    account; see the note under section 5 #8). Website 21, 24 and 25 fixed; see section 10.
-9. **Next up:** backend reliability — #19 (no timeout/`AbortController` on any Google, Razorpay or
-   Expo push call, so a hung upstream hangs the request), then #17/#16/#18 (performance
-   leftovers), then #23 (`MapLocationPicker` listener cleanup), then the mobile-app lows (D3, D4, D5,
-   C2, rider #10/#11, customer #13).
+9. `[DONE 2026-10-02]` #19: deadlines on every outbound HTTP call (section 11).
+10. **Next up:** #17/#16/#18 (performance leftovers), then #23 (`MapLocationPicker` listener
+    cleanup), then the mobile-app lows (D3, D4, D5, C2, rider #10/#11, customer #13).
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -1006,3 +1035,35 @@ On the ESLint row: one existing `exhaustive-deps` warning in `CheckoutPage` now 
 location on that same schedule before this change, so behaviour is unchanged. An `any` this pass first
 introduced in `DriverApp` was removed, and `DriverApp` is back at its original 10 warnings. The new
 test files have 0 warnings.
+
+## 11. 2026-10-02 — outbound HTTP deadlines (item 19)
+
+The fix is described under item 19 in section 4.
+
+**Tests: `backend/src/utils/fetchWithTimeout.test.ts` (new, 11 tests)**
+
+| Group | What it pins down |
+| --- | --- |
+| Helper against a **real local HTTP server** | A fast JSON response is returned. A server that never answers → `UpstreamTimeoutError` with the exact message and `inferStatus` = 504, inside the deadline. A server that sends headers and stalls the body also times out. A non-JSON body still throws `SyntaxError` (old semantics, not a timeout). A refused connection passes through, not reported as a timeout. |
+| Each caller with a **hung upstream** (deadlines shortened to 100 ms) | Every fetch carries an abort signal. Geocoding (forward and reverse) resolves `null`. `fetchRoadRoute` tries Directions, then Roads, each bounded, and resolves `[]` in under 2 s. Places autocomplete answers **504** with `error_message: "Google Maps did not respond within 0.1 s"`. Expo push resolves quietly. Razorpay (`getPaymentDetails`) rejects with a 504-mapped `UpstreamTimeoutError`. |
+
+**Mutation check** (file copies, no `git stash`):
+- *Helper with the signal removed:* 7 of 11 tests failed. Two were the real-server timeout tests,
+  because the calls then hang past the test limit.
+- *Callers reverted to their `HEAD` versions (bare `fetch`):* all 5 caller tests failed.
+- Every file was restored and confirmed byte-identical, and 11/11 passed again.
+
+A first attempt at the caller mutation silently did nothing: zsh doesn't split an unquoted `$FILES`
+string. It was caught, the source files were confirmed untouched, and the check was re-run with a
+proper array.
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | **80/80** (69 before + 11 new; the pre-existing `payment.service.test.ts` fetch mocks still pass through the new helper) |
+| `npx vitest run` — frontend | 50/50 |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+
+The backend has no ESLint script, so there was no lint step for this change.

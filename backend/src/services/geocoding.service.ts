@@ -1,3 +1,4 @@
+import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS } from '../utils/fetchWithTimeout.js';
 /**
  * Server-side geocoding - calls Google Geocoding API.
  */
@@ -23,8 +24,9 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string |
     url.searchParams.set('latlng', `${lat},${lng}`);
     url.searchParams.set('key', apiKey);
 
-    const response = await fetch(url.toString());
-    const data = (await response.json()) as { status?: string; results?: Array<{ formatted_address?: string }> };
+    const { json: data } = await fetchJsonWithTimeout<{ status?: string; results?: Array<{ formatted_address?: string }> }>(
+      'Google Geocoding', url, {}, UPSTREAM_TIMEOUTS_MS.google
+    );
 
     if (data.status === 'OK' && data.results?.[0]?.formatted_address) {
       return String(data.results[0].formatted_address).trim();
@@ -50,11 +52,10 @@ export async function forwardGeocode(address: string): Promise<{ lat: number; ln
     url.searchParams.set('address', q);
     url.searchParams.set('key', apiKey);
 
-    const response = await fetch(url.toString());
-    const data = (await response.json()) as {
+    const { json: data } = await fetchJsonWithTimeout<{
       status?: string;
       results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
-    };
+    }>('Google Geocoding', url, {}, UPSTREAM_TIMEOUTS_MS.google);
 
     const loc = data.results?.[0]?.geometry?.location;
     if (data.status === 'OK' && loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {

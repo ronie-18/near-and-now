@@ -1,3 +1,4 @@
+import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS } from '../utils/fetchWithTimeout.js';
 /**
  * Google Roads API - Snap to Roads.
  * Snaps GPS points to nearest roads and optionally interpolates path along road geometry.
@@ -67,11 +68,10 @@ export async function snapToRoads(
     url.searchParams.set('interpolate', String(interpolate));
     url.searchParams.set('key', apiKey);
 
-    const response = await fetch(url.toString());
-    const data = (await response.json()) as {
+    const { response, json: data } = await fetchJsonWithTimeout<{
       error?: { message?: string };
       snappedPoints?: Array<{ location: { latitude: number; longitude: number } }>;
-    };
+    }>('Google Roads', url, {}, UPSTREAM_TIMEOUTS_MS.google);
 
     if (!response.ok) {
       const errorMsg = data?.error?.message ?? 'Unknown error';

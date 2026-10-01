@@ -6,6 +6,7 @@
 import { Request, Response } from 'express';
 import { fetchRoadRoute } from '../services/directions.service.js';
 import { sendError } from '../utils/httpError.js';
+import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS, UpstreamTimeoutError } from '../utils/fetchWithTimeout.js';
 
 const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const AUTOCOMPLETE_URL = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
@@ -39,11 +40,10 @@ export async function autocomplete(req: Request, res: Response) {
       url.searchParams.set('sessiontoken', sessiontoken);
     }
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
+    const { json: data } = await fetchJsonWithTimeout('Google Maps', url, {}, UPSTREAM_TIMEOUTS_MS.google);
     res.json(data);
   } catch (err: unknown) {
-    return sendError(res, 'places.autocomplete', 'Google Maps request failed: autocomplete', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Autocomplete request failed' });
+    return sendError(res, 'places.autocomplete', 'Google Maps request failed: autocomplete', err, err instanceof UpstreamTimeoutError ? 504 : 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Autocomplete request failed' });
   }
 }
 
@@ -67,11 +67,10 @@ export async function placeDetails(req: Request, res: Response) {
       url.searchParams.set('sessiontoken', sessiontoken);
     }
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
+    const { json: data } = await fetchJsonWithTimeout('Google Maps', url, {}, UPSTREAM_TIMEOUTS_MS.google);
     res.json(data);
   } catch (err: unknown) {
-    return sendError(res, 'places.placeDetails', 'Google Maps request failed: place details', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Place details request failed' });
+    return sendError(res, 'places.placeDetails', 'Google Maps request failed: place details', err, err instanceof UpstreamTimeoutError ? 504 : 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Place details request failed' });
   }
 }
 
@@ -92,11 +91,10 @@ export async function geocode(req: Request, res: Response) {
     url.searchParams.set('key', apiKey);
     url.searchParams.set('components', 'country:IN');
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
+    const { json: data } = await fetchJsonWithTimeout('Google Maps', url, {}, UPSTREAM_TIMEOUTS_MS.google);
     res.json(data);
   } catch (err: unknown) {
-    return sendError(res, 'places.geocode', 'Google Maps request failed: geocode', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Geocode request failed' });
+    return sendError(res, 'places.geocode', 'Google Maps request failed: geocode', err, err instanceof UpstreamTimeoutError ? 504 : 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Geocode request failed' });
   }
 }
 
@@ -118,11 +116,10 @@ export async function reverseGeocode(req: Request, res: Response) {
     url.searchParams.set('latlng', `${latNum},${lngNum}`);
     url.searchParams.set('key', apiKey);
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
+    const { json: data } = await fetchJsonWithTimeout('Google Maps', url, {}, UPSTREAM_TIMEOUTS_MS.google);
     res.json(data);
   } catch (err: unknown) {
-    return sendError(res, 'places.reverseGeocode', 'Google Maps request failed: reverse geocode', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Reverse geocode request failed' });
+    return sendError(res, 'places.reverseGeocode', 'Google Maps request failed: reverse geocode', err, err instanceof UpstreamTimeoutError ? 504 : 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Reverse geocode request failed' });
   }
 }
 
@@ -149,11 +146,10 @@ export async function directions(req: Request, res: Response) {
     url.searchParams.set('region', 'in');
     url.searchParams.set('components', 'country:in');
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
+    const { json: data } = await fetchJsonWithTimeout('Google Maps', url, {}, UPSTREAM_TIMEOUTS_MS.google);
     res.json(data);
   } catch (err: unknown) {
-    return sendError(res, 'places.directions', 'Google Maps request failed: directions', err, 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Directions request failed' });
+    return sendError(res, 'places.directions', 'Google Maps request failed: directions', err, err instanceof UpstreamTimeoutError ? 504 : 502, { status: 'ERROR', error_message: err instanceof Error ? err.message : 'Directions request failed' });
   }
 }
 

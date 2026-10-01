@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { supabaseAdmin } from '../config/database.js';
+import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS } from '../utils/fetchWithTimeout.js';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
@@ -45,7 +46,7 @@ export class NotificationService {
   ) {
     if (!expoPushToken?.startsWith('ExponentPushToken')) return;
     try {
-      const res = await fetch(EXPO_PUSH_URL, {
+      const { json } = await fetchJsonWithTimeout<any>('Expo push', EXPO_PUSH_URL, {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -53,8 +54,7 @@ export class NotificationService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ to: expoPushToken, sound, title, body, data, channelId: ORDER_ALERT_CHANNEL_ID }),
-      });
-      const json: any = await res.json().catch(() => null);
+      }, UPSTREAM_TIMEOUTS_MS.expoPush);
       const ticket = json?.data;
       if (ticket?.status === 'error') {
         console.error('Expo push ticket error:', ticket.message, ticket.details);
@@ -86,14 +86,13 @@ export class NotificationService {
   ) {
     if (!partners.length) return;
     try {
-      const res = await fetch(EXPO_PUSH_URL, {
+      const { json } = await fetchJsonWithTimeout<any>('Expo push', EXPO_PUSH_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(partners.map((p) => ({
           to: p.expo_push_token, sound: 'default', title, body, data, channelId: ORDER_ALERT_CHANNEL_ID,
         }))),
-      });
-      const json: any = await res.json().catch(() => null);
+      }, UPSTREAM_TIMEOUTS_MS.expoPush);
       const tickets = Array.isArray(json?.data) ? json.data : [];
       const staleIds: string[] = [];
       tickets.forEach((ticket: any, i: number) => {
