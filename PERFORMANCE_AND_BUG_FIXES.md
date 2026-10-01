@@ -305,9 +305,51 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
     `error` and never throws, so the catch branch could never run.
 
 **Performance (medium)**
-16. `[PARTIALLY MITIGATED]` The 3 tracking watchdogs are now fire-and-forget (no longer blocking the response), but they still run every poll, and `reBroadcastIfStuck` (`shopkeeper.controller.ts:887-897`) still does a DB read before its in-memory throttle check.
-17. `[STILL OPEN]` `assignCandidatesInRadius` (580-589) and the driver-online catch-up path (757-788) still pull all active/approved stores or all `ready_for_pickup` orders and filter by `haversineKm` in JS. `adminActivityLog.controller.ts`'s six queries are `[FIXED 2026-10-01]` — see section 6.1, finding A3.
-18. `[PARTIALLY MITIGATED]` Rider `getOrders` gained an opt-in `?limit=` (capped 200) but defaults to unbounded by design (documented); `coupons.controller.ts` → `database.service.ts:1420-1432` `getCoupons()` is still fully unbounded. `adminRiderPayouts.controller.ts`'s `listRiderPayouts` is `[FIXED 2026-10-01]` — see section 6.1, finding A3.
+16. `[FIXED 2026-10-02]` The 3 tracking watchdogs are now fire-and-forget (no longer blocking the response), but they still run every poll, and `reBroadcastIfStuck` (`shopkeeper.controller.ts:887-897`) still does a DB read before its in-memory throttle check.
+    **`reBroadcastIfStuck` now has the same 10 s pre-read gate** as `expireStaleAllocations` and
+    `cancelIfPaymentAbandoned`. The 3-minute broadcast gate is now checked before any read too. A
+    customer polling every 5 s now triggers at most one watchdog read per order per 10 s, not one per
+    poll.
+    **Two further problems found and fixed in the same code:**
+    - *Memory leak.* The three order-keyed throttle maps were never pruned, so every order whose
+      tracking screen was ever opened stayed in memory until a restart. A new `utils/keyedThrottle.ts`
+      (`KeyedThrottle`) replaces them. Once a map passes 1,000 entries it drops only entries older
+      than its interval, which no longer throttle anything, so behaviour is unchanged. The rider-keyed
+      maps in `deliveryPartner.controller.ts` were left alone: they're bounded by the rider count.
+    - *Owner's checks could be suppressed.* The throttles run before the ownership check, and were
+      keyed on the order id alone. Anyone polling someone else's order id therefore kept the owner's
+      own watchdog checks suppressed. This already applied to two of the three watchdogs. Order ids
+      are unguessable UUIDs, so the risk was low. All three are now keyed by order **and** caller. The
+      3-minute broadcast gate stays keyed by order alone, since it's only recorded after ownership
+      is confirmed.
+17. `[FIXED 2026-10-02]` `assignCandidatesInRadius` (580-589) and the driver-online catch-up path (757-788) still pull all active/approved stores or all `ready_for_pickup` orders and filter by `haversineKm` in JS.
+    The same pattern turned up in two more places, so four were fixed in total:
+    - `assignCandidatesInRadius`: every active, approved store;
+    - `dispatchReadyOrdersToDriver`: every `ready_for_pickup` order;
+    - `broadcastToNearbyDrivers`: every fresh driver location;
+    - `delivery.controller.ts` `broadcastToDrivers` (admin): **every `driver_locations` row ever
+      written**. It had no freshness filter in the query and dropped stale rows in JS.
+
+    Fix: a new `boundingBox()` in `utils/geo.ts` returns a lat/lng box that fully contains the
+    radius circle, padded by 1%. Each query now filters on it with `.gte/.lte`, and the admin
+    broadcast also filters `updated_at` in the query. **The exact `haversineKm` check is unchanged
+    and still decides.** The box is always a superset of the circle, so the same rows qualify as
+    before; the database just stops sending ones that can't. `stores` and `driver_locations` already
+    have `(latitude, longitude)` btree indexes (verified in the migrations), so the latitude range
+    is index-assisted. The orders query also narrows by its indexed `status`. The two literal `10`
+    km radii in the driver-offer paths became one named `DRIVER_OFFER_RADIUS_KM` constant.
+    `adminActivityLog.controller.ts`'s six queries are `[FIXED 2026-10-01]` — see section 6.1,
+    finding A3.
+18. `[RE-ASSESSED 2026-10-02 — deliberately not changed]` Rider `getOrders` gained an opt-in `?limit=` (capped 200) but defaults to unbounded by design (documented); `coupons.controller.ts` → `database.service.ts:1420-1432` `getCoupons()` is still fully unbounded.
+    `getCoupons()` is admin-only (`coupons.view`). It backs the admin Offers page, and every row is
+    a coupon an admin created by hand, so it grows very slowly. The customer-facing list
+    (`GET /api/coupons/active`, `getActiveCoupons`) is already filtered in the query to active,
+    in-date coupons. A hard cap on the admin list without a "Load More" UI would eventually hide
+    older coupons from admins with no indication, which is worse than today. Worth revisiting only if
+    the coupon count actually grows into the hundreds, and then with pagination in `OffersPage.tsx`
+    (the A3 pattern).
+    Separately, `adminRiderPayouts.controller.ts`'s `listRiderPayouts` is `[FIXED 2026-10-01]` — see
+    section 6.1, finding A3.
 19. `[FIXED 2026-10-02]` No `AbortController`/`signal` on any fetch in `directions.service.ts`, `geocoding.service.ts`, `notification.service.ts`, `payment.service.ts`, `roads.service.ts`.
     The full inventory was 12 call sites. Besides the five services above, `places.controller.ts` had
     5 direct Google calls. Node's built-in `fetch` has no overall deadline (undici gives up only after
@@ -805,8 +847,10 @@ referral/rewards screens exist anywhere in the app (not started).
 8. `[DONE 2026-10-02]` Shopkeeper-app 6/7/8 re-assessed as latent (no path creates a multi-store
    account; see the note under section 5 #8). Website 21, 24 and 25 fixed; see section 10.
 9. `[DONE 2026-10-02]` #19: deadlines on every outbound HTTP call (section 11).
-10. **Next up:** #17/#16/#18 (performance leftovers), then #23 (`MapLocationPicker` listener
-    cleanup), then the mobile-app lows (D3, D4, D5, C2, rider #10/#11, customer #13).
+10. `[DONE 2026-10-02]` #16 and #17 fixed, #18 re-assessed (section 12).
+11. **Next up:** #23 (`MapLocationPicker` listener/debounce cleanup), then #20 (session-token
+    timestamp written on every request), then the mobile-app lows (D3, D4, D5, C2, rider
+    #10/#11, customer #13).
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -1067,3 +1111,36 @@ proper array.
 | `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
 
 The backend has no ESLint script, so there was no lint step for this change.
+
+## 12. 2026-10-02 — dispatch query bounds and watchdog throttling (items 16, 17, 18)
+
+The fix details are inline under items 16, 17 and 18 in section 4.
+
+**Tests: `backend/src/controllers/dispatch.perf.test.ts` (new, 13 tests)**
+
+| Group | What it pins down |
+| --- | --- |
+| `boundingBox` | For 1, 4, 8 and 10 km radii, every point inside the circle on all bearings (5° steps, at Kolkata's latitude) is inside the box. The box edges sit about 1% beyond the radius, so it's tight. |
+| Item 17 | (1) `dispatchReadyOrdersToDriver`: the orders query has the status filter plus box filters, and an order in the box corner (~14 km away) is still excluded by the exact 10 km check; only the in-range order gets an offer. (2) Store reallocation, driven through `expireStaleAllocations`: both ring queries (0–4 km, 4–8 km) keep `is_active`/`is_approved` and carry box filters sized to 4 km and 8 km. (3) Admin `broadcastToDrivers`: the `driver_locations` query filters `updated_at` and the box in the database. |
+| Item 16 | Three polls by the same caller within 10 s → one database read, not three. A stranger polling the same order id doesn't suppress the owner's check. |
+| `KeyedThrottle` | Once per interval per key. `isThrottled` doesn't record, `mark` does. Pruning removes only expired entries, and live entries are never dropped even above the threshold. |
+
+`src/test/fakeSupabase.ts` gained `.rpc()` support, recorded as table `rpc:<name>`. The reallocation
+path calls `finalize_order_if_ready`.
+
+**Mutation check** (file copies, no `git stash`):
+- *Both controllers reverted to `HEAD`:* the three item-17 tests and the "one read per 10 s" test
+  failed.
+- *The stranger/owner test* passes on `HEAD` by construction: the old code had no pre-read throttle
+  that could suppress anything. So it was checked against the mutation it exists to catch, keying the
+  throttle by order id only. It failed there as intended.
+- Files restored and confirmed byte-identical; 13/13 passed again.
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | **93/93** (80 before + 13 new) |
+| `npx vitest run` — frontend | 50/50 |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |

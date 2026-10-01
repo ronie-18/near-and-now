@@ -3,7 +3,7 @@ import { databaseService } from '../services/database.service.js';
 import { runDeliverySimulation } from '../services/deliverySimulation.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { supabaseAdmin } from '../config/database.js';
-import { haversineKm } from '../utils/geo.js';
+import { haversineKm, boundingBox } from '../utils/geo.js';
 import { sendError } from '../utils/httpError.js';
 
 export class DeliveryController {
@@ -374,13 +374,20 @@ export class DeliveryController {
 
       if (!store?.latitude) return res.json({ success: true, broadcast_count: 0, message: 'Store has no location set' });
 
+      // Freshness and a bounding box now filter in the query (backlog item 17):
+      // this used to download *every driver_locations row ever written* and
+      // drop stale/far ones in JS. The exact 10 km check below still decides.
+      const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const box = boundingBox(store.latitude, store.longitude, 10);
       const { data: locations } = await supabaseAdmin
         .from('driver_locations')
-        .select('delivery_partner_id, latitude, longitude, updated_at');
+        .select('delivery_partner_id, latitude, longitude, updated_at')
+        .gte('updated_at', tenMinsAgo)
+        .gte('latitude', box.minLat).lte('latitude', box.maxLat)
+        .gte('longitude', box.minLng).lte('longitude', box.maxLng);
 
-      const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const nearbyIds = (locations || [])
-        .filter((l: any) => l.updated_at >= tenMinsAgo && haversineKm(store.latitude, store.longitude, l.latitude, l.longitude) <= 10)
+        .filter((l: any) => haversineKm(store.latitude, store.longitude, l.latitude, l.longitude) <= 10)
         .map((l: any) => l.delivery_partner_id);
 
       if (!nearbyIds.length) return res.json({ success: true, broadcast_count: 0, message: 'No drivers online nearby' });

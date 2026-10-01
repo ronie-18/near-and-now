@@ -80,8 +80,19 @@ export function installFakeSupabase(client: unknown, responder: Responder = () =
     return builder;
   };
 
-  // `from` lives on the SupabaseClient prototype; assigning on the instance shadows it.
+  // `.rpc(fn, args)` is recorded as table `rpc:<fn>` with the args as payload.
+  const rpc = (fn: string, args?: unknown) => {
+    const call: Call = { table: `rpc:${fn}`, op: 'select', payload: args, filters: [], terminal: null };
+    const run = (): Promise<Result> => {
+      calls.push(call);
+      return Promise.resolve(responder(call) ?? { data: null, error: null });
+    };
+    return { then: (f: (r: Result) => unknown, r?: (e: unknown) => unknown) => run().then(f, r) };
+  };
+
+  // `from`/`rpc` live on the SupabaseClient prototype; assigning on the instance shadows them.
   (client as { from: unknown }).from = from;
+  (client as { rpc: unknown }).rpc = rpc;
 
   return {
     calls,

@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { randomBytes } from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
-import { haversineKm } from '../utils/geo.js';
+import { haversineKm, boundingBox } from '../utils/geo.js';
+import { KeyedThrottle } from '../utils/keyedThrottle.js';
 import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
 import { sendError } from '../utils/httpError.js';
@@ -443,8 +444,12 @@ export class ShopkeeperController {
 }
 
 const STALE_ALLOCATION_MS = 5 * 60 * 1000; // 5 minutes
-const lastExpireCheck = new Map<string, number>();
 const WATCHDOG_THROTTLE_MS = 10 * 1000; // matches the customer app's ~5s tracking poll with headroom
+const expireCheckThrottle = new KeyedThrottle(WATCHDOG_THROTTLE_MS);
+// Watchdog throttles are keyed by order *and* caller: the throttle runs before
+// the ownership check, so keyed on orderId alone, anyone polling someone else's
+// order id could keep the owner's own checks suppressed. (2026-10-02)
+const watchdogKey = (orderId: string, customerId: string) => `${orderId}:${customerId}`;
 
 // Called opportunistically from the order-tracking endpoint (which the customer app
 // polls while an order is active). Any store allocation that's been sitting in
@@ -458,9 +463,7 @@ const WATCHDOG_THROTTLE_MS = 10 * 1000; // matches the customer app's ~5s tracki
 // this check any authenticated customer who obtained another customer's orderId
 // could trigger reallocation/cancellation/rebroadcast on an order they don't own.
 export async function expireStaleAllocations(orderId: string, customerId: string) {
-  const last = lastExpireCheck.get(orderId);
-  if (last && Date.now() - last < WATCHDOG_THROTTLE_MS) return;
-  lastExpireCheck.set(orderId, Date.now());
+  if (!expireCheckThrottle.tryAcquire(watchdogKey(orderId, customerId))) return;
 
   // Online-payment orders are hidden from the shopkeeper's incoming list
   // until payment_status is 'paid' (getIncomingOrders/acceptAllocation) — a
@@ -577,11 +580,18 @@ async function assignCandidatesInRadius(
   // had suspended (suspendStoreIfApprovedAndGetName flips is_approved=false
   // but never touches is_active) kept being assigned brand-new customer
   // orders indefinitely. Found 2026-08-13 during a full-codebase audit.
+  // Bounding-box pre-filter in the query (backlog item 17): this used to pull
+  // every active+approved store platform-wide and distance-filter in JS. The
+  // box contains the whole maxKm circle, so the exact haversine filter below
+  // still decides; the database just stops sending stores that can't qualify.
+  const box = boundingBox(lat, lng, maxKm);
   const { data: rawStores } = await supabaseAdmin
     .from('stores')
     .select('id, latitude, longitude')
     .eq('is_active', true)
-    .eq('is_approved', true);
+    .eq('is_approved', true)
+    .gte('latitude', box.minLat).lte('latitude', box.maxLat)
+    .gte('longitude', box.minLng).lte('longitude', box.maxLng);
 
   const candidates = (rawStores || [])
     .map((s: any) => ({ ...s, dist: haversineKm(lat, lng, s.latitude, s.longitude) }))
@@ -761,6 +771,10 @@ async function reallocateMissingItems(orderId: string, itemIds: string[]) {
 // orders based on wherever it happened to be last, possibly hours or days ago.
 const DRIVER_LOCATION_STALE_MS = 5 * 60 * 1000; // 5 minutes
 
+// How far a driver may be from the pickup store (broadcast) / an order's
+// drop-off (driver-online catch-up) to be offered it. Was a literal 10 in both.
+const DRIVER_OFFER_RADIUS_KM = 10;
+
 // Cap on how many drivers get offered a single order at once — bounds the push
 // notification burst and offer-row count in areas with a lot of online drivers.
 const MAX_DRIVERS_PER_BROADCAST = 20;
@@ -776,16 +790,21 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
 
     if (!locRow) return; // No location on record (or it's stale), can't determine distance
 
+    // Bounding-box pre-filter (backlog item 17) — previously every
+    // ready_for_pickup order platform-wide; the exact 10 km check below decides.
+    const box = boundingBox(locRow.latitude, locRow.longitude, DRIVER_OFFER_RADIUS_KM);
     const { data: readyOrders } = await supabaseAdmin
       .from('customer_orders')
       .select('id, delivery_latitude, delivery_longitude')
-      .eq('status', 'ready_for_pickup');
+      .eq('status', 'ready_for_pickup')
+      .gte('delivery_latitude', box.minLat).lte('delivery_latitude', box.maxLat)
+      .gte('delivery_longitude', box.minLng).lte('delivery_longitude', box.maxLng);
 
     if (!readyOrders?.length) return;
 
     const nearby = readyOrders.filter(
       (o: any) => o.delivery_latitude &&
-        haversineKm(locRow.latitude, locRow.longitude, o.delivery_latitude, o.delivery_longitude) <= 10
+        haversineKm(locRow.latitude, locRow.longitude, o.delivery_latitude, o.delivery_longitude) <= DRIVER_OFFER_RADIUS_KM
     );
     if (!nearby.length) return;
 
@@ -813,7 +832,7 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
 }
 
 const UNPAID_ORDER_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const lastCancelCheck = new Map<string, number>();
+const cancelCheckThrottle = new KeyedThrottle(WATCHDOG_THROTTLE_MS);
 
 // Called opportunistically from the order-tracking endpoint, same pattern as
 // expireStaleAllocations/reBroadcastIfStuck. placeCheckoutOrder creates the
@@ -832,9 +851,7 @@ const lastCancelCheck = new Map<string, number>();
 // expireStaleAllocations' comment above for why (this function can otherwise
 // be used to force-cancel someone else's order by orderId alone).
 export async function cancelIfPaymentAbandoned(orderId: string, customerId: string) {
-  const last = lastCancelCheck.get(orderId);
-  if (last && Date.now() - last < WATCHDOG_THROTTLE_MS) return;
-  lastCancelCheck.set(orderId, Date.now());
+  if (!cancelCheckThrottle.tryAcquire(watchdogKey(orderId, customerId))) return;
 
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
@@ -864,7 +881,13 @@ export async function cancelIfPaymentAbandoned(orderId: string, customerId: stri
 }
 
 const STUCK_READY_ORDER_MS = 3 * 60 * 1000; // 3 minutes
-const lastReBroadcast = new Map<string, number>();
+// Two gates: `stuckCheckThrottle` is the cheap per-poll gate the other two
+// watchdogs already had — this one used to read customer_orders on *every*
+// 5 s tracking poll before consulting any throttle (backlog item 16).
+// `reBroadcastThrottle` is the original 3-minute gate on the push burst
+// itself, recorded only when a broadcast actually goes out.
+const stuckCheckThrottle = new KeyedThrottle(WATCHDOG_THROTTLE_MS);
+const reBroadcastThrottle = new KeyedThrottle(STUCK_READY_ORDER_MS);
 
 // Called opportunistically from the order-tracking endpoint (mirrors
 // expireStaleAllocations above, but for the driver-dispatch stage instead of
@@ -885,6 +908,9 @@ const lastReBroadcast = new Map<string, number>();
 // expireStaleAllocations' comment above for why (this function can otherwise
 // be used to force a driver rebroadcast on someone else's order by orderId alone).
 export async function reBroadcastIfStuck(orderId: string, customerId: string) {
+  if (reBroadcastThrottle.isThrottled(orderId)) return;
+  if (!stuckCheckThrottle.tryAcquire(watchdogKey(orderId, customerId))) return;
+
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
     .select('customer_id, status, assigned_driver_id')
@@ -892,9 +918,6 @@ export async function reBroadcastIfStuck(orderId: string, customerId: string) {
     .maybeSingle();
   if (!order || (order as any).customer_id !== customerId) return;
   if ((order as any).status !== 'ready_for_pickup' || (order as any).assigned_driver_id) return;
-
-  const last = lastReBroadcast.get(orderId);
-  if (last && Date.now() - last < STUCK_READY_ORDER_MS) return;
 
   const { data: readyRow } = await supabaseAdmin
     .from('order_status_history')
@@ -906,7 +929,7 @@ export async function reBroadcastIfStuck(orderId: string, customerId: string) {
     .maybeSingle();
   if (!readyRow || Date.now() - new Date((readyRow as any).created_at).getTime() < STUCK_READY_ORDER_MS) return;
 
-  lastReBroadcast.set(orderId, Date.now());
+  reBroadcastThrottle.mark(orderId);
   await broadcastToNearbyDrivers(orderId);
 }
 
@@ -937,15 +960,20 @@ async function broadcastToNearbyDrivers(orderId: string) {
 
   if (!store?.latitude) return;
 
+  // Bounding-box pre-filter (backlog item 17) — previously every fresh driver
+  // location platform-wide; the exact 10 km check below decides.
+  const box = boundingBox(store.latitude, store.longitude, DRIVER_OFFER_RADIUS_KM);
   const { data: locations } = await supabaseAdmin
     .from('driver_locations')
     .select('delivery_partner_id, latitude, longitude')
-    .gte('updated_at', new Date(Date.now() - DRIVER_LOCATION_STALE_MS).toISOString());
+    .gte('updated_at', new Date(Date.now() - DRIVER_LOCATION_STALE_MS).toISOString())
+    .gte('latitude', box.minLat).lte('latitude', box.maxLat)
+    .gte('longitude', box.minLng).lte('longitude', box.maxLng);
 
   const distanceByDriverId = new Map<string, number>();
   for (const l of (locations || []) as any[]) {
     const dist = haversineKm(store.latitude, store.longitude, l.latitude, l.longitude);
-    if (dist <= 10) distanceByDriverId.set(l.delivery_partner_id, dist);
+    if (dist <= DRIVER_OFFER_RADIUS_KM) distanceByDriverId.set(l.delivery_partner_id, dist);
   }
 
   if (!distanceByDriverId.size) return;
