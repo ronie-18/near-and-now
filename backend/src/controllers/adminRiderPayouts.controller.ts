@@ -16,10 +16,14 @@ import { sendError } from '../utils/httpError.js';
 export async function listRiderPayouts(req: Request, res: Response) {
   try {
     const status = typeof req.query.status === 'string' ? req.query.status : 'pending';
+    // Same row-cap pattern as adminSecurityLog.controller.ts / adminActivityLog.controller.ts —
+    // this had no .limit() at all before, growing unbounded with every delivery.
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
     let query = supabaseAdmin
       .from('delivery_partners_payouts')
       .select('id, partner_user_id, customer_order_id, store_id, amount, currency, status, reference_date, created_at, paid_at')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(limit);
     if (status === 'pending' || status === 'paid') {
       query = query.eq('status', status);
     }

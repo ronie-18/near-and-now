@@ -292,24 +292,40 @@ requires it in the `stores` UPDATE policy's `WITH CHECK` whenever the write woul
 client-side write to `stores.is_approved` anywhere in the admin panel, and that no other write
 (`toggleStoreActive`, `handleDeleteStore`, `handleRestoreStore`) touches `is_approved` in a way this
 check could block — each either omits it (keeping the existing value, which is already consistent with
-document status per the codebase's approve/revoke invariant) or explicitly sets it to `false`. Needs
-this migration applied to the live database (see section 7's note on how — `supabase db push` is a
-harness-blocked action requiring the user to run it directly).
+document status per the codebase's approve/revoke invariant) or explicitly sets it to `false`.
+**`[APPLIED 2026-10-01]`** — verified live via an anon-key RPC call to `store_required_docs_approved`
+(returns `200 false` for a nonexistent store id, confirming the function exists and runs); migration
+history repaired the same way as the others in section 7.
 
-**A3. (Medium) Unbounded queries, no pagination.**
+**A3. (Medium, FIXED 2026-10-01) Unbounded queries, no pagination.**
 `backend/src/controllers/adminActivityLog.controller.ts` (54-77): 6 parallel queries across
 profile-change-requests, product-submissions and verification-document tables, none with
-`.limit()`/`.range()`; `admin/src/pages/admin/ActivityLogPage.tsx` calls it with no limit param and
-has no "load more" UI (unlike `SecurityLogPage`/`NotificationsPage`, which both paginate).
-`backend/src/controllers/adminRiderPayouts.controller.ts`'s `listRiderPayouts` (19-26) is also
+`.limit()`/`.range()`; `admin/src/pages/admin/ActivityLogPage.tsx` called it with no limit param and
+had no "load more" UI (unlike `SecurityLogPage`/`NotificationsPage`, which both paginate).
+`backend/src/controllers/adminRiderPayouts.controller.ts`'s `listRiderPayouts` (19-26) was also
 unbounded.
+Fix: both endpoints now accept `?limit=` (`Math.min(Number(req.query.limit) || 100, 500)`, same
+convention as `adminSecurityLog.controller.ts`). `listActivityLog`'s 6 source queries are each ordered
+by `reviewed_at` descending and capped at `limit` independently (so a quiet source can't be starved
+out of the merged result by a noisy one), and the final role-filtered, sorted list is truncated to
+`limit` again. `ActivityLogPage.tsx` and `RiderPayoutsPage.tsx` both gained the exact "Load More"
+pattern already used on `SecurityLogPage` (re-request with `limit + 100`, `hasMore = rows.length ===
+limit`) — `RiderPayoutsPage` additionally resets to the default limit when the pending/paid filter
+changes, in one combined effect so switching tabs can't fire two fetches back to back. Verified with
+`npx tsc --noEmit` (clean for `backend/` and `admin/`) and `npx vitest run` (22/22 passing); confirmed
+via grep that each endpoint has exactly one route and one frontend caller, both updated.
 
-**A4. (Minor) Route-level guards check auth only, not permission.**
+**A4. (Minor, deliberately not fixed) Route-level guards check auth only, not permission.**
 `admin/src/routes/AdminRoutes.tsx`'s `AdminAuthGuard` checks `isAdminAuthenticated()` for every
 route, not role/permission — pages self-gate via `hasPermission`/`hasRole` inside the component
 (confirmed present), so a low-privilege admin typing a URL directly gets a client-side "no
 permission" render rather than real data. Low risk since backend endpoints are separately
-permission-checked; worth a shared route-level guard for consistency.
+permission-checked. Left alone: correctly replicating this at the route level would mean re-deriving
+the exact required permission for all ~30 routes to match each page's own internal check exactly — a
+broad, error-prone change where getting even one wrong risks locking a legitimate admin out of a page
+entirely, a worse outcome than today's client-side message, for the lowest-severity item on this
+list. Worth a shared route-level guard for consistency if picked up deliberately later, with each
+route's permission carefully cross-checked against its page component first.
 
 **What's left (admin panel):** rider payouts explicitly "records the outcome, doesn't move money" —
 no real disbursement/payment-gateway integration exists yet (documented in the controller's own
@@ -334,14 +350,22 @@ no forward-only guard. A malformed status value from the admin panel can write s
 
 ### 6.3 near-now-store_owner (shopkeeper app) — new area
 
-**S1. (Medium) Partial multi-photo upload failure creates duplicate gallery entries on retry.**
-`components/kyc/useStoreImages.ts:102-134` (`saveAll`) uploads+registers each staged photo
-sequentially; if photo 2 of 3 fails to register (network blip), `pending` is never trimmed for the
-already-succeeded photo 1 (only cleared via `setPending([])` on full success) and `reload()` never
-runs. Retrying re-uploads and re-registers photo 1, creating a duplicate gallery entry. Shared by
-both `app/upload-documents.tsx` (`useVerificationDocuments`) and `app/profile.tsx`
-(`useStoreGallery` — likely the same pattern, not yet inspected). Fix direction: remove each URI from
-`pending` as soon as its own upload+register succeeds, not just at the end.
+**S1. (Medium, FIXED 2026-10-01) Partial multi-photo upload failure creates duplicate gallery entries
+on retry.** `components/kyc/useStoreImages.ts:102-134` (`saveAll`) uploaded+registered each staged
+photo sequentially; if photo 2 of 3 failed to register (network blip), `pending` was never trimmed for
+the already-succeeded photo 1 (only cleared via `setPending([])` on full success) and `reload()` never
+ran. Retrying re-uploaded and re-registered photo 1, creating a duplicate gallery entry.
+Fix: `saveAll` now works off a local copy of `pending`, trimming it (and mirroring into state via
+`setPending`) as each photo's own upload+register succeeds, and calls `reload()` whenever at least one
+photo succeeded even if a later one failed — so a retry only resends what's actually still staged, and
+the gallery reflects reality immediately rather than after the next full success. The caller's
+contract (`Promise<boolean>`, `false` halts `useVerificationDocuments.ts`'s own save flow) is
+unchanged, so no caller updates were needed.
+Checked `app/profile.tsx`'s sibling `components/profile/useStoreGallery.ts` — it's structurally
+different (uploads one photo immediately per `pick()` call, no staging/batching), so there's no
+multi-photo partial-failure scenario there; no fix needed.
+Verified with `npx tsc --noEmit` (clean) and a grep confirming `useVerificationDocuments.ts:281` is
+the only caller of `saveAll` and its `if (!imagesOk) return;` handling is unaffected.
 
 Everything else in this pass (onboarding, KYC upload, billing/payouts, profile edit, settings,
 help/support, notifications, signup, custom-product submission, caching) came back clean — already
@@ -349,14 +373,22 @@ hardened with explicit audit-trail comments from prior fixes. No incomplete feat
 
 ### 6.4 NAT_Near-Now_Rider- (driver app) — new area
 
-**D1. (Medium) No double-tap guard on profile save.**
-`app/(tabs)/profile.tsx:229` `handleSave` gates re-entry only via `saving` state, not a synchronous
+**D1. (Medium, FIXED 2026-10-01) No double-tap guard on profile save.**
+`app/(tabs)/profile.tsx:229` `handleSave` gated re-entry only via `saving` state, not a synchronous
 ref like `billing-info.tsx:175` (`savingRef`) or `delivery/[orderId].tsx:126` (`verifyingRef`) use for
-this exact race. A fast double-tap fires two concurrent profile-change-request POSTs.
+this exact race. A fast double-tap could fire two concurrent profile-change-request POSTs.
+Fix: added the identical `savingRef` pattern (checked synchronously at the top of `handleSave`, set
+before the async work, reset in a `finally`). While adding the `finally`, also found and fixed a
+second, related bug: the two early `return`s inside the `try` block (session expired, no changes to
+save) previously skipped `setSaving(false)` entirely, since it was a bare statement after the
+try/catch rather than inside a `finally` — leaving `saving`/`savingRef` stuck `true` forever on those
+paths. Verified with `npx tsc --noEmit` (clean).
 
-**D2. (Medium) No email format validation before submitting a profile change.**
-`app/(tabs)/profile.tsx:241` pushes `email.trim()` straight into the admin-review patch with no
+**D2. (Medium, FIXED 2026-10-01) No email format validation before submitting a profile change.**
+`app/(tabs)/profile.tsx:241` pushed `email.trim()` straight into the admin-review patch with no
 validation, unlike `billing-info.tsx:180` (UPI regex) or `documents.tsx`'s per-doc-type regex checks.
+Fix: reuses the same email regex already used in `signup.tsx` (`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`),
+checked before the `savingRef` guard engages. Verified with `npx tsc --noEmit` (clean).
 
 **D3. (Low-Medium) Optimistic-revert race on concurrent notification actions.**
 `notifications.tsx`'s `markOneRead`/`markAllRead` (84-112) and `notification-preferences.tsx`'s
@@ -380,18 +412,25 @@ fetches `has_more` but never uses it — the "Past" tab is hard-capped at 50 wit
 
 ### 6.5 nearandnowcustomerapp (customer app) — new area
 
-**C1. (Medium-High) Home catalog cache is dead code, silently defeating a perf optimization.**
-`app/(tabs)/home.tsx:883-942` (`fetchFresh`/`fetchFreshFast`) only writes the AsyncStorage/memory
-cache `if (!filter)`. Every real call site now passes a truthy `Set` (cold start passes
-`getAllActiveProductIds()`; the location-driven refresh passes `filter.productIds`, truthy even when
-empty) — so `!filter` only fires if zero active+approved stores exist platform-wide, which never
-happens live. Net effect: `readHomeCatalogCache()`/`getMemoryHomeCache()`, consumed by
-`order-again.tsx:329-357` and `categories.tsx:151-205` for instant-paint, return `null` on every app
-run, silently falling through to the slower live-fetch fallback every time. Looks like a regression
-from when the mandatory nearby/active-store filtering was added (the 2026-09-03 radius fix) without
-updating this caching condition to match. Not a correctness bug — a real, provable perf regression.
-Fix direction (needs a product-intent decision first): cache under a location-keyed key, or cache the
-platform-wide fetch specifically when the filter is the *global* active-ids one.
+**C1. (Medium-High, FIXED 2026-10-01) Home catalog cache is dead code, silently defeating a perf
+optimization.** `app/(tabs)/home.tsx:883-942` (`fetchFresh`/`fetchFreshFast`) only wrote the
+AsyncStorage/memory cache `if (!filter)`. Every real call site passes a truthy `Set` (cold start
+passes `getAllActiveProductIds()`; the location-driven refresh passes `filter.productIds`, truthy even
+when empty) — so `!filter` only fired if zero active+approved stores existed platform-wide, which
+never happens live. Net effect: `readHomeCatalogCache()`/`getMemoryHomeCache()`, consumed by
+`order-again.tsx:329-357` and `categories.tsx:151-205` for instant-paint, returned `null` on every app
+run, silently falling through to the slower live-fetch fallback every time. A regression from when the
+mandatory nearby/active-store filtering was added (the 2026-09-03 radius fix) without updating this
+caching condition to match.
+Fix: both functions now take an explicit `options?: { cacheable?: boolean }` instead of inferring
+intent from `!filter` — caching no longer depends on whether a filter is present, but on whether the
+filter in play is the cold-start **global** `getAllActiveProductIds()` set (safe to cache platform-wide)
+versus the **location-scoped** `getNearbyProductFilter()`/`nearbyIds` set used by the location-change
+effect and pull-to-refresh (never safe to cache globally — it would poison the shared cache with one
+location's results for every other location). Only the three cold-start call sites (memory-cache-stale
+refresh, AsyncStorage-cache-stale refresh, no-cache-at-all fast path) now pass `{ cacheable: true }`;
+the location-driven effect and `onRefresh` are unchanged. Confirmed via grep that `writeHomeCatalogCache`
+has no other caller anywhere in the app. Verified with `npx tsc --noEmit` (clean).
 
 **C2. (Low) Coupon list never checks expiry client-side.**
 `app/product/coupons.tsx:54-57` (`isApplicable`) only checks `min_order_value` against subtotal,
@@ -422,7 +461,10 @@ referral/rewards screens exist anywhere in the app (not started).
    worthwhile follow-up, not done here.
 3. **`[DONE 2026-10-01]` Admin panel A2** — closed the store-approval RLS gap so the UI check can't be
    bypassed; migration still needs to be applied to the live database.
-4. Mobile-app mediums (S1, D1, D2, C1) — smaller, independent, safe to pick up any time.
+4. `[DONE 2026-10-01]` Mobile-app mediums (S1, D1, D2, C1) — all fixed.
+5. `[DONE 2026-10-01]` Admin panel A3 — pagination added to activity log and rider payouts.
+   A4 deliberately left as-is — see its own note (lowest severity, high regression risk to
+   "fix properly" across ~30 routes without miscategorizing one).
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 

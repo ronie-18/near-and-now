@@ -51,31 +51,52 @@ export async function listActivityLog(req: Request, res: Response) {
       return res.status(401).json({ success: false, error: 'Invalid admin session' });
     }
 
+    // Same row-cap pattern as adminSecurityLog.controller.ts's listAuditLogs/
+    // listSecurityEvents/listFailedLogins ("Load More" re-requests with a higher
+    // limit, not offset pagination) — these 6 queries had no .limit() at all
+    // before, growing unbounded with platform activity. Each source is capped
+    // independently (ordered by its own most-recent timestamp) so a quiet
+    // source can't be starved out of the merged result by a noisy one, then
+    // the final merged/sorted list is truncated to the same limit again below.
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+
     const [storeChanges, riderChanges, productSubs, storeDocs, riderDocs, storeImages] = await Promise.all([
       supabaseAdmin
         .from('store_profile_change_requests')
         .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
-        .neq('status', 'pending'),
+        .neq('status', 'pending')
+        .order('reviewed_at', { ascending: false })
+        .limit(limit),
       supabaseAdmin
         .from('rider_profile_change_requests')
         .select('id, rider_id, status, rejection_reason, reviewed_by, reviewed_at, created_at')
-        .neq('status', 'pending'),
+        .neq('status', 'pending')
+        .order('reviewed_at', { ascending: false })
+        .limit(limit),
       supabaseAdmin
         .from('product_submissions')
         .select('id, name, status, rejection_reason, reviewed_by, reviewed_at, created_at')
-        .neq('status', 'pending'),
+        .neq('status', 'pending')
+        .order('reviewed_at', { ascending: false })
+        .limit(limit),
       supabaseAdmin
         .from('store_verification_documents')
         .select('id, store_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at, stores(name)')
-        .in('status', ['approved', 'rejected']),
+        .in('status', ['approved', 'rejected'])
+        .order('reviewed_at', { ascending: false })
+        .limit(limit),
       supabaseAdmin
         .from('delivery_partner_verification_documents')
         .select('id, partner_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at')
-        .in('status', ['approved', 'rejected']),
+        .in('status', ['approved', 'rejected'])
+        .order('reviewed_at', { ascending: false })
+        .limit(limit),
       supabaseAdmin
         .from('store_images')
         .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
-        .in('status', ['approved', 'rejected']),
+        .in('status', ['approved', 'rejected'])
+        .order('reviewed_at', { ascending: false })
+        .limit(limit),
     ]);
 
     for (const [label, result] of [
@@ -235,6 +256,11 @@ export async function listActivityLog(req: Request, res: Response) {
     }
 
     visible.sort((a, b) => new Date(b.reviewed_at).getTime() - new Date(a.reviewed_at).getTime());
+
+    // Truncate after role-filtering (not before) so a non-super_admin caller gets
+    // up to `limit` rows they can actually see, matching SecurityLogPage's
+    // `hasMore = rows.length === limit` heuristic for showing "Load More".
+    visible = visible.slice(0, limit);
 
     res.json({ success: true, activity: visible });
   } catch (error) {

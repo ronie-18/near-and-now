@@ -32,6 +32,9 @@ function formatINR(value: number): string {
   return `₹${Number(value ?? 0).toFixed(2)}`;
 }
 
+const DEFAULT_LIMIT = 100;
+const LOAD_MORE_STEP = 100;
+
 /**
  * delivery_partners_payouts rows were written on every delivery
  * (payRiderForDeliveredOrder) but nothing ever surfaced or settled them —
@@ -41,21 +44,27 @@ function formatINR(value: number): string {
  * been executed outside this system (no payment-gateway disbursement API
  * exists here — this records the outcome, it doesn't move money). Found
  * 2026-08-11 during a payout-flow audit.
+ *
+ * The endpoint had no .limit() at all until 2026-10-01 (adminRiderPayouts.controller.ts,
+ * now capped at 100/max 500, same convention as SecurityLogPage/ActivityLogPage) —
+ * "Load More" re-requests with a higher `limit` rather than offset pagination.
  */
 const RiderPayoutsPage = () => {
   const currentAdmin = getCurrentAdmin();
   const canMarkPaid = Boolean(currentAdmin && hasPermission(currentAdmin, 'payments.edit'));
   const [payouts, setPayouts] = useState<RiderPayout[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'pending' | 'paid'>('pending');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (currentLimit: number, silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/rider-payouts?status=${statusFilter}`, { headers: adminAuthHeaders() });
+      const res = await fetch(`${API_BASE}/api/admin/rider-payouts?status=${statusFilter}&limit=${currentLimit}`, { headers: adminAuthHeaders() });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load payouts');
       setPayouts(json.payouts);
@@ -63,10 +72,29 @@ const RiderPayoutsPage = () => {
       setError(err.message || 'Failed to load payouts');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, [statusFilter]);
 
-  useEffect(() => { load(); }, [load]);
+  // Switching the pending/paid filter starts back at the default page size
+  // rather than carrying over a "Load More"-expanded limit from the other tab —
+  // resetting `limit` and fetching in the same effect (rather than two effects
+  // that each react to one of these) avoids firing two fetches back to back.
+  useEffect(() => {
+    setLimit(DEFAULT_LIMIT);
+    load(DEFAULT_LIMIT);
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refresh = () => load(limit);
+
+  const loadMore = () => {
+    const nextLimit = limit + LOAD_MORE_STEP;
+    setLimit(nextLimit);
+    setLoadingMore(true);
+    load(nextLimit, true);
+  };
+
+  const hasMore = payouts.length > 0 && payouts.length === limit;
 
   const handleMarkPaid = async (id: string) => {
     if (!confirm('Confirm the bank/UPI transfer has already been sent to this rider outside this system?')) return;
@@ -78,7 +106,7 @@ const RiderPayoutsPage = () => {
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to mark payout paid');
-      load();
+      load(limit);
     } catch (err: any) {
       setError(err.message || 'Failed to mark payout paid');
     } finally {
@@ -99,7 +127,7 @@ const RiderPayoutsPage = () => {
             </p>
           </div>
           <button
-            onClick={load}
+            onClick={refresh}
             className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
           >
             <RefreshCw size={18} className="mr-2" />
@@ -191,6 +219,19 @@ const RiderPayoutsPage = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {hasMore && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={loadMore}
+              disabled={loadingMore}
+              className="inline-flex items-center px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
+            >
+              {loadingMore ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
+              {loadingMore ? 'Loading…' : 'Load More'}
+            </button>
           </div>
         )}
       </div>

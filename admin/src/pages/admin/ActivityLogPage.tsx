@@ -34,6 +34,9 @@ const SOURCE_LABEL: Record<Source, string> = {
   store_image: 'Storefront photo',
 };
 
+const DEFAULT_LIMIT = 100;
+const LOAD_MORE_STEP = 100;
+
 /**
  * Unified log of every admin review action (store/rider profile changes,
  * product submissions, store/rider verification documents) across all the
@@ -41,18 +44,27 @@ const SOURCE_LABEL: Record<Source, string> = {
  * (adminActivityLog.controller.ts) — super admins see everything including
  * other super admins' actions; everyone else sees admin-tier actions only;
  * viewers additionally get a simplified row with no rejection-reason detail.
+ *
+ * The endpoint now caps at 100 rows server-side (adminActivityLog.controller.ts,
+ * max 500) with no frontend indicator that more exists — same bug class already
+ * found/fixed for SecurityLogPage/ReviewsPage/NotificationsPage. Found
+ * 2026-10-01. "Load More" re-requests with a higher `limit` (the endpoint
+ * merges 6 tables in-memory, so it supports a row cap, not offset pagination),
+ * same convention as SecurityLogPage.
  */
 const ActivityLogPage = () => {
   const [rows, setRows] = useState<ActivityRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<Source | 'all'>('all');
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (currentLimit: number, silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/activity-log`, { headers: adminAuthHeaders() });
+      const res = await fetch(`${API_BASE}/api/admin/activity-log?limit=${currentLimit}`, { headers: adminAuthHeaders() });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load activity log');
       setRows(json.activity);
@@ -60,10 +72,22 @@ const ActivityLogPage = () => {
       setError(err.message || 'Failed to load activity log');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(limit); }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refresh = () => load(limit);
+
+  const loadMore = () => {
+    const nextLimit = limit + LOAD_MORE_STEP;
+    setLimit(nextLimit);
+    setLoadingMore(true);
+    load(nextLimit, true);
+  };
+
+  const hasMore = rows.length > 0 && rows.length === limit;
 
   const filtered = sourceFilter === 'all' ? rows : rows.filter((r) => r.source === sourceFilter);
 
@@ -76,7 +100,7 @@ const ActivityLogPage = () => {
             <p className="text-gray-500 mt-1">Every admin review action across profile changes, product submissions, and verification documents</p>
           </div>
           <button
-            onClick={load}
+            onClick={refresh}
             className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
           >
             <RefreshCw size={18} className="mr-2" />
@@ -159,6 +183,19 @@ const ActivityLogPage = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {hasMore && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={loadMore}
+              disabled={loadingMore}
+              className="inline-flex items-center px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
+            >
+              {loadingMore ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
+              {loadingMore ? 'Loading…' : 'Load More'}
+            </button>
           </div>
         )}
       </div>
