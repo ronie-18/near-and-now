@@ -7,6 +7,7 @@ import { fetchCustomerOrders } from '../services/orderService';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 import { apiErrorFromResponse, describeError } from '../utils/apiErrors';
+import { isInvoiceAvailable } from '../utils/invoiceEligibility';
 
 /* ─────────────────────────────────────────────
    Styles
@@ -525,6 +526,7 @@ const OrdersPage = () => {
 
                       {/* Actions */}
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
+                        {isInvoiceAvailable({ status: order.order_status, payment_status: order.payment_status, payment_method: order.payment_method }) && (
                         <button
                           className="op-btn-ghost"
                           onClick={() => handleCustomerInvoiceDownload(order)}
@@ -541,6 +543,7 @@ const OrdersPage = () => {
                             </>
                           )}
                         </button>
+                        )}
                         <Link to={`/track/${order.id}`} className="op-btn-primary">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M17.657 16.657L13.414 20.9a2 2 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />

@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { getOrderById, updateOrderStatus, Order } from '../../services/adminService';
 import { apiUrl } from '../../utils/apiBase';
+import { isInvoiceAvailable } from '../../utils/invoiceEligibility';
 
 const OrderDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -493,6 +494,13 @@ const OrderDetailPage = () => {
                   <p className="text-sm text-gray-500">Payment Method</p>
                   <p className="font-semibold text-gray-800 mt-1">{order.payment_method || 'N/A'}</p>
                 </div>
+                {!isInvoiceAvailable(order) ? (
+                  <p className="mt-3 text-sm text-gray-500">
+                    {String(order.payment_method || '').toLowerCase() === 'cod'
+                      ? 'No invoice is issued for a cancelled cash-on-delivery order.'
+                      : 'Invoices become available once the payment has been received.'}
+                  </p>
+                ) : (
                 <div className="flex flex-col gap-2 mt-2">
                   <button
                     onClick={() => handleAdminInvoiceDownload('store')}
@@ -516,6 +524,7 @@ const OrderDetailPage = () => {
                     {invoiceLoading === 'delivery' ? 'Generating…' : 'Download Delivery Slip'}
                   </button>
                 </div>
+                )}
               </div>
             </div>
 

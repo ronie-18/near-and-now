@@ -13,6 +13,7 @@ import { geocodeAddress } from '../services/placesService';
 import { fetchOrderTrackingFull, lastTrackingError } from '../services/trackingApi';
 import { apiErrorFromResponse, describeError } from '../utils/apiErrors';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
+import { isInvoiceAvailable } from '../utils/invoiceEligibility';
 import { useNotification } from '../context/NotificationContext';
 
 // DB statuses
@@ -191,6 +192,7 @@ const OrderTrackingPage = () => {
         delivery_address: orderData.delivery_address || '',
         total_amount: orderData.total_amount || 0,
         payment_method: orderData.payment_method || 'COD',
+        payment_status: orderData.payment_status,
         items: orderData.store_orders?.flatMap((so: any) => so.order_items || []) || [],
         estimated_delivery: orderData.estimated_delivery_time,
         delivery_latitude: orderData.delivery_latitude,
@@ -821,6 +823,7 @@ const OrderTrackingPage = () => {
                 <span className="text-xs font-bold text-gray-600 group-hover:text-primary">Reorder</span>
               </Link>
             )}
+            {isInvoiceAvailable(order) && (
             <button
               type="button"
               disabled={invoiceLoading}
@@ -847,6 +850,7 @@ const OrderTrackingPage = () => {
               <FileText className="w-6 h-6 text-gray-500 group-hover:text-primary" />
               <span className="text-xs font-bold text-gray-600 group-hover:text-primary">Invoice</span>
             </button>
+            )}
             {isDelivered && (
               <button
                 type="button"

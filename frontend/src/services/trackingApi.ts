@@ -21,6 +21,7 @@ export interface TrackingFullResponse {
     delivery_address: string;
     total_amount: number;
     payment_method: string;
+    payment_status?: string;
     delivery_latitude?: number;
     delivery_longitude?: number;
     estimated_delivery_time?: string;

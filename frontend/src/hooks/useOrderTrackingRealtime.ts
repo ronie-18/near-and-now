@@ -16,6 +16,7 @@ export interface Order {
   delivery_address: string;
   total_amount: number;
   payment_method: string;
+  payment_status?: string;
   items: any[];
   delivery_agent?: {
     id: string;
@@ -117,6 +118,8 @@ export function useOrderTrackingRealtime(
       created_at: co.placed_at || co.created_at || '',
       delivery_address: co.delivery_address || '',
       total_amount: co.total_amount ?? 0,
+      // Kept fresh so the Invoice button appears as soon as payment lands.
+      payment_status: co.payment_status ?? order.payment_status,
       delivery_agent: deliveryAgent || order.delivery_agent,
       delivery_agents: deliveryAgents ?? order.delivery_agents,
       estimated_delivery: co.estimated_delivery_time,

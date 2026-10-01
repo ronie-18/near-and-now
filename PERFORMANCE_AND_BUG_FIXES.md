@@ -279,6 +279,12 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
     generating, so the new guard doesn't race them: `verifyPayment` (`payment.controller.ts`),
     the `payment.captured` webhook, and `payOrderWithWallet` (via the `pay_order_with_wallet` RPC,
     which sets `paid` in the same transaction).
+    **UI follow-up (2026-10-01): invoice buttons are now hidden where the backend would refuse.**
+    After the fix above, the website (Orders page, Tracking page), the customer app (order detail,
+    confirmation screen) and the admin panel all still showed an Invoice button on every order. Tapping
+    it on an unpaid or cancelled-COD order produced an error instead of the old wrong invoice. Each app
+    now uses a small `isInvoiceAvailable()` helper with the same rule as `assertOrderInvoiceable()`.
+    Section 9 has the details.
 15. `[FIXED 2026-10-01]` The delivery simulation wrote `order_delivered` unconditionally, after one status read at the start of the run.
     The problem was wider than the final write. The simulation runs for about 5 minutes and writes
     `customer_orders.status` at six points, so a cancellation at *any* point was walked back
@@ -854,3 +860,56 @@ Not covered by automated tests, and still verified only by type-checking and rev
 
 `tsc` also emits the test files into `backend/dist/`. That was already true of the existing
 `*.test.ts` files, and `dist/` is gitignored, so it was left as-is.
+
+## 9. 2026-10-01 — invoice buttons follow the backend's invoice rule (follow-up to item 14)
+
+**Why:** item 14 made the backend refuse invoices for unpaid online orders and cancelled COD orders
+(409 with a readable message). The apps kept offering an Invoice button on those orders, so a customer
+could tap it and get an error. The backend stays the authority; this change only stops offering
+something that can only fail.
+
+**The rule.** Each app gets a copy of `isInvoiceAvailable()`, with the same rule as the backend's
+`assertOrderInvoiceable()`:
+- COD orders → available unless the order is cancelled;
+- every other payment method → available only once `payment_status` is `paid`,
+  `partially_refunded` or `refunded`.
+
+| App | File(s) | Change |
+| --- | --- | --- |
+| Website | `frontend/src/utils/invoiceEligibility.ts` (new) | The helper. |
+| Website | `pages/OrdersPage.tsx` | The Invoice button on each expanded order is hidden when the order isn't invoiceable. |
+| Website | `pages/OrderTrackingPage.tsx`, `hooks/useOrderTrackingRealtime.ts`, `services/trackingApi.ts` | Same for the Tracking page's Invoice tile. The tracking API already returned `payment_status` (it selects `*`) but the page never kept it. It's now typed and carried through, including on the realtime refresh, so the tile appears as soon as a payment lands without a reload. |
+| Customer app | `lib/invoiceEligibility.ts` (new) | The helper. |
+| Customer app | `app/order/[id].tsx` | "View Tax Invoice" on the delivered-order card is hidden when the order isn't invoiceable. |
+| Customer app | `app/order/confirmation/[id].tsx` | The "View Invoice" button is shown only once the order is loaded and invoiceable. "Track Order" (`flex: 1`) fills the row when it's hidden. |
+| Customer app | `app/orders.tsx` | A delivered order shows "View Invoice" only if invoiceable; otherwise "View Details". Before, a delivered order that wasn't invoiceable would have fallen through to "Track Order". |
+| Admin panel | `admin/src/utils/invoiceEligibility.ts` (new) | The helper. It also accepts the admin panel's mapped `cancelled` label, because `adminService.ts` shows `order_cancelled` as `cancelled`. |
+| Admin panel | `admin/src/pages/admin/OrderDetailPage.tsx` | The three download buttons (merchant invoice, customer invoice, delivery slip) are replaced by a one-line reason when the order isn't invoiceable: "available once the payment has been received" or "not issued for a cancelled COD order". Staff see *why*, instead of a missing button or the generic "download failed" alert. |
+
+Not changed:
+- The customer app's invoice screen (`app/order/invoice/[id].tsx`). Opened directly (e.g. via deep
+  link), it still shows the backend's 409 message, which is the correct fallback.
+- Shopkeeper and rider invoice screens. They don't call the invoice API from the mobile apps.
+
+**Keeping the copies in sync.** The rule now exists in four places: the backend, website, admin panel
+and customer app. There's no shared package across the Vite apps and the separate mobile repo.
+`frontend/src/utils/invoiceEligibility.test.ts` runs the backend's 9-case matrix (from
+`bugfixes.regression.test.ts`, "Item 14") through both the website copy and the admin copy, plus the
+admin `cancelled` label case: 19 tests. The customer-app copy is in a separate repo with no test
+runner, so it isn't covered. Any change to the backend rule must be repeated in
+`nearandnowcustomerapp/lib/invoiceEligibility.ts` by hand.
+
+**Regression checks (all run after the change):**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | 69/69 |
+| `npx vitest run` — frontend | **45/45** (26 pre-existing + 19 new) |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+| ESLint on every touched website file | 13 warnings before, the same 13 after; 0 in the new files |
+| Mutation check | Adding `'pending'` to the settled set in the website copy, then separately in the admin copy, makes the parity test fail each time. Both files were restored afterwards. |
+
+Not covered by automated tests: the button visibility itself (no render tests exist for these
+pages), and the customer-app screens. Those were checked by type-checking and by reading each
+condition against the order fields each screen actually loads.
