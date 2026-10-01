@@ -586,12 +586,20 @@ hit them. See the note after item 8.)*
    effect calls it too whenever `getSession()` resolves with no token on cold start — covering both
    the "401 arrives while a screen other than home.tsx is mounted" case and the "app relaunched with
    an already-expired/cleared session" case. Verified with `npx tsc --noEmit` (clean).
-10. **(Low) `useRiderVerificationGate.ts` fail-open window.** A network error during a verification
+10. **(Low, RE-ASSESSED 2026-10-02 — intended behaviour, not changed) `useRiderVerificationGate.ts` fail-open window.** A network error during a verification
     check keeps an already-verified rider verified; a genuine admin-side revoke racing a connectivity
     blip isn't caught for up to ~30 s / until the next successful poll or foreground check.
-11. **(Low) Foreground/background GPS watch toggling on rapid backgrounding.** `home.tsx` and the
+11. **(Low, RE-ASSESSED 2026-10-02 — not changed) Foreground/background GPS watch toggling on rapid backgrounding.** `home.tsx` and the
     background task hand off `watchPositionAsync` on every background/foreground transition; both
     start/stop calls are idempotent so this is log noise, not a functional bug.
+    Re-assessment: the fail-open is a deliberate, in-code-documented choice. A *network* failure on a
+    re-check doesn't bounce an already-verified rider to `/pending-verification`, because resume and
+    reconnect blips are common. It only affects what the rider *sees*. Every action that matters is
+    re-checked against `is_approved` fresh on the server on every call: going online, `acceptOffer`
+    (via `accept_driver_offer()`), `acceptOrder`. See item 8's note. So a revoked rider can't
+    act during the window.
+    As the original note says, both start/stop calls are idempotent, so this is log noise with no
+    functional effect.
 
 ### nearandnowcustomerapp (customer app)
 
@@ -609,10 +617,18 @@ hit them. See the note after item 8.)*
     query never runs against an unloaded filter. `nearbyIdsRef.current` is also reset to `undefined`
     when a new location fetch starts, so a stale filter from a previous location can't leak into the
     new one. Verified with `npx tsc --noEmit` (clean).
-13. **(Low) Client address payload adds no defense against the backend's mass-assignment gap.**
+13. **(Low, FIXED 2026-10-02) Client address payload adds no defense against the backend's mass-assignment gap.**
     `lib/addressService.ts:105-161` whitelists fields before POSTing (correct client behavior), but a
     modified/replayed request bypassing the client can still hit backend backlog item 10; also passes
     `google_place_data` through as an arbitrary, unstripped object.
+    The client already sends a strict field list, and the backend half (allowlist) was fixed as
+    backlog item 10. What remained was `google_place_data`: an opaque object stored as-is that nothing
+    reads back, so a client could store up to the 1 MB body limit of arbitrary JSON per address.
+    `customers.controller.ts` now has one shared `pickAddressFields()` for both create and update. It
+    applies the allowlist and keeps `google_place_data` only if it's a plain object under 16 KB
+    (`MAX_GOOGLE_PLACE_DATA_BYTES`). A real value, with the fields `places.controller` requests, is a
+    few KB. Anything else is dropped to `null` with a warning, and **the address still saves**, since
+    this is optional reference data and not worth failing a save over.
 
 ## 6. 2026-10-01 deep-dive — admin panel (new), backend backlog re-verification, and fresh areas of all three mobile apps
 
@@ -782,20 +798,43 @@ validation, unlike `billing-info.tsx:180` (UPI regex) or `documents.tsx`'s per-d
 Fix: reuses the same email regex already used in `signup.tsx` (`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`),
 checked before the `savingRef` guard engages. Verified with `npx tsc --noEmit` (clean).
 
-**D3. (Low-Medium) Optimistic-revert race on concurrent notification actions.**
+**D3. (Low-Medium, FIXED 2026-10-02) Optimistic-revert race on concurrent notification actions.**
 `notifications.tsx`'s `markOneRead`/`markAllRead` (84-112) and `notification-preferences.tsx`'s
 `toggle` (92-107) each snapshot `previous` state before their async PUT resolves. Two such actions
 fired close together can have the earlier one's failure revert to a snapshot taken before *both*,
 silently erasing the second action's successful change.
+- **`notifications.tsx`.** A `confirmedReadRef` set records ids the server has confirmed read. A
+  failed action now rolls back only the ids *it* changed, and never one already confirmed. So "mark X
+  read (succeeds), then mark-all fails" no longer flips X back. `markOneRead` also skips the PUT for an
+  already-read notification; opening one used to re-send it every time.
+- **`notification-preferences.tsx`.** There was a second race here, worse than the revert. Each
+  toggle POSTs the *whole* preferences object, and toggles fired overlapping requests. Toggle A then
+  B: if A's request reached the server last, it overwrote B **server-side**. Saves are now serialized
+  and latest-wins: one request in flight, then the newest wanted state is sent if it changed. A
+  failure reverts the switches to the last state the server confirmed.
 
-**D4. (Low) Unhandled promise rejections from `Linking.openURL()`.**
+**D4. (Low, FIXED 2026-10-02) Unhandled promise rejections from `Linking.openURL()`.**
 No `.catch()` on calls in `delivery/[orderId].tsx:162,166,504`, `pending-verification.tsx:385`, or
 `home.tsx:976,1110,1142` — rejects with no app installed to handle the scheme (e.g. no dialer/maps
 app).
+All 8 current call sites (`home.tsx:1142` from the original list no longer exists) now go through a
+new `lib/openLink.ts`:
+- `callNumber()`: a failed call shows the number in an alert;
+- `openNavigation()`: falls back to a Google Maps web link;
+- `openAppSettings()`.
 
-**D5. (Low) Same missing-ref double-tap pattern on image pickers.**
+`openNavigation` fixes a real symptom. On Android the native link is `google.navigation:`, which needs
+the Google Maps app; on phones without it (common without Google services) "Navigate" did nothing at
+all. Now-unused `Linking`/`Platform` imports were removed.
+
+**D5. (Low, FIXED 2026-10-02) Same missing-ref double-tap pattern on image pickers.**
 `profile.tsx:190` `handlePickImage` and `billing-info.tsx:127` `pickProfileImage` gate only on state.
 Low real-world risk since the native picker modal blocks re-taps.
+Worse than described. Neither handler caught errors, and expo-image-picker rejects a second
+concurrent picker, so a fast double tap before the library opened produced an unhandled rejection.
+Both handlers (`profile.tsx`, `billing-info.tsx`) now have a synchronous `pickingImageRef` guard,
+plus a catch that shows "Couldn't open your photos". Confirmed no early `return` precedes either new
+hook.
 
 **What's left (driver app):** no support/chat screen (tel: links to hardcoded numbers only); no
 ratings/reviews screen for riders; no dedicated trip-history/analytics screen; `orders.tsx:138`
@@ -824,10 +863,23 @@ refresh, AsyncStorage-cache-stale refresh, no-cache-at-all fast path) now pass `
 the location-driven effect and `onRefresh` are unchanged. Confirmed via grep that `writeHomeCatalogCache`
 has no other caller anywhere in the app. Verified with `npx tsc --noEmit` (clean).
 
-**C2. (Low) Coupon list never checks expiry client-side.**
+**C2. (Low, FIXED 2026-10-02) Coupon list never checks expiry client-side.**
 `app/product/coupons.tsx:54-57` (`isApplicable`) only checks `min_order_value` against subtotal,
 never `expires_at`. Depends entirely on the backend's "active" coupon list correctly excluding
 expired ones — no defense-in-depth check like the min-order-value one got.
+Root cause: the screen's `Coupon` type declared `expires_at`, but the API returns the real columns
+`valid_from`/`valid_until`, so an expiry check wasn't even possible. A coupon is now
+treated as applicable only inside its validity window, re-checked at render, because the screen can
+stay open past a coupon's end time. The button says "Expired" / "Not yet active", and the "Add ₹X more"
+hint is hidden for those.
+**Real bug found alongside it:** `first_order_discount`, one of the three DB coupon types (the type
+here only listed two), fell through to `return 0` in `CartContext`'s discount calculation. The cart
+showed **no discount and the full total**, while checkout charged the server's discounted amount
+(the backend treats it as a percentage). Nobody was overcharged, but the app showed a different total
+from the payment sheet. Fixed by moving the coupon maths into a new `lib/couponMath.ts` (no React
+Native imports) that mirrors the backend's `computeCouponDiscount` exactly, including treating any
+non-null cap as a cap (the old code ignored a cap of 0). The website's checkout was checked and
+already matched the server.
 
 **What's left (customer app):** `app/verify-email.tsx` is orphaned dead code — the post-signup
 redirect to it is commented out in `otp.tsx` (112-118, "Email verification step disabled for now"),
@@ -878,9 +930,10 @@ referral/rewards screens exist anywhere in the app (not started).
 9. `[DONE 2026-10-02]` #19: deadlines on every outbound HTTP call (section 11).
 10. `[DONE 2026-10-02]` #16 and #17 fixed, #18 re-assessed (section 12).
 11. `[DONE 2026-10-02]` #23 and #20 (section 13).
-12. **Next up:** the mobile-app lows. Rider app: D3 (notification undo race), D4 (unhandled
-    `Linking.openURL` rejections), D5 (picker double-tap), #10 (verification fail-open window),
-    #11 (GPS watch log noise). Customer app: C2 (coupon expiry not checked client-side), #13.
+12. `[DONE 2026-10-02]` Mobile-app lows: D3, D4, D5, C2 and #13 fixed; #10 and #11 re-assessed
+    as intended behaviour (section 14).
+13. **Backlog status:** every bug item in this document is now fixed or deliberately parked with a
+    reason. See section 15.
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -1203,3 +1256,50 @@ The fix details are inline under items 20 and 23 in section 4.
 | `npx vitest run` — frontend | **56/56** (50 before + 6 new) |
 | `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
 | ESLint — `MapLocationPicker.tsx` | 0 warnings before, 0 after; 0 in the new test file |
+
+## 14. 2026-10-02 — mobile-app low-severity batch (D3, D4, D5, C2, #10, #11, #13)
+
+The fix details are inline under each item (section 5 for #10/#11/#13, section 6 for D3–D5 and C2).
+
+**Automated checks**
+
+| What | How | Result |
+| --- | --- | --- |
+| #13 `pickAddressFields` | New `backend/src/controllers/customers.address.test.ts` (8 tests): keeps a realistic place object; drops an oversized blob while keeping the rest of the address; drops an array, a string or a number; passes `null` through; still drops non-allowlisted fields; `updateAddress` stores `null` instead of a 20 KB blob. | 8/8. With the size/type check disabled, 5 fail. Restored. |
+| C2 coupon maths (customer app) | The app has no test runner, so the logic was moved to a plain module (`lib/couponMath.ts`) and checked with a **throwaway** vitest run from the scratchpad. It is not added to any repo. It compares the app's `computeCouponDiscount` with the **backend's real** `computeCouponDiscount` over 270+ combinations (all three types, caps including 0, clamping), and runs 5 validity-window cases. | 7/7. With the old behaviour restored (`first_order_discount` → 0), the parity and percentage checks fail. Restored. |
+| D3, D4, D5 (rider app) | No test runner in the rider app, and the logic lives in screen components. Verified by type-checking and by reading each path (rollback sets, save loop, hook placement). | not unit-tested |
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | **107/107** (99 before + 8 new) |
+| `npx vitest run` — frontend | 56/56 |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+
+The mobile apps have no ESLint config: `expo lint` would set one up interactively. So no lint step
+for these.
+
+## 15. Backlog status after 2026-10-02
+
+**Fixed:** every High and Medium bug item across the backend, website, admin panel and all three
+mobile apps, plus the Low items in this pass. Each one has a fix note inline. Automated coverage
+backs the backend (107 tests) and website (56 tests); the regression tests were written in this
+effort and each was checked to fail against the pre-fix code.
+
+**Deliberately not changed, with reasons inline:**
+- **#4:** `cancelOrder` is still internally multi-step. The exploitable race is closed from the
+  `acceptOrder` side. A single atomic Postgres function would be the clean long-term fix, and it's
+  the only remaining *engineering* follow-up.
+- **#18:** the admin coupon list has no limit (hand-created rows; a cap without Load More would hide
+  data).
+- **A4:** admin route guards check login only, not permission (pages self-gate, the backend
+  enforces).
+- **B1:** wallet top-up idempotency key (no money moves on a duplicate).
+- **#10, #11:** rider-app verification fail-open and GPS log noise (intended / no functional effect).
+- **Shopkeeper #6, #7, #8:** latent. No path creates a multi-store owner. Revisit if multi-store
+  support is built.
+
+**Product/data decisions left with the owner:** the 29 demo stores on one test account (section 5
+#8), and whether multi-store ownership is on the roadmap.

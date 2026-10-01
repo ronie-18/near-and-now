@@ -19,6 +19,38 @@ const ALLOWED_ADDRESS_FIELDS = [
   'delivery_for', 'receiver_name', 'receiver_address', 'receiver_phone',
 ] as const;
 
+// google_place_data is an opaque Google Place Details blob the clients attach
+// for reference; nothing reads it back. It was stored as-is, so any client
+// could park up to the 1 MB body limit of arbitrary JSON per address. A real
+// value (place_id, name, formatted_address, address_components, geometry — the
+// fields places.controller requests) is a few KB. Anything that isn't a plain
+// object under this cap is dropped, and the address still saves — it's
+// optional reference data, not worth failing the save over. (Audit #13,
+// 2026-10-02.)
+export const MAX_GOOGLE_PLACE_DATA_BYTES = 16 * 1024;
+
+export function pickAddressFields(body: Record<string, unknown>): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const key of ALLOWED_ADDRESS_FIELDS) {
+    if (key in body) picked[key] = body[key];
+  }
+  if ('google_place_data' in picked && picked.google_place_data != null) {
+    const value = picked.google_place_data;
+    const isPlainObject = typeof value === 'object' && !Array.isArray(value);
+    let size = Infinity;
+    try {
+      size = Buffer.byteLength(JSON.stringify(value), 'utf8');
+    } catch {
+      // unserializable — treated as invalid below
+    }
+    if (!isPlainObject || size > MAX_GOOGLE_PLACE_DATA_BYTES) {
+      console.warn('[addresses] dropping google_place_data', { isPlainObject, size });
+      picked.google_place_data = null;
+    }
+  }
+  return picked;
+}
+
 export class CustomersController {
   /**
    * Resolves the authenticated customer's saved addresses, merging in any
@@ -103,10 +135,7 @@ export class CustomersController {
         return res.status(403).json({ error: 'Not authorized to create an address for this customer' });
       }
 
-      const addressData: Record<string, unknown> = { customer_id: customerId };
-      for (const key of ALLOWED_ADDRESS_FIELDS) {
-        if (key in req.body) addressData[key] = req.body[key];
-      }
+      const addressData: Record<string, unknown> = { ...pickAddressFields(req.body ?? {}), customer_id: customerId };
 
       const address = await databaseService.createCustomerSavedAddress(addressData);
       res.status(201).json(address);
@@ -120,10 +149,7 @@ export class CustomersController {
       const { addressId } = req.params;
       const customerId = req.customerId!;
 
-      const updates: Record<string, unknown> = {};
-      for (const key of ALLOWED_ADDRESS_FIELDS) {
-        if (key in req.body) updates[key] = req.body[key];
-      }
+      const updates = pickAddressFields(req.body ?? {});
 
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({ error: 'No valid fields to update' });
