@@ -69,6 +69,7 @@ function notifStyle(type: string): { iconBg: string; Icon: React.ElementType } {
     case 'document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: FileText };
     case 'document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: FileText };
     case 'verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: ShieldCheck };
+    case 'store_added': return { iconBg: 'bg-teal-100 text-teal-600', Icon: Package };
     case 'rider_document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: Truck };
     case 'rider_document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: Truck };
     case 'rider_verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: Truck };

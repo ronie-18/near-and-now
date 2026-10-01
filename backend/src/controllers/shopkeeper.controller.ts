@@ -10,7 +10,8 @@ import { sendError } from '../utils/httpError.js';
 declare module 'express' {
   interface Request {
     shopkeeperId?: string;
-    shopkeeperStoreId?: string;   // first store (kept for compat)
+    shopkeeperStoreId?: string;   // default store: first approved, else first
+    shopkeeperApprovedStoreIds?: string[];
     shopkeeperStoreIds?: string[]; // all stores owned by this shopkeeper
     shopkeeperHasApprovedStore?: boolean;
   }
@@ -61,16 +62,24 @@ export async function requireShopkeeperAuth(req: Request, res: Response, next: N
       }
     }
 
+    // Live stores only (multi-store ownership, 2026-10-02): a soft-deleted
+    // store must not count towards approval or pull in its old allocations.
     const { data: stores } = await supabaseAdmin
       .from('stores')
       .select('id, is_approved')
-      .eq('owner_id', user.id);
+      .eq('owner_id', user.id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true });
 
     if (!stores?.length) return res.status(403).json({ error: 'No store found for this account' });
 
     req.shopkeeperId = user.id;
     req.shopkeeperStoreIds = stores.map((s: any) => s.id);
-    req.shopkeeperStoreId = stores[0].id; // primary store for backward compat
+    // Default store for endpoints that don't say which store they mean: the
+    // first *approved* one (an owner's newly added, still-pending store must
+    // not become the default), else the first.
+    req.shopkeeperStoreId = (stores.find((s: any) => s.is_approved) ?? stores[0]).id;
+    req.shopkeeperApprovedStoreIds = stores.filter((s: any) => s.is_approved).map((s: any) => s.id);
     req.shopkeeperHasApprovedStore = stores.some((s: any) => s.is_approved);
     next();
   } catch (err) {
@@ -100,11 +109,21 @@ export class ShopkeeperController {
   // GET /shopkeeper/profile
   async getProfile(req: Request, res: Response) {
     try {
-      const [{ data: user }, { data: store }] = await Promise.all([
+      // `.maybeSingle()` on the owner's stores errored as soon as an owner had
+      // two, and the swallowed error returned `store: null`. Now returns every
+      // live store, plus `store` = the default one, for older callers.
+      const [{ data: user }, { data: stores, error: storesErr }] = await Promise.all([
         supabaseAdmin.from('app_users').select('id, name, email, phone, created_at').eq('id', req.shopkeeperId!).single(),
-        supabaseAdmin.from('stores').select('id, name, address, latitude, longitude, is_active, phone').eq('owner_id', req.shopkeeperId!).maybeSingle(),
+        supabaseAdmin
+          .from('stores')
+          .select('id, name, address, latitude, longitude, is_active, is_approved, phone')
+          .eq('owner_id', req.shopkeeperId!)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: true }),
       ]);
-      res.json({ success: true, user, store });
+      if (storesErr) throw storesErr;
+      const store = (stores ?? []).find((s: any) => s.id === req.shopkeeperStoreId) ?? stores?.[0] ?? null;
+      res.json({ success: true, user, store, stores: stores ?? [] });
     } catch (err) {
       return sendError(res, 'ShopkeeperController.getProfile', 'Could not load profile', err);
     }
@@ -156,7 +175,7 @@ export class ShopkeeperController {
           .in('customer_order_id', orderIds)
           .in('assigned_store_id', storeIds),
         supabaseAdmin.from('stores')
-          .select('id, latitude, longitude')
+          .select('id, name, latitude, longitude')
           .in('id', storeIds),
       ]);
 
@@ -171,7 +190,7 @@ export class ShopkeeperController {
         itemsByOrderAndStore[key].push(item);
       });
 
-      const storeCoordsMap: Record<string, { latitude: number; longitude: number }> = {};
+      const storeCoordsMap: Record<string, { latitude: number; longitude: number; name?: string }> = {};
       (storeRows || []).forEach((s: any) => { storeCoordsMap[s.id] = s; });
 
       // Online-payment orders (razorpay/wallet) are created immediately at
@@ -195,6 +214,8 @@ export class ShopkeeperController {
           allocation_id: alloc.id,
           order_id: alloc.order_id,
           store_id: alloc.store_id,
+          // For multi-store owners the app labels each order with its store.
+          store_name: storeCoordsMap[alloc.store_id]?.name ?? null,
           order_code: order.order_code,
           alloc_status: alloc.status,
           sequence_number: alloc.sequence_number,

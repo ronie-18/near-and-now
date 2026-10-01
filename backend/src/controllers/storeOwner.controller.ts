@@ -133,10 +133,16 @@ export async function getStores(req: Request, res: Response) {
     const userId = await resolveShopkeeperFromToken(req, res);
     if (!userId) return;
 
+    // Soft-deleted stores (admin "delete", or a removed placeholder) are
+    // excluded: with multi-store ownership this list feeds the app's store
+    // switcher, and a deleted store must not be selectable. Oldest first, so
+    // an owner's original store stays first and the order is stable.
     const { data: stores, error } = await supabaseAdmin
       .from('stores')
       .select('*')
-      .eq('owner_id', userId);
+      .eq('owner_id', userId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true });
 
     if (error) {
       console.error('❌ Error fetching stores:', error);
@@ -470,6 +476,106 @@ export async function signupComplete(req: Request, res: Response) {
   }
 }
 
+/** How many live (not soft-deleted) stores one owner may have. */
+export const MAX_STORES_PER_OWNER = 10;
+
+/**
+ * POST /store-owner/stores — an existing, signed-in shopkeeper adds another
+ * store (multi-store ownership, 2026-10-02). Signup (signupComplete) still
+ * creates the account + first store in one go; this is only for additional
+ * stores. The new store starts exactly like a fresh signup's: offline, not
+ * approved, no documents — it goes through the same per-store verification
+ * (Aadhaar/PAN upload, photos, billing) and admin approval. Owner decisions:
+ * KYC is re-uploaded per store; billing starts blank; at most
+ * MAX_STORES_PER_OWNER live stores.
+ *
+ * Copied from the owner's existing store, because they're per-store columns
+ * that are really per-owner: `expo_push_token` (otherwise the new store gets
+ * no order pushes until the app happens to re-register) and
+ * `owner_image_url` (the owner's own photo).
+ */
+export async function createStore(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    // No client-supplied phone: the store phone is shown to riders for calls,
+    // so it comes from the owner's existing store / account, never the body.
+    // A different number goes through the profile-change review like any
+    // other store's.
+    const { name, address, latitude, longitude } = (req.body ?? {}) as Record<string, unknown>;
+    const storeName = typeof name === 'string' ? name.trim() : '';
+    const storeAddress = typeof address === 'string' ? address.trim() : '';
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+
+    if (!storeName || storeName.length > 100) {
+      return res.status(400).json({ success: false, error: 'Store name is required (up to 100 characters).' });
+    }
+    if (!storeAddress || storeAddress.length > 500) {
+      return res.status(400).json({ success: false, error: 'Store address is required (up to 500 characters).' });
+    }
+    // Unlike signup (which tolerated a missing pin as 0,0), an added store must
+    // be placed: it can't be dispatched orders without a real location.
+    if (
+      latitude == null || longitude == null ||
+      !Number.isFinite(lat) || !Number.isFinite(lng) ||
+      Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)
+    ) {
+      return res.status(400).json({ success: false, error: 'Set the store location on the map.' });
+    }
+
+    const { data: existing, error: existingErr } = await supabaseAdmin
+      .from('stores')
+      .select('id, phone, expo_push_token, owner_image_url, created_at')
+      .eq('owner_id', userId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false });
+    if (existingErr) throw existingErr;
+    if ((existing?.length ?? 0) >= MAX_STORES_PER_OWNER) {
+      return res.status(409).json({
+        success: false,
+        error: `You can have up to ${MAX_STORES_PER_OWNER} stores. Contact support if you need more.`,
+      });
+    }
+
+    const latest = existing?.[0] as
+      | { phone?: string | null; expo_push_token?: string | null; owner_image_url?: string | null }
+      | undefined;
+    const { data: owner } = await supabaseAdmin.from('app_users').select('name, phone').eq('id', userId).maybeSingle();
+    const storePhone = latest?.phone || (owner as { phone?: string } | null)?.phone || null;
+
+    const { data: created, error: insertErr } = await supabaseAdmin
+      .from('stores')
+      .insert({
+        owner_id: userId,
+        name: storeName,
+        address: storeAddress,
+        phone: storePhone,
+        latitude: lat,
+        longitude: lng,
+        is_active: false,
+        is_approved: false,
+        expo_push_token: latest?.expo_push_token ?? null,
+        owner_image_url: latest?.owner_image_url ?? null,
+      })
+      .select('*')
+      .single();
+    if (insertErr) throw insertErr;
+
+    await notifyAdmins(
+      'store_added',
+      'New store added',
+      `${(owner as { name?: string } | null)?.name || 'A shopkeeper'} added a new store: ${storeName}. It will appear for verification once documents are uploaded.`,
+      { store_id: created.id, store_name: storeName, owner_id: userId }
+    );
+
+    res.status(201).json({ success: true, store: created });
+  } catch (error) {
+    return sendError(res, 'storeOwner.createStore', 'Could not add the store', error, undefined, { success: false });
+  }
+}
+
 /**
  * Update store profile fields — caller must own the target store.
  * Only whitelisted fields are applied; unknown keys are ignored.
@@ -522,6 +628,17 @@ export async function updateStore(req: Request, res: Response) {
     }
 
     if (patch.owner_image_url) {
+      // The owner's photo describes the person, not one shop, but it's stored
+      // per store row. With multi-store ownership (2026-10-02), keep every one
+      // of the owner's live stores in step instead of only the store edited.
+      // Non-fatal: the edited store is already updated.
+      const { error: syncErr } = await supabaseAdmin
+        .from('stores')
+        .update({ owner_image_url: patch.owner_image_url, updated_at: new Date().toISOString() })
+        .eq('owner_id', userId)
+        .is('deleted_at', null)
+        .neq('id', storeId);
+      if (syncErr) console.error('❌ updateStore: owner photo sync to other stores failed', syncErr);
       await notifyAdmins(
         'owner_photo_updated',
         'Store owner photo updated',
@@ -922,6 +1039,7 @@ async function assertOwnsStore(storeId: string, userId: string): Promise<boolean
     .select('id')
     .eq('id', storeId)
     .eq('owner_id', userId)
+    .is('deleted_at', null)
     .maybeSingle();
   return !!data;
 }
@@ -944,6 +1062,7 @@ async function assertOwnsApprovedStore(storeId: string, userId: string): Promise
     .eq('id', storeId)
     .eq('owner_id', userId)
     .eq('is_approved', true)
+    .is('deleted_at', null)
     .maybeSingle();
   return !!data;
 }
@@ -1658,16 +1777,19 @@ export async function createSupportMessage(req: Request, res: Response) {
     const userId = await resolveShopkeeperFromToken(req, res);
     if (!userId) return;
 
-    const { message } = req.body as { message?: string };
+    const { message, store_id: requestedStoreId } = req.body as { message?: string; store_id?: string };
     if (!message || !message.trim()) {
       return res.status(400).json({ success: false, error: 'Message is required' });
     }
 
+    // Multi-store owners: file the message under the store they're working in
+    // (the app sends its selected store). Validated against the caller's own
+    // live stores; anything else falls back to their first store, as before.
     const [{ data: user }, { data: stores }] = await Promise.all([
       supabaseAdmin.from('app_users').select('name, phone').eq('id', userId).maybeSingle(),
-      supabaseAdmin.from('stores').select('id, name').eq('owner_id', userId).limit(1),
+      supabaseAdmin.from('stores').select('id, name').eq('owner_id', userId).is('deleted_at', null).order('created_at', { ascending: true }),
     ]);
-    const store = stores?.[0];
+    const store = (requestedStoreId && stores?.find((s: { id: string }) => s.id === requestedStoreId)) || stores?.[0];
 
     const { data: inserted, error } = await supabaseAdmin
       .from('support_messages')

@@ -566,20 +566,21 @@ which were fixed here — this is a record for the next pass.
 
 ### near-now-store_owner (shopkeeper app)
 
-*(Items 6–8 were re-assessed on 2026-10-02 as **latent**: correct in the code, but no current user can
-hit them. See the note after item 8.)*
+*(Items 6–8 were first re-assessed on 2026-10-02 as latent, since no path created a multi-store owner.
+The owner then decided to build multi-store ownership, and all three were fixed as part of it: see
+section 17.)*
 
-6. **(High → latent) No store-switcher; `selected_store_id` is set once at first login and never updated.**
+6. **(High, FIXED 2026-10-02 — multi-store ownership built, section 17) No store-switcher; `selected_store_id` is set once at first login and never updated.**
    `lib/useSelectedStore.ts:37-40`, seeded only in `app/(tabs)/home.tsx:160-165` (`if (!id)`). A
    shopkeeper with 2+ stores is permanently locked to whichever store the backend returned first —
    inventory, add-products, profile and billing for any other store are silently inaccessible.
-7. **(High → latent) Store approval/suspension gate always checks `stores[0]`, not the store actually in
+7. **(High, FIXED 2026-10-02 — section 17) Store approval/suspension gate always checks `stores[0]`, not the store actually in
    use.** `lib/storeApproval.ts` (`getPrimaryStore`, `checkStoreApproval`) never honors
    `selected_store_id`, unlike `useSelectedStore`. For a multi-store account this can either lock the
    shopkeeper out of the whole app (store[0] suspended, real store approved) or let them keep
    managing/accepting orders on a store an admin already suspended (store[0] approved, real store
    suspended) — the client-side mirror of backend backlog item 8.
-8. **(Medium → latent) Inconsistent multi-store scoping.** Order badges (`incomingOrdersContext.tsx`) and
+8. **(Medium, FIXED 2026-10-02 — section 17) Inconsistent multi-store scoping.** Order badges (`incomingOrdersContext.tsx`) and
    invoices (`app/invoice/[orderId].tsx`) correctly aggregate across every store the account owns;
    inventory, profile, billing and the approval gate do not.
 
@@ -1104,8 +1105,10 @@ projects.
 | `npx vite build` — frontend, admin | both succeed |
 
 Not covered by automated tests, and still verified only by type-checking and review:
-- the mobile-app fixes (S1, D1, D2, C1, section 5 #9/#12). None of the three apps has a test runner
-  configured;
+- the mobile-app fixes (S1, D1, D2, C1, section 5 #9/#12). *Correction (2026-10-02):* this said none
+  of the three apps has a test runner. The rider and customer apps don't, but the **shopkeeper app
+  does** (Jest via `jest-expo`, `npm test`; 38 tests at the time). It's used for the multi-store
+  work in section 17;
 - the Supabase migrations (A1/A2/V1/V2). These were verified live against the database, per section 7.
 
 `tsc` also emits the test files into `backend/dist/`. That was already true of the existing
@@ -1337,10 +1340,11 @@ effort and each was checked to fail against the pre-fix code.
   enforces).
 - **B1:** wallet top-up idempotency key (no money moves on a duplicate).
 - **#10, #11:** rider-app verification fail-open and GPS log noise (intended / no functional effect).
-- **Shopkeeper #6, #7, #8:** latent. No path creates a multi-store owner. Revisit if multi-store
-  support is built.
+- ~~**Shopkeeper #6, #7, #8:** latent.~~ Fixed 2026-10-02 by building multi-store ownership
+  (section 17).
 
-**Product/data decisions left with the owner:** whether multi-store ownership is on the roadmap.
+**Product/data decisions left with the owner:** none open. Multi-store ownership was built on
+2026-10-02 (section 17).
 The demo stores were handled on 2026-10-02: 12 test stores removed, 17 named shops kept (section 5
 #8).
 
@@ -1392,3 +1396,124 @@ function uses only standard PL/pgSQL.)
 afterwards. `cancelOrder.test.ts` now asserts that a missing function is a hard error with no
 writes or refunds; it's still 12 tests, the 2 fallback tests having been replaced. Backend
 119/119.
+
+## 17. 2026-10-02 — multi-store ownership (feature; fixes shopkeeper #6, #7, #8)
+
+One shopkeeper account can now run up to 10 stores. Owner decisions, taken before building:
+- **KYC:** each new store re-uploads Aadhaar/PAN and gets its own admin review.
+- **Orders:** incoming and active orders show as one list across all approved stores, each labelled
+  with its store.
+- **Billing:** per store, starting blank.
+- **Limit:** 10 live stores per owner.
+
+### What was built
+
+**Backend (`near-and-now/backend`)**
+
+| Change | Detail |
+| --- | --- |
+| `POST /store-owner/stores` (`createStore`) | Signed-in owner only. Validates the name (≤100 chars), the address (≤500), and a real location (range-checked; rejects missing or 0,0, because a store without a location can't be dispatched to). Enforces the 10-live-store limit (409). The new store starts **offline and unapproved**, exactly like a fresh signup, and goes through the normal per-store Documents → Billing → Status → admin approval. It copies the owner's push token and photo from their newest store; both are per-store columns that are really per-owner. The phone comes from the owner's existing store or account, **never the request body** (riders call the store phone). Sends a `store_added` admin notification, which has an icon and links to the Stores page in the admin panel. |
+| `GET /store-owner/stores` | Live stores only (`deleted_at IS NULL`), oldest first. Before, soft-deleted stores were returned, and would have appeared in the switcher. |
+| `assertOwnsStore` / `assertOwnsApprovedStore` | Ignore soft-deleted stores. |
+| `requireShopkeeperAuth` | Live stores only. The default store (`shopkeeperStoreId`) is the **first approved** store rather than `stores[0]`, so a newly added pending store never becomes the default. New `shopkeeperApprovedStoreIds`. |
+| `GET /shopkeeper/profile` | Used `.maybeSingle()` on the owner's stores, which errors with two stores, so `store` came back `null`. Now returns `stores` (all live) plus `store` (the default). |
+| `GET /shopkeeper/orders` | Each allocation carries `store_name`. |
+| Product submissions | Optional `store_id`, which must be one of the caller's **approved** stores (403 otherwise). When omitted, the default store is used, as before. |
+| Support messages | Optional `store_id`, used only if the caller owns it; otherwise their first store, as before. |
+| Order notifications | Push and inbox text add "at <store name>" when the owner has 2+ live stores. Single-store owners get identical wording to before. |
+| `updateStore` owner photo | Applied to all of the owner's live stores, not only the one edited. |
+
+`acceptAllocation` already checked the specific allocation's store approval and online state, so it
+was unchanged.
+
+**Shopkeeper app (`near-now-store_owner`)**
+
+| Change | Detail |
+| --- | --- |
+| `lib/selectedStore.ts` (new) | The single source of truth for "which store". `pickSelectedStore` applies the rule: remembered store → first approved → first. It also handles switching (with persistence and change notification), remembering the default, clearing on logout, `storeStatus` (Live / Offline / Under review / Setup needed), and the 10-store limit. |
+| `useSelectedStore`, `storeApproval` (`getSelectedStore`, `refreshStoreApproval`, `resolveAuthenticatedRoute`), `useStoreApprovalGate`, `useExistingStore` | All resolve the store through the shared rule (before, the gate, routing, refresh and Details screen used `stores[0]`), and re-check or reload immediately on a switch. **Audit #7:** the approval gate now checks the store actually in use. |
+| `components/StoreSwitcher.tsx` (new) | On Home, the store name in the header is tappable and opens a sheet of all stores with status badges plus "Add a new store" (disabled at the limit). On the four verification screens a compact "Switch store" row appears for multi-store owners only, so an owner setting up a new store can always return to an approved one. Picking an approved store goes to Home; picking a store still being set up goes to its Status screen. **Audit #6.** |
+| `app/add-store.tsx` (new) | Name, map pin and address, reusing signup's `MapPinPicker` / `AddressFields` / `useMapPin`. Calls `POST /store-owner/stores`, then selects the new store and lands on its Status screen, which links to Documents and Billing. Also reachable from Settings → "Add another store". |
+| Orders | Each order card shows its store name for multi-store owners, and "Accept" uses **that order's** store's online state. Before, it used the selected store's, which was wrong in a combined list. The offline banner names the offline stores that have incoming orders. Order history and payouts stay per selected store. **Audit #8.** |
+| Product submissions, support messages | Send the selected store's id. |
+| Logout | Now also clears the selected store. Before, it was left behind for the next account on the device. |
+
+### Bugs found while reviewing the implementation (all fixed)
+
+1. **Approval answer reused across a switch.** `refreshStoreApproval` reuses its last answer for
+   15 s. Right after a switch it would have reported the *previous* store's approval. The memo is
+   now keyed by the selected store.
+2. **Add-store could open the wrong store.** `forceFetchStores` joins an in-flight request. If one was
+   sent before the store was created, the list lacked the new store and the selection fell back to
+   another store. New `addStoreToCache()` inserts the store and invalidates older in-flight
+   responses before switching.
+3. **Add-store navigation bounce.** Selecting the new, unapproved store makes the tabs' approval gate
+   (mounted underneath) redirect to Status. A redirect landing after add-store's own navigation
+   would bounce the owner off Documents. Add-store now lands on Status itself.
+4. **Payouts showed the wrong store after a switch (pre-existing code, reachable only now).** The tab's
+   "load in progress" guard wasn't tied to a store. Switching while store A was loading skipped store
+   B's load entirely, and A's late response then filled B's screen. The guard is now per store, late
+   responses for a no-longer-selected store are dropped, and the list clears on a switch.
+5. **Order history briefly showed the previous store** after a switch: the cache seed only fills an
+   empty list. The list now clears on a switch.
+6. **Owner photo out of sync** across an owner's stores: see the `updateStore` row above.
+7. **Client-chosen store phone** accepted unvalidated by `createStore`: removed, see above.
+
+Reviewed and found safe:
+- Home's "approved" banner compares the same store before and after, so a switch can't trigger it.
+- The Status screen shows the approved state without auto-navigating or alerting.
+- Inventory's fetch already had a request-id guard.
+- `acceptAllocation` already enforced per-store approval and online state.
+- Order history's fetch already had a request-id guard.
+
+Known minor limitation: the incoming-orders badge's instant realtime nudge only covers stores known
+when the tabs mounted. A store approved later relies on the badge's existing 15 s poll until the tabs
+remount, which any switch does. Counts stay correct.
+
+### Regression checks
+
+**Tests added**
+- Backend `src/controllers/multiStore.test.ts`, 23 tests: createStore success and copied fields;
+  6 validation cases; the 10-store limit; first extra store with nothing to copy; ignored client
+  phone; owner-photo sync; session required; live-store listing; the default-store rule and
+  approved list; profile with two stores; `store_name` on orders; submission ownership (filed under
+  another approved store, foreign store refused, default when omitted); support-message store choice
+  and fallback; notification wording for one store versus several.
+- Shopkeeper app `__tests__/multiStore.test.ts` (Jest), 19 tests: the selection rule (5 cases);
+  switch persistence and notification; default never overrides an explicit choice; survives restart;
+  logout clears and notifies; `storeStatus`; approval checks the selected store; no 15 s reuse across
+  a switch; a pending first store doesn't lock out an approved one; a suspended selected store is
+  reported unapproved; startup routing by selected store; and the add-store cache race against an
+  in-flight fetch.
+
+**Mutation checks** (each behaviour removed, its test confirmed red, file restored and verified):
+- *Backend:* 9 of 9 caught: store limit, 0,0 location check, push-token copy, deleted-store filter,
+  first-approved default, `store_name`, submission ownership, support store choice, notification
+  store name.
+- *App:* 6 of 6 caught: `storeApproval.ts` at `HEAD`, `session.ts` at `HEAD`, the approved-store
+  preference, switch notification, the store-keyed approval memo, and the add-store cache
+  generation bump.
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | **142/142** (119 before + 23 new) |
+| `npx vitest run` — frontend | 56/56 |
+| `npx jest` — shopkeeper app | **57/57** (38 existing + 19 new) |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+| `npx expo export --platform android` — shopkeeper app | bundles cleanly (5.8 MB Hermes bundle) |
+| ESLint — 18 modified shopkeeper-app files | 0 warnings before, 0 after. The new files have 5 warnings, all `require()` in the test, the same fresh-module-load pattern the existing `session.test.ts` uses. |
+
+**Not covered by automated tests:** screen rendering and navigation (the switcher sheet, the add-store
+form, order-card labels, the payouts/history switch fixes). The app's Jest setup tests pure logic
+only, with no component-rendering library. These were reviewed by reading every path and confirmed
+to bundle. A pass on a real device is recommended:
+- add a second store;
+- switch between an approved and a pending store;
+- confirm orders from both stores appear labelled;
+- check that payouts and history change with the store.
+
+No database migration is needed: `stores` already supported several rows per owner, with no unique
+constraint on `owner_id`.

@@ -17,6 +17,7 @@ export function getNotificationLink(type: string, data: Record<string, any> | nu
     case 'product_updated':
       return d.product_id ? `/products/edit/${d.product_id}` : '/products';
     case 'verification_submitted':
+    case 'store_added':
     case 'document_uploaded':
     case 'document_removed':
     case 'owner_photo_updated':

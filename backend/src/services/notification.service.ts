@@ -204,17 +204,36 @@ export class NotificationService {
     }
   }
 
-  async notifyShopkeeperNewOrder(storeId: string, orderId: string, orderCode: string) {
-    const title = 'New Order!';
-    const body = `Order #${orderCode} has arrived. Tap to review and accept.`;
-
-    await this.persistNotification('store', storeId, 'new_order', title, body, { orderId, storeId });
-
+  /**
+   * The store a shopkeeper notification is about, plus " at <name>" when its
+   * owner has more than one live store — otherwise a multi-store owner can't
+   * tell which shop an order is for. Single-store owners get the exact same
+   * wording as before (empty suffix). (Multi-store ownership, 2026-10-02.)
+   */
+  private async storeForShopkeeperNotification(storeId: string) {
     const { data: store } = await supabaseAdmin
       .from('stores')
-      .select('expo_push_token, owner_id')
+      .select('name, expo_push_token, owner_id')
       .eq('id', storeId)
       .maybeSingle();
+    let atStore = '';
+    if (store?.owner_id && store.name) {
+      const { count } = await supabaseAdmin
+        .from('stores')
+        .select('id', { count: 'exact', head: true })
+        .eq('owner_id', store.owner_id)
+        .is('deleted_at', null);
+      if ((count ?? 0) > 1) atStore = ` at ${store.name}`;
+    }
+    return { store, atStore };
+  }
+
+  async notifyShopkeeperNewOrder(storeId: string, orderId: string, orderCode: string) {
+    const { store, atStore } = await this.storeForShopkeeperNotification(storeId);
+    const title = 'New Order!';
+    const body = `Order #${orderCode} has arrived${atStore}. Tap to review and accept.`;
+
+    await this.persistNotification('store', storeId, 'new_order', title, body, { orderId, storeId });
 
     if (store?.expo_push_token && (await this.isShopkeeperNotificationEnabled(store.owner_id, 'newOrders'))) {
       await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'new_order' }, 'order_chime.wav', { table: 'stores', idColumn: 'id', idValue: storeId });
@@ -227,16 +246,11 @@ export class NotificationService {
   // notifyShopkeeperNewOrder's shape/gating (reuses the 'newOrders'
   // preference category rather than adding a new one for a single push type).
   async notifyShopkeeperOrderCancelled(storeId: string, orderId: string, orderCode: string) {
+    const { store, atStore } = await this.storeForShopkeeperNotification(storeId);
     const title = 'Order Cancelled';
-    const body = `Order #${orderCode} was cancelled by the customer — no need to prepare it.`;
+    const body = `Order #${orderCode}${atStore} was cancelled by the customer — no need to prepare it.`;
 
     await this.persistNotification('store', storeId, 'order_cancelled', title, body, { orderId, storeId });
-
-    const { data: store } = await supabaseAdmin
-      .from('stores')
-      .select('expo_push_token, owner_id')
-      .eq('id', storeId)
-      .maybeSingle();
 
     if (store?.expo_push_token && (await this.isShopkeeperNotificationEnabled(store.owner_id, 'newOrders'))) {
       await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'order_cancelled' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });

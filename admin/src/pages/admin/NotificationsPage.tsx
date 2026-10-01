@@ -22,7 +22,7 @@ interface AdminNotification {
     | 'owner_photo_updated' | 'store_image_added' | 'store_image_removed'
     | 'rider_profile_photo_updated' | 'rider_vehicle_photo_updated'
     | 'product_updated' | 'admin_review_action'
-    | 'store_status_changed' | 'rider_status_changed' | 'support_message';
+    | 'store_status_changed' | 'rider_status_changed' | 'support_message' | 'store_added';
   title: string;
   message: string;
   data: Record<string, any>;
@@ -70,6 +70,7 @@ const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string;
   store_status_changed: { icon: Wifi, color: 'text-emerald-600', bg: 'bg-emerald-100' },
   rider_status_changed: { icon: Wifi, color: 'text-emerald-600', bg: 'bg-emerald-100' },
   support_message: { icon: MessageCircle, color: 'text-blue-600', bg: 'bg-blue-100' },
+  store_added: { icon: Package, color: 'text-teal-600', bg: 'bg-teal-100' },
 };
 
 // ─── Push Notification Panel ──────────────────────────────────────────────────

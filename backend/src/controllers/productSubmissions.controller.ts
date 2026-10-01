@@ -89,8 +89,18 @@ function validateSubmissionFields(body: SubmitBody): { ok: true; fields: Validat
  */
 export async function submitProductSubmission(req: Request, res: Response) {
   try {
-    const storeId = req.shopkeeperStoreId;
     const shopkeeperId = req.shopkeeperId;
+    // Multi-store owners say which store the product is for (the app sends its
+    // selected store). It must be one of the caller's own *approved* stores;
+    // when omitted, the default (first approved) store is used, as before.
+    const requestedStoreId = (req.body as { store_id?: unknown })?.store_id;
+    let storeId = req.shopkeeperStoreId;
+    if (requestedStoreId !== undefined && requestedStoreId !== null && requestedStoreId !== '') {
+      if (typeof requestedStoreId !== 'string' || !req.shopkeeperApprovedStoreIds?.includes(requestedStoreId)) {
+        return res.status(403).json({ success: false, error: 'That store is not one of your approved stores' });
+      }
+      storeId = requestedStoreId;
+    }
     if (!storeId || !shopkeeperId) {
       return res.status(403).json({ success: false, error: 'No approved store found for this account' });
     }

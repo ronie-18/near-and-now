@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, createStore, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth } from '../controllers/storeOwner.controller.js';
 import { MAX_DOC_SIZE_BYTES } from '../utils/verificationDocuments.js';
 
 const router = Router();
@@ -8,6 +8,7 @@ const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 
 router.post('/signup/complete', signupComplete);
 router.get('/stores', getStores);
+router.post('/stores', createStore);
 router.patch('/stores/:id', updateStore);
 router.patch('/stores/:id/online', updateStoreStatus);
 router.get('/stores/:id/profile-change-request', getProfileChangeRequest);
