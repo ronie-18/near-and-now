@@ -4,7 +4,7 @@
  * reverse geocoding on camera idle, and confirm location flow.
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleMap } from '@react-google-maps/api';
 import { ArrowLeft, MapPin, Info, Navigation, Search } from 'lucide-react';
 import { reverseGeocode, LocationData, searchPlaces, getPlaceDetails, PlaceSuggestion } from '../../services/placesService';
@@ -50,6 +50,28 @@ export default function MapLocationPicker({
   const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reverseGeocodeRequestIdRef = useRef(0);
+  // Backlog item 23 (2026-10-02). The search box had no stale-response guard
+  // (reverse geocoding already did): typing "park" then "park street", the
+  // slower "park" response could land last and replace the newer suggestions,
+  // and clearing the box could be undone by a late response. Each search bumps
+  // this id and only the latest one may write state.
+  const searchRequestIdRef = useRef(0);
+  const resizeTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const idleListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+
+  // On close: cancel pending debounce/resize timers (a debounce firing after
+  // close still made a paid Google geocode/places request for a screen that's
+  // gone), detach the map listener, and invalidate in-flight responses.
+  useEffect(() => () => {
+    if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    resizeTimeoutsRef.current.forEach(clearTimeout);
+    resizeTimeoutsRef.current = [];
+    idleListenerRef.current?.remove();
+    idleListenerRef.current = null;
+    reverseGeocodeRequestIdRef.current++;
+    searchRequestIdRef.current++;
+  }, []);
 
   const { isLoaded, loadError } = useGoogleMaps();
 
@@ -60,16 +82,16 @@ export default function MapLocationPicker({
     // Trigger resize so map renders properly when embedded in a modal
     if (embedded) {
       // Multiple resize triggers to ensure map renders
-      setTimeout(() => {
-        google.maps.event.trigger(map, 'resize');
-        map.setCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
-      }, 100);
-      setTimeout(() => {
-        google.maps.event.trigger(map, 'resize');
-        map.setCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
-      }, 500);
+      resizeTimeoutsRef.current.forEach(clearTimeout);
+      resizeTimeoutsRef.current = [100, 500].map((ms) =>
+        setTimeout(() => {
+          google.maps.event.trigger(map, 'resize');
+          map.setCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
+        }, ms)
+      );
     }
-    map.addListener('idle', () => {
+    idleListenerRef.current?.remove();
+    idleListenerRef.current = map.addListener('idle', () => {
       const center = map.getCenter();
       if (!center) return;
       const lat = center.lat();
@@ -149,27 +171,44 @@ export default function MapLocationPicker({
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
+    // Any keystroke supersedes whatever search is still in flight.
+    const requestId = ++searchRequestIdRef.current;
 
     if (!value.trim()) {
       setSearchSuggestions([]);
+      setIsLoadingSearch(false);
       return;
     }
 
     searchTimeoutRef.current = setTimeout(async () => {
+      searchTimeoutRef.current = null;
+      if (requestId !== searchRequestIdRef.current) return;
       setIsLoadingSearch(true);
       try {
         const results = await searchPlaces(value);
+        if (requestId !== searchRequestIdRef.current) return; // stale response
         setSearchSuggestions(results);
       } catch (err) {
+        if (requestId !== searchRequestIdRef.current) return;
         console.error('Search error:', err);
         setSearchSuggestions([]);
       } finally {
-        setIsLoadingSearch(false);
+        if (requestId === searchRequestIdRef.current) setIsLoadingSearch(false);
       }
     }, 300);
   };
 
+  // Ending a search (picking a suggestion or closing the panel) drops any
+  // pending/in-flight one so it can't repopulate the list afterwards.
+  const cancelPendingSearch = () => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = null;
+    searchRequestIdRef.current++;
+    setIsLoadingSearch(false);
+  };
+
   const handleSuggestionClick = async (suggestion: PlaceSuggestion) => {
+    cancelPendingSearch();
     setIsLoadingSearch(true);
     try {
       const location = await getPlaceDetails(suggestion.placeId);
@@ -249,6 +288,8 @@ export default function MapLocationPicker({
             onLoad={onMapLoad}
             onUnmount={() => {
               if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+              idleListenerRef.current?.remove();
+              idleListenerRef.current = null;
               mapRef.current = null;
             }}
           />
@@ -290,6 +331,7 @@ export default function MapLocationPicker({
                 />
                 <button
                   onClick={() => {
+                    cancelPendingSearch();
                     setShowSearch(false);
                     setSearchQuery('');
                     setSearchSuggestions([]);

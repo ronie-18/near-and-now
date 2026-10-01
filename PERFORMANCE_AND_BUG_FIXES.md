@@ -381,7 +381,20 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
       webhook, which accumulates `refunded_amount` (item 1).
 
     Both of these were already true with the old 5-minute failure. The deadline only shortens it.
-20. `[PARTIALLY MITIGATED]` `customerAuth.middleware.ts:91-101` still writes `session_token_issued_at` every request, but it's now fire-and-forget (`void (async...)`), so it no longer blocks the response.
+20. `[FIXED 2026-10-02]` `customerAuth.middleware.ts:91-101` still writes `session_token_issued_at` every request, but it's now fire-and-forget (`void (async...)`), so it no longer blocks the response.
+    It no longer blocked the response, but it was still one `app_users` write per authenticated
+    customer request: about 720 an hour for a customer on the tracking screen (5 s poll), plus row
+    churn on a hot table. Renewal now happens only when the stored timestamp is more than an hour
+    old (`SESSION_RENEW_AFTER_MS`). The 25-day sliding window is unchanged; it now counts from last
+    activity to within an hour instead of to the second. Expiry, suspension and unknown-token
+    handling are untouched.
+    Checked while here:
+    - Every login path in `auth.controller.ts` sets `session_token` and `session_token_issued_at`
+      together, so the "no timestamp → never expires" branch only applies to legacy rows.
+    - An anonymous REST read of `app_users` returns HTTP 200 but **0 rows** (count-only check, no
+      data read). RLS is working, and session tokens aren't exposed.
+    - Shopkeeper sessions (`shopkeeper.controller.ts`, `storeOwner.controller.ts`) use a fixed,
+      non-sliding window with no renewal. That's a separate design, not part of this item.
 
 **Frontend (medium/low)**
 21. `[FIXED 2026-10-02]` `DeliveryPartnerPage.tsx:380-382` still sends no `Authorization` header.
@@ -396,7 +409,23 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
     bookmark still lands somewhere that works. Grep confirmed no other references in the website,
     admin panel or backend.
 22. `[FIXED]` `ShopPage.tsx` was rewritten around server-side `get_nearby_products_page`/`getNearbyProductsMeta`/`hasNearbyStores`; the old triple-RPC-call pattern is gone.
-23. `[PARTIALLY MITIGATED]` `DeliveryMap.tsx` now has real cleanup (`cancelled` flags, `zoomListenerRef.current?.remove()`); `MapLocationPicker.tsx` still has zero `useEffect`/cleanup for its `idle` listener or debounce timeouts.
+23. `[FIXED 2026-10-02]` `DeliveryMap.tsx` now has real cleanup (`cancelled` flags, `zoomListenerRef.current?.remove()`); `MapLocationPicker.tsx` still has zero `useEffect`/cleanup for its `idle` listener or debounce timeouts.
+    `MapLocationPicker.tsx` (the website's "Adjust location" map) had real user-facing problems
+    beyond missing cleanup:
+    - **Out-of-order search results.** Search had no stale-response guard (reverse geocoding
+      already had one). Typing "park" then "park street", the slower first response could land
+      last and replace the newer suggestions. Clearing the box, picking a suggestion or closing the
+      panel could each be undone by a late response refilling the list. A `searchRequestIdRef` now
+      lets only the latest search write state, and a `cancelPendingSearch()` helper runs on
+      suggestion click and on the panel's back button.
+    - **Paid Google calls after close.** Closing the picker within the 300 ms search debounce still
+      sent a Places request. The map's own `onUnmount` already cleared the 400 ms reverse-geocode
+      debounce.
+    - **Leftover listener and timers.** The `idle` listener was never removed, and the embedded
+      mode's two resize timers (100 ms and 500 ms) ran after close.
+
+    An unmount effect now clears every timer, removes the listener and invalidates in-flight
+    responses. The map's `onUnmount` also removes the listener.
 24. `[FIXED 2026-10-02]` `WishlistPage.tsx:77-92` `remove()` still captures a stale `previous` snapshot vulnerable to concurrent-remove races; `DriverApp.tsx:577-587` `toggleOnline` still has no rollback; `fetchSequence` (295-313) still force-collapses `expandedStops` every 6s.
     - **Wishlist.** Remove A, then remove B before A's request finishes. If A then failed, the whole
       pre-A snapshot was restored, so B came back on screen although the server had deleted it. Now
@@ -848,9 +877,10 @@ referral/rewards screens exist anywhere in the app (not started).
    account; see the note under section 5 #8). Website 21, 24 and 25 fixed; see section 10.
 9. `[DONE 2026-10-02]` #19: deadlines on every outbound HTTP call (section 11).
 10. `[DONE 2026-10-02]` #16 and #17 fixed, #18 re-assessed (section 12).
-11. **Next up:** #23 (`MapLocationPicker` listener/debounce cleanup), then #20 (session-token
-    timestamp written on every request), then the mobile-app lows (D3, D4, D5, C2, rider
-    #10/#11, customer #13).
+11. `[DONE 2026-10-02]` #23 and #20 (section 13).
+12. **Next up:** the mobile-app lows. Rider app: D3 (notification undo race), D4 (unhandled
+    `Linking.openURL` rejections), D5 (picker double-tap), #10 (verification fail-open window),
+    #11 (GPS watch log noise). Customer app: C2 (coupon expiry not checked client-side), #13.
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -1144,3 +1174,32 @@ path calls `finalize_order_if_ready`.
 | `npx vitest run` — backend | **93/93** (80 before + 13 new) |
 | `npx vitest run` — frontend | 50/50 |
 | `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+
+## 13. 2026-10-02 — map picker cleanup (item 23) and session renewal (item 20)
+
+The fix details are inline under items 20 and 23 in section 4.
+
+**New tests**
+
+| Test file | Pins down |
+| --- | --- |
+| `frontend/src/components/location/MapLocationPicker.test.tsx` (new, 6) | A fake Google map captures the `idle` listener, and the places calls are hand-resolved promises. (1) "park" then "park street"; the newer response lands first, the older one last → only "park street" is shown. (2) Clearing the box isn't undone by a late response. (3) Closing within the search debounce → `searchPlaces` is never called. (4) Closing within the map's idle debounce → `reverseGeocode` is never called, and the listener is removed. (5) Embedded resize timers don't fire after close. (6) Reverse geocoding still works normally while open. |
+| `backend/src/middleware/customerAuth.test.ts` (new, 6) | No `app_users` write 10 minutes after the last renewal. A renewal happens once the timestamp is over an hour old. A 24-day-old session is valid and renewed. A 26-day-old session → 401 and the token is cleared. A suspended account → 403 with no renewal. An unknown token → 401. |
+
+**Mutation check** (file copies, no `git stash`):
+- *Picker:* swapped back to `HEAD` → 5 of 6 failed. The 6th is the "still works while open"
+  guard, expected to pass on both versions.
+- *Middleware:* the `HEAD` file doesn't export the new constant the test imports, so instead only the
+  hourly condition was removed (renewal on every request again). The "no write 10 minutes after"
+  test failed as intended.
+- Both files were restored and confirmed byte-identical.
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | **99/99** (93 before + 6 new) |
+| `npx vitest run` — frontend | **56/56** (50 before + 6 new) |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+| ESLint — `MapLocationPicker.tsx` | 0 warnings before, 0 after; 0 in the new test file |

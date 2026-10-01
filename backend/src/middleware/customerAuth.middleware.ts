@@ -3,6 +3,11 @@ import { supabaseAdmin } from '../config/database.js';
 import { sendError } from '../utils/httpError.js';
 
 const SESSION_TTL_MS = 25 * 24 * 60 * 60 * 1000; // 25 days of inactivity
+// Renew the sliding window at most this often. Renewing on *every* request
+// meant one app_users write per authenticated call — ~720/hour for a customer
+// sitting on the tracking screen (5 s poll) — for no benefit: against a 25-day
+// window, an hour of granularity is invisible. (Backlog item 20, 2026-10-02.)
+export const SESSION_RENEW_AFTER_MS = 60 * 60 * 1000;
 
 declare module 'express' {
   interface Request {
@@ -20,10 +25,10 @@ declare module 'express' {
  * random session token, checked here, cannot be guessed or harvested the
  * same way.
  *
- * The session is a sliding 25-day window, not a fixed one: every single
- * authenticated request renews `session_token_issued_at` to the current
- * time, so the 25-day clock always counts from the customer's actual last
- * activity, to the second — not their original login. Only 25 days of
+ * The session is a sliding 25-day window, not a fixed one: authenticated
+ * requests renew `session_token_issued_at` (at most once an hour — see
+ * SESSION_RENEW_AFTER_MS), so the 25-day clock counts from the customer's
+ * actual last activity, to within an hour — not their original login. Only 25 days of
  * genuine inactivity — no request at all — lets the token actually expire
  * and forces a fresh OTP login, regardless of whether they ever tapped
  * "logout".
@@ -83,12 +88,12 @@ export async function requireCustomer(req: Request, res: Response, next: NextFun
         }
         return sendError(res, where, 'Your login session expired after 25 days without activity — please log in again.', undefined, 401);
       }
-      // Renew on every request so the 25-day window always counts from the
-      // customer's actual last activity. Fire-and-forget: don't hold up the
-      // request on this write, and a missed renewal just means the next
-      // request renews it instead. Filtered by role too, matching the SELECT
-      // above, so this can never touch a non-customer row even in principle.
-      void (async () => {
+      // Renew (at most hourly) so the 25-day window counts from the customer's
+      // actual last activity. Fire-and-forget: don't hold up the request on
+      // this write, and a missed renewal just means a later request renews it.
+      // Filtered by role too, matching the SELECT above, so this can never
+      // touch a non-customer row even in principle.
+      if (age > SESSION_RENEW_AFTER_MS) void (async () => {
         try {
           await supabaseAdmin
             .from('app_users')
