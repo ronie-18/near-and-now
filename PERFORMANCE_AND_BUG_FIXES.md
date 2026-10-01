@@ -312,11 +312,44 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
 20. `[PARTIALLY MITIGATED]` `customerAuth.middleware.ts:91-101` still writes `session_token_issued_at` every request, but it's now fire-and-forget (`void (async...)`), so it no longer blocks the response.
 
 **Frontend (medium/low)**
-21. `[STILL OPEN]` `DeliveryPartnerPage.tsx:380-382` still sends no `Authorization` header.
+21. `[FIXED 2026-10-02]` `DeliveryPartnerPage.tsx:380-382` still sends no `Authorization` header.
+    The page (route `/driver-legacy`, linked from nowhere) asked a rider to type their partner ID and
+    pushed browser GPS to `PUT /api/tracking/agents/:id/location`. That route is behind `requireRider`
+    and also rejects any id other than the logged-in rider's own. The page could never work: every
+    update was a 401, logged only to the browser console. Adding a header wouldn't have been enough,
+    because the manual-ID design itself conflicts with the backend's own-id check.
+    `/driver` (`DriverApp.tsx`) already does the same job properly. The rider logs in, and the location
+    is pushed via `/delivery-partner/location` while they're online.
+    Fix: deleted `DeliveryPartnerPage.tsx`. `/driver-legacy` now redirects to `/driver`, so an old
+    bookmark still lands somewhere that works. Grep confirmed no other references in the website,
+    admin panel or backend.
 22. `[FIXED]` `ShopPage.tsx` was rewritten around server-side `get_nearby_products_page`/`getNearbyProductsMeta`/`hasNearbyStores`; the old triple-RPC-call pattern is gone.
 23. `[PARTIALLY MITIGATED]` `DeliveryMap.tsx` now has real cleanup (`cancelled` flags, `zoomListenerRef.current?.remove()`); `MapLocationPicker.tsx` still has zero `useEffect`/cleanup for its `idle` listener or debounce timeouts.
-24. `[STILL OPEN]` `WishlistPage.tsx:77-92` `remove()` still captures a stale `previous` snapshot vulnerable to concurrent-remove races; `DriverApp.tsx:577-587` `toggleOnline` still has no rollback; `fetchSequence` (295-313) still force-collapses `expandedStops` every 6s.
-25. `[STILL OPEN]` `CheckoutPage.tsx:182` still reads raw `localStorage.getItem('currentLocation')`, never `LocationContext`.
+24. `[FIXED 2026-10-02]` `WishlistPage.tsx:77-92` `remove()` still captures a stale `previous` snapshot vulnerable to concurrent-remove races; `DriverApp.tsx:577-587` `toggleOnline` still has no rollback; `fetchSequence` (295-313) still force-collapses `expandedStops` every 6s.
+    - **Wishlist.** Remove A, then remove B before A's request finishes. If A then failed, the whole
+      pre-A snapshot was restored, so B came back on screen although the server had deleted it. Now
+      only the failed item is re-inserted, at its original position. The single `removingId` is only
+      cleared by the removal that set it.
+    - **`toggleOnline`.** It flipped the switch optimistically and never flipped it back. A network
+      error was swallowed, and a refusal (e.g. the backend's 403 "not yet approved") doesn't throw from
+      `fetch` at all. The screen then said "online" and polled for offers while the server still had
+      the rider offline. Now it checks `res.ok`, rolls back on any failure, and shows the server's
+      reason under the button ("Could not go online: …"). A ref guard plus a disabled button stop a
+      double click from sending two requests.
+    - **`fetchSequence`.** It ran every 6 s and reset the expanded stops to "first pending stop only",
+      collapsing whatever the rider had opened, e.g. a stop where they were typing a pickup code. It now
+      auto-expands only on first load or when the next pending stop changes (after a pickup).
+25. `[FIXED 2026-10-02]` `CheckoutPage.tsx:182` still reads raw `localStorage.getItem('currentLocation')`, never `LocationContext`.
+    The "Delivering to" location lives in two places: `LocationContext.userLocation` (persisted under
+    `userLocation`) and a second copy under `currentLocation` that only `Header.tsx` writes. The
+    nearby-store filter, and so the stores the cart was built from, reads the context. Checkout read the
+    second copy to decide which saved address to preselect, so any path that updated the context
+    without that key, or a stale key from another tab, made checkout preselect an address for a
+    different location than the cart's.
+    Fix: checkout now reads `userLocation` from `LocationContext` (imported as `useDeliveryLocation` to
+    avoid clashing with react-router's `useLocation`). It runs at the same point in the address-loading
+    effect as before, so preselection behaviour is otherwise unchanged. `Header.tsx` still writes
+    `currentLocation` for its own restore-on-reload and is untouched.
 26. `[FIXED]` `npx eslint . --ext ts,tsx --max-warnings 0` in `frontend/` now runs cleanly (4 errors/85 warnings, no config crash) — the broken `eslint-plugin-react` reference is gone.
 
 ## 5. New findings — 2026-09-30 deep-dive audit
@@ -404,19 +437,38 @@ which were fixed here — this is a record for the next pass.
 
 ### near-now-store_owner (shopkeeper app)
 
-6. **(High) No store-switcher; `selected_store_id` is set once at first login and never updated.**
+*(Items 6–8 were re-assessed on 2026-10-02 as **latent**: correct in the code, but no current user can
+hit them. See the note after item 8.)*
+
+6. **(High → latent) No store-switcher; `selected_store_id` is set once at first login and never updated.**
    `lib/useSelectedStore.ts:37-40`, seeded only in `app/(tabs)/home.tsx:160-165` (`if (!id)`). A
    shopkeeper with 2+ stores is permanently locked to whichever store the backend returned first —
    inventory, add-products, profile and billing for any other store are silently inaccessible.
-7. **(High) Store approval/suspension gate always checks `stores[0]`, not the store actually in
+7. **(High → latent) Store approval/suspension gate always checks `stores[0]`, not the store actually in
    use.** `lib/storeApproval.ts` (`getPrimaryStore`, `checkStoreApproval`) never honors
    `selected_store_id`, unlike `useSelectedStore`. For a multi-store account this can either lock the
    shopkeeper out of the whole app (store[0] suspended, real store approved) or let them keep
    managing/accepting orders on a store an admin already suspended (store[0] approved, real store
    suspended) — the client-side mirror of backend backlog item 8.
-8. **(Medium) Inconsistent multi-store scoping.** Order badges (`incomingOrdersContext.tsx`) and
+8. **(Medium → latent) Inconsistent multi-store scoping.** Order badges (`incomingOrdersContext.tsx`) and
    invoices (`app/invoice/[orderId].tsx`) correctly aggregate across every store the account owns;
    inventory, profile, billing and the approval gate do not.
+
+   **Re-assessment (2026-10-02): latent, not fixed.** All three items need one account that owns 2+
+   stores, and nothing in the product can create one:
+   - shopkeeper signup (`storeOwner.controller.ts`) always inserts a *new* `app_users` row with
+     exactly one store;
+   - neither the admin panel nor the backend has any "add another store" path (grep found no other
+     `stores` insert anywhere).
+
+   A read-only check of the live `stores` table (2026-10-02, public anon key) found 9 owners: 8 with
+   exactly one store, and one holding 29 seeded demo stores ("Near & Now Store #1–#29", created
+   2026-02-24 to 02-28, none approved, none active). No real shopkeeper can reach these bugs today.
+   They become real only if multi-store ownership is ever built. At that point #6 (a store switcher —
+   a product/UI decision), #7 (make the approval gate read the selected store) and #8 should be done
+   together.
+   Separately, the 29 demo stores could be cleaned up. That's a product-data decision and was
+   deliberately not touched.
 
 ### NAT_Near-Now_Rider- (driver app)
 
@@ -720,11 +772,12 @@ referral/rewards screens exist anywhere in the app (not started).
    writing tests (item 3's fully-refunded path, item 9's sibling `maybeSingle`). B1 was re-assessed as
    Low and deliberately left alone (see its note). All of them, and the earlier High fixes that
    previously had no automated coverage, are now pinned by a regression suite (section 8).
-8. **Next up:** shopkeeper-app Highs 6/7 (no store switcher; approval gate reads `stores[0]` instead
-   of the selected store). These are open in section 5. Item 6 needs a UI/product decision on how a
-   store switcher should look. Item 7's gate fix is mechanical, but should land with or after 6, since
-   today `selected_store_id` is never changed after first login. After that: Performance items 16–20
-   and Frontend 21/23–25.
+8. `[DONE 2026-10-02]` Shopkeeper-app 6/7/8 re-assessed as latent (no path creates a multi-store
+   account; see the note under section 5 #8). Website 21, 24 and 25 fixed; see section 10.
+9. **Next up:** backend reliability — #19 (no timeout/`AbortController` on any Google, Razorpay or
+   Expo push call, so a hung upstream hangs the request), then #17/#16/#18 (performance
+   leftovers), then #23 (`MapLocationPicker` listener cleanup), then the mobile-app lows (D3, D4, D5,
+   C2, rider #10/#11, customer #13).
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 
@@ -913,3 +966,43 @@ runner, so it isn't covered. Any change to the backend rule must be repeated in
 Not covered by automated tests: the button visibility itself (no render tests exist for these
 pages), and the customer-app screens. Those were checked by type-checking and by reading each
 condition against the order fields each screen actually loads.
+
+## 10. 2026-10-02 — website batch (items 21, 24, 25) and shopkeeper re-assessment
+
+The fix details are inline under items 21, 24 and 25 in section 4. The shopkeeper re-assessment is
+under section 5 #8.
+
+**New tests (frontend)**
+
+| Test file | Pins down |
+| --- | --- |
+| `src/pages/WishlistPage.test.tsx` (new) | Remove A, remove B; B's delete succeeds, then A's fails. The list ends as A, C, not A, B, C as before. |
+| `src/pages/DriverApp.test.tsx` (new) | (1) A 403 from `PATCH /delivery-partner/status` flips the toggle back and shows the server's reason. (2) A network error flips it back. (3) Success stays online, and a double click sends exactly one request. |
+| `src/pages/CheckoutPage.test.tsx` (extended) | With `LocationContext` at the work address and a stale `currentLocation` key pointing at the home (default) address, checkout preselects the **work** address. The test file now mocks `LocationContext`, `walletService` and an authenticated user; the 3 existing tests are unchanged and still pass. |
+
+**Mutation check.** Each fixed file was swapped back to its `HEAD` (pre-fix) version, its test run,
+and the file restored and confirmed byte-identical. Copies were used, not `git stash`.
+- Wishlist: 1 of 1 failed.
+- DriverApp: 3 of 3 failed.
+- Checkout: the new test failed, the 3 existing ones passed.
+
+Not covered by an automated test:
+- the `fetchSequence` re-collapse fix, which needs a 6-second polling cycle with a pickup in between.
+  Verified by reading the new condition;
+- the `/driver-legacy` → `/driver` redirect, a one-line `<Navigate>`.
+
+**Full verification run (2026-10-02)**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` — backend, frontend, admin, shopkeeper app, rider app, customer app | clean ×6 |
+| `npx vitest run` — backend | 69/69 |
+| `npx vitest run` — frontend | **50/50** (45 before + 5 new) |
+| `npm run build` (backend), `npx vite build` (frontend, admin) | all succeed |
+| ESLint on the four touched pages | 15 problems before, 15 after |
+
+On the ESLint row: one existing `exhaustive-deps` warning in `CheckoutPage` now also names
+`getStoredDeliveryLocation`. The effect deliberately runs once per user, and it read the stored
+location on that same schedule before this change, so behaviour is unchanged. An `any` this pass first
+introduced in `DriverApp` was removed, and `DriverApp` is back at its original 10 warnings. The new
+test files have 0 warnings.

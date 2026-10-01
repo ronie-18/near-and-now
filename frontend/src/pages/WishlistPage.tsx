@@ -76,7 +76,12 @@ const WishlistPage = () => {
 
   const remove = async (productId: string) => {
     setRemovingId(productId);
-    const previous = items;
+    // Roll back only the item that failed. Restoring a whole-list snapshot (as
+    // before) also resurrected anything removed successfully while this request
+    // was in flight: remove A, remove B, A fails → B reappeared although it was
+    // deleted on the server. (Backlog item 24, fixed 2026-10-02.)
+    const index = items.findIndex((it) => it.productId === productId);
+    const removed = index >= 0 ? items[index] : null;
     setItems((prev) => prev.filter((it) => it.productId !== productId));
     try {
       const res = await authedFetch(`${apiBase()}/api/wishlist/${productId}`, {
@@ -85,9 +90,16 @@ const WishlistPage = () => {
       });
       if (!res.ok) throw new Error('Failed to remove');
     } catch {
-      setItems(previous);
+      if (removed) {
+        setItems((prev) => {
+          if (prev.some((it) => it.productId === productId)) return prev;
+          const next = [...prev];
+          next.splice(Math.min(index, next.length), 0, removed);
+          return next;
+        });
+      }
     } finally {
-      setRemovingId(null);
+      setRemovingId((current) => (current === productId ? null : current));
     }
   };
 

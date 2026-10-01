@@ -292,6 +292,12 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
   const [delivering, setDelivering] = useState(false);
   const [expandedStops, setExpandedStops] = useState<Set<string>>(new Set());
   const headers = { Authorization: `Bearer ${token}` };
+  // Which stop was last auto-expanded. This poll runs every 6 s and used to
+  // reset expandedStops to "first pending stop only" on every tick, collapsing
+  // whatever the rider had opened (e.g. mid-way through typing a pickup code
+  // on another stop). Now it auto-expands only on first load or when the next
+  // pending stop changes (after a pickup). (Backlog item 24, fixed 2026-10-02.)
+  const autoExpandedStopRef = useRef<string | null>(null);
 
   const fetchSequence = useCallback(async () => {
     try {
@@ -301,7 +307,10 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
       if (d.success) {
         setData(d);
         const firstPending = d.stops.find((s: Stop) => !s.picked_up);
-        if (firstPending) setExpandedStops(new Set([firstPending.allocation_id]));
+        if (firstPending && firstPending.allocation_id !== autoExpandedStopRef.current) {
+          autoExpandedStopRef.current = firstPending.allocation_id;
+          setExpandedStops(new Set([firstPending.allocation_id]));
+        }
       }
     } catch { /* non-critical */ }
     finally { setLoadingSeq(false); }
@@ -574,16 +583,38 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
   }, [isOnline, pushLocation]);
 
   // Toggle online/offline — only allowed when status is 'active'
+  // Optimistic toggle with rollback. Previously it flipped the switch and never
+  // flipped it back: a network failure (caught) or a refusal such as the
+  // backend's 403 "not yet approved" (fetch doesn't throw on 4xx) left the
+  // screen saying "online" — polling for offers — while the server still had
+  // the rider offline. The ref also stops a double click from sending two
+  // opposite requests. (Backlog item 24, fixed 2026-10-02.)
+  const togglingRef = useRef(false);
+  const [toggling, setToggling] = useState(false);
+  const [toggleError, setToggleError] = useState('');
   const toggleOnline = async () => {
-    if (profile?.status !== 'active') return;
+    if (profile?.status !== 'active' || togglingRef.current) return;
+    togglingRef.current = true;
+    setToggling(true);
+    setToggleError('');
     const next = !isOnline;
     setIsOnline(next);
     try {
-      await fetch(`${API}/delivery-partner/status`, {
+      const r = await fetch(`${API}/delivery-partner/status`, {
         method: 'PATCH', headers,
         body: JSON.stringify({ is_online: next }),
       });
-    } catch (e) { console.error(e); }
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        throw new Error(body?.error || `Server responded ${r.status}`);
+      }
+    } catch (e) {
+      setIsOnline(!next);
+      setToggleError(`Could not go ${next ? 'online' : 'offline'}: ${(e instanceof Error && e.message) || 'network error'}`);
+    } finally {
+      togglingRef.current = false;
+      setToggling(false);
+    }
   };
 
   // Load profile
@@ -708,11 +739,17 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
                 <>
                   <button
                     onClick={toggleOnline}
-                    className={`w-full py-3 rounded-xl font-bold text-lg transition-all active:scale-95
+                    disabled={toggling}
+                    className={`w-full py-3 rounded-xl font-bold text-lg transition-all active:scale-95 disabled:opacity-60
                       ${isOnline ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white text-green-600 hover:bg-green-50'}`}
                   >
                     {isOnline ? '🔴 Go Offline' : '🟢 Go Online'}
                   </button>
+                  {toggleError && (
+                    <p role="alert" className="text-white text-xs text-center mt-2 bg-red-600/40 rounded-lg px-2 py-1">
+                      {toggleError}
+                    </p>
+                  )}
                   {isOnline && (
                     <p className="text-white/60 text-xs text-center mt-2">
                       Location updates every 10 s. New orders will appear below.

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useNotification } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
+import { useLocation as useDeliveryLocation } from '../context/LocationContext';
 import { createOrder, CreateOrderData, getUserAddresses, createAddress, updateAddress, deleteAddress, Address as DbAddress, UpdateAddressData } from '../services/supabase';
 import { geocodeAddress, LocationData } from '../services/placesService';
 import { openRazorpayCheckout, verifyPayment } from '../services/paymentGateway';
@@ -177,16 +178,24 @@ const CheckoutPage = () => {
 
   const lastCreatedAddressRef = useRef<DbAddress | null>(null);
 
+  // The "Delivering to" location comes from LocationContext — the same state the
+  // nearby-store filter (and so the cart's stores) is built from. It used to be
+  // read straight from localStorage's 'currentLocation', a second copy that only
+  // Header.tsx keeps in step; anything that updated the context without that
+  // key (or a stale key from another tab) made checkout preselect an address
+  // for a different location than the one the cart was built for.
+  // (Backlog item 25, fixed 2026-10-02.)
+  const { userLocation } = useDeliveryLocation();
   const getStoredDeliveryLocation = (): LocationData | null => {
-    try {
-      const raw = localStorage.getItem('currentLocation');
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as LocationData;
-      if (typeof parsed?.lat !== 'number' || typeof parsed?.lng !== 'number') return null;
-      return parsed;
-    } catch {
-      return null;
-    }
+    if (!userLocation || typeof userLocation.latitude !== 'number' || typeof userLocation.longitude !== 'number') return null;
+    return {
+      lat: userLocation.latitude,
+      lng: userLocation.longitude,
+      address: userLocation.address || '',
+      city: userLocation.city || '',
+      state: userLocation.state || '',
+      pincode: userLocation.pincode || '',
+    };
   };
 
   useEffect(() => {

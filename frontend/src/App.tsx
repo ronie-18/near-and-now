@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { NotificationProvider, useNotification } from './context/NotificationContext';
@@ -34,7 +34,6 @@ import AddressesPage from './pages/AddressesPage';
 import WishlistPage from './pages/WishlistPage';
 import AboutPage from './pages/AboutPage';
 import HelpPage from './pages/HelpPage';
-import DeliveryPartnerPage from './pages/DeliveryPartnerPage';
 import NotFoundPage from './pages/NotFoundPage';
 
 // Policy pages
@@ -85,7 +84,11 @@ const AppContent: React.FC = () => {
             <Route path="/contact" element={<AboutPage />} />
             <Route path="/help" element={<HelpPage />} />
             <Route path="/faq" element={<HelpPage />} />
-            <Route path="/driver-legacy" element={<DeliveryPartnerPage />} />
+            {/* The old manual-ID location page (DeliveryPartnerPage) sent no rider
+                login, so since requireRider guarded the location route every
+                update was a silent 401. /driver does the same job with a real
+                login; old bookmarks land there. (Backlog item 21, 2026-10-02.) */}
+            <Route path="/driver-legacy" element={<Navigate to="/driver" replace />} />
             {/* Policy Pages */}
             <Route path="/terms" element={<TermsOfServicePage />} />
             <Route path="/shipping" element={<ShippingPolicyPage />} />
