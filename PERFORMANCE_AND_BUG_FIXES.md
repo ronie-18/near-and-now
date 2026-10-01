@@ -64,16 +64,110 @@ Ordered by risk. Line numbers refer to `origin/main` at `89bd719`. **Status colu
 against live code on 2026-10-01** (see section 6.2) — items not re-verified keep their original text.
 
 **Payments / orders (high)**
-1. `[STILL OPEN]` Webhooks can downgrade a `paid` order (`payment.service.ts` `payment.authorized` / `payment.failed` have no status guard, lines 546-562/613-625); `refund.processed` (626-639) marks partial refunds as full.
-2. `[STILL OPEN]` Payment is captured before amount/notes validation (`payment.controller.ts:84`, `orderAdditions.controller.ts:298` — `ensurePaymentCaptured` runs before the cross-check that follows); a customer can pay for an order that `cancelIfPaymentAbandoned` already cancelled.
-3. `[PARTIALLY MITIGATED]` The generic `POST /refund` (`payment.controller.ts:199-217`) still never updates `refunded_amount`/`payment_status`, so a later cancel refunds twice, and `amount: 0` still triggers a full refund (`payment.service.ts:509`'s `if (data.amount)` is falsy for 0). But a new, correctly-built `resolveItemRefund` endpoint (`payment.controller.ts:223-318`) was added since — it updates both fields, caps at the paid total, and rejects `amount<=0`.
+1. `[FIXED 2026-10-01]` Webhooks could downgrade a `paid` order (`payment.service.ts` `payment.authorized` / `payment.failed` had no status guard); `refund.processed` marked partial refunds as full.
+   Fix: `payment.authorized`/`payment.failed` now use the same atomic-guard pattern as `cancelOrder`/
+   `acceptOrder` — `.not('payment_status', 'in', '(paid,refunded,partially_refunded)')` on the update,
+   so a late/retried webhook (Razorpay retries deliveries with no ordering guarantee) can no longer
+   downgrade an already-settled order; a zero-row match is logged and treated as a legitimate no-op
+   (the webhook handler acks 2xx either way, matching `payment.captured`'s existing idempotent-skip
+   convention, so Razorpay doesn't retry something that was correctly skipped). `refund.processed` now
+   looks up the order's `total_amount`/`refunded_amount`, accumulates the webhook's refund amount into
+   `refunded_amount` (capped at the order total), and classifies `payment_status` as `'refunded'` only
+   once that reaches the total — `'partially_refunded'` otherwise — mirroring `resolveItemRefund`'s own
+   full-vs-partial logic instead of always setting `'refunded'`.
+   Known residual gap, not fixed here: there's no webhook-event ledger in this codebase (`payment.captured`'s
+   idempotency is also business-state-only, not event-id-based), so a redelivered `refund.processed` for
+   the *same* Razorpay refund could still double-count `refunded_amount` — narrower than the bug fixed
+   here, which was wrong on every single partial refund, not just on a redelivery.
+   Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing — no existing test
+   covered `processWebhookEvent`, so this is verified by code review and type-checking, not new
+   automated coverage). Confirmed via grep that `payment.controller.ts`'s webhook handler is the only
+   caller and treats a normal return as success/no-retry, consistent with the new skip paths.
+2. `[FIXED 2026-10-01]` Payment was captured before amount/notes validation (`payment.controller.ts:84`, `orderAdditions.controller.ts:298`, `wallet.controller.ts:104` — `ensurePaymentCaptured` ran before the cross-check that followed); a customer could pay for an order that `cancelIfPaymentAbandoned` already cancelled, or capture real money for a payment that turned out not to actually belong to the thing it was being verified for.
+   Fix, same reordering across all three files — fetch payment details read-only first, run every
+   validation check (amount, notes-based ownership, and a new order-not-already-cancelled check) against
+   that pre-capture snapshot, and only call `ensurePaymentCaptured` once everything passes:
+   - `payment.controller.ts`'s `verifyPayment`: added an `orderCtx.status === 'order_cancelled'` guard
+     (new `status` field added to `getOrderPaymentContext`'s return) before the first Razorpay call, and
+     moved the amount/`notes.internal_order_id` strict checks to run against a pre-capture
+     `getPaymentDetails` fetch (accepting `'authorized'` or `'captured'`, since the payment is normally
+     still only authorized at this point) instead of after `ensurePaymentCaptured`. Re-fetches payment
+     details once more after a successful capture so the persisted gateway response reflects the final
+     captured state, matching the original behavior.
+   - `orderAdditions.controller.ts`'s `verifyAdditionPayment`: same reordering for its amount/
+     `order_id` check (this endpoint already had a `request.status !== 'pending'` guard before capture,
+     unaffected).
+   - `wallet.controller.ts`'s `verifyTopup`: same reordering for its `notes.wallet_topup`/`notes.user_id`
+     ownership check — previously a payment that turned out not to be a genuine top-up for that user
+     still got captured even though the request was rejected and no wallet credit was given.
+   Verified with `npx tsc --noEmit` (clean — also updated `payment.service.test.ts`'s
+   `getOrderPaymentContext` mock to include the new `status` field) and `npx vitest run` (22/22
+   passing). Confirmed via grep that `getOrderPaymentContext`'s other 5 callers only destructure
+   specific fields, so the additive `status` field doesn't affect them.
+3. `[FIXED 2026-10-01]` The generic `POST /refund` (`payment.controller.ts:199-217`) never updated
+   `refunded_amount`/`payment_status`, so a later cancel refunded twice, and `amount: 0` triggered a
+   full refund (`payment.service.ts:509`'s `if (data.amount)` is falsy for 0). A new, correctly-built
+   `resolveItemRefund` endpoint (`payment.controller.ts:223-318`) was added since this item was first
+   found — it updates both fields, caps at the paid total, and rejects `amount<=0` — but the original
+   `/refund` endpoint itself was untouched.
+   Fix: rebuilt `processRefund` to match `resolveItemRefund`'s own safety pattern. Rejects
+   `amount <= 0`/non-numeric outright (closing the `amount: 0` → full-refund fallthrough). Looks up the
+   order by `razorpay_payment_id` *before* calling Razorpay (this endpoint previously had zero order
+   linkage at all) and rejects with 404/409 if no order is found or the requested amount would exceed
+   what's actually been paid. After a successful Razorpay refund, accumulates into `refunded_amount`
+   (capped at the order total) and classifies `payment_status` as `'refunded'`/`'partially_refunded'` —
+   so a later `cancelOrder` now sees accurate state instead of refunding the same order a second time.
+   Confirmed via grep this endpoint (`POST /api/payment/refund`, admin-only) has zero live callers in
+   the admin panel or website today — hardened as a matter of principle (same "dead but reachable,
+   still worth closing" reasoning as earlier fixes this session), not because real traffic was hitting
+   it, but it does handle real money if called directly by anyone holding an admin session.
+   Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing).
 4. `[MITIGATED 2026-10-01]` `cancelOrder` (`database.service.ts:360-461`) still cancels allocations/offers/store_orders (398-438) before its own atomic status-guarded `customer_orders` update (447-456) — internally still a multi-step, non-transactional sequence. The exploitable consequence (a rider's `acceptOrder` winning a race landing between those steps) is now closed from the other side instead — see item 7's fix. A future caller that reads/writes `store_orders`/`customer_orders` state without the same defensive status guard `acceptOrder` now has could still hit a similar race; `cancelOrder` itself would ideally become one atomic Postgres function (matching `finalize_order_if_ready`'s pattern) rather than relying on every consumer to defend against its non-atomicity individually.
 5. `[FIXED]` `acceptAllocation` (`shopkeeper.controller.ts`) now has a read-check (238) and an atomic `.eq('status','pending_acceptance')` write guard (317-325) against double-submit; migration `20260930340000_finalize_order_if_ready_require_accepted.sql` closed the related "all-rejected still marked ready" gap.
 
 **Access control (high)**
-6. `[STILL OPEN]` Saved-address resolution (`database.service.ts:582-687` `getCustomerSavedAddressesResolved`) still does `ilike '%tendigits%'` substring matching on `contact_phone` across all customers and merges in their addresses.
-7. `[PARTIALLY FIXED 2026-10-01]` `acceptOrder` (`deliveryPartner.controller.ts:816-845`) claimed via `.is('delivery_partner_id', null)` with no `store_orders.status` filter; `addTrackingUpdate` (`tracking.controller.ts:107-134`, `database.service.ts:2406-2446`) let any assigned rider set any `VALID_ORDER_STATUSES` value directly, with no forward-only/OTP guard; and riders could read customer name/phone before accepting.
-   `[STILL OPEN]` The third sub-issue — `getAvailableOrders` (`deliveryPartner.controller.ts:1917,1931,1966-1967`) returns `customer_name`/`customer_phone` (from `receiver_name`/`receiver_phone` or the `app_users` row) directly in every offer payload sent to any online rider browsing available orders, before they've accepted anything — was not addressed in this pass. Not fixed here; carried forward.
+6. `[FIXED 2026-10-01]` Saved-address resolution (`database.service.ts` `getCustomerSavedAddressesResolved`)
+   did `ilike '%tendigits%'` substring matching (plus an exact-match variant) on `contact_phone` across
+   *all* customers and merged in their addresses.
+   Root cause: `customer_saved_addresses.contact_phone` is a per-address delivery-contact field ("who to
+   call for this delivery"), not an account-identity field — a customer can legitimately save an address
+   with someone else's number as the contact (sending a gift, delivering to a relative). Matching on it
+   meant that if *anyone*, ever, entered your phone number as the delivery contact on their own saved
+   address, your account would merge in their `customer_id` and this function would return their entire
+   saved-address book to you; the substring variant made it worse by also matching unrelated numbers
+   sharing a 10-digit run.
+   Fix: removed both the exact and substring `contact_phone` matches entirely. Only the account-level
+   identity fields (`app_users.phone` / `customers.phone`, exact-variant matching) remain — which is what
+   actually serves this function's documented purpose (merging duplicate accounts for the *same* real
+   person), without matching on a field that's explicitly meant to differ from the account owner. Also
+   removed the now-dead `lastTenIndianMobileDigits()` helper, which existed solely to feed the removed
+   substring match.
+   Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing). Confirmed via grep that
+   `getCustomerSavedAddressesResolved` has exactly one caller (`customers.controller.ts`'s
+   `getResolvedAddresses`, "get my own addresses" with no client-supplied phone hints — already hardened
+   against the unauthenticated-query-param version of this same bug class) with no dependency on the
+   over-broad merge.
+7. `[FIXED 2026-10-01]` `acceptOrder` (`deliveryPartner.controller.ts:816-845`) claimed via `.is('delivery_partner_id', null)` with no `store_orders.status` filter; `addTrackingUpdate` (`tracking.controller.ts:107-134`, `database.service.ts:2406-2446`) let any assigned rider set any `VALID_ORDER_STATUSES` value directly, with no forward-only/OTP guard; and riders could read customer name/phone before accepting.
+   Third sub-issue, fixed separately: `getAvailableOrders` (`deliveryPartner.controller.ts`) returned
+   `customer_name`/`customer_phone` (from `receiver_name`/`receiver_phone` or an `app_users` lookup)
+   directly in every offer payload sent to any online rider browsing available orders — and the rider
+   app's `home.tsx` actively displayed it, including a tap-to-call button, before the rider had accepted
+   anything. This was a live product behavior, not just a background data leak, so the fix direction was
+   confirmed with the user first (hide until accepted, matching how most delivery platforms handle this,
+   rather than leaving it or showing a partial field) before changing it.
+   Fix: removed `customer_name`/`customer_phone` (and the now-unused `app_users` lookup and
+   `customer_id`/`receiver_name`/`receiver_phone` select columns that only fed them) from
+   `getAvailableOrders`'s response. Removed the matching pre-accept display (name + call button) from
+   the rider app's offer card, along with the now-dead `customer_name`/`customer_phone` type fields and
+   two now-unused styles. Confirmed customer contact info remains available immediately after
+   acceptance via `getPickupSequence` (the active-delivery screen's endpoint, already
+   `assigned_driver_id`-gated and already including `receiver_name`/`receiver_phone`), which the rider
+   app's active-delivery screen (`app/delivery/[orderId].tsx`) already displays — so riders don't lose
+   the ability to see/call the customer, it's just correctly gated to after they've committed to the
+   delivery. Confirmed via grep that `getAvailableOrders` has exactly one route and the rider app is its
+   only consumer; the website's driver screens don't reference these fields at all.
+   Verified with `npx tsc --noEmit` (clean for both the backend and the rider app) and `npx vitest run`
+   (22/22 passing).
    Fix, two parts:
    - `acceptOrder`'s `store_orders` claim now also requires `.not('status', 'in', '(order_cancelled,order_delivered)')`, closing the race where `cancelOrder`'s non-atomic multi-step sequence (item 4) could let a claim land between steps and succeed on an order actually being cancelled. A second, narrower-window guard was added on the follow-up `customer_orders` update too (same status exclusion); if that one loses the race instead, the `store_orders` claim is rolled back (`delivery_partner_id: null`, `status: 'ready_for_pickup'` — the same reset `rejectOrder` already uses) rather than leaving the rider holding a live claim on a cancelled order. Note: confirmed via grep that `POST /delivery-partner/orders/:orderId/accept` (`acceptOrder`) has zero live callers today — every app (rider app, website's `DriverApp.tsx`, legacy `DeliveryPartnerPage.tsx`) only ever calls the offer-based `/delivery-partner/offers/:offerId/accept` (`acceptOffer`), whose underlying `accept_driver_offer()` Postgres function was already fully atomic and correctly order-status-gated (checked during this same audit). So the day-to-day accept flow was never actually exposed to this race — `acceptOrder` is hardened as a matter of principle (same "dead but reachable, still worth closing" reasoning as `addTrackingUpdate` below), not because real traffic was hitting it.
    - `addTrackingUpdate` (`database.service.ts`) now enforces a forward-only `ORDER_STATUS_SEQUENCE` (rejects any transition that isn't strictly forward, `order_cancelled` excepted as a separate terminal branch reachable from anywhere) and requires `customer_orders.delivery_otp_verified_at` to already be set before accepting a transition to `order_delivered` — closing the second, unguarded path to a status the dedicated `markDelivered` endpoint otherwise gates properly on OTP verification. Confirmed via grep that this route (`POST /api/tracking/orders/:orderId/updates`) has zero live callers in either the rider app or the website today — hardened rather than removed, since it's still a registered, `requireRider`-gated endpoint reachable directly.
@@ -83,9 +177,49 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
    For shopkeepers, `resolveShopkeeperFromToken` deliberately stays approval-agnostic (many callers — document upload/delete, billing info, support messages, profile-change requests — must keep working for a pending/suspended shopkeeper so they can act on admin's feedback); instead, the two customer-facing storefront-gallery mutations that were missing the check pending stores already had elsewhere (`deleteStoreProduct`, `updateProductQuantity`, `updateProductActiveState`) — `addStoreImage` and `deleteStoreImage` — now go through a new `assertOwnsApprovedStore()` helper instead of the approval-agnostic `assertOwnsStore()`.
    For riders, `requireRider` is intentionally left unchanged: it's documented in-code (deliveryPartner.controller.ts:311-317) as deliberately approval-agnostic so a pending rider can still view their own profile/status, and every actual order-mutating action (`acceptOrder`, `acceptOffer`, going online) already re-checks `is_approved` fresh from the DB on every call via `getRiderApprovalState()`/inline checks — confirmed this isn't a stale-session gap like the admin case, since there's no "checked once at login" pattern here to begin with.
    Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing, unaffected).
-9. `[STILL OPEN]` `getDriverLocationsForOrder` (`database.service.ts` ~2490) still has no filter excluding `order_delivered`/`order_cancelled`.
-10. `[STILL OPEN]` `customers.controller.ts:85-101` `createAddress` still spreads `...req.body` into the insert; `updateAddress` right below it correctly uses an allowlist — the fix was applied inconsistently between the two.
-11. `[STILL OPEN]` `storeOwner.routes.ts:19,22` still wire `docUpload.single('file')` ahead of the controller; the auth check in `resolveShopkeeperFromToken` runs as the first line *inside* the handler, after multer already parsed the upload.
+9. `[FIXED 2026-10-01]` `getDriverLocationsForOrder` (`database.service.ts` ~2490) had no filter
+   excluding `order_delivered`/`order_cancelled` — a customer could keep polling a rider's live GPS
+   position indefinitely after their own order finished.
+   Fix: now fetches the order's `status` after the ownership check and returns `{}` (the same shape
+   already used for "no rider assigned yet") once it's `order_delivered`/`order_cancelled`. Found and
+   fixed the identical gap in the sibling `isAgentAssignedToCustomer`/`getAgentLocation` path too — its
+   own comment explicitly says it "scopes the raw live-location read ... the same way
+   `isOrderOwnedByCustomer` scopes order-keyed tracking reads," but had no status filter either, and
+   `assigned_driver_id` is never cleared after delivery (kept as history), so a customer could pull a
+   past rider's location by id alone the same way. Added
+   `.not('status', 'in', '(order_delivered,order_cancelled)')` to its query.
+   Confirmed both controllers already treat the resulting empty `{}`/`null` as valid, pre-existing
+   states (`getDriverLocations` already returns `{}` for "no rider assigned yet";
+   `getAgentLocation` already 404s on `null`), so no frontend changes were needed.
+   Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing).
+10. `[FIXED 2026-10-01]` `customers.controller.ts` `createAddress` spread `...req.body` into the
+    insert; `updateAddress` right below it already correctly used an allowlist — the fix had been
+    applied inconsistently between the two.
+    Fix: hoisted `updateAddress`'s allowlist into a shared `ALLOWED_ADDRESS_FIELDS` constant and switched
+    `createAddress` to build its insert payload from it the same way, rather than duplicating the list a
+    second time (duplication is exactly what let the two drift apart in the first place). `customer_id`
+    is still always set explicitly from the URL param, never from the allowlist/body.
+    Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing). Confirmed every field
+    the customer mobile app's `lib/addressService.ts` and the website's `supabase.ts` `createAddress`
+    send is a strict subset of the allowlist — including a client-supplied `customer_id` in the website's
+    payload, which was already overridden and is now also simply not copied by the allowlist loop.
+11. `[FIXED 2026-10-01]` `storeOwner.routes.ts` wired `docUpload.single('file')` ahead of the
+    controller on both upload routes; the auth check in `resolveShopkeeperFromToken` ran as the first
+    line *inside* the handler, after multer already parsed the upload — an unauthenticated request
+    still got its multipart body fully parsed into memory (up to `MAX_DOC_SIZE_BYTES`) before being
+    rejected.
+    Fix: extracted a new exported `requireStoreOwnerAuth` Express middleware (wrapping
+    `resolveShopkeeperFromToken`, which already sends the 401 response on failure) and wired it
+    *before* `docUpload.single('file')` on both routes, so an unauthenticated upload is rejected before
+    multer does any work. Stashes the resolved id on a new `req.storeOwnerId` (deliberately named
+    distinctly from `shopkeeper.controller.ts`'s own unrelated `req.shopkeeperId`, a different route
+    family's session check) so `saveVerificationDocument`/`saveBillingInfo` reuse it instead of
+    re-resolving the same token a second time. The other 22 call sites of
+    `resolveShopkeeperFromToken` are untouched — this only applies to the two routes that also run
+    multer.
+    Verified with `npx tsc --noEmit` (clean) and `npx vitest run` (22/22 passing). The failure-response
+    shape for an unauthenticated request is unchanged (same function, same status/body), so no client
+    changes were needed.
 
 **Data / multi-store (medium)**
 12. `[STILL OPEN]` `invoice.controller.ts` `verifyOrderBelongsToShopkeeper` still uses `.maybeSingle()` on a join; a shopkeeper whose two stores are both allocated on one order gets a silently-swallowed multi-row error → 403.
@@ -95,8 +229,8 @@ against live code on 2026-10-01** (see section 6.2) — items not re-verified ke
 
 **Performance (medium)**
 16. `[PARTIALLY MITIGATED]` The 3 tracking watchdogs are now fire-and-forget (no longer blocking the response), but they still run every poll, and `reBroadcastIfStuck` (`shopkeeper.controller.ts:887-897`) still does a DB read before its in-memory throttle check.
-17. `[STILL OPEN]` `assignCandidatesInRadius` (580-589) and the driver-online catch-up path (757-788) still pull all active/approved stores or all `ready_for_pickup` orders and filter by `haversineKm` in JS; `adminActivityLog.controller.ts:57-77` still has six unbounded `.select()`s with no `.limit()` — **the admin panel's own `ActivityLogPage` has no pagination UI either**, see section 6.1, finding A3.
-18. `[PARTIALLY MITIGATED]` Rider `getOrders` gained an opt-in `?limit=` (capped 200) but defaults to unbounded by design (documented); `coupons.controller.ts` → `database.service.ts:1420-1432` `getCoupons()` is still fully unbounded. **`adminRiderPayouts.controller.ts`'s `listRiderPayouts` is also unbounded**, see section 6.1, finding A3.
+17. `[STILL OPEN]` `assignCandidatesInRadius` (580-589) and the driver-online catch-up path (757-788) still pull all active/approved stores or all `ready_for_pickup` orders and filter by `haversineKm` in JS. `adminActivityLog.controller.ts`'s six queries are `[FIXED 2026-10-01]` — see section 6.1, finding A3.
+18. `[PARTIALLY MITIGATED]` Rider `getOrders` gained an opt-in `?limit=` (capped 200) but defaults to unbounded by design (documented); `coupons.controller.ts` → `database.service.ts:1420-1432` `getCoupons()` is still fully unbounded. `adminRiderPayouts.controller.ts`'s `listRiderPayouts` is `[FIXED 2026-10-01]` — see section 6.1, finding A3.
 19. `[STILL OPEN]` No `AbortController`/`signal` on any fetch in `directions.service.ts`, `geocoding.service.ts`, `notification.service.ts`, `payment.service.ts`, `roads.service.ts`.
 20. `[PARTIALLY MITIGATED]` `customerAuth.middleware.ts:91-101` still writes `session_token_issued_at` every request, but it's now fire-and-forget (`void (async...)`), so it no longer blocks the response.
 
@@ -453,18 +587,30 @@ referral/rewards screens exist anywhere in the app (not started).
    not the same stale-session pattern as the admin case. Applying this migration also surfaced 2 new,
    unrelated live vulnerabilities (V1, V2 — section 7), now also fixed and applied.
 2. **`[DONE 2026-10-01]` Backend items 4 and 7** — the `cancelOrder`/`acceptOrder`/`addTrackingUpdate`
-   race conditions. `acceptOrder`'s claim now excludes cancelled/delivered orders (with a rollback if
-   the narrower `customer_orders` update loses the race instead); `addTrackingUpdate` now enforces
+   race conditions, including item 7's third sub-issue (riders reading customer name/phone before
+   accepting, fixed in a later pass the same day with the user's product-decision sign-off — see
+   item 7's own note). `acceptOrder`'s claim now excludes cancelled/delivered orders (with a rollback
+   if the narrower `customer_orders` update loses the race instead); `addTrackingUpdate` now enforces
    forward-only transitions and requires OTP verification before `order_delivered`. `cancelOrder`
    itself is still internally non-atomic (see item 4's updated note) — the exploitable consequence is
    closed, but a fully atomic rewrite (matching `finalize_order_if_ready`'s pattern) remains a
    worthwhile follow-up, not done here.
-3. **`[DONE 2026-10-01]` Admin panel A2** — closed the store-approval RLS gap so the UI check can't be
-   bypassed; migration still needs to be applied to the live database.
+3. **`[DONE + APPLIED 2026-10-01]` Admin panel A2** — closed the store-approval RLS gap so the UI check
+   can't be bypassed; migration applied and verified live (section 7).
 4. `[DONE 2026-10-01]` Mobile-app mediums (S1, D1, D2, C1) — all fixed.
 5. `[DONE 2026-10-01]` Admin panel A3 — pagination added to activity log and rider payouts.
    A4 deliberately left as-is — see its own note (lowest severity, high regression risk to
    "fix properly" across ~30 routes without miscategorizing one).
+6. `[DONE 2026-10-01]` **Every remaining backend High item** (1, 2, 3, 6, 9, 10, 11) — webhook status
+   guards and accurate partial/full refund accounting (1, 3); capture-before-validation reordering
+   across checkout/add-items/wallet top-up, plus a new order-not-cancelled guard (2); removed the
+   over-broad `contact_phone` cross-customer address merge (6); closed the matching live-location leak
+   in both `getDriverLocationsForOrder` and the sibling `isAgentAssignedToCustomer` path (9); shared
+   allowlist so `createAddress` can no longer be mass-assigned (10); auth-before-multer on both
+   document-upload routes (11). Every fix verified with `npx tsc --noEmit` + `npx vitest run` (22/22)
+   per-change, plus grep-confirmed caller/consumer checks — see each item's own note in section 4 for
+   details. This closes every High-severity item in the `near-and-now` repo that didn't require a
+   product decision beyond the one already made (item 7's sub-issue).
 
 ## 7. 2026-10-01 — migration-history reconciliation and 2 new live vulnerabilities found while applying the item-8 fix
 

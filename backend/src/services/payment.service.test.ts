@@ -72,6 +72,7 @@ describe('PaymentService', () => {
       customer_id: 'customer-ctx-id',
       total_amount: 100,
       payment_status: 'pending',
+      status: 'pending_at_store',
       razorpay_order_id: null,
       razorpay_payment_id: null,
       split_upi_amount: null

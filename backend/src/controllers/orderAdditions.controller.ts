@@ -295,21 +295,28 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'Payment verification failed' });
     }
 
+    // Validate amount before capturing — capturing is a one-way action; doing it
+    // before this check meant a payment captured for the wrong amount could
+    // only be fixed with a manual refund afterward, not just rejecting the
+    // request outright. Found 2026-10-01 (bug_fixes doc, item 2). Accepts
+    // 'authorized' (the normal pre-capture state here) as well as 'captured'
+    // (e.g. a retried verify call after a prior success).
+    const prelimPayment = await paymentService.getPaymentDetails(razorpay_payment_id) as any;
+    const prelimStatus = String(prelimPayment?.status || '').toLowerCase();
+    const trustedAmountPaise = Math.round(Number(request.subtotal_amount) * 100);
+    const strictChecksPassed =
+      (prelimStatus === 'captured' || prelimStatus === 'authorized') &&
+      prelimPayment?.order_id === razorpay_order_id &&
+      Number(prelimPayment?.amount || 0) === trustedAmountPaise;
+
+    if (!strictChecksPassed) {
+      console.warn('[ADD-ITEMS] Strict checks failed', { request_id, orderId, payment: prelimPayment });
+      return res.status(400).json({ success: false, error: 'Payment verification failed' });
+    }
+
     const captureResult = await paymentService.ensurePaymentCaptured(razorpay_payment_id);
     if (captureResult.status !== 'captured') {
       return res.status(400).json({ success: false, error: `Payment not captured (status: ${captureResult.status})` });
-    }
-
-    const payment = await paymentService.getPaymentDetails(razorpay_payment_id) as any;
-    const trustedAmountPaise = Math.round(Number(request.subtotal_amount) * 100);
-    const strictChecksPassed =
-      String(payment?.status).toLowerCase() === 'captured' &&
-      payment?.order_id === razorpay_order_id &&
-      Number(payment?.amount || 0) === trustedAmountPaise;
-
-    if (!strictChecksPassed) {
-      console.warn('[ADD-ITEMS] Strict checks failed', { request_id, orderId, payment });
-      return res.status(400).json({ success: false, error: 'Payment verification failed' });
     }
 
     const { data: applied, error: applyErr } = await supabaseAdmin

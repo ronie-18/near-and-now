@@ -5,6 +5,20 @@ import { sendError } from '../utils/httpError.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Shared by createAddress and updateAddress — previously only updateAddress used an
+// allowlist; createAddress spread `...req.body` straight into the insert, letting a
+// client set any column on customer_saved_addresses (id, created_at, customer_id
+// before the explicit override, etc). Hoisted to one constant specifically so the
+// two can't drift apart the way they did before — found 2026-10-01 (bug_fixes doc,
+// item 10).
+const ALLOWED_ADDRESS_FIELDS = [
+  'label', 'address', 'city', 'state', 'pincode', 'country',
+  'latitude', 'longitude', 'google_place_id', 'google_formatted_address',
+  'google_place_data', 'contact_name', 'contact_phone', 'landmark',
+  'delivery_instructions', 'is_default', 'is_active',
+  'delivery_for', 'receiver_name', 'receiver_address', 'receiver_phone',
+] as const;
+
 export class CustomersController {
   /**
    * Resolves the authenticated customer's saved addresses, merging in any
@@ -88,10 +102,11 @@ export class CustomersController {
       if (customerId !== req.customerId) {
         return res.status(403).json({ error: 'Not authorized to create an address for this customer' });
       }
-      const addressData = {
-        ...req.body,
-        customer_id: customerId
-      };
+
+      const addressData: Record<string, unknown> = { customer_id: customerId };
+      for (const key of ALLOWED_ADDRESS_FIELDS) {
+        if (key in req.body) addressData[key] = req.body[key];
+      }
 
       const address = await databaseService.createCustomerSavedAddress(addressData);
       res.status(201).json(address);
@@ -105,16 +120,8 @@ export class CustomersController {
       const { addressId } = req.params;
       const customerId = req.customerId!;
 
-      const allowed = [
-        'label', 'address', 'city', 'state', 'pincode', 'country',
-        'latitude', 'longitude', 'google_place_id', 'google_formatted_address',
-        'google_place_data', 'contact_name', 'contact_phone', 'landmark',
-        'delivery_instructions', 'is_default', 'is_active',
-        'delivery_for', 'receiver_name', 'receiver_address', 'receiver_phone',
-      ] as const;
-
       const updates: Record<string, unknown> = {};
-      for (const key of allowed) {
+      for (const key of ALLOWED_ADDRESS_FIELDS) {
         if (key in req.body) updates[key] = req.body[key];
       }
 

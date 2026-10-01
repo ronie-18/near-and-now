@@ -1914,7 +1914,7 @@ export class DeliveryPartnerController {
 
       const [{ data: orders }, { data: allocations }] = await Promise.all([
         supabaseAdmin.from('customer_orders')
-          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, customer_id, receiver_name, receiver_phone')
+          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at')
           .in('id', orderIds),
         supabaseAdmin.from('order_store_allocations')
           .select('order_id, store_id, sequence_number')
@@ -1925,13 +1925,6 @@ export class DeliveryPartnerController {
 
       const orderMap: Record<string, any> = {};
       (orders || []).forEach((o: any) => { orderMap[o.id] = o; });
-
-      const customerIds = [...new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean))];
-      const { data: customers } = customerIds.length
-        ? await supabaseAdmin.from('app_users').select('id, name, phone').in('id', customerIds)
-        : { data: [] };
-      const customerMap: Record<string, any> = {};
-      (customers || []).forEach((c: any) => { customerMap[c.id] = c; });
 
       const storeIds = [...new Set((allocations || []).map((a: any) => a.store_id))];
       const [{ data: stores }, { data: items }] = await Promise.all([
@@ -1961,7 +1954,6 @@ export class DeliveryPartnerController {
 
       const result = offers.map((offer: any) => {
         const order = orderMap[offer.order_id] || {};
-        const customer = customerMap[order.customer_id] || {};
         const orderAllocs = allocsByOrder[offer.order_id] || [];
         return {
           offer_id: offer.id,
@@ -1971,8 +1963,13 @@ export class DeliveryPartnerController {
           delivery_address: order.delivery_address,
           customer_lat: order.delivery_latitude,
           customer_lng: order.delivery_longitude,
-          customer_name: order.receiver_name || customer.name || null,
-          customer_phone: order.receiver_phone || customer.phone || null,
+          // customer_name/customer_phone deliberately NOT included here — this
+          // lists orders the rider hasn't accepted yet. Any online rider could
+          // previously browse every pending offer and see (and call) the
+          // customer before committing to deliver, which is the whole thing
+          // acceptance is supposed to gate. Customer contact info is available
+          // post-accept via getOrderById/getCurrentOrder instead. Found
+          // 2026-10-01 (bug_fixes doc, item 7).
           placed_at: offer.created_at,
           store_count: orderAllocs.length,
           stores: orderAllocs.map((a: any) => {

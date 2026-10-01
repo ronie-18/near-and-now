@@ -551,13 +551,25 @@ export class PaymentService {
         // handleWebhook) responds non-2xx on a thrown error, which makes
         // Razorpay retry the webhook. An unchecked write here would instead
         // silently leave payment_status stale with no retry and no trace.
-        const { error } = await supabaseAdmin
+        //
+        // Atomic status guard: Razorpay retries webhook deliveries with no
+        // ordering guarantee, so a late/retried payment.authorized event can
+        // arrive after payment.captured already marked this order 'paid' (or
+        // after a refund settled it). Without this guard it silently downgrades
+        // an already-settled order back to merely 'authorized'. Found 2026-10-01
+        // (bug_fixes doc, item 1).
+        const { data: updated, error } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'authorized', razorpay_payment_id: payment.id })
-          .eq('id', internalOrderId);
+          .eq('id', internalOrderId)
+          .not('payment_status', 'in', '(paid,refunded,partially_refunded)')
+          .select('id');
         if (error) {
           console.error('[WEBHOOK] Failed to persist payment.authorized', { eventId, internalOrderId, error });
           throw error;
+        }
+        if (!updated || updated.length === 0) {
+          console.log('[WEBHOOK] Skipped payment.authorized — order already settled or not found', { eventId, internalOrderId });
         }
       }
     } else if (eventType === 'payment.captured') {
@@ -614,23 +626,64 @@ export class PaymentService {
       const payment = event.payload?.payment?.entity;
       const internalOrderId = payment?.notes?.internal_order_id;
       if (internalOrderId) {
-        const { error } = await supabaseAdmin
+        // Same atomic status guard as payment.authorized above — a late/retried
+        // payment.failed event (e.g. the customer's first attempt failed, a
+        // retry succeeded and the order is now paid) must not downgrade an
+        // already-settled order back to 'failed'. Found 2026-10-01 (bug_fixes
+        // doc, item 1).
+        const { data: updated, error } = await supabaseAdmin
           .from('customer_orders')
           .update({ payment_status: 'failed' })
-          .eq('id', internalOrderId);
+          .eq('id', internalOrderId)
+          .not('payment_status', 'in', '(paid,refunded,partially_refunded)')
+          .select('id');
         if (error) {
           console.error('[WEBHOOK] Failed to persist payment.failed', { eventId, internalOrderId, error });
           throw error;
+        }
+        if (!updated || updated.length === 0) {
+          console.log('[WEBHOOK] Skipped payment.failed — order already settled or not found', { eventId, internalOrderId });
         }
       }
     } else if (eventType === 'refund.processed') {
       const refund = event.payload?.refund?.entity;
       const paymentId = refund?.payment_id;
       if (paymentId) {
+        const { data: order, error: fetchErr } = await supabaseAdmin
+          .from('customer_orders')
+          .select('id, total_amount, refunded_amount')
+          .eq('razorpay_payment_id', paymentId)
+          .maybeSingle();
+        if (fetchErr) {
+          console.error('[WEBHOOK] Failed to look up order for refund.processed', { eventId, paymentId, error: fetchErr });
+          throw fetchErr;
+        }
+        if (!order) {
+          console.warn('[WEBHOOK] refund.processed for unknown payment_id', { eventId, paymentId });
+          return;
+        }
+        // Previously always set payment_status: 'refunded' regardless of amount,
+        // so a partial refund (e.g. resolveItemRefund's per-item admin refund)
+        // got reported here as the whole order being refunded. Mirrors
+        // resolveItemRefund's own full-vs-partial classification
+        // (payment.controller.ts) instead: accumulate into refunded_amount and
+        // only mark 'refunded' once that reaches the order total, 'partially_refunded'
+        // otherwise. Doesn't fully solve double-counting if this exact webhook is
+        // redelivered (no webhook-event ledger exists in this codebase — same
+        // business-state-only idempotency payment.captured above already relies
+        // on) but that's a narrower edge case than a bug that was wrong on every
+        // single partial refund. Found 2026-10-01 (bug_fixes doc, item 1).
+        const totalAmount = Number(order.total_amount || 0);
+        const alreadyRefunded = Number(order.refunded_amount || 0);
+        const refundAmountRupees = Number(refund?.amount || 0) / 100;
+        const newRefundedTotal = Math.min(alreadyRefunded + refundAmountRupees, totalAmount);
         const { error } = await supabaseAdmin
           .from('customer_orders')
-          .update({ payment_status: 'refunded' })
-          .eq('razorpay_payment_id', paymentId);
+          .update({
+            refunded_amount: newRefundedTotal,
+            payment_status: newRefundedTotal >= totalAmount - 0.01 ? 'refunded' : 'partially_refunded',
+          })
+          .eq('id', order.id);
         if (error) {
           console.error('[WEBHOOK] Failed to persist refund.processed', { eventId, paymentId, error });
           throw error;

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth } from '../controllers/storeOwner.controller.js';
 import { MAX_DOC_SIZE_BYTES } from '../utils/verificationDocuments.js';
 
 const router = Router();
@@ -16,10 +16,15 @@ router.get('/stores/:id/images', getStoreImages);
 router.post('/stores/:id/images', addStoreImage);
 router.delete('/stores/:id/images/:imageId', deleteStoreImage);
 router.get('/stores/:id/verification-documents', getVerificationDocuments);
-router.post('/stores/:id/verification-documents/:docType', docUpload.single('file'), saveVerificationDocument);
+// requireStoreOwnerAuth runs before docUpload on both of these specifically — auth
+// must reject an unauthenticated request before multer spends any work parsing its
+// multipart body (up to MAX_DOC_SIZE_BYTES) into memory. See its own comment
+// (storeOwner.controller.ts) for the full writeup; found 2026-10-01 (bug_fixes
+// doc, item 11).
+router.post('/stores/:id/verification-documents/:docType', requireStoreOwnerAuth, docUpload.single('file'), saveVerificationDocument);
 router.delete('/stores/:id/verification-documents/:docType', deleteVerificationDocument);
 router.get('/stores/:id/billing-info', getBillingInfo);
-router.post('/stores/:id/billing-info', docUpload.single('file'), saveBillingInfo);
+router.post('/stores/:id/billing-info', requireStoreOwnerAuth, docUpload.single('file'), saveBillingInfo);
 router.patch('/products/:productId/quantity', updateProductQuantity);
 router.patch('/products/:productId', updateProductActiveState);
 router.delete('/products/:productId', deleteStoreProduct);

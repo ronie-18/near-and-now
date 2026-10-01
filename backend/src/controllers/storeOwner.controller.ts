@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
@@ -62,6 +62,16 @@ function describeSignupDbError(step: 'account' | 'store', error: { code?: string
 // schedule as its sibling /shopkeeper routes, not live forever.
 const SHOPKEEPER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+declare module 'express' {
+  interface Request {
+    /** Set by requireStoreOwnerAuth below — distinct from shopkeeper.controller.ts's
+     * req.shopkeeperId, which is a different route family's own session check;
+     * the two never run on the same request, but keeping separate names avoids
+     * any ambiguity if that ever changes. */
+    storeOwnerId?: string;
+  }
+}
+
 async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<string | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -93,6 +103,26 @@ async function resolveShopkeeperFromToken(req: Request, res: Response): Promise<
   }
 
   return user.id;
+}
+
+/**
+ * Express middleware wrapping resolveShopkeeperFromToken, for the two routes
+ * (verification-document and billing-info upload) that also run `multer`.
+ * Previously multer ran first (`docUpload.single('file')` was wired ahead of
+ * the controller in storeOwner.routes.ts, which does the auth check itself as
+ * the first line inside the handler) — so an unauthenticated request still
+ * got its multipart body fully parsed into memory, up to MAX_DOC_SIZE_BYTES,
+ * before ever being rejected. Running this middleware first means an
+ * unauthenticated upload is rejected before multer does any work at all.
+ * Stashes the resolved id on req.storeOwnerId so the controller doesn't need
+ * a second round-trip to re-resolve the same token. Found 2026-10-01
+ * (bug_fixes doc, item 11).
+ */
+export async function requireStoreOwnerAuth(req: Request, res: Response, next: NextFunction) {
+  const userId = await resolveShopkeeperFromToken(req, res);
+  if (!userId) return; // resolveShopkeeperFromToken already sent the error response
+  req.storeOwnerId = userId;
+  next();
 }
 
 /**
@@ -1092,8 +1122,10 @@ export async function getVerificationDocuments(req: Request, res: Response) {
  */
 export async function saveVerificationDocument(req: Request, res: Response) {
   try {
-    const userId = await resolveShopkeeperFromToken(req, res);
-    if (!userId) return;
+    // Already resolved by requireStoreOwnerAuth (storeOwner.routes.ts), which runs
+    // before multer on this route specifically so an unauthenticated upload is
+    // rejected before its file body is parsed at all.
+    const userId = req.storeOwnerId!;
 
     const { id: storeId, docType } = req.params;
     if (!isDocType(docType)) {
@@ -1363,8 +1395,10 @@ const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
  */
 export async function saveBillingInfo(req: Request, res: Response) {
   try {
-    const userId = await resolveShopkeeperFromToken(req, res);
-    if (!userId) return;
+    // Already resolved by requireStoreOwnerAuth (storeOwner.routes.ts), which runs
+    // before multer on this route specifically so an unauthenticated upload is
+    // rejected before its file body is parsed at all.
+    const userId = req.storeOwnerId!;
 
     const storeId = req.params.id;
     if (!(await assertOwnsStore(storeId, userId))) {

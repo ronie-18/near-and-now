@@ -79,24 +79,26 @@ export class PaymentController {
         console.warn('[PAYMENT] Order does not belong to caller', { internalOrderId, customerId, orderOwnerId: orderCtx.customer_id });
         return res.status(403).json({ success: false, error: 'This order does not belong to you' });
       }
-
-      // Explicitly capture authorized payments so dashboard amount/transactions reflect successful payments.
-      const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
-      if (captureResult.status !== 'captured') {
-        console.warn('[PAYMENT] Capture did not result in captured status', {
-          internalOrderId,
-          paymentId,
-          status: captureResult.status
-        });
-        return res.status(400).json({
-          success: false,
-          error: `Payment not captured (status: ${captureResult.status})`
-        });
+      // The order must not already be cancelled (e.g. cancelIfPaymentAbandoned
+      // racing a very late verify call) before we capture real money for it —
+      // capturing is a one-way action (undoing it needs a separate refund, not
+      // just a DB rollback). Found 2026-10-01 (bug_fixes doc, item 2).
+      if (orderCtx.status === 'order_cancelled') {
+        console.warn('[PAYMENT] Order already cancelled — refusing to capture', { internalOrderId, paymentId });
+        return res.status(409).json({ success: false, error: 'This order has already been cancelled' });
       }
 
-      const payment = await paymentService.getPaymentDetails(paymentId) as any;
-      const paymentStatus = String(payment?.status || '').toLowerCase();
-      const razorpayAmountPaise = Number(payment?.amount || 0);
+      // Fetch payment details read-only — no capture yet — so every check below
+      // (amount, notes.internal_order_id, order ownership/status above) runs
+      // against real Razorpay data *before* the irreversible capture call.
+      // Previously ensurePaymentCaptured ran first, so a payment could be
+      // captured before these checks ever ran, including for a payment that
+      // turned out not to actually belong to this order (notes mismatch) or an
+      // order that was already cancelled — found 2026-10-01 (bug_fixes doc,
+      // item 2).
+      const prelimPayment = await paymentService.getPaymentDetails(paymentId) as any;
+      const prelimStatus = String(prelimPayment?.status || '').toLowerCase();
+      const razorpayAmountPaise = Number(prelimPayment?.amount || 0);
 
       // For split payments the Razorpay order covers only the UPI portion, not the full order total.
       const isSplit = orderCtx.split_upi_amount != null && orderCtx.split_upi_amount > 0;
@@ -113,10 +115,12 @@ export class PaymentController {
       // full exploit writeup). createPaymentOrder stamps notes.internal_order_id
       // on the Razorpay order at creation time specifically so this can be checked
       // against Razorpay's own trusted record, never a client-supplied value.
-      const notes = payment?.notes || {};
+      // Accepts 'authorized' here (pre-capture, the normal state at this point)
+      // as well as 'captured' (e.g. a retried verify call after a prior success).
+      const notes = prelimPayment?.notes || {};
       const strictChecksPassed =
-        paymentStatus === 'captured' &&
-        payment?.order_id === razorpayOrderId &&
+        (prelimStatus === 'captured' || prelimStatus === 'authorized') &&
+        prelimPayment?.order_id === razorpayOrderId &&
         razorpayAmountPaise === trustedAmountPaise &&
         notes.internal_order_id === internalOrderId;
 
@@ -124,9 +128,9 @@ export class PaymentController {
         console.warn('[PAYMENT] Strict source-of-truth checks failed', {
           internalOrderId,
           paymentId,
-          paymentStatus,
+          prelimStatus,
           razorpayOrderId,
-          paymentOrderId: payment?.order_id,
+          paymentOrderId: prelimPayment?.order_id,
           notesInternalOrderId: notes.internal_order_id,
           razorpayAmountPaise,
           trustedAmountPaise,
@@ -138,6 +142,25 @@ export class PaymentController {
         });
       }
 
+      // Only now, after every read-only check above passed, actually capture
+      // the money — explicitly, so dashboard amount/transactions reflect
+      // successful payments.
+      const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
+      if (captureResult.status !== 'captured') {
+        console.warn('[PAYMENT] Capture did not result in captured status', {
+          internalOrderId,
+          paymentId,
+          status: captureResult.status
+        });
+        return res.status(400).json({
+          success: false,
+          error: `Payment not captured (status: ${captureResult.status})`
+        });
+      }
+
+      // Re-fetch so the persisted gateway response reflects the final captured
+      // state, not the pre-capture snapshot used for validation above.
+      const payment = await paymentService.getPaymentDetails(paymentId) as any;
       await paymentService.persistGatewayResponse(internalOrderId, payment);
 
       // Idempotent DB update prevents verify + webhook race from double-updating.
@@ -203,12 +226,63 @@ export class PaymentController {
       if (!paymentId) {
         return res.status(400).json({ error: 'Payment ID is required' });
       }
+      // paymentService.processRefund's `if (data.amount) body.amount = ...` is
+      // falsy for 0, so `amount: 0` previously fell through to omitting the
+      // amount entirely — which Razorpay treats as "refund everything left on
+      // this payment" — instead of being rejected outright. Found 2026-10-01
+      // (bug_fixes doc, item 3).
+      if (amount !== undefined && (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0)) {
+        return res.status(400).json({ error: 'amount must be a positive number, or omitted for a full refund' });
+      }
+
+      // This endpoint previously had no order linkage at all: a successful
+      // Razorpay refund never updated customer_orders.refunded_amount/
+      // payment_status, so a later cancelOrder saw stale state (still 'paid',
+      // refunded_amount still 0) and issued a SECOND, full refund for money
+      // already refunded here. Require the order up front — reject before
+      // calling Razorpay, not after — so every refund through this endpoint is
+      // trackable and can't silently overshoot what's actually been paid.
+      // Mirrors resolveItemRefund's own amount-vs-total guard. Found 2026-10-01
+      // (bug_fixes doc, item 3).
+      const { data: order, error: orderLookupErr } = await supabaseAdmin
+        .from('customer_orders')
+        .select('id, total_amount, refunded_amount')
+        .eq('razorpay_payment_id', paymentId)
+        .maybeSingle();
+      if (orderLookupErr) throw orderLookupErr;
+      if (!order) {
+        return res.status(404).json({ error: 'No order found for this payment ID' });
+      }
+      const alreadyRefunded = Number(order.refunded_amount || 0);
+      const totalAmount = Number(order.total_amount || 0);
+      const requestedAmount = amount != null ? Number(amount) : totalAmount - alreadyRefunded;
+      if (alreadyRefunded + requestedAmount > totalAmount + 0.01) {
+        return res.status(409).json({ error: 'Refund would exceed the amount paid for this order' });
+      }
 
       const refund = await paymentService.processRefund({
         paymentId,
-        amount,
+        amount: requestedAmount,
         reason
       });
+
+      // Checked but not thrown — the Razorpay refund has already happened by
+      // this point, so failing the request now would be misleading. But a
+      // silent failure here would leave payment_status/refunded_amount stale
+      // with real money already refunded, risking exactly the double-refund
+      // this fix closes — log it loudly instead, same pattern as cancelOrder's
+      // own refund-then-mark-refunded step.
+      const newRefundedTotal = Math.min(alreadyRefunded + refund.amount, totalAmount);
+      const { error: orderUpdateErr } = await supabaseAdmin
+        .from('customer_orders')
+        .update({
+          refunded_amount: newRefundedTotal,
+          payment_status: newRefundedTotal >= totalAmount - 0.01 ? 'refunded' : 'partially_refunded',
+        })
+        .eq('id', order.id);
+      if (orderUpdateErr) {
+        console.error('CRITICAL: Razorpay refund succeeded but failed to persist order state (double-refund risk):', orderUpdateErr, { orderId: order.id, paymentId });
+      }
 
       res.json(refund);
     } catch (error) {

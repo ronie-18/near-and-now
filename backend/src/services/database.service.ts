@@ -46,25 +46,6 @@ function customerPhoneLookupVariants(phone: string): string[] {
   return [...out].filter(Boolean);
 }
 
-/** 10-digit Indian mobile for loose contact_phone ILIKE matching (ignores spaces/format in DB). */
-function lastTenIndianMobileDigits(phone: string): string | null {
-  const d = String(phone).replace(/\D/g, '');
-  if (d.length === 10 && /^[6-9]/.test(d)) return d;
-  if (d.length === 11 && d.startsWith('0')) {
-    const rest = d.slice(1);
-    return rest.length === 10 && /^[6-9]/.test(rest) ? rest : null;
-  }
-  if (d.length >= 12 && d.startsWith('91')) {
-    const rest = d.slice(-10);
-    return /^[6-9]/.test(rest) ? rest : null;
-  }
-  if (d.length >= 10) {
-    const rest = d.slice(-10);
-    return /^[6-9]/.test(rest) ? rest : null;
-  }
-  return null;
-}
-
 /**
  * delivery_partners.is_approved is the single source of truth for the admin approval
  * gate (mirrors stores.is_approved). It's derived from status rather than set directly
@@ -106,13 +87,14 @@ export class DatabaseService {
     customer_id: string;
     total_amount: number;
     payment_status: string;
+    status: string;
     razorpay_order_id: string | null;
     razorpay_payment_id: string | null;
     split_upi_amount: number | null;
   } | null> {
     const primary = await supabaseAdmin
       .from('customer_orders')
-      .select('id, customer_id, total_amount, payment_status, razorpay_order_id, razorpay_payment_id, notes')
+      .select('id, customer_id, total_amount, payment_status, status, razorpay_order_id, razorpay_payment_id, notes')
       .eq('id', orderId)
       .maybeSingle();
     if (!primary.error) {
@@ -121,6 +103,7 @@ export class DatabaseService {
         customer_id: string;
         total_amount: number;
         payment_status: string;
+        status: string;
         razorpay_order_id: string | null;
         razorpay_payment_id: string | null;
         notes: string | null;
@@ -139,7 +122,7 @@ export class DatabaseService {
     if (this.isMissingColumnError(primary.error, 'razorpay_order_id')) {
       const fallback = await supabaseAdmin
         .from('customer_orders')
-        .select('id, customer_id, total_amount, payment_status, razorpay_payment_id')
+        .select('id, customer_id, total_amount, payment_status, status, razorpay_payment_id')
         .eq('id', orderId)
         .maybeSingle();
       if (fallback.error) throw fallback.error;
@@ -149,6 +132,7 @@ export class DatabaseService {
         customer_id: (fallback.data as any).customer_id,
         total_amount: Number((fallback.data as any).total_amount || 0),
         payment_status: String((fallback.data as any).payment_status || 'pending'),
+        status: String((fallback.data as any).status || ''),
         razorpay_order_id: null,
         razorpay_payment_id: (fallback.data as any).razorpay_payment_id ?? null,
         split_upi_amount: null
@@ -634,16 +618,22 @@ export class DatabaseService {
 
     const list = [...allVariants];
 
-    const tenDigitHints = new Set<string>();
-    for (const p of phoneHints) {
-      const t = lastTenIndianMobileDigits(p);
-      if (t) tenDigitHints.add(t);
-    }
-    for (const s of seeds) {
-      const t = lastTenIndianMobileDigits(s);
-      if (t) tenDigitHints.add(t);
-    }
-
+    // Previously also matched customer_saved_addresses.contact_phone (exact
+    // variant, and a `.ilike('contact_phone', '%<10digits>%')` substring match)
+    // on the theory that it's just another phone-format variant to reconcile.
+    // It isn't: contact_phone is per-address ("who to call for this delivery"),
+    // not an account-identity field — a customer can legitimately save an
+    // address with a *different* person's number as the contact (sending a
+    // gift, delivering to a relative). Matching on it meant that if anyone,
+    // ever, entered your phone number as the delivery contact on their own
+    // saved address, your account would merge in their customer_id and this
+    // function would return their *entire* saved-address book to you — the
+    // substring version made this worse, since it could also match on
+    // unrelated numbers that happened to share a 10-digit run. Only the
+    // account-level identity fields (app_users.phone / customers.phone) below
+    // actually support this function's documented purpose (merging duplicate
+    // accounts for the *same* real person). Found 2026-10-01 (bug_fixes doc,
+    // item 6).
     if (list.length > 0) {
       const { data: usersByPhone } = await supabaseAdmin
         .from('app_users')
@@ -662,33 +652,6 @@ export class DatabaseService {
 
       for (const row of custRows || []) {
         if (row.user_id) customerIds.add(row.user_id);
-      }
-
-      // Saved addresses use contact_phone (not a generic "phone" column); exact variant match
-      const { data: addrByContactExact } = await supabaseAdmin
-        .from('customer_saved_addresses')
-        .select('customer_id')
-        .in('contact_phone', list)
-        .eq('is_active', true);
-
-      for (const row of addrByContactExact || []) {
-        const cid = (row as { customer_id?: string }).customer_id;
-        if (cid) customerIds.add(cid);
-      }
-    }
-
-    // contact_phone may not equal any variant exactly (+91 vs spaces); match by 10-digit substring
-    for (const ten of tenDigitHints) {
-      const { data: addrByContactLoose } = await supabaseAdmin
-        .from('customer_saved_addresses')
-        .select('customer_id')
-        .eq('is_active', true)
-        .not('contact_phone', 'is', null)
-        .ilike('contact_phone', `%${ten}%`);
-
-      for (const row of addrByContactLoose || []) {
-        const cid = (row as { customer_id?: string }).customer_id;
-        if (cid) customerIds.add(cid);
       }
     }
 
@@ -2481,13 +2444,23 @@ export class DatabaseService {
     return data;
   }
 
-  /** True only if `agentId` is the currently-assigned rider on one of `customerId`'s own orders — used to scope the raw live-location read below, the same way `isOrderOwnedByCustomer` scopes order-keyed tracking reads. */
+  /**
+   * True only if `agentId` is the currently-assigned rider on one of
+   * `customerId`'s own *active* orders — used to scope the raw live-location
+   * read below, the same way `isOrderOwnedByCustomer` scopes order-keyed
+   * tracking reads. The status exclusion closes the same gap as
+   * getDriverLocationsForOrder's: `assigned_driver_id` is never cleared after
+   * delivery (it's kept as delivery history), so without this a customer
+   * could keep pulling a past rider's live location indefinitely after their
+   * order was delivered or cancelled. Found 2026-10-01 (bug_fixes doc, item 9).
+   */
   private async isAgentAssignedToCustomer(agentId: string, customerId: string): Promise<boolean> {
     const { data } = await supabaseAdmin
       .from('customer_orders')
       .select('id')
       .eq('customer_id', customerId)
       .eq('assigned_driver_id', agentId)
+      .not('status', 'in', '(order_delivered,order_cancelled)')
       .maybeSingle();
     return !!data;
   }
@@ -2525,6 +2498,16 @@ export class DatabaseService {
   /** Returns null if `orderId` doesn't belong to `customerId` — distinct from `{}`, which means "owned, but no driver assigned yet". */
   async getDriverLocationsForOrder(orderId: string, customerId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }> | null> {
     if (!(await this.isOrderOwnedByCustomer(orderId, customerId))) return null;
+    // Previously had no status check at all — a customer could keep polling a
+    // rider's live GPS position indefinitely after their own order was
+    // delivered or cancelled, with no ongoing legitimate reason to see it.
+    // Found 2026-10-01 (bug_fixes doc, item 9).
+    const { data: orderRow } = await supabaseAdmin
+      .from('customer_orders')
+      .select('status')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (orderRow?.status === 'order_delivered' || orderRow?.status === 'order_cancelled') return {};
     const { data: storeOrders } = await supabaseAdmin
       .from('store_orders')
       .select('delivery_partner_id')

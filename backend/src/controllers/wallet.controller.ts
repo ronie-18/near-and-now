@@ -101,11 +101,6 @@ export class WalletController {
         return res.status(400).json({ success: false, error: 'Payment verification failed' });
       }
 
-      const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
-      if (captureResult.status !== 'captured') {
-        return res.status(400).json({ success: false, error: `Payment not captured (status: ${captureResult.status})` });
-      }
-
       // The signature only proves paymentId/orderId/signature are internally
       // consistent — it does NOT prove this payment was ever created as a
       // wallet top-up for THIS user. Without this check, any authenticated
@@ -120,10 +115,15 @@ export class WalletController {
       // so this can be checked against Razorpay's own trusted record, not
       // anything client-supplied — same shape as the main checkout's
       // `payment.order_id === razorpayOrderId` strict check.
-      const payment = await paymentService.getPaymentDetails(paymentId) as any;
-      const notes = payment?.notes || {};
+      //
+      // Checked *before* capturing — capturing is a one-way action; doing it
+      // first meant a payment that turned out not to be a genuine top-up for
+      // this user still got captured even though the request was rejected and
+      // no wallet credit was ever given. Found 2026-10-01 (bug_fixes doc, item 2).
+      const prelimPayment = await paymentService.getPaymentDetails(paymentId) as any;
+      const notes = prelimPayment?.notes || {};
       const isGenuineTopup =
-        payment?.order_id === razorpayOrderId &&
+        prelimPayment?.order_id === razorpayOrderId &&
         (notes.wallet_topup === true || notes.wallet_topup === 'true') &&
         notes.user_id === userId;
       if (!isGenuineTopup) {
@@ -131,6 +131,11 @@ export class WalletController {
           userId, paymentId, razorpayOrderId, notes,
         });
         return res.status(400).json({ success: false, error: 'Payment verification failed' });
+      }
+
+      const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
+      if (captureResult.status !== 'captured') {
+        return res.status(400).json({ success: false, error: `Payment not captured (status: ${captureResult.status})` });
       }
 
       // Trust the captured amount from Razorpay, not the client-supplied one —
