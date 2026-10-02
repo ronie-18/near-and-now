@@ -49,7 +49,14 @@ export function isGstVerificationConfigured(): boolean {
 
 // A provider-side problem (bad/expired key, no credits, throttled) is
 // "couldn't verify", not "this GSTIN is fake" — never reject a customer for it.
-const PROVIDER_PROBLEM = /key|secret|credit|balance|recharge|unauthori[sz]ed|limit|expired|plan|subscription/i;
+const PROVIDER_PROBLEM = /key|secret|credit|balance|recharge|unauthori[sz]ed|authenticat|forbidden|limit|expired|plan|subscription|quota/i;
+
+// Only a message that clearly says the registry has no such GSTIN counts as
+// 'not_found'. Anything else — including wording never seen before — is
+// 'unavailable', so an unexpected error can never refuse a genuine customer.
+// (Was the reverse — any error not matching PROVIDER_PROBLEM meant
+// 'not_found' — fixed 2026-10-02 after the first live test.)
+const NOT_FOUND = /not\s*found|no\s*(record|data|detail|result)s?|does\s*n[o']?t\s*exist|not\s*registered|invalid\s*gst(in)?\b|not\s*(a\s*)?valid\s*gst/i;
 
 type AppyflowResponse = {
   error?: boolean;
@@ -114,11 +121,11 @@ async function lookupAppyflow(gstin: string, keySecret: string): Promise<GstinVe
   }
 
   const message = String(json.message || '').trim();
-  if (!ok || PROVIDER_PROBLEM.test(message) || (!json.error && !message)) {
-    console.warn('[gstVerification] AppyFlow could not verify', { gstin, httpOk: ok, message: message || '(none)' });
-    return { result: 'unavailable', gstin, reason: message || 'unexpected provider response' };
+  if (ok && json.error && !PROVIDER_PROBLEM.test(message) && NOT_FOUND.test(message)) {
+    return { result: 'not_found', gstin, message };
   }
-  return { result: 'not_found', gstin, message: message || 'GSTIN not found on the GST registry' };
+  console.warn('[gstVerification] AppyFlow could not verify', { gstin, httpOk: ok, message: message || '(none)' });
+  return { result: 'unavailable', gstin, reason: message || 'unexpected provider response' };
 }
 
 /** Verify a GSTIN. Never throws. */

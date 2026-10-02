@@ -27,6 +27,7 @@ import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { exportToCsv } from '../../utils/csvExport';
 import { notifyAdminAction } from '../../services/adminService';
+import { gstinHint, isValidGstin } from '../../utils/gstin';
 
 interface StoreData {
   id: string;
@@ -344,6 +345,13 @@ const DocumentReviewModal = ({
                           ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
                           : doc.number) || 'No number provided'}
                       </p>
+                      {/* A GSTIN that fails the check character can't be
+                          approved (the backend refuses it too) — 2026-10-02. */}
+                      {doc.doc_type === 'gst' && doc.number && !isValidGstin(doc.number) && (
+                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                          <AlertCircle size={11} /> GSTIN check failed — {gstinHint(doc.number)}
+                        </span>
+                      )}
                       {doc.file_size && (
                         <p className="text-xs text-gray-400 mt-0.5">{doc.file_size}</p>
                       )}
@@ -397,7 +405,12 @@ const DocumentReviewModal = ({
                     <div className="flex gap-2 flex-shrink-0">
                       <button
                         onClick={() => review(doc.doc_type, 'approved')}
-                        disabled={actingType === doc.doc_type || doc.status === 'approved'}
+                        disabled={
+                          actingType === doc.doc_type ||
+                          doc.status === 'approved' ||
+                          (doc.doc_type === 'gst' && !!doc.number && !isValidGstin(doc.number))
+                        }
+                        title={doc.doc_type === 'gst' && doc.number && !isValidGstin(doc.number) ? 'This GSTIN fails the GSTIN check — reject it so the shopkeeper re-enters it' : undefined}
                         className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 disabled:opacity-50"
                       >
                         Approve

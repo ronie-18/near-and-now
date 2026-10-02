@@ -9,6 +9,7 @@ import {
 } from '../utils/verificationDocuments.js';
 import { suspendStoreIfApprovedAndGetName } from './storeOwner.controller.js';
 import { sendError } from '../utils/httpError.js';
+import { gstinHint, isValidGstin } from '../utils/gstin.js';
 
 /**
  * List a store's verification documents for admin review, each with a
@@ -169,13 +170,24 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
 
     const { data: existing } = await supabaseAdmin
       .from('store_verification_documents')
-      .select('id')
+      .select('id, number')
       .eq('store_id', storeId)
       .eq('doc_type', docType)
       .maybeSingle();
 
     if (!existing) {
       return res.status(404).json({ success: false, error: 'No document uploaded for this type yet' });
+    }
+
+    // A GST certificate can't be approved with a GSTIN that fails the check
+    // character — 3 of the 5 GST numbers admins had approved (2026-10-02) were
+    // mistyped. Rejecting stays allowed (that's how the shopkeeper is asked
+    // to fix it).
+    if (status === 'approved' && docType === 'gst' && !isValidGstin(String((existing as { number?: string | null }).number ?? ''))) {
+      return res.status(400).json({
+        success: false,
+        error: `The GSTIN on this certificate fails the GSTIN check (${gstinHint(String((existing as { number?: string | null }).number ?? '')) ?? 'invalid'}). Reject it and ask the shopkeeper to re-enter the number.`,
+      });
     }
 
     const now = new Date().toISOString();

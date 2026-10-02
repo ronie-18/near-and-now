@@ -13,6 +13,12 @@ describe('website GSTIN validator', () => {
     expect(website).toBe(backend);
   });
 
+  it('the admin panel copy is identical too', () => {
+    const admin = readFileSync(resolve(__dirname, '../../../admin/src/utils/gstin.ts'), 'utf8');
+    const backend = readFileSync(resolve(__dirname, '../../../backend/src/utils/gstin.ts'), 'utf8');
+    expect(admin).toBe(backend);
+  });
+
   it.each([
     ['29AAHCR4320E1ZJ', true],
     ['27AAPFU0939F1ZV', true],

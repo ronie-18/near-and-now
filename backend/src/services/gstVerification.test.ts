@@ -63,12 +63,26 @@ describe('verifyGstin', () => {
     expect(gstinRejectionMessage(v)).toContain(sts.toLowerCase());
   });
 
-  it('unknown to the registry → not_found', async () => {
-    fakeAppyflow({ json: { error: true, message: 'Invalid GSTIN Number' } });
-    const v = await verifyGstin(ACTIVE);
-    expect(v.result).toBe('not_found');
-    expect(gstinRejectionMessage(v)).toMatch(/isn't registered/);
-  });
+  it.each(['Invalid GSTIN Number', 'GSTIN not found', 'No records found', 'This GSTIN does not exist', 'GSTIN is not registered'])(
+    'clearly "not registered" (%j) → not_found',
+    async (message) => {
+      fakeAppyflow({ json: { error: true, message } });
+      const v = await verifyGstin(ACTIVE);
+      expect(v.result).toBe('not_found');
+      expect(gstinRejectionMessage(v)).toMatch(/isn't registered/);
+    }
+  );
+
+  // Fix 2 (2026-10-02): unrecognised error wording must never refuse a customer.
+  it.each(['Authentication failed', 'Something went wrong', 'Server busy, try later', 'Invalid key_secret', 'Daily quota exceeded', ''])(
+    'unrecognised or provider-side error (%j) → unavailable, never a rejection',
+    async (message) => {
+      fakeAppyflow({ json: { error: true, message } });
+      const v = await verifyGstin(ACTIVE);
+      expect(v.result).toBe('unavailable');
+      expect(gstinRejectionMessage(v)).toBeNull();
+    }
+  );
 
   it.each([
     ['bad key', { json: { error: true, message: 'Invalid key_secret' } }],

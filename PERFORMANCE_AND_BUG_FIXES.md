@@ -1767,3 +1767,57 @@ AppyFlow dashboard.
 **Until AppyFlow returns real records,** every lookup safely resolves to "couldn't verify", so
 checkout behaves exactly as it did before verification was added. Re-run the two-GSTIN check once
 the account is active.
+
+### 19.3 Two follow-up fixes (2026-10-02, owner-approved)
+
+Asked "is the GSTIN part entirely bug-free?", the honest answer was no. Two of the gaps were fixed:
+
+**Fix 2: unrecognised provider errors could wrongly refuse a customer.** `lookupAppyflow` used to
+classify *any* error message not matching a provider-problem pattern as `not_found`. That
+**refused** the customer's GSTIN, so a provider message worded unexpectedly (e.g.
+"Authentication failed", "Something went wrong") rejected genuine customers. Reversed:
+- only a message that clearly means "not registered" (not found / no records / does not exist /
+  not registered / invalid GSTIN) is `not_found`;
+- everything else, including unseen wording, is `unavailable`, which never refuses anyone.
+
+The provider-problem pattern gained `authenticat`, `forbidden` and `quota`. 10 new cases: 5
+not-found phrasings → `not_found`; 5 provider or unknown phrasings plus an empty message →
+`unavailable`. With the service at the previous commit, the 5 unknown-wording cases fail.
+
+**Fix 4: shop GST certificate numbers weren't checksum-validated.** 3 of the 5 admin-approved GST
+numbers on file failed the check character, because shopkeeper upload and admin approval checked
+the format only.
+- **Upload:** `validateDocNumber('gst', …)` in both the backend
+  (`backend/src/utils/verificationDocuments.ts`) and the shopkeeper app
+  (`lib/verificationDocuments.ts`) now also requires a valid check character. The example shown
+  (`22AAAAA0000A1Z5`, itself invalid) is now `GSTIN_EXAMPLE`.
+- **Admin approval:** `reviewStoreVerificationDocument` returns 400 when approving a `gst` document
+  whose number fails the check, with an explanation. Rejecting stays allowed, since that's how the
+  shopkeeper is asked to fix it. The admin panel's document card shows "GSTIN check failed — …"
+  and disables Approve with a tooltip.
+- **Shared validator:** `gstin.ts` now has five identical copies: backend, website, admin, customer
+  app and shopkeeper app. Website tests check the website and admin copies byte-for-byte against the
+  backend's; a shopkeeper-app Jest test checks its copy when the backend repo sits alongside.
+- **Existing data:** the 5 GST numbers on file all belong to deleted shops, so nothing live needed
+  correcting.
+
+**Checks**
+
+| Check | Result |
+| --- | --- |
+| Backend `gstVerification.test.ts` | 33/33 (+10 classification cases) |
+| Backend `src/controllers/gstDocuments.test.ts` (new, 7) | Upload: real GSTIN accepted, mistyped ones rejected, the example is valid, other document types unchanged. Admin: approving an invalid GSTIN → 400 with no write; rejecting it still works; approving a valid one works. |
+| Shopkeeper app `__tests__/gstDocument.test.ts` (new, 4) | Accepts real, rejects mistyped, valid example, byte-identical to the backend validator. |
+| Website `gstin.test.ts` | 8/8 (+ the admin copy is identical) |
+| Mutation | Backend `verificationDocuments.ts` at `HEAD` → 2 fail. `adminStores.controller.ts` at `HEAD` → 1 fails. Shopkeeper `verificationDocuments.ts` at `HEAD` → 2 fail. Classification at `HEAD` → 5 fail. All restored. |
+| `npx tsc --noEmit` — all six projects | clean ×6 |
+| Tests — backend / frontend / shopkeeper app | **203/203**, **64/64**, **61/61** |
+| Builds — backend, frontend, admin | all succeed |
+| ESLint | admin `StoresPage.tsx`: 11 before, 11 after. Shopkeeper `verificationDocuments.ts`: 0 / 0. New shopkeeper files: 0. |
+
+**Still open in the GSTIN area:**
+- (1) AppyFlow's real responses have not yet been seen: the account currently returns sample data.
+- (3) A well-formed but *unverified* GSTIN (provider unavailable at order time) can still be printed
+  on an invoice. Fixing it needs a migration.
+- No automated tests cover the checkout screens.
+- The cache and rate limit are kept per server instance.
