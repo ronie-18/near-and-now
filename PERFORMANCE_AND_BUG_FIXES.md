@@ -879,7 +879,7 @@ hook.
 **What's left (driver app):** no support/chat screen (tel: links to hardcoded numbers only); no
 ratings/reviews screen for riders; no dedicated trip-history/analytics screen; `orders.tsx:138`
 fetches `has_more` but never uses it — the "Past" tab is hard-capped at 50 with no pagination
-(earnings totals are unaffected — fetched separately and unbounded).
+(earnings totals are unaffected — fetched separately and unbounded). **`[FIXED 2026-10-02]` — see section 18.**
 
 ### 6.5 nearandnowcustomerapp (customer app) — new area
 
@@ -1517,3 +1517,42 @@ to bundle. A pass on a real device is recommended:
 
 No database migration is needed: `stores` already supported several rows per owner, with no unique
 constraint on `owner_id`.
+
+## 18. 2026-10-02 — rider app: older deliveries reachable ("Past" tab paging)
+
+**Problem:** the rider app's Orders → Past tab fetched only the newest 50 deliveries. The server
+already returned `has_more` and accepted `?offset`, but the app ignored both, so a rider's 51st and
+older deliveries could not be opened at all. Earnings totals were never affected, because they're
+fetched separately and unbounded.
+
+**Fix**
+- **Rider app, `app/(tabs)/orders.tsx`:**
+  - a "Load older deliveries" button at the end of the list, shown when the server reports more;
+  - the header count shows "50+" while more exist;
+  - a failed page shows "Couldn't load more — tap to try again".
+- **Rider app, `lib/orderPaging.ts` (new, plain TS):**
+  - `appendPage` drops ids already shown, because a delivery completing between page requests
+    shifts every offset by one and the next page then repeats an item;
+  - `mergeFirstPage` lets the on-focus refresh update the newest page **without throwing away
+    older pages already loaded**. Before, opening an old delivery and coming back would have reset
+    the list to the newest 50.
+- **Request ordering:** every first-page load bumps a request counter. A slower response from an
+  earlier load, including a page from the other tab, is dropped. A ref guard stops double-tapped
+  "Load more". Tab change, pull-to-refresh and retry start over from the newest page.
+- **Backend, `deliveryPartner.controller.ts` `getOrders`:** added `id` as a tie-breaker after
+  `placed_at`. Orders placed at the same instant had no defined order, so separate offset pages could
+  swap them, duplicating one and skipping another at a page boundary.
+
+**Checks**
+
+| Check | Result |
+| --- | --- |
+| Backend `src/controllers/riderOrders.paging.test.ts` (new, 2 tests) | The sort is placed_at then id, and `offset=50&limit=50` → `range(50, 99)`. Without `?limit` it stays unbounded, which earnings needs. With the controller at `HEAD` (no tie-breaker): 1 of 2 fails, as intended. |
+| Rider paging logic (throwaway vitest check in the scratchpad, not added to the repo; the rider app has no test runner) | 5/5: both helpers; paging a 130-delivery history against a simulated server reaches every delivery exactly once in 3 requests; a delivery completing mid-paging causes no duplicate and no gap; a focus refresh after paging keeps the older pages. Removing de-duplication fails 2; making the refresh replace the list fails 2. |
+| `npx tsc --noEmit` — all six projects | clean ×6 |
+| `npx vitest run` — backend / frontend; `npx jest` — shopkeeper app | **144/144**, 56/56, 57/57 |
+| `npm run build` — backend | succeeds |
+| `npx expo export --platform android` — rider app | bundles cleanly |
+
+**Not covered by automated tests:** the screen itself (button, spinner, error text, count badge). A
+quick real-device check with a rider account that has more than 50 deliveries is recommended.

@@ -680,7 +680,11 @@ export class DeliveryPartnerController {
         .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, notes')
         .in('id', orderIds)
         .in('status', dbStatuses)
-        .order('placed_at', { ascending: false });
+        .order('placed_at', { ascending: false })
+        // Tie-breaker: orders placed at the same instant had no defined order,
+        // so separate ?offset pages could swap them — duplicating one and
+        // skipping another at a page boundary. (Rider "Past" paging, 2026-10-02.)
+        .order('id', { ascending: false });
       if (limit != null) ordersQuery = ordersQuery.range(offset, offset + limit - 1);
       const { data: orders } = await ordersQuery;
 
