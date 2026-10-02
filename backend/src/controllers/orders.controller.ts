@@ -5,6 +5,7 @@ import { notificationService } from '../services/notification.service.js';
 import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { sendError } from '../utils/httpError.js';
+import { gstinRejectionMessage, verifyGstin } from '../services/gstVerification.service.js';
 
 // Normal forward order-of-progress, excluding order_cancelled (which is a
 // valid transition from any non-terminal status, not a sequence position).
@@ -46,7 +47,23 @@ export class OrdersController {
     try {
       // Never trust the client-sent user_id — the order must belong to whoever
       // actually authenticated (requireCustomer), not whoever the body claims.
-      const order = await databaseService.placeCheckoutOrder({ ...req.body, user_id: req.customerId });
+      const body = { ...req.body, user_id: req.customerId };
+
+      // Live GSTIN check (2026-10-02). The route already enforced format +
+      // check character; this asks the GST registry. A cancelled/suspended/
+      // unknown GSTIN is refused (it would go on a tax invoice), and an Active
+      // one gets the registry's legal name instead of whatever was typed. If
+      // the check can't run (no key, provider down, out of credits) the order
+      // goes through unchanged — checkout is never blocked on the provider.
+      if (body.gstin) {
+        const v = await verifyGstin(body.gstin);
+        const rejection = gstinRejectionMessage(v);
+        if (rejection) return res.status(400).json({ error: rejection, field: 'gstin' });
+        if (v.result === 'active' && v.legalName) body.gstin_business_name = v.legalName;
+        if (v.result === 'unavailable') console.warn('[placeCheckout] GSTIN not verified (accepted)', { gstin: v.gstin, reason: v.reason });
+      }
+
+      const order = await databaseService.placeCheckoutOrder(body);
       res.status(201).json(order);
     } catch (error: unknown) {
       console.error('Error placing checkout order:', error);

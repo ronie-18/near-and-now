@@ -1,6 +1,7 @@
 import PDFDocument from 'pdfkit';
 import { supabaseAdmin } from '../config/database.js';
 import { AppError } from '../utils/httpError.js';
+import { isValidGstin, normalizeGstin } from '../utils/gstin.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +77,14 @@ export interface InvoiceData {
   buyer_address: string;
   buyer_state: string;
   buyer_pincode: string;
+  /**
+   * The customer's own GSTIN and registered (legal) business name, for a B2B
+   * invoice they can claim input tax credit on. Collected at checkout and
+   * stored on customer_orders, but never read here until 2026-10-02 (GST
+   * finding G1) — the invoice silently dropped it. Empty when not provided.
+   */
+  buyer_gstin?: string;
+  buyer_legal_name?: string;
   place_of_supply: string;
   reverse_charge: boolean;
 
@@ -193,6 +202,19 @@ function amountToWords(amount: number): string {
 // Fetch order data from Supabase
 // ---------------------------------------------------------------------------
 
+/**
+ * Near & Now's own GST registration, printed as the platform's GSTIN on every
+ * invoice (the footer block on each store page, and the seller block of the
+ * platform-fee page) — both previously showed "N/A" / blank (GST finding G2,
+ * platform part; GSTIN provided by the owner 2026-10-02). Overridable with
+ * NEAR_AND_NOW_GSTIN; a value that fails the GSTIN check is never printed.
+ */
+const DEFAULT_PLATFORM_GSTIN = '19AAYFN8032H1ZM';
+export function platformGstin(): string {
+  const g = normalizeGstin(process.env.NEAR_AND_NOW_GSTIN || DEFAULT_PLATFORM_GSTIN);
+  return isValidGstin(g) ? g : '';
+}
+
 // Payment states in which real money has moved for an online (non-COD) order.
 // A paid-then-refunded order still gets an invoice — its PDF shows the
 // refunded status — because a real transaction took place.
@@ -231,7 +253,7 @@ async function fetchOrderData(orderId: string) {
       id, order_code, customer_id, status, payment_status, payment_method,
       subtotal_amount, delivery_fee, discount_amount, total_amount, tip_amount,
       delivery_address, placed_at, created_at,
-      razorpay_payment_id
+      razorpay_payment_id, gstin, gstin_business_name
     `)
     .eq('id', orderId)
     .single();
@@ -406,7 +428,12 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
   const buyerPincode = customer?.pincode || '';
   const buyerAddress = o.delivery_address || [customer?.address, customer?.city, customer?.state, customer?.pincode].filter(Boolean).join(', ');
 
-  const isInterState = false; // assume intra-state (same state for now)
+  // Always intra-state (CGST+SGST), deliberately: Near & Now operates only in
+  // West Bengal (owner's decision, 2026-10-02), and for goods the place of
+  // supply is the delivery address, which is always in the store's state.
+  // If the service ever spans states, compare the store's state with the
+  // delivery state here and use IGST when they differ (GST finding G3).
+  const isInterState = false;
 
   // ── Per-store sections ──────────────────────────────────────────────────
   // stores.gstin/fssai/pan don't exist as columns yet (no shopkeeper-facing
@@ -521,6 +548,11 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
     buyer_address: buyerAddress,
     buyer_state: buyerState,
     buyer_pincode: buyerPincode,
+    // Only a GSTIN that passes the full check (format + check character) is
+    // printed: orders placed before the checksum was enforced may hold a
+    // mistyped one, and a wrong GSTIN on a tax invoice is worse than none.
+    buyer_gstin: o.gstin && isValidGstin(o.gstin) ? normalizeGstin(o.gstin) : '',
+    buyer_legal_name: o.gstin && isValidGstin(o.gstin) ? String(o.gstin_business_name || '').trim() : '',
     place_of_supply: buyerState || 'India',
     reverse_charge: false,
 
@@ -715,6 +747,12 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
         ['Pincode', inv.buyer_pincode || ''],
         ['State', inv.buyer_state || ''],
       ];
+      // B2B: the buyer's GSTIN and legal name (GST finding G1). The block's
+      // height is computed from these rows below, so it grows to fit.
+      if (inv.buyer_gstin) {
+        tailRows.push(['Buyer GSTIN', inv.buyer_gstin]);
+        if (inv.buyer_legal_name) tailRows.push(['Legal Name', inv.buyer_legal_name]);
+      }
 
       const blockH = fixedRows.length * rowH + addressRowH + tailRows.length * rowH + 6;
       box(L, y, W, blockH);
@@ -930,7 +968,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('GSTIN', L + 4, y + 22);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
-      t(': N/A', L + labelW1 + 4, y + 22, { width: midX - L - labelW1 - 8, ellipsis: true });
+      t(': ' + (platformGstin() || 'N/A'), L + labelW1 + 4, y + 22, { width: midX - L - labelW1 - 8, ellipsis: true });
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica-Bold');
       t('CIN', L + 4, y + 36);
       doc.fillColor('#000000').fontSize(7.5).font('Helvetica');
@@ -1014,7 +1052,7 @@ function generateCustomerPDF(inv: InvoiceData): Promise<Buffer> {
       let y = 30;
       y = drawHeader(y);
       y = drawSellerBlock(y, {
-        name: inv.fee_seller_name, address: '', gstin: '', fssai: '', pan: '', cin: '',
+        name: inv.fee_seller_name, address: '', gstin: platformGstin(), fssai: '', pan: '', cin: '',
       });
       y = drawBuyerBlock(y);
 

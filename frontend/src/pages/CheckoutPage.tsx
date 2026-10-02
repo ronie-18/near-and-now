@@ -15,6 +15,8 @@ import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 import { describeError } from '../utils/apiErrors';
+import { GSTIN_EXAMPLE, gstinHint, isValidGstin, normalizeGstin } from '../utils/gstin';
+import { useGstinVerification } from '../hooks/useGstinVerification';
 
 /* ─────────────────────────────────────────────
    Tiny reusable components
@@ -42,9 +44,8 @@ const FieldLabel = ({ children }: { children: React.ReactNode }) => (
 
 const inputCls = "w-full px-4 py-3 border border-stone-200 rounded-2xl text-sm text-stone-800 placeholder-stone-300 bg-stone-50 focus:bg-white focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all duration-200";
 
-// Standard 15-char Indian GSTIN format — was previously persisted and
-// printed on the customer's own tax invoice with no format check at all.
-const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+// GSTIN checks (format + check character) live in utils/gstin.ts, shared
+// word-for-word with the backend and the customer app (GST finding G4).
 const textareaCls = `${inputCls} resize-none`;
 
 /** Shape of a coupon row as returned by POST /api/coupons/validate. */
@@ -166,6 +167,13 @@ const CheckoutPage = () => {
   const [gstinEnabled, setGstinEnabled] = useState(false);
   const [gstin, setGstin] = useState('');
   const [businessName, setBusinessName] = useState('');
+  // Live registry check once the GSTIN is well-formed (2026-10-02). An Active
+  // GSTIN fills in the registered legal name, which is what the backend saves
+  // and prints on the invoice anyway.
+  const gstinCheck = useGstinVerification(normalizeGstin(gstin), gstinEnabled && isValidGstin(gstin));
+  useEffect(() => {
+    if (gstinCheck.state === 'verified' && gstinCheck.legalName) setBusinessName(gstinCheck.legalName);
+  }, [gstinCheck]);
 
   const [savedAddresses, setSavedAddresses] = useState<DbAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
@@ -454,8 +462,16 @@ const CheckoutPage = () => {
     e.preventDefault();
     if (cartItems.length === 0) { showNotification('Your cart is empty', 'error'); return; }
     if (!formData.paymentMethod) { showNotification('Please select a payment method', 'error'); return; }
-    if (gstinEnabled && gstin.trim() && !GSTIN_REGEX.test(gstin.trim())) {
-      showNotification('Please enter a valid 15-character GSTIN, or uncheck "Add GSTIN" to continue without one', 'error');
+    if (gstinEnabled && gstin.trim() && !isValidGstin(gstin)) {
+      showNotification(`GSTIN: ${gstinHint(gstin)} Or uncheck "Add GSTIN" to continue without one.`, 'error');
+      return;
+    }
+    if (gstinEnabled && gstin.trim() && gstinCheck.state === 'rejected') {
+      showNotification(`${gstinCheck.message} Or uncheck "Add GSTIN" to continue without one.`, 'error');
+      return;
+    }
+    if (gstinEnabled && gstin.trim() && gstinCheck.state === 'checking') {
+      showNotification('Still checking your GSTIN with the GST portal — one moment.', 'info');
       return;
     }
     // "Registered Business Name" is labeled required (*) next to the GSTIN
@@ -581,7 +597,7 @@ const CheckoutPage = () => {
           split_cash_amount: parseFloat(splitCashAmount) || 0,
           split_upi_amount: parseFloat(splitUpiAmount) || 0
         }),
-        ...(gstinEnabled && gstin.trim() && { gstin: gstin.trim() }),
+        ...(gstinEnabled && gstin.trim() && { gstin: normalizeGstin(gstin) }),
         ...(gstinEnabled && businessName.trim() && { gstin_business_name: businessName.trim() }),
         ...(orderForOthers && receiverName.trim() && { receiver_name: receiverName.trim() }),
         ...(orderForOthers && receiverPhone.trim() && { receiver_phone: receiverPhone.trim() }),
@@ -1400,15 +1416,21 @@ const CheckoutPage = () => {
                             value={gstin}
                             onChange={(e) => setGstin(e.target.value.toUpperCase())}
                             maxLength={15}
-                            placeholder="22AAAAA0000A1Z5"
-                            className={`${inputCls} font-mono tracking-wider ${gstin.trim().length > 0 && !GSTIN_REGEX.test(gstin.trim()) ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+                            placeholder={GSTIN_EXAMPLE}
+                            className={`${inputCls} font-mono tracking-wider ${gstin.trim().length > 0 && !isValidGstin(gstin) ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
                           />
-                          {gstin.trim().length > 0 && !GSTIN_REGEX.test(gstin.trim()) ? (
-                            <p className="text-xs text-red-500 mt-1.5">
-                              {gstin.trim().length < 15
-                                ? `${15 - gstin.trim().length} more character${15 - gstin.trim().length === 1 ? '' : 's'} needed`
-                                : "Doesn't match the GSTIN format (e.g. 22AAAAA0000A1Z5)"}
+                          {gstin.trim().length > 0 && !isValidGstin(gstin) ? (
+                            <p className="text-xs text-red-500 mt-1.5">{gstinHint(gstin)}</p>
+                          ) : gstinCheck.state === 'checking' ? (
+                            <p className="text-xs text-stone-500 mt-1.5">Checking with the GST portal…</p>
+                          ) : gstinCheck.state === 'verified' ? (
+                            <p className="text-xs text-green-700 mt-1.5 flex items-center gap-1">
+                              <CheckCircle className="w-3.5 h-3.5" /> Verified on the GST portal · Active
                             </p>
+                          ) : gstinCheck.state === 'rejected' ? (
+                            <p className="text-xs text-red-500 mt-1.5">{gstinCheck.message}</p>
+                          ) : gstinCheck.state === 'unavailable' ? (
+                            <p className="text-xs text-stone-400 mt-1.5">Couldn&apos;t check with the GST portal right now — we&apos;ll check again when you place the order.</p>
                           ) : (
                             <p className="text-xs text-stone-400 mt-1.5">Enter your 15-digit GSTIN</p>
                           )}
@@ -1420,8 +1442,12 @@ const CheckoutPage = () => {
                             value={businessName}
                             onChange={(e) => setBusinessName(e.target.value)}
                             placeholder="Your Company Name Pvt Ltd"
-                            className={inputCls}
+                            readOnly={gstinCheck.state === 'verified' && !!gstinCheck.legalName}
+                            className={`${inputCls} ${gstinCheck.state === 'verified' && gstinCheck.legalName ? 'bg-stone-100 text-stone-600' : ''}`}
                           />
+                          {gstinCheck.state === 'verified' && gstinCheck.legalName && (
+                            <p className="text-xs text-stone-400 mt-1.5">As registered on the GST portal</p>
+                          )}
                         </div>
                       </div>
                     )}

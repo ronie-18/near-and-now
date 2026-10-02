@@ -1573,3 +1573,197 @@ fetched separately and unbounded.
 
 **Not covered by automated tests:** the screen itself (button, spinner, error text, count badge). A
 quick real-device check with a rider account that has more than 50 deliveries is recommended.
+
+## 19. 2026-10-02 — GST / GSTIN findings (G1, G4, G5 fixed; G3 closed; G2 platform part fixed, store part open; live verification added — see 19.1–19.2)
+
+Found while scoping GSTIN verification through a third-party API. That work is pending the owner's
+decisions: provider, when to verify, what counts as valid, what to do if the API is down, and scope.
+
+**Context: where the GSTIN goes today.**
+- **Customer app checkout** (`nearandnowcustomerapp/app/support/checkout.tsx` lines 800–855): an
+  "Add GSTIN" card ("Get a GST-compliant invoice for input tax credit claims") with a GSTIN field and
+  a "Registered Business Name" field. Format is checked by regex only (line 52), live and on submit.
+- **Website checkout** (`frontend/src/pages/CheckoutPage.tsx` line 47): the same regex.
+- **Backend** (`routes/orders.routes.ts` lines 17 and 39): the same regex, the only server-side
+  check.
+- **Storage and display:** stored on `customer_orders.gstin` / `gstin_business_name` (migration
+  `20260817000000`). Shown on the customer app's order detail and the admin order page.
+
+No check anywhere that a GSTIN actually exists, is active, or matches the business name, and no GST
+verification provider is configured.
+
+| ID | Finding | Classification | Severity |
+| --- | --- | --- | --- |
+| G1 `[FIXED]` | **The customer's GSTIN never reaches their invoice.** `invoice.service.ts` `fetchOrderData` doesn't select `gstin`/`gstin_business_name`, and the invoice's buyer block prints only name, phone, email, address and state (`buyer_*` fields, lines 402–407 / 518–524). The checkout explicitly promises a GST invoice "for input tax credit claims", which isn't delivered whether or not the number is verified. | **Bug**: data collected, stored and promised, then dropped at invoice generation. | Medium-High |
+| G2 | **Supplier registration details are blank on invoices.** Store GSTIN/FSSAI/PAN render empty or "N/A": `stores` has no such columns (code note at lines 412–415), and shopkeepers upload a GST certificate only as a document. Near & Now's own GSTIN and CIN in the platform-fee section are hard-coded `: N/A` (lines ~931–936), although GST is computed on platform fees (`fees_sgst_total`). | **Compliance gap / missing feature**, not a code defect. Whether each store is GST-registered decides what document is correct: unregistered suppliers issue a *bill of supply*, not a *tax invoice*. Needs a business and accountant decision. | High risk; decision needed |
+| G3 `[CLOSED — not applicable]` | **Tax is always same-state** (`isInterState = false`, CGST+SGST). | **Mostly correct, not a bug.** For goods, the place of supply is where delivery ends, not the buyer's registered state, so a buyer GSTIN from another state does *not* by itself mean IGST. (This corrects an earlier statement in this session.) Hyperlocal delivery keeps store and delivery address in the same state in practice. Only a store/delivery pair straddling a state border would be mis-taxed; the proper rule compares the store's state with the delivery state. Confirm with a CA. | Low |
+| G4 `[FIXED]` | **No checksum check.** The 15th GSTIN character is a check digit computable offline (free, no API), but all three regexes only check the shape, so most single-character typos pass. | Validation weakness / improvement. | Low |
+| G5 `[FIXED]` | **The app and website disagree on business name.** The website requires "Registered Business Name" whenever a GSTIN is entered (lines 461–466); the customer app doesn't, and the backend accepts either. Once G1 is fixed, an app order could produce a GST invoice with a GSTIN and no legal name. | **Bug** (inconsistent validation). | Low |
+
+**Note for the API work:** verification alone doesn't make invoices usable for input tax credit. G1
+(print the buyer GSTIN and legal name) and G2 (supplier registration) must also be addressed for that
+promise to hold. G4 and G5 are cheap to fix in the same pass.
+
+### 19.1 Fixes (2026-10-02)
+
+**Provider decision (owner):** Cashfree for live GSTIN verification, to be added once account details
+are available. Everything below is offline and needs no API.
+
+**G4: check character.** New `backend/src/utils/gstin.ts` holds the shared validator, copied
+word-for-word into `frontend/src/utils/gstin.ts` and `nearandnowcustomerapp/lib/gstin.ts`:
+- `normalizeGstin` strips spaces and uppercases;
+- `gstinCheckChar` and `gstinProblem` return incomplete, format or checksum;
+- `isValidGstin`;
+- `gstinHint` gives the user-facing message, e.g. "This GSTIN looks mistyped — its last character
+  doesn't match the rest.";
+- `GSTIN_EXAMPLE`.
+
+The algorithm was proven against two real, published GSTINs (Razorpay's `29AAHCR4320E1ZJ` and
+`27AAPFU0939F1ZV`) before use.
+
+**Found along the way:** the example shown to users, `22AAAAA0000A1Z5`, **failed the checksum**,
+so customers were being shown an invalid number to copy. It's now `22AAAAA0000A1ZC`.
+
+- The backend order route (`POST /api/orders/place`) normalises the GSTIN and rejects a bad check
+  character with the same message.
+- The website and app checkouts use the shared hints live and on submit, and send the normalised
+  value.
+
+**G1: GSTIN on the invoice.**
+- `invoice.service.ts` now reads `gstin` and `gstin_business_name` with the order. The customer tax
+  invoice's buyer block prints **Buyer GSTIN** and **Legal Name**; the block grows to fit.
+- Only a GSTIN that passes the full check is printed: an older order could hold a mistyped one, and
+  a wrong GSTIN on a tax invoice is worse than none.
+- No database change: the GSTIN already lives on `customer_orders`, and the PDF (the tax document)
+  is built from the order. The `invoices` table row is unchanged, so there's no deploy-order risk.
+- A read-only check of production found **0 orders with a GSTIN**, so no previously issued invoice
+  needs regenerating.
+- The store copy (a packing slip) and the delivery slip are unchanged.
+
+**G5: business name.**
+- The customer app now requires "Registered Business Name" when a GSTIN is entered, with an alert on
+  submit; the placeholder says "(required with GSTIN)". This matches the website.
+- The backend deliberately still accepts a GSTIN without a name, with a comment explaining why: app
+  builds already installed may send one, and failing their checkout would be worse. The invoice then
+  shows the GSTIN with the customer's name.
+
+**Where Cashfree will plug in:** a backend `verifyGstin` call behind `isValidGstin` in the
+`/api/orders/place` validation, with a cached lookup table. The offline checksum runs first, so
+mistyped numbers never cost a paid lookup.
+
+**Checks**
+
+| Check | Result |
+| --- | --- |
+| Backend `src/utils/gstin.test.ts` (new, 15) | Real GSTINs accepted; the example is valid and the old one isn't; single-character typos caught; incomplete/format cases; hint wording; normalisation. Route schema: valid GSTIN normalised, typo rejected with "mistyped", malformed rejected, empty or absent fine, GSTIN without a business name still accepted. |
+| Backend `invoice.multistore.test.ts` (+3) | Decodes the generated customer PDF's text: a valid GSTIN prints "Buyer GSTIN" and "Legal Name" plus both values, and the `invoices` row is unchanged. A non-GST order prints no GSTIN rows. An older mistyped GSTIN is not printed. |
+| Website `src/utils/gstin.test.ts` (new, 7) | The website copy is **byte-identical** to the backend copy (the test reads both files), plus validity vectors and hint wording. |
+| Customer app copy | Byte-identical to the backend copy (checked with `cmp`). The app has no test runner. |
+| Mutation | Invoice code at `HEAD` → the print test fails. Checksum disabled → 5 tests fail, including the "don't print a mistyped GSTIN" guard. Both restored. |
+| `npx tsc --noEmit` — all six projects | clean ×6 |
+| Tests — backend / frontend / shopkeeper app | **162/162**, **63/63**, 57/57 |
+| Builds | backend `tsc`, frontend `vite build`, customer app `expo export` (Android): all succeed |
+| ESLint | website checkout: 4 warnings before, 4 after; new website files 0. The customer app has no ESLint config. |
+
+**Still open:**
+- **G2** (supplier registration on invoices): needs the owner's accountant to decide.
+- ~~**G3** (intra-state assumption)~~: **closed** by the owner on 2026-10-02. Near & Now operates
+  only in West Bengal, so every sale is intra-state and CGST+SGST is correct. The code comment at
+  `isInterState` now records this, and says what to change if the service ever spans states.
+- **Live registry verification:** Cashfree, pending account details.
+
+### 19.2 Live GSTIN verification (AppyFlow) and Near & Now's own GSTIN (2026-10-02)
+
+**Provider:** AppyFlow. The owner signed up and the key is set by them in `backend/.env` as
+`APPYFLOW_KEY_SECRET`. The key was never written to code or committed. `.env` is git-ignored, and
+`.env.example` documents the setting with an empty value. Built so a Cashfree lookup can be added as
+a second function later.
+
+**Backend: `services/gstVerification.service.ts` (new).** Checks run cheapest first:
+1. the offline format and check-character test (free; a mistyped GSTIN never costs a lookup);
+2. an in-memory cache (Active results for 24 h, negative ones for 6 h, "unavailable" never cached),
+   with concurrent identical lookups sharing one request;
+3. AppyFlow, `POST https://appyflow.in/api/verifyGST` with JSON `{ gstNo, key_secret }`. The key is
+   only in the request body, never in a URL or log. An 8-second deadline applies (from item 19).
+
+**Results:**
+- `active`: registered and Active.
+- `inactive`: Cancelled or Suspended.
+- `not_found`: the registry doesn't know the number.
+- `invalid`: failed the offline check.
+- `unavailable`: no key, provider down, bad key or out of credits. Never treated as a rejection.
+
+**Endpoints:**
+- **`POST /api/gstin/verify`** (new): signed-in customers only, 30 per customer per hour (each
+  uncached call is paid). Returns `verified`, `result`, `legal_name`, `trade_name`,
+  `registry_status` and `message`.
+- **`POST /api/orders/place`:** re-verifies any GSTIN. A cancelled, suspended or unknown GSTIN is
+  refused with 400 (`field: 'gstin'`) before the order is created. An Active one has
+  `gstin_business_name` replaced by the **registry's legal name**. If the check is unavailable, the
+  order goes through with the typed name and a warning is logged.
+
+**Clients:**
+- **Website** (`frontend/src/hooks/useGstinVerification.ts` + `CheckoutPage.tsx`) and **customer
+  app** (`lib/useGstinVerification.ts` + `app/support/checkout.tsx`) check the GSTIN half a second
+  after it becomes well-formed, ignoring out-of-date responses. They show:
+  - "Checking with the GST portal…";
+  - "Verified on the GST portal · Active" (the business name is filled in from the registry and
+    locked);
+  - the rejection reason (placing the order is blocked);
+  - "Couldn't check right now — we'll check again when you place the order" (not blocking).
+
+**Near & Now's GSTIN on invoices (G2, platform part).** `19AAYFN8032H1ZM` (provided by the owner;
+passes the check; state code 19 = West Bengal) replaces the hard-coded "N/A". It appears in the
+Near & Now footer block on every store page and in the seller block of the platform-fee page.
+`platformGstin()` reads `NEAR_AND_NOW_GSTIN` if set, otherwise uses that default, and never prints a
+value that fails the check. The CIN, PAN and FSSAI fields there still say N/A, because no values
+were provided.
+
+**G2, store part: still open.** Shops have no GSTIN column. A shop's GSTIN lives only in
+`store_verification_documents` (`doc_type = 'gst'`, column `number`). Live data on 2026-10-02:
+- 5 GST numbers on file, all admin-"approved", but **none on a live shop**;
+- 3 of the 5 fail the check character: shopkeeper upload and admin approval check the format only.
+
+Printing shop GSTINs needs the accountant's decision on which shops are GST-registered, plus the
+check-character test applied to those documents.
+
+**Checks**
+
+| Check | Result |
+| --- | --- |
+| Backend `src/services/gstVerification.test.ts` (new, 20) | **Service:** Active → verified with the registry legal name, key in the POST body not the URL; Cancelled and Suspended → inactive with a message; unknown → not_found; bad key, out of credits, HTTP 500 and network failure → unavailable, never a rejection; a mistyped GSTIN makes no paid call; no key makes no call; one lookup is cached and shared, and "unavailable" is not cached. **Endpoint** (through a real local HTTP server): Active → verified with legal name; Cancelled → rejection message; missing gstin → 400. **Order placement:** cancelled refused before the order is created; Active saves the registry name over the typed one; provider down → the order still goes through; no GSTIN → no lookup. **Platform GSTIN:** default value, environment override, an invalid value never printed. |
+| Backend `invoice.multistore.test.ts` (+1) | The generated customer PDF's text contains `19AAYFN8032H1ZM`. |
+| Mutation | Platform GSTIN removed from the invoice → the PDF test fails. Order controller at `HEAD` (no verification) → 2 order tests fail. Both restored. |
+| `npx tsc --noEmit` — all six projects | clean ×6 |
+| Tests — backend / frontend / shopkeeper app | **183/183**, 63/63, 57/57 |
+| Builds | backend `tsc`, frontend `vite build`, customer app `expo export` (Android): all succeed |
+| ESLint — website checkout + new hook | same 4 pre-existing problems as before (1 error, 3 warnings); 0 new |
+
+**Not covered by automated tests:**
+- The checkout screens' new messages: no component-level tests exist for those screens.
+- The real AppyFlow service. Tests use a fake: AppyFlow doesn't publish the exact wording of its
+  error messages, so telling "not registered" apart from "bad key / no credits" relies on the message
+  text.
+
+**After adding the key,** check once with a known-active GSTIN (e.g. Near & Now's own) and a
+known-cancelled one, and confirm the responses match.
+
+**Live test (2026-10-02, 2 real AppyFlow lookups, with the owner's go-ahead).** Queried
+`19AAYFN8032H1ZM` (Near & Now) and `22AAAAA0000A1ZC` (well-formed, almost certainly unregistered).
+**Both returned the same record, for a different GSTIN:** `03DOXPM4071K1ZE`, "DISHANT MAHAJAN" /
+"AppyFlow Technologies" / Punjab, Active. That's AppyFlow's own sample record, which points to the
+key being in a demo or trial state (account activation or credits). The owner is to check the
+AppyFlow dashboard.
+- **This exposed a bug in the new code, now fixed:** it never checked that the returned record was
+  for the GSTIN asked about. It would have marked *any* GSTIN Active and replaced the customer's
+  business name on their tax invoice with "DISHANT MAHAJAN".
+- `lookupAppyflow` now requires `taxpayerInfo.gstin` to equal the queried GSTIN. A missing or
+  different GSTIN is `unavailable`: never accepted, never a rejection, and the order goes through
+  with the typed name.
+- 3 new tests replay the exact live response: verification → unavailable; no GSTIN in the record →
+  unavailable; placing an order keeps the typed name. With the check disabled, all 3 fail.
+- Backend tests: 186/186.
+
+**Until AppyFlow returns real records,** every lookup safely resolves to "couldn't verify", so
+checkout behaves exactly as it did before verification was added. Re-run the two-GSTIN check once
+the account is active.

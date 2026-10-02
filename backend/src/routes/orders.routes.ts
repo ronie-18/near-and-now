@@ -3,20 +3,27 @@ import { z } from 'zod';
 import { OrdersController } from '../controllers/orders.controller.js';
 import { createAdditionPayment, verifyAdditionPayment } from '../controllers/orderAdditions.controller.js';
 import { validate } from '../middleware/validate.js';
+import { gstinHint, normalizeGstin } from '../utils/gstin.js';
 import { requireCustomer } from '../middleware/customerAuth.middleware.js';
 import { requireAdmin, requirePermission } from '../middleware/adminAuth.middleware.js';
 
 const router = Router();
 const ordersController = new OrdersController();
 
-// Standard 15-char Indian GSTIN format (2-digit state code, 10-char PAN,
-// 1-digit entity code, literal 'Z', 1 checksum char). Previously accepted as
-// any string and persisted straight onto the invoice — this is the actual
-// trust boundary (the customer app now also validates client-side, but that
-// alone doesn't stop a modified client or direct API call).
-const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+// GSTIN validation — format AND check character (utils/gstin.ts). This is the
+// trust boundary: the apps validate too, but that doesn't stop a modified
+// client or direct API call. The checksum was added 2026-10-02 (GST finding
+// G4): the format regex alone let most typos through onto tax invoices.
+const gstinField = z
+  .string()
+  .transform(normalizeGstin)
+  .superRefine((g, ctx) => {
+    if (!g) return; // empty = no GSTIN
+    const hint = gstinHint(g);
+    if (hint) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Invalid GSTIN: ${hint}` });
+  });
 
-const placeCheckoutSchema = z.object({
+export const placeCheckoutSchema = z.object({
   user_id: z.string().uuid('Invalid user ID'),
   customer_name: z.string().min(1, 'Name required'),
   customer_email: z.string().optional(),
@@ -36,8 +43,12 @@ const placeCheckoutSchema = z.object({
   // this fix could never have run either). Found while adding that check.
   split_cash_amount: z.number().min(0).optional(),
   split_upi_amount: z.number().min(0).optional(),
-  gstin: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN format').optional().or(z.literal('')),
-  gstin_business_name: z.string().optional(),
+  gstin: gstinField.optional(),
+  // Not required alongside a GSTIN here, deliberately: the apps require it
+  // (G5), but app builds already installed may send a GSTIN without one, and
+  // rejecting their checkout would be worse than an invoice that falls back
+  // to the customer's name.
+  gstin_business_name: z.string().trim().max(200).optional(),
   receiver_name: z.string().optional(),
   receiver_phone: z.string().optional(),
   receiver_address: z.string().optional(),

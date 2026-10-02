@@ -14,6 +14,7 @@ vi.mock('../config/database.js', () => ({
   isSupabaseServiceRoleConfigured: true,
 }));
 
+import { inflateSync } from 'zlib';
 import { invoiceService } from './invoice.service.js';
 import { supabaseAdmin } from '../config/database.js';
 
@@ -31,7 +32,7 @@ function chain(result: any) {
   return c;
 }
 
-function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmount: number }) {
+function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmount: number; order?: Record<string, unknown> }) {
   const orderRow = {
     id: 'order-abc-123', order_code: 'NN20260826-0099', customer_id: 'cust-1',
     status: 'order_delivered', payment_status: 'paid', payment_method: 'razorpay',
@@ -39,6 +40,7 @@ function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmoun
     tip_amount: 0,
     delivery_address: 'Prantik Flat no 1, 87/2, Baghajatin Place, Birnagar, Garia, Kolkata, West Bengal 700086, India',
     placed_at: '2026-08-26T10:00:00Z', created_at: '2026-08-26T10:00:00Z', razorpay_payment_id: 'pay_test123',
+    ...(opts.order ?? {}),
   };
 
   const storeOrders = Array.from({ length: opts.storeCount }, (_, i) => ({
@@ -82,6 +84,12 @@ function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmoun
     select: () => ({ single: () => Promise.resolve({ data: { id: 'inv-1', invoice_number: 'INV-2026-000099' }, error: null }) }),
   }));
 
+  let insertedInvoiceRow: any = null;
+  tables.invoices.insert = vi.fn((row: any) => {
+    insertedInvoiceRow = row;
+    return { select: () => ({ single: () => Promise.resolve({ data: { id: 'inv-1', invoice_number: 'INV-2026-000099' }, error: null }) }) };
+  });
+
   let insertedItemRows: any[] = [];
   tables.invoice_items.select = vi.fn(() => tables.invoice_items);
   tables.invoice_items.eq = vi.fn(() => Promise.resolve({ count: 0, error: null }));
@@ -98,7 +106,25 @@ function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmoun
     upload: vi.fn((path: string, buf: Buffer) => { uploaded[path] = buf; return Promise.resolve({ error: null }); }),
   });
 
-  return { uploaded, getInsertedItemRows: () => insertedItemRows };
+  return { uploaded, getInsertedItemRows: () => insertedItemRows, getInsertedInvoiceRow: () => insertedInvoiceRow };
+}
+
+/** Text drawn in a pdfkit PDF: inflate each content stream, decode its TJ text runs. */
+function pdfText(buf: Buffer): string {
+  const raw = buf.toString('latin1');
+  const runs: string[] = [];
+  for (const m of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+    let content: string;
+    try {
+      content = inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1');
+    } catch {
+      continue; // not a deflated content stream (fonts, images)
+    }
+    for (const tj of content.matchAll(/\[(.*?)\]\s*TJ/g)) {
+      runs.push([...tj[1].matchAll(/<([0-9a-fA-F]*)>/g)].map((h) => Buffer.from(h[1], 'hex').toString('latin1')).join(''));
+    }
+  }
+  return runs.join('\n');
 }
 
 function pdfPageCount(buf: Buffer): number {
@@ -164,5 +190,53 @@ describe('invoice generation — multi-store pages, HSN, fee breakdown', () => {
     await invoiceService.generateForOrder('order-abc-123');
     getInsertedItemRows();
     expect(insertedHeader?.grand_total).toBe(130.55);
+  });
+});
+
+// GST finding G1 (2026-10-02): the customer's GSTIN and legal name were
+// collected at checkout but never printed on their tax invoice.
+describe('invoice — buyer GSTIN (B2B)', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const customerPdf = (uploaded: Record<string, Buffer>) =>
+    pdfText(uploaded[Object.keys(uploaded).find((p) => p.startsWith('customer/'))!]);
+
+  it('prints the buyer GSTIN and legal name when the order has a valid GSTIN', async () => {
+    const { uploaded, getInsertedInvoiceRow } = setupMocks({
+      storeCount: 1, itemsPerStore: 2, totalAmount: 500,
+      order: { gstin: '29AAHCR4320E1ZJ', gstin_business_name: 'Razorpay Software Private Limited' },
+    });
+    await invoiceService.generateForOrder('order-abc-123');
+    const text = customerPdf(uploaded);
+    expect(text).toContain('Buyer GSTIN');
+    expect(text).toContain('29AAHCR4320E1ZJ');
+    expect(text).toContain('Legal Name');
+    expect(text).toContain('Razorpay Software Private Limited');
+    // No new DB column needed: the invoices row is unchanged.
+    expect(getInsertedInvoiceRow()).not.toHaveProperty('buyer_gstin');
+  });
+
+  it("prints Near & Now's own GSTIN (previously N/A) on every invoice", async () => {
+    const { uploaded } = setupMocks({ storeCount: 1, itemsPerStore: 2, totalAmount: 500 });
+    await invoiceService.generateForOrder('order-abc-123');
+    expect(customerPdf(uploaded)).toContain('19AAYFN8032H1ZM');
+  });
+
+  it('prints no GSTIN rows for an ordinary (non-GST) order', async () => {
+    const { uploaded } = setupMocks({ storeCount: 1, itemsPerStore: 2, totalAmount: 500 });
+    await invoiceService.generateForOrder('order-abc-123');
+    const text = customerPdf(uploaded);
+    expect(text).toContain('Pincode'); // the buyer block itself is there
+    expect(text).not.toContain('Buyer GSTIN');
+  });
+
+  it('does not print a mistyped GSTIN from an older order (fails the check character)', async () => {
+    const { uploaded } = setupMocks({
+      storeCount: 1, itemsPerStore: 2, totalAmount: 500,
+      order: { gstin: '22AAAAA0000A1Z5', gstin_business_name: 'Typo Traders' },
+    });
+    await invoiceService.generateForOrder('order-abc-123');
+    const text = customerPdf(uploaded);
+    expect(text).not.toContain('22AAAAA0000A1Z5');
+    expect(text).not.toContain('Buyer GSTIN');
   });
 });
