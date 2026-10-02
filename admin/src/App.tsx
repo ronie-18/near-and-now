@@ -2,20 +2,20 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import AdminLoginPage from './pages/admin/AdminLoginPage';
 import AdminRoutes from './routes/AdminRoutes';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { NotificationProvider } from './context/NotificationContext';
-import { NotificationToasts } from './components/NotificationToasts';
+import { ToastProvider } from './context/ToastContext';
+import { Toasts } from './components/Toasts';
 function App() {
   return (
     <ErrorBoundary>
-      <NotificationProvider>
+      <ToastProvider>
         <Router>
           <Routes>
             <Route path="/login" element={<AdminLoginPage />} />
             <Route path="/*" element={<AdminRoutes />} />
           </Routes>
         </Router>
-        <NotificationToasts />
-      </NotificationProvider>
+        <Toasts />
+      </ToastProvider>
     </ErrorBoundary>
   );
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getAdminToken } from '../../services/adminSession';
 import { Tag, Search, Plus, CheckCircle, XCircle, Calendar, Users } from 'lucide-react';
-import { useNotification } from '../../context/NotificationContext';
+import { useToast } from '../../context/ToastContext';
 import AdminLayout from '../../components/admin/layout/AdminLayout';
 
 interface Coupon {
@@ -30,7 +30,7 @@ function adminAuthHeaders(): Record<string, string> {
 }
 
 const OffersPage = () => {
-  const { showNotification } = useNotification();
+  const { showToast } = useToast();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -64,7 +64,7 @@ const OffersPage = () => {
       setCoupons(data);
     } catch (error) {
       console.error('Error fetching coupons:', error);
-      showNotification('Failed to load coupons', 'error');
+      showToast('Failed to load coupons', 'error');
     } finally {
       setLoading(false);
     }
@@ -92,13 +92,13 @@ const OffersPage = () => {
         const error = await res.json();
         throw new Error(error.error || 'Failed to create coupon');
       }
-      showNotification('Coupon created successfully', 'success');
+      showToast('Coupon created successfully', 'success');
       setShowModal(false);
       resetForm();
       fetchCoupons();
     } catch (error: any) {
       console.error('Error creating coupon:', error);
-      showNotification(error.message || 'Failed to create coupon', 'error');
+      showToast(error.message || 'Failed to create coupon', 'error');
     }
   };
 
@@ -125,14 +125,14 @@ const OffersPage = () => {
         const error = await res.json();
         throw new Error(error.error || 'Failed to update coupon');
       }
-      showNotification('Coupon updated successfully', 'success');
+      showToast('Coupon updated successfully', 'success');
       setShowModal(false);
       setEditingCoupon(null);
       resetForm();
       fetchCoupons();
     } catch (error: any) {
       console.error('Error updating coupon:', error);
-      showNotification(error.message || 'Failed to update coupon', 'error');
+      showToast(error.message || 'Failed to update coupon', 'error');
     }
   };
 
@@ -144,11 +144,11 @@ const OffersPage = () => {
         headers: adminAuthHeaders(),
       });
       if (!res.ok) throw new Error('Failed to delete coupon');
-      showNotification('Coupon deleted successfully', 'success');
+      showToast('Coupon deleted successfully', 'success');
       fetchCoupons();
     } catch (error) {
       console.error('Error deleting coupon:', error);
-      showNotification('Failed to delete coupon', 'error');
+      showToast('Failed to delete coupon', 'error');
     }
   };
 
@@ -163,7 +163,7 @@ const OffersPage = () => {
       fetchCoupons();
     } catch (error) {
       console.error('Error updating status:', error);
-      showNotification('Failed to update coupon status', 'error');
+      showToast('Failed to update coupon status', 'error');
     }
   };
 

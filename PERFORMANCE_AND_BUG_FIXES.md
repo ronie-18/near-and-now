@@ -753,6 +753,23 @@ header comment). Two independent "notification" concepts coexist under similar n
 `admin/src/context/NotificationContext.tsx` (toast/alert only) vs. the real `admin_notifications`
 per-admin-read-state system used by `NotificationsPage.tsx` — not a bug, but a naming collision
 worth resolving before it causes one.
+**`[RESOLVED 2026-10-02]`** The toast system was renamed so "notification" in the admin panel means
+only the real `admin_notifications` system:
+- `context/NotificationContext.tsx` → `context/ToastContext.tsx`, with `NotificationProvider` /
+  `useNotification` / `showNotification` / `removeNotification` → `ToastProvider` / `useToast` /
+  `showToast` / `removeToast`;
+- `components/NotificationToasts.tsx` → `components/Toasts.tsx`.
+
+Both files were moved with `git mv`, so history follows. The only users were `App.tsx` and
+`OffersPage.tsx`, and both are updated. The header's `showNotifications` (the bell dropdown for the
+real system) was deliberately left as-is. A note in the new file explains the rename.
+Pure rename, with no behaviour change:
+- `npx tsc --noEmit` clean;
+- `npx vite build` succeeds;
+- ESLint gives the same 8 warnings before and after, all pre-existing;
+- grep finds no remaining reference to the old names in `admin/`.
+
+The admin panel has no test suite.
 
 ### 6.2 near-and-now backend — 2 new bugs found in previously-unreviewed files
 
