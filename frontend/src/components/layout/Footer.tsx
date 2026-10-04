@@ -143,7 +143,7 @@ const Footer = () => {
           <div className="space-y-4">
             <div className="flex items-center space-x-3">
               <img
-                src="/Logo.png"
+                src="/logo-192.png"
                 alt="Near & Now Logo"
                 className="h-12 w-auto object-contain"
                 onError={(e) => {

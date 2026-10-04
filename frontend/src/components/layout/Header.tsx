@@ -224,7 +224,7 @@ const Header = () => {
                 <div className="relative">
                   <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 rounded-xl blur-lg group-hover:blur-xl transition-all duration-300" />
                   <img
-                    src="/Logo.png"
+                    src="/logo-192.png"
                     alt="Near & Now"
                     className="h-10 w-10 sm:h-11 sm:w-11 object-contain transform group-hover:scale-105 transition-transform duration-300 relative z-10"
                   />
