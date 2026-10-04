@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { paymentService } from '../services/payment.service.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 const MIN_TOPUP_RUPEES = 10;
 const MAX_TOPUP_RUPEES = 50_000; // anti-abuse ceiling on a single top-up
@@ -211,17 +212,17 @@ export class WalletController {
 
       // The order just became visible to its stores (hidden until paid) —
       // tell them, same as the Razorpay path does via updateOrderPaymentStatus.
-      import('../services/database.service.js')
-        .then(({ databaseService }) => databaseService.notifyStoresOrderPayable(orderId))
-        .catch((err: unknown) => console.error('[WALLET] notifyStoresOrderPayable failed', { orderId, err }));
+      runInBackground('[WALLET] notifyStoresOrderPayable', async () => {
+        const { databaseService } = await import('../services/database.service.js');
+        await databaseService.notifyStoresOrderPayable(orderId);
+      });
 
       // Fire-and-forget invoice generation (idempotent) — same as the
       // Razorpay webhook's payment.captured handler.
-      import('../services/invoice.service.js').then(({ invoiceService }) => {
-        invoiceService.generateForOrder(orderId).catch((err: unknown) => {
-          console.error('[INVOICE] Wallet-payment invoice generation failed', { orderId, err });
-        });
-      }).catch(() => {/* ignore dynamic import failure */});
+      runInBackground(`[INVOICE] wallet-payment invoice for ${orderId}`, async () => {
+        const { invoiceService } = await import('../services/invoice.service.js');
+        await invoiceService.generateForOrder(orderId);
+      });
 
       res.json({ success: true, balance: newBalance });
     } catch (error) {

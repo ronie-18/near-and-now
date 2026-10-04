@@ -318,6 +318,12 @@ export class PaymentController {
       if (data.resolved) return res.status(409).json({ error: 'Already refunded' });
       const refundMethod: 'wallet' | 'razorpay' = data.refund_method === 'wallet' ? 'wallet' : 'razorpay';
 
+      // Checked before the claim below: returning here after claiming left the
+      // notification marked resolved with no refund and nothing to undo it.
+      if (!data.refund_eligible || (refundMethod === 'razorpay' && !data.payment_id)) {
+        return res.status(400).json({ error: 'This order has no online payment to refund (COD or unpaid)' });
+      }
+
       // Claim the notification BEFORE moving money: two admins clicking at
       // once both passed the read-check above and both refunded. The JSON
       // filter makes exactly one of them win. Released again below if the
@@ -334,9 +340,6 @@ export class PaymentController {
         const { error } = await supabaseAdmin.from('admin_notifications').update({ data: { ...data, resolved: false } }).eq('id', notificationId);
         if (error) console.error('resolveItemRefund: could not release claim:', error, { notificationId });
       };
-      if (!data.refund_eligible || (refundMethod === 'razorpay' && !data.payment_id)) {
-        return res.status(400).json({ error: 'This order has no online payment to refund (COD or unpaid)' });
-      }
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')

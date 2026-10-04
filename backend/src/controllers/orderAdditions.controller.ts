@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { paymentService } from '../services/payment.service.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 // The customer-facing confirmation screen's own countdown is 30s
 // (ADD_MORE_WINDOW_SECONDS in nearandnowcustomerapp); this is a server-side
@@ -413,8 +414,8 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
 
     // Tell each store its order grew — an already-accepted store otherwise only
     // sees the new lines on its next poll, with no signal that anything changed.
-    notifyStoresOfAddedItems(orderId, (request as any).items as TrustedItem[]).catch((err) =>
-      console.error('[ADD-ITEMS] store notification failed:', err, { orderId })
+    runInBackground('[ADD-ITEMS] store notification', () =>
+      notifyStoresOfAddedItems(orderId, (request as any).items as TrustedItem[])
     );
 
     res.json({ success: true });

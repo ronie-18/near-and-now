@@ -8,6 +8,7 @@ import { verifySignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -234,6 +235,41 @@ declare module 'express' {
   interface Request {
     riderId?: string;
   }
+}
+
+/**
+ * Cash the rider must collect at the door. total_amount alone was shown
+ * before, which over-asks whenever part of the bill was already paid online:
+ *  - cash on delivery: the total minus any add-ons the customer paid online
+ *    (order_addition_requests 'paid' — apply_order_addition_request adds
+ *    their subtotal to total_amount);
+ *  - split cash/UPI: the cash share recorded at checkout;
+ *  - fully prepaid (razorpay/wallet): nothing.
+ * (2026-10-04 review follow-up)
+ */
+export async function cashToCollect(order: { id: string; total_amount: number | string | null; payment_method?: string | null; notes?: string | null }): Promise<number> {
+  const round = (n: number) => Math.max(0, Math.round(n * 100) / 100);
+  if (order.payment_method === 'cod') {
+    const { data: additions, error } = await supabaseAdmin
+      .from('order_addition_requests')
+      .select('subtotal_amount')
+      .eq('customer_order_id', order.id)
+      .eq('status', 'paid');
+    if (error) {
+      // Fall back to the full total rather than under-collecting.
+      console.error('cashToCollect: could not read paid add-ons:', error, { orderId: order.id });
+      return round(Number(order.total_amount) || 0);
+    }
+    const prepaid = ((additions || []) as Array<{ subtotal_amount: number | string }>).reduce((sum, a) => sum + (Number(a.subtotal_amount) || 0), 0);
+    return round((Number(order.total_amount) || 0) - prepaid);
+  }
+  if (order.notes) {
+    try {
+      const parsed = JSON.parse(String(order.notes));
+      if (parsed && typeof parsed.split_cash_amount === 'number') return round(parsed.split_cash_amount);
+    } catch { /* plain-text delivery note */ }
+  }
+  return 0;
 }
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
@@ -574,7 +610,7 @@ export class DeliveryPartnerController {
       // When going online, check for any ready_for_pickup orders this driver missed
       if (is_online) {
         lastDispatchCheck.set(req.riderId!, Date.now());
-        dispatchReadyOrdersToDriver(req.riderId!).catch(console.error);
+        runInBackground('dispatchReadyOrdersToDriver', () => dispatchReadyOrdersToDriver(req.riderId!));
       }
     } catch (err) {
       return sendError(res, 'DeliveryPartnerController.updateStatus', 'Could not update the status', err);
@@ -632,7 +668,7 @@ export class DeliveryPartnerController {
 
       // Throttled: if this driver just came into range of a ready order they missed, offer it to them
       if (shouldCheckDispatch(req.riderId!)) {
-        dispatchReadyOrdersToDriver(req.riderId!).catch(console.error);
+        runInBackground('dispatchReadyOrdersToDriver', () => dispatchReadyOrdersToDriver(req.riderId!));
       }
     } catch (err) {
       return sendError(res, 'DeliveryPartnerController.updateLocation', 'Could not update the location', err);
@@ -892,7 +928,7 @@ export class DeliveryPartnerController {
         notes: 'Rider accepted order',
       });
 
-      notificationService.sendOrderNotification(orderId, 'rider_assigned').catch(console.error);
+      runInBackground('rider_assigned notification', () => notificationService.sendOrderNotification(orderId, 'rider_assigned'));
 
       res.json({ success: true });
     } catch (err) {
@@ -959,7 +995,7 @@ export class DeliveryPartnerController {
         notes: 'Rider released the order, awaiting reassignment',
       });
 
-      broadcastToNearbyDrivers(orderId).catch((err) => console.error('rejectOrder: re-broadcast failed:', err));
+      runInBackground('rejectOrder: re-broadcast', () => broadcastToNearbyDrivers(orderId));
 
       res.json({ success: true });
     } catch (err) {
@@ -1024,7 +1060,7 @@ export class DeliveryPartnerController {
         console.error('markPickedUp: failed to record order_status_history:', historyErr, { orderId });
       }
 
-      notificationService.sendOrderNotification(orderId, 'order_shipped').catch(console.error);
+      runInBackground('order_shipped notification', () => notificationService.sendOrderNotification(orderId, 'order_shipped'));
 
       res.json({ success: true });
     } catch (err) {
@@ -2085,11 +2121,13 @@ export class DeliveryPartnerController {
         if (orderId) {
           // accept_driver_offer() writes no order_status_history row, so the
           // customer's timeline was missing "rider assigned" on the main path.
-          supabaseAdmin
-            .from('order_status_history')
-            .insert({ customer_order_id: orderId, status: 'delivery_partner_assigned', notes: 'Delivery partner assigned' })
-            .then(({ error: historyErr }) => { if (historyErr) console.error('acceptOffer: history insert failed:', historyErr, { orderId }); });
-          notificationService.sendOrderNotification(orderId, 'rider_assigned').catch(console.error);
+          runInBackground('acceptOffer: history insert', async () => {
+            const { error: historyErr } = await supabaseAdmin
+              .from('order_status_history')
+              .insert({ customer_order_id: orderId, status: 'delivery_partner_assigned', notes: 'Delivery partner assigned' });
+            if (historyErr) console.error('acceptOffer: history insert failed:', historyErr, { orderId });
+          });
+          runInBackground('rider_assigned notification', () => notificationService.sendOrderNotification(orderId, 'rider_assigned'));
         }
 
         return res.json({ success: true, result: 'accepted', order_id: orderId });
@@ -2128,7 +2166,7 @@ export class DeliveryPartnerController {
 
       const { data: order } = await supabaseAdmin
         .from('customer_orders')
-        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address, delivery_otp_verified_at')
+        .select('id, order_code, status, total_amount, payment_method, notes, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address, delivery_otp_verified_at')
         .eq('id', orderId)
         .eq('assigned_driver_id', req.riderId!)
         .maybeSingle();
@@ -2192,11 +2230,13 @@ export class DeliveryPartnerController {
       }));
 
       const all_picked_up = stops.every((s: any) => s.picked_up);
+      const amount_to_collect = await cashToCollect(o);
 
       res.json({
         success: true,
         order: {
           id: o.id, order_code: o.order_code, status: o.status, total_amount: o.total_amount,
+          amount_to_collect,
           customer_address: o.delivery_address,
           customer_lat: o.delivery_latitude, customer_lng: o.delivery_longitude,
           total_stores: stops.length, all_picked_up,
@@ -2279,7 +2319,7 @@ export class DeliveryPartnerController {
           supabaseAdmin.from('store_orders').update({ status: 'order_picked_up', picked_up_at: new Date().toISOString() }).eq('customer_order_id', orderId),
           supabaseAdmin.from('order_status_history').insert({ customer_order_id: orderId, status: 'order_picked_up', notes: 'All stores picked up — driver en route to customer' }),
         ]);
-        notificationService.sendOrderNotification(orderId, 'order_shipped').catch(console.error);
+        runInBackground('order_shipped notification', () => notificationService.sendOrderNotification(orderId, 'order_shipped'));
       } else {
         // Partial pickup — driver has more stops to visit
         const nextStoreId = (remaining[0] as any).store_id;

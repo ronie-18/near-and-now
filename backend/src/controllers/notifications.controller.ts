@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from '../services/database.service.js';
 import { notificationService, type BatchPushRecipient } from '../services/notification.service.js';
 import { sendError } from '../utils/httpError.js';
+import { fetchAllRows } from '../utils/fetchAllRows.js';
 
 export const BROADCAST_TARGETS = ['all', 'drivers', 'stores', 'customers'] as const;
 export type BroadcastTarget = (typeof BROADCAST_TARGETS)[number];
@@ -92,20 +93,27 @@ export class NotificationsController {
       const { target, title, message, data } = req.body as BroadcastPushBody;
 
       const wants = (t: Exclude<BroadcastTarget, 'all'>) => target === 'all' || target === t;
+      // Paged (fetchAllRows): a single read stopped silently at PostgREST's
+      // 1000-row cap, so a broadcast to a larger audience skipped the rest.
+      const load = async <T,>(label: string, enabled: boolean, page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>) => {
+        if (!enabled) return { label, rows: [] as T[], error: null as unknown };
+        try {
+          return { label, rows: await fetchAllRows<T>(page), error: null as unknown };
+        } catch (error) {
+          return { label, rows: [] as T[], error };
+        }
+      };
       const [drivers, stores, customers] = await Promise.all([
-        wants('drivers')
-          ? supabaseAdmin.from('delivery_partners').select('user_id, expo_push_token').not('expo_push_token', 'is', null)
-          : Promise.resolve({ data: [] as any[], error: null as any }),
-        wants('stores')
-          ? supabaseAdmin.from('stores').select('id, expo_push_token').not('expo_push_token', 'is', null)
-          : Promise.resolve({ data: [] as any[], error: null as any }),
-        wants('customers')
-          ? supabaseAdmin.from('app_users').select('id, expo_push_token').eq('role', 'customer').not('expo_push_token', 'is', null)
-          : Promise.resolve({ data: [] as any[], error: null as any }),
+        load<{ user_id: string; expo_push_token: string | null }>('driver', wants('drivers'), (from, to) =>
+          supabaseAdmin.from('delivery_partners').select('user_id, expo_push_token').not('expo_push_token', 'is', null).order('user_id').range(from, to)),
+        load<{ id: string; expo_push_token: string | null }>('store', wants('stores'), (from, to) =>
+          supabaseAdmin.from('stores').select('id, expo_push_token').not('expo_push_token', 'is', null).order('id').range(from, to)),
+        load<{ id: string; expo_push_token: string | null }>('customer', wants('customers'), (from, to) =>
+          supabaseAdmin.from('app_users').select('id, expo_push_token').eq('role', 'customer').not('expo_push_token', 'is', null).order('id').range(from, to)),
       ]);
-      for (const [label, result] of [['driver', drivers], ['store', stores], ['customer', customers]] as const) {
+      for (const result of [drivers, stores, customers]) {
         if (result.error) {
-          return sendError(res, where, `Could not load ${label} push tokens`, result.error);
+          return sendError(res, where, `Could not load ${result.label} push tokens`, result.error);
         }
       }
 
@@ -118,9 +126,9 @@ export class NotificationsController {
         seen.add(token);
         recipients.push({ token, staleTokenTarget });
       };
-      for (const r of drivers.data ?? []) add(r.expo_push_token, { table: 'delivery_partners', idColumn: 'user_id', idValue: r.user_id });
-      for (const r of stores.data ?? []) add(r.expo_push_token, { table: 'stores', idColumn: 'id', idValue: r.id });
-      for (const r of customers.data ?? []) add(r.expo_push_token, { table: 'app_users', idColumn: 'id', idValue: r.id });
+      for (const r of drivers.rows) add(r.expo_push_token, { table: 'delivery_partners', idColumn: 'user_id', idValue: r.user_id });
+      for (const r of stores.rows) add(r.expo_push_token, { table: 'stores', idColumn: 'id', idValue: r.id });
+      for (const r of customers.rows) add(r.expo_push_token, { table: 'app_users', idColumn: 'id', idValue: r.id });
 
       if (recipients.length === 0) {
         return res.json({ success: true, target, tokens: 0, sent: 0, failed: 0, errors: [] });

@@ -3,6 +3,7 @@ import { databaseService } from '../services/database.service.js';
 import { expireStaleAllocations, reBroadcastIfStuck, cancelIfPaymentAbandoned } from './shopkeeper.controller.js';
 import type { OrderStatus } from '../types/database.types.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 const VALID_ORDER_STATUSES: OrderStatus[] = [
   'pending_at_store',
@@ -60,9 +61,9 @@ export class TrackingController {
       // customer's orderId could force-cancel/reallocate/rebroadcast that
       // order (fixed 2026-09-09, see bug_fixes_2026-07-23.md).
       const customerId = req.customerId!;
-      expireStaleAllocations(orderId, customerId).catch((err) => console.error('expireStaleAllocations:', err));
-      reBroadcastIfStuck(orderId, customerId).catch((err) => console.error('reBroadcastIfStuck:', err));
-      cancelIfPaymentAbandoned(orderId, customerId).catch((err) => console.error('cancelIfPaymentAbandoned:', err));
+      runInBackground('expireStaleAllocations', () => expireStaleAllocations(orderId, customerId));
+      runInBackground('reBroadcastIfStuck', () => reBroadcastIfStuck(orderId, customerId));
+      runInBackground('cancelIfPaymentAbandoned', () => cancelIfPaymentAbandoned(orderId, customerId));
       const data = await databaseService.getOrderTrackingFull(orderId, req.customerId!);
 
       if (!data) {

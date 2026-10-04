@@ -10,6 +10,7 @@
 import { supabaseAdmin } from '../config/database.js';
 import { boundingBox, haversineKm } from '../utils/geo.js';
 import type { PlannerStore } from './allocationPlanner.js';
+import { fetchAllRows } from '../utils/fetchAllRows.js';
 
 /**
  * How far from the customer a store may be to receive the order at checkout.
@@ -88,16 +89,27 @@ export async function fetchStoreStock(storeIds: string[], masterProductIds: stri
   const key = (storeId: string, masterId: string) => `${storeId}\u0000${masterId}`;
 
   if (storeIds.length && masterProductIds.length) {
-    const { data, error } = await supabaseAdmin
-      .from('products')
-      .select('id, store_id, master_product_id')
-      .in('store_id', storeIds)
-      .in('master_product_id', masterProductIds)
-      .eq('is_active', true)
-      .is('deleted_at', null);
-    if (error) throw new Error(`Failed to verify product availability: ${error.message}`);
+    // Paged: (candidate stores × cart products) can pass PostgREST's 1000-row
+    // cap, and a silently truncated read made stores look like they lacked
+    // items they stock.
+    let data: Array<{ id: string; store_id: string; master_product_id: string }>;
+    try {
+      data = await fetchAllRows<{ id: string; store_id: string; master_product_id: string }>((from, to) =>
+        supabaseAdmin
+          .from('products')
+          .select('id, store_id, master_product_id')
+          .in('store_id', storeIds)
+          .in('master_product_id', masterProductIds)
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to)
+      );
+    } catch (error) {
+      throw new Error(`Failed to verify product availability: ${(error as { message?: string })?.message ?? String(error)}`);
+    }
 
-    for (const row of (data || []) as Array<{ id: string; store_id: string; master_product_id: string }>) {
+    for (const row of data) {
       const set = stock.get(row.store_id) ?? new Set<string>();
       set.add(row.master_product_id);
       stock.set(row.store_id, set);

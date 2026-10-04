@@ -375,10 +375,42 @@ describe('reallocateMissingItems', () => {
     await reallocateMissingItems('o1', ['i1']);
 
     const bill = fake.on('customer_orders', 'update').find((u) => 'total_amount' in (u.payload as object))!;
-    expect(bill.payload).toEqual({ total_amount: 65, subtotal_amount: 50 });
+    expect(bill.payload).toEqual({ total_amount: 65, subtotal_amount: 50, discount_amount: 0 });
     expect(hasFilter(bill, 'eq', 'total_amount', 115)).toBe(true); // compare-and-swap guard
     expect(fake.on('order_status_history', 'insert')[0].payload).toMatchObject({ notes: expect.stringContaining('₹50.00 removed from the bill') });
     expect(fake.on('admin_notifications', 'insert')[0].payload).toMatchObject({ data: { refund_eligible: false, cod_bill_reduced: true } });
+  });
+
+  it('on a discounted cash-on-delivery order, shrinks subtotal and discount in proportion so later drops keep the coupon ratio', async () => {
+    // Subtotal 100, coupon 10 (10%), fees 15 → total 105. Dropping a ₹50 line
+    // gives back ₹45 (its share of the coupon stays applied).
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'rpc:finalize_order_if_ready') return ok(false);
+      if (c.table === 'customer_orders' && c.columns?.includes('delivery_latitude')) {
+        return ok({ status: 'pending_at_store', order_code: 'NN1', delivery_latitude: KOLKATA.lat, delivery_longitude: KOLKATA.lng });
+      }
+      if (c.table === 'customer_orders' && c.op === 'select' && c.columns?.includes('refunded_amount')) {
+        return ok({ order_code: 'NN1', razorpay_payment_id: null, payment_method: 'cod', payment_status: 'pending', total_amount: 105, subtotal_amount: 100, discount_amount: 10, refunded_amount: 0 });
+      }
+      if (c.table === 'customer_orders' && c.op === 'update') return ok([{ id: 'o1' }]);
+      if (c.table === 'customer_orders' && c.op === 'select') return ok({ status: 'pending_at_store' });
+      if (c.table === 'order_items' && c.columns === 'id, product_id') return ok([{ id: 'i1', product_id: 'p-old-1' }]);
+      if (c.table === 'order_items' && c.op === 'select') return ok([{ id: 'i1' }]);
+      if (c.table === 'order_items' && c.op === 'update') return ok([{ id: 'i1', product_name: 'Ghee', unit_price: 25, quantity: 2 }]);
+      if (c.table === 'products') return ok([{ id: 'p-old-1', master_product_id: 'm1' }]);
+      if (c.table === 'order_store_allocations') return ok([{ store_id: 's-old', status: 'accepted', accepted_item_ids: ['i0'] }]);
+      if (c.table === 'stores') return ok([]);
+      return undefined;
+    });
+    await reallocateMissingItems('o1', ['i1']);
+
+    const bill = fake.on('customer_orders', 'update').find((u) => 'total_amount' in (u.payload as object))!;
+    // subtotal 100→50 (full line price), discount 10→5 (its 10% share), total 105→60.
+    expect(bill.payload).toEqual({ total_amount: 60, subtotal_amount: 50, discount_amount: 5 });
+    // The ratio a later drop will use is unchanged: 5 / 50 = 10 / 100.
+    const after = bill.payload as { subtotal_amount: number; discount_amount: number };
+    expect(after.discount_amount / after.subtotal_amount).toBeCloseTo(10 / 100);
+    expect(fake.on('admin_notifications', 'insert')[0].payload).toMatchObject({ data: { refund_amount: 45, cod_bill_reduced: true } });
   });
 
   it('on an online-paid order, leaves the total alone (the admin refund flow reconciles it)', async () => {
@@ -454,30 +486,82 @@ describe('reallocateMissingItems', () => {
 
 // ---------------------------------------------------------------------------
 describe('sweepStuckOrders', () => {
-  it('expires stale allocations only on orders a shopkeeper could see, with a status-guarded flip', async () => {
+  const LIVE = 'id, status, payment_status, payment_method';
+  beforeEach(() => {
+    vi.spyOn(notificationService, 'notifyShopkeeperOrderCancelled').mockResolvedValue(undefined);
+  });
+
+  it('expires stale allocations only on live orders a shopkeeper could see, with a status-guarded flip', async () => {
     const fake = installFakeSupabase(supabaseAdmin, (c) => {
-      if (c.table === 'order_store_allocations' && c.op === 'select' && c.columns === 'order_id') return ok([{ order_id: 'paid' }, { order_id: 'unpaid' }]);
-      if (c.table === 'customer_orders' && c.columns?.includes('payment_method')) {
+      if (c.table === 'customer_orders' && c.columns === 'id') return ok([]); // no abandoned payments
+      if (c.table === 'customer_orders' && c.columns === LIVE) {
         return ok([
           { id: 'paid', status: 'pending_at_store', payment_status: 'paid', payment_method: 'razorpay' },
           { id: 'unpaid', status: 'pending_at_store', payment_status: 'pending', payment_method: 'razorpay' },
         ]);
       }
+      if (c.table === 'order_store_allocations' && c.op === 'select' && c.columns === 'order_id' && hasFilter(c, 'eq', 'status', 'pending_acceptance')) {
+        return ok([{ order_id: 'paid' }]);
+      }
+      if (c.table === 'order_store_allocations' && c.op === 'select' && c.columns === 'order_id') return ok([]);
       if (c.table === 'order_store_allocations' && c.op === 'select' && c.columns === 'id, store_id, created_at') return ok([{ id: 'a1', store_id: 's1', created_at: new Date(Date.now() - 10 * 60_000).toISOString() }]);
       if (c.table === 'order_store_allocations' && c.op === 'update') return ok([{ id: 'a1', store_id: 's1' }]);
-      if (c.table === 'order_items' && c.op === 'select' && c.columns === 'id') return ok([]);
-      if (c.table === 'order_items' && c.op === 'select') return ok([]); // no orphaned items
+      if (c.table === 'order_items') return ok([]);
       if (c.table === 'customer_orders') return ok({ status: 'order_cancelled' });
       if (c.table === 'rpc:finalize_order_if_ready') return ok(false);
       return undefined;
     });
     const result = await sweepStuckOrders();
     expect(result.expiredOrders).toBe(1);
+
+    // Every per-order read is scoped to the live, payment-ready orders only.
+    const scoped = fake.on('order_store_allocations', 'select').filter((q) => q.columns === 'order_id');
+    expect(scoped).toHaveLength(2);
+    for (const q of scoped) expect(hasFilter(q, 'in', 'order_id', ['paid'])).toBe(true);
+    expect(hasFilter(fake.on('order_items', 'select')[0], 'in', 'customer_order_id', ['paid'])).toBe(true);
+
     const flips = fake.on('order_store_allocations', 'update');
     expect(flips).toHaveLength(1);
     expect(hasFilter(flips[0], 'eq', 'status', 'pending_acceptance')).toBe(true);
-    expect(hasFilter(flips[0], 'eq', 'order_id', 'paid') || fake.on('order_store_allocations', 'select').some((q) => hasFilter(q, 'eq', 'order_id', 'paid'))).toBe(true);
-    expect(fake.on('order_store_allocations', 'select').some((q) => hasFilter(q, 'eq', 'order_id', 'unpaid'))).toBe(false);
+  });
+
+  it('reads live orders by status (oldest first, last 7 days) instead of scanning allocations, so dead rows cannot fill the batch', async () => {
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'customer_orders') return ok([]);
+      return undefined;
+    });
+    const result = await sweepStuckOrders();
+    expect(result).toEqual({ abandonedOrders: 0, expiredOrders: 0, rehomedOrders: 0, settledOrders: 0 });
+
+    const live = fake.on('customer_orders', 'select').find((q) => q.columns === LIVE)!;
+    expect(hasFilter(live, 'in', 'status', ['pending_at_store', 'store_accepted', 'preparing_order'])).toBe(true);
+    expect(live.filters.some(([m]) => m === 'gte')).toBe(true);
+    expect(hasFilter(live, 'order', 'created_at', { ascending: true })).toBe(true);
+    // No live orders → no unscoped allocation/item scans at all.
+    expect(fake.on('order_store_allocations')).toHaveLength(0);
+    expect(fake.on('order_items')).toHaveLength(0);
+  });
+
+  it('cancels online orders left unpaid past the payment window (no tracking screen needed)', async () => {
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'customer_orders' && c.columns === 'id') return ok([{ id: 'abandoned' }]);
+      if (c.table === 'rpc:cancel_customer_order') {
+        return ok({ id: 'abandoned', order_code: 'NN9', status: 'order_cancelled', payment_status: 'pending', payment_method: 'razorpay', total_amount: 120, refunded_amount: 0, cancelled_store_ids: ['s1'] });
+      }
+      if (c.table === 'order_addition_requests') return ok([]);
+      if (c.table === 'customer_orders' && c.columns === LIVE) return ok([]);
+      return undefined;
+    });
+    const result = await sweepStuckOrders();
+    expect(result.abandonedOrders).toBe(1);
+
+    const unpaidQuery = fake.on('customer_orders', 'select').find((q) => q.columns === 'id')!;
+    expect(hasFilter(unpaidQuery, 'neq', 'payment_method', 'cod')).toBe(true);
+    expect(unpaidQuery.filters.some(([m, arg]) => m === 'or' && String(arg).includes('not.in.(paid,partially_refunded,refunded)'))).toBe(true);
+    const cancel = fake.on('rpc:cancel_customer_order');
+    expect(cancel).toHaveLength(1);
+    // The automatic path never uses the admin override.
+    expect(cancel[0].payload).toEqual({ p_order_id: 'abandoned' });
   });
 });
 

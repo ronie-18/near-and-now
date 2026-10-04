@@ -496,23 +496,60 @@ export async function updateProduct(id: string, updates: ProductUpdate): Promise
   }
 }
 
-export async function deleteProduct(id: string): Promise<boolean> {
-  try {
-    const { error } = await getAdminClient()
-      .from('master_products')
-      .delete()
-      .eq('id', id);
+/**
+ * 'deleted'  — the row is gone.
+ * 'archived' — the product could not be removed because other rows still
+ *              reference it, so it was deactivated instead (see deleteProduct).
+ */
+export type DeleteProductResult = 'deleted' | 'archived';
 
-    if (error) {
-      console.error('Error deleting product:', error);
-      return false;
+/**
+ * Removes a master product, falling back to archiving it.
+ *
+ * products.master_product_id references master_products(id) ON DELETE
+ * RESTRICT (and product_submissions references it too), so any product a
+ * store has ever listed can never be hard-deleted — order_items point at
+ * those store rows, and order history must survive. Every such delete used to
+ * fail with a bare "Failed to delete product" toast, for every admin role
+ * including super_admin. On a foreign-key violation (23503) the product is
+ * set inactive instead: the storefront, the customer app and checkout all
+ * already treat an inactive master product as unavailable.
+ *
+ * Throws (with the database's reason) on any other failure, including a
+ * delete/update that RLS silently filtered to zero rows.
+ */
+export async function deleteProduct(id: string): Promise<DeleteProductResult> {
+  const { data: deleted, error } = await getAdminClient()
+    .from('master_products')
+    .delete()
+    .eq('id', id)
+    .select('id');
+
+  if (!error) {
+    if (!deleted || deleted.length === 0) {
+      throw new Error('The product was not deleted (no admin session or insufficient permissions).');
     }
-
-    return true;
-  } catch (error) {
-    console.error('Error in deleteProduct:', error);
-    return false;
+    return 'deleted';
   }
+
+  if (error.code !== '23503') {
+    console.error('Error deleting product:', error);
+    throw error;
+  }
+
+  const { data: archived, error: archiveError } = await getAdminClient()
+    .from('master_products')
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('id');
+  if (archiveError) {
+    console.error('Error archiving product after a blocked delete:', archiveError);
+    throw archiveError;
+  }
+  if (!archived || archived.length === 0) {
+    throw new Error('The product could not be archived (no admin session or insufficient permissions).');
+  }
+  return 'archived';
 }
 
 // Categories Management

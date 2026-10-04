@@ -433,6 +433,26 @@ export class NotificationService {
     }
   }
 
+  // An admin cancelled an order this rider is already assigned to. Not gated
+  // on the rider's 'newOrders' preference: a rider mid-job must be told to
+  // stop, whatever they chose for new-order alerts.
+  async notifyRiderOrderCancelled(riderId: string, orderId: string, orderCode: string) {
+    const title = 'Order cancelled';
+    const body = `Order #${orderCode} was cancelled. Stop this delivery — do not collect payment.`;
+
+    await this.persistNotification('rider', riderId, 'order_cancelled', title, body, { orderId });
+
+    const { data: partner } = await supabaseAdmin
+      .from('delivery_partners')
+      .select('expo_push_token')
+      .eq('user_id', riderId)
+      .maybeSingle();
+
+    if (partner?.expo_push_token) {
+      await this.sendExpoPush(partner.expo_push_token, title, body, { orderId, type: 'order_cancelled' }, 'default', { table: 'delivery_partners', idColumn: 'user_id', idValue: riderId });
+    }
+  }
+
   async notifyProfileChangeReviewed(storeId: string, approved: boolean, rejectionReason?: string | null) {
     const title = approved ? 'Profile Change Approved' : 'Profile Change Rejected';
     const body = approved

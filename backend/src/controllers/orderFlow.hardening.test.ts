@@ -219,7 +219,7 @@ describe('admin status override', () => {
     });
     const res = mockRes();
     await new OrdersController().updateOrderStatus({ params: { orderId: 'o1' }, body: { status: 'order_cancelled', notes: 'duplicate' } } as unknown as Request, res as never);
-    expect(cancel).toHaveBeenCalledWith('o1', { reason: 'Cancelled by admin: duplicate' });
+    expect(cancel).toHaveBeenCalledWith('o1', { reason: 'Cancelled by admin: duplicate', allowDriverAssigned: true });
     expect(fake.on('customer_orders', 'update')).toHaveLength(0);
     expect(fake.on('store_orders', 'update')).toHaveLength(0);
     expect(res.body).toMatchObject({ success: true });
@@ -286,5 +286,90 @@ describe('a partially refunded order is still a paid order for its stores', () =
     });
     await expireStaleAllocations('o-partially-refunded', 'c1');
     expect(fake.on('order_store_allocations', 'update')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-10-04 review follow-ups
+// ---------------------------------------------------------------------------
+import { cashToCollect } from './deliveryPartner.controller.js';
+
+describe('resolveItemRefund: an ineligible notification is refused before it is claimed', () => {
+  it.each([
+    ['COD / unpaid', { refund_eligible: false, payment_id: null, refund_method: 'razorpay' }],
+    ['no payment id', { refund_eligible: true, payment_id: null, refund_method: 'razorpay' }],
+  ])('%s → 400, notification untouched', async (_label, extra) => {
+    const refund = vi.spyOn(paymentService, 'processRefund');
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'admin_notifications' && c.op === 'select') return ok({ id: 'n1', type: 'refund_required', data: { order_id: 'o1', refund_amount: 20, resolved: false, ...extra } });
+      return undefined;
+    });
+    const res = mockRes();
+    await new PaymentController().resolveItemRefund({ params: { notificationId: 'n1' } } as unknown as Request, res as never);
+    expect(res.statusCode).toBe(400);
+    expect(fake.on('admin_notifications', 'update')).toHaveLength(0); // still unresolved, still actionable
+    expect(refund).not.toHaveBeenCalled();
+  });
+});
+
+describe('admin cancel of a rider-assigned order', () => {
+  it('a refusal from the database reaches the admin as a 409 with the reason, not a 500', async () => {
+    installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'customer_orders' && c.op === 'select') return ok({ id: 'o1', status: 'in_transit' });
+      if (c.table === 'rpc:cancel_customer_order') return { data: null, error: { code: 'P0001', message: 'ORDER_DELIVERED' } };
+      return undefined;
+    });
+    const res = mockRes();
+    await new OrdersController().updateOrderStatus({ params: { orderId: 'o1' }, body: { status: 'order_cancelled' } } as unknown as Request, res as never);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ error: 'Cannot cancel order - it has already been delivered' });
+  });
+
+  it('an in-transit order is cancelled with the override', async () => {
+    vi.spyOn(notificationService, 'notifyShopkeeperOrderCancelled').mockResolvedValue(undefined as never);
+    const rider = vi.spyOn(notificationService, 'notifyRiderOrderCancelled').mockResolvedValue(undefined as never);
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'customer_orders' && c.op === 'select') return ok({ id: 'o1', status: 'in_transit' });
+      if (c.table === 'rpc:cancel_customer_order') {
+        return ok({ id: 'o1', order_code: 'NN1', status: 'order_cancelled', payment_method: 'cod', payment_status: 'pending', total_amount: 100, refunded_amount: 0, assigned_driver_id: 'r1', cancelled_store_ids: [] });
+      }
+      return undefined;
+    });
+    const res = mockRes();
+    await new OrdersController().updateOrderStatus({ params: { orderId: 'o1' }, body: { status: 'order_cancelled' } } as unknown as Request, res as never);
+    expect(res.statusCode).toBe(200);
+    expect(fake.on('rpc:cancel_customer_order')[0].payload).toEqual({ p_order_id: 'o1', p_allow_driver_assigned: true });
+    expect(rider).toHaveBeenCalledWith('r1', 'o1', 'NN1');
+  });
+});
+
+describe('cashToCollect (rider "Collect ₹X" badge)', () => {
+  it('COD: the total minus add-ons the customer already paid online', async () => {
+    installFakeSupabase(supabaseAdmin, (c) =>
+      c.table === 'order_addition_requests' ? ok([{ subtotal_amount: 40 }, { subtotal_amount: '15.5' }]) : undefined
+    );
+    expect(await cashToCollect({ id: 'o1', total_amount: 255.5, payment_method: 'cod', notes: null })).toBe(200);
+  });
+
+  it('COD with no add-ons: the whole total', async () => {
+    installFakeSupabase(supabaseAdmin, (c) => (c.table === 'order_addition_requests' ? ok([]) : undefined));
+    expect(await cashToCollect({ id: 'o1', total_amount: 120, payment_method: 'cod', notes: 'Ring twice' })).toBe(120);
+  });
+
+  it('COD: if the add-ons cannot be read, falls back to the full total rather than under-collecting', async () => {
+    installFakeSupabase(supabaseAdmin, () => ({ data: null, error: { message: 'boom' } }));
+    expect(await cashToCollect({ id: 'o1', total_amount: 120, payment_method: 'cod', notes: null })).toBe(120);
+  });
+
+  it('split cash/UPI: the recorded cash share', async () => {
+    const fake = installFakeSupabase(supabaseAdmin);
+    const notes = JSON.stringify({ split_upi_amount: 300, split_cash_amount: 150, note: null });
+    expect(await cashToCollect({ id: 'o1', total_amount: 450, payment_method: 'razorpay', notes })).toBe(150);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it.each(['razorpay', 'wallet'])('fully prepaid (%s): nothing', async (payment_method) => {
+    installFakeSupabase(supabaseAdmin);
+    expect(await cashToCollect({ id: 'o1', total_amount: 450, payment_method, notes: 'plain note' })).toBe(0);
   });
 });

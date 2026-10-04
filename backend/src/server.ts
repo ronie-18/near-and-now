@@ -38,7 +38,7 @@ import reviewsRoutes from './routes/reviews.routes.js';
 import adminReviewsRoutes from './routes/adminReviews.routes.js';
 import wishlistRoutes from './routes/wishlist.routes.js';
 import gstinRoutes from './routes/gstin.routes.js';
-import { sweepStuckOrders } from './controllers/shopkeeper.controller.js';
+import { triggerOrderSweep } from './controllers/shopkeeper.controller.js';
 
 // Load .env from backend and project root
 dotenv.config();
@@ -125,6 +125,18 @@ app.use(compression({ threshold: 1024 }));
 
 // Request id + per-request latency log line (JSON, for CloudWatch Logs Insights).
 app.use(requestContext);
+
+// On Vercel there is no long-running process, so the order-flow sweep's
+// setInterval (see app.listen below) never runs. Piggy-back on traffic
+// instead: every request may start a sweep, throttled to one per minute per
+// warm instance, kept alive past the response with waitUntil. The apps poll
+// constantly while orders are in flight, so this tracks real activity.
+if (process.env.VERCEL) {
+  app.use((_req: Request, _res: Response, next: NextFunction) => {
+    triggerOrderSweep();
+    next();
+  });
+}
 
 // Capture raw body for the Razorpay webhook route BEFORE express.json() parses it.
 // verifyWebhook() needs the exact bytes that Razorpay signed; JSON.stringify of an
@@ -250,9 +262,7 @@ if (!process.env.VERCEL) {
   // customer has the tracking screen open; this runs regardless. Safe across
   // several instances (status-guarded writes + a locked database function).
   const ORDER_SWEEP_INTERVAL_MS = 60_000;
-  const orderSweep = setInterval(() => {
-    sweepStuckOrders().catch((err) => console.error('[sweepStuckOrders] failed:', err));
-  }, ORDER_SWEEP_INTERVAL_MS);
+  const orderSweep = setInterval(triggerOrderSweep, ORDER_SWEEP_INTERVAL_MS);
   orderSweep.unref();
 
   // Graceful shutdown so in-flight requests finish during ECS/App Runner deploys.

@@ -141,3 +141,90 @@ describe('cancelOrder — no silent fallback', () => {
     expect(refundSpy).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 2026-10-04 review follow-ups
+// ---------------------------------------------------------------------------
+describe('cancelOrder — add-ons paid online on a cash-on-delivery order', () => {
+  it('refunds every paid add-on and records it, without touching the COD payment_status', async () => {
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'rpc:cancel_customer_order') {
+        return ok(cancelledOrder({ payment_method: 'cod', payment_status: 'pending', razorpay_payment_id: null, total_amount: 380 }));
+      }
+      if (c.table === 'order_addition_requests') {
+        return ok([
+          { razorpay_payment_id: 'pay_add_1', subtotal_amount: 60 },
+          { razorpay_payment_id: 'pay_add_2', subtotal_amount: '20' },
+        ]);
+      }
+      return undefined;
+    });
+    await databaseService.cancelOrder('o1');
+
+    expect(refundSpy.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      { paymentId: 'pay_add_1', amount: 60, reason: 'Order cancelled by customer' },
+      { paymentId: 'pay_add_2', amount: 20, reason: 'Order cancelled by customer' },
+    ]);
+    // Only the add-ons were paid; the order itself stays a COD order.
+    expect(fake.on('customer_orders', 'update')[0].payload).toEqual({ refunded_amount: 80 });
+  });
+
+  it('a COD order without add-ons still moves no money', async () => {
+    const fake = installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'rpc:cancel_customer_order') {
+        return ok(cancelledOrder({ payment_method: 'cod', payment_status: 'pending', razorpay_payment_id: null }));
+      }
+      if (c.table === 'order_addition_requests') return ok([]);
+      return undefined;
+    });
+    await databaseService.cancelOrder('o1');
+    expect(refundSpy).not.toHaveBeenCalled();
+    expect(fake.on('customer_orders', 'update')).toHaveLength(0);
+  });
+
+  it('a paid online order with an add-on refunds the main payment and the add-on separately (unchanged)', async () => {
+    installFakeSupabase(supabaseAdmin, (c) => {
+      if (c.table === 'rpc:cancel_customer_order') return ok(cancelledOrder({ total_amount: 560 }));
+      if (c.table === 'order_addition_requests') return ok([{ razorpay_payment_id: 'pay_add', subtotal_amount: 60 }]);
+      return undefined;
+    });
+    await databaseService.cancelOrder('o1');
+    expect(refundSpy.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      { paymentId: 'pay_1', amount: 500, reason: 'Order cancelled by customer' },
+      { paymentId: 'pay_add', amount: 60, reason: 'Order cancelled by customer' },
+    ]);
+  });
+});
+
+describe('cancelOrder — admin override for a rider-assigned order', () => {
+  it('passes p_allow_driver_assigned and tells the assigned rider to stop', async () => {
+    const riderSpy = vi.spyOn(notificationService, 'notifyRiderOrderCancelled').mockResolvedValue(undefined as never);
+    const fake = installFakeSupabase(supabaseAdmin, (c) =>
+      c.table === 'rpc:cancel_customer_order' ? ok(cancelledOrder({ assigned_driver_id: 'rider-1' })) : undefined
+    );
+    await databaseService.cancelOrder('o1', { reason: 'Cancelled by admin', allowDriverAssigned: true });
+    expect(fake.on('rpc:cancel_customer_order')[0].payload).toEqual({ p_order_id: 'o1', p_allow_driver_assigned: true });
+    expect(riderSpy).toHaveBeenCalledWith('rider-1', 'o1', 'NN-1');
+  });
+
+  it('customer and automatic cancels never send the override (and work against the old one-argument function)', async () => {
+    const riderSpy = vi.spyOn(notificationService, 'notifyRiderOrderCancelled').mockResolvedValue(undefined as never);
+    const fake = installFakeSupabase(supabaseAdmin, (c) =>
+      c.table === 'rpc:cancel_customer_order' ? ok(cancelledOrder({ assigned_driver_id: 'rider-1' })) : undefined
+    );
+    await databaseService.cancelOrder('o1');
+    expect(fake.on('rpc:cancel_customer_order')[0].payload).toEqual({ p_order_id: 'o1' });
+    expect(riderSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['DRIVER_ASSIGNED', 'ORDER_DELIVERED', 'ORDER_ALREADY_CANCELLED'])(
+    '%s is a 409 AppError, so the admin route reports the reason instead of a 500',
+    async (code) => {
+      installFakeSupabase(supabaseAdmin, () => ({ data: null, error: { code: 'P0001', message: code } }));
+      const err = await databaseService.cancelOrder('o1').catch((e) => e);
+      expect(err).toBeInstanceOf(AppError);
+      expect(err.status).toBe(409);
+      expect(err.expose).toBe(true);
+    }
+  );
+});

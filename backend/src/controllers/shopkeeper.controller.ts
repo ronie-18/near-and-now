@@ -8,6 +8,7 @@ import { databaseService } from '../services/database.service.js';
 import { planAllocation } from '../services/allocationPlanner.js';
 import { fetchCandidateStores, fetchStoreStock, REALLOCATION_MAX_RADIUS_KM, withOrderLock } from '../services/storeAllocation.service.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 declare module 'express' {
   interface Request {
@@ -423,7 +424,7 @@ export class ShopkeeperController {
 
       // Reallocate unavailable items to next nearest store (async, non-blocking)
       if (unavailableIds.length) {
-        reallocateMissingItems(alloc.order_id, unavailableIds).catch(console.error);
+        runInBackground('reallocateMissingItems', () => reallocateMissingItems(alloc.order_id, unavailableIds));
         // This store DID respond and accept what it could — the customer
         // shouldn't wait in silence just because reallocation is happening
         // behind the scenes for the rest. Safe to fire unconditionally (no
@@ -431,7 +432,7 @@ export class ShopkeeperController {
         // atomic `.eq('status', 'pending_acceptance')` guard earlier in this
         // function already ensures this code path runs at most once per
         // allocation, so there's no concurrent-retry duplicate-send risk here.
-        notificationService.sendOrderNotification(alloc.order_id, 'order_confirmed').catch(console.error);
+        runInBackground('order_confirmed notification', () => notificationService.sendOrderNotification(alloc.order_id, 'order_confirmed'));
       } else {
         const resolved = await finalizeIfAllResolved(alloc.order_id);
         if (!resolved) {
@@ -442,7 +443,7 @@ export class ShopkeeperController {
             .eq('status', 'pending_at_store')
             .select('id');
           if (partialUpdate?.length) {
-            notificationService.sendOrderNotification(alloc.order_id, 'order_confirmed').catch(console.error);
+            runInBackground('order_confirmed notification', () => notificationService.sendOrderNotification(alloc.order_id, 'order_confirmed'));
           }
         }
       }
@@ -504,7 +505,7 @@ export class ShopkeeperController {
       // re-home the items (or settle the order if the store held none —
       // e.g. an allocation left behind by an interrupted reallocation).
       const itemIds = await releaseStoreFromOrder(alloc.order_id, alloc.store_id);
-      handleStoreDeclined(alloc.order_id, itemIds).catch(console.error);
+      runInBackground('handleStoreDeclined', () => handleStoreDeclined(alloc.order_id, itemIds));
 
       res.json({ success: true });
     } catch (err) {
@@ -653,8 +654,8 @@ async function finalizeIfAllResolved(orderId: string): Promise<boolean> {
     return false;
   }
   if (didFinalize) {
-    broadcastToNearbyDrivers(orderId).catch(console.error);
-    notificationService.sendOrderNotification(orderId, 'ready_for_pickup').catch(console.error);
+    runInBackground('broadcastToNearbyDrivers', () => broadcastToNearbyDrivers(orderId));
+    runInBackground('ready_for_pickup notification', () => notificationService.sendOrderNotification(orderId, 'ready_for_pickup'));
   }
   return !!didFinalize;
 }
@@ -764,13 +765,17 @@ async function flagUnresolvableItemsForRefund(orderId: string, itemIds: string[]
   // What the customer actually paid for these lines. A coupon discount was
   // applied to the whole bill, so each dropped line gives back its share of
   // it — refunding the undiscounted line price over-refunds a discounted
-  // order. (2026-10-04 audit) The original subtotal is reconstructed from
-  // the live one plus anything already written off on this order.
+  // order. (2026-10-04 audit) The share is discount / subtotal. The COD
+  // adjustment below shrinks subtotal and discount in the same proportion,
+  // so this ratio is the order's original one however many write-offs
+  // happen (it used to subtract the *discounted* amount from the gross
+  // subtotal, which drifted the ratio on every later drop).
   const grossAmount = lineItems.reduce((sum, li) => sum + Number(li.unit_price) * Number(li.quantity), 0);
   const discount = Math.max(0, Number((order as any)?.discount_amount) || 0);
   const subtotalForDiscount = Math.max(0, Number((order as any)?.subtotal_amount) || 0);
   const discountShare = discount > 0 && subtotalForDiscount > 0 ? Math.min(1, discount / subtotalForDiscount) : 0;
   const refundAmount = Math.round(grossAmount * (1 - discountShare) * 100) / 100;
+  const discountGivenBack = Math.round((grossAmount - refundAmount) * 100) / 100;
 
   // Cash on delivery: nothing has been paid, so there is nothing to refund —
   // but the rider collects customer_orders.total_amount at the door, and the
@@ -785,15 +790,20 @@ async function flagUnresolvableItemsForRefund(orderId: string, itemIds: string[]
     for (let attempt = 0; attempt < 3 && !codBillReduced; attempt++) {
       const { data: current } = attempt === 0
         ? { data: order }
-        : await supabaseAdmin.from('customer_orders').select('total_amount, subtotal_amount').eq('id', orderId).maybeSingle();
+        : await supabaseAdmin.from('customer_orders').select('total_amount, subtotal_amount, discount_amount').eq('id', orderId).maybeSingle();
       if (!current) break;
       const oldTotal = Number((current as any).total_amount) || 0;
       const oldSubtotal = Number((current as any).subtotal_amount) || 0;
+      const oldDiscount = Math.max(0, Number((current as any).discount_amount) || 0);
+      // subtotal - discount + fees = total stays true: the subtotal loses the
+      // lines' full price, the discount loses their share of the coupon, and
+      // the total loses the difference (what the customer would have paid).
       const { data: swapped, error: swapErr } = await supabaseAdmin
         .from('customer_orders')
         .update({
           total_amount: Math.max(0, Math.round((oldTotal - refundAmount) * 100) / 100),
-          subtotal_amount: Math.max(0, Math.round((oldSubtotal - refundAmount) * 100) / 100),
+          subtotal_amount: Math.max(0, Math.round((oldSubtotal - grossAmount) * 100) / 100),
+          discount_amount: Math.max(0, Math.round((oldDiscount - discountGivenBack) * 100) / 100),
         })
         .eq('id', orderId)
         .eq('total_amount', oldTotal)
@@ -850,9 +860,9 @@ async function flagUnresolvableItemsForRefund(orderId: string, itemIds: string[]
 
   // The customer was never told before — their tracking screen just showed
   // fewer items. Best-effort.
-  notificationService
-    .notifyCustomerItemsUnavailable(orderId, lineItems.map((li) => li.product_name))
-    .catch((err) => console.error('notifyCustomerItemsUnavailable failed:', err));
+  runInBackground('notifyCustomerItemsUnavailable', () =>
+    notificationService.notifyCustomerItemsUnavailable(orderId, lineItems.map((li) => li.product_name))
+  );
 }
 
 /**
@@ -988,9 +998,9 @@ async function reallocateMissingItemsLocked(orderId: string, itemIds: string[]) 
 
         // The new store must be told — previously a reallocated store only
         // found out via its own 10 s poll.
-        notificationService
-          .notifyShopkeeperNewOrder(stop.storeId, orderId, (order as any).order_code || orderId)
-          .catch((err) => console.error('[reallocateMissingItems] shopkeeper notification failed:', err));
+        runInBackground('[reallocateMissingItems] shopkeeper notification', () =>
+          notificationService.notifyShopkeeperNewOrder(stop.storeId, orderId, (order as any).order_code || orderId)
+        );
       }
     }
   }
@@ -1054,103 +1064,167 @@ async function settleOrderAfterReallocation(orderId: string) {
 }
 
 /**
- * Server-side sweep, run on an interval from server.ts. The tracking-poll
- * watchdogs below only run while a customer has the tracking screen open, so a
- * store that never answered — or items orphaned mid-reallocation by a crash —
- * used to wait until the customer happened to look. Safe to run from several
- * instances at once: the flip-to-rejected update is status-guarded and the
- * reallocation step is a locked database function.
+ * Server-side sweep. The tracking-poll watchdogs below only run while a
+ * customer has the tracking screen open, so a store that never answered — or
+ * items orphaned mid-reallocation by a crash — used to wait until the customer
+ * happened to look. Safe to run from several instances at once: the
+ * flip-to-rejected update is status-guarded and the reallocation step is a
+ * locked database function.
+ *
+ * Driven by triggerOrderSweep() below (an interval in a long-running server;
+ * opportunistically from incoming requests on Vercel, where timers don't run).
+ *
+ * Works from the LIVE pre-dispatch orders (2026-10-04 audit fix). The first
+ * version scanned order_store_allocations / order_items directly with
+ * `.limit()` and no ordering or status filter; 'accepted' allocations stay
+ * 'accepted' forever on any order finished without a pickup-code scan, and
+ * abandoned unpaid orders keep 'pending_acceptance' rows forever, so those
+ * dead rows filled every batch and the live orders the sweep exists for were
+ * skipped indefinitely. Abandoned unpaid orders are now cancelled here (step
+ * 0, same rule as cancelIfPaymentAbandoned) instead of only when the customer
+ * reopened tracking.
  */
-const SWEEP_BATCH = 100;
-export async function sweepStuckOrders(): Promise<{ expiredOrders: number; rehomedOrders: number; settledOrders: number }> {
-  const result = { expiredOrders: 0, rehomedOrders: 0, settledOrders: 0 };
+const SWEEP_LIVE_ORDER_BATCH = 100; // also bounds the `.in()` URL size (~4 KB of UUIDs)
+const SWEEP_ABANDONED_BATCH = 50;
+// Mirrors the shopkeeper app's 7-day incoming window: much older orders are
+// left alone rather than mass-cancelled/notified on the first run.
+const SWEEP_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
-  // 1. Stores that never answered, on orders their shopkeeper could actually see.
-  const cutoff = new Date(Date.now() - STALE_ALLOCATION_MS).toISOString();
-  const { data: stale, error: staleErr } = await supabaseAdmin
-    .from('order_store_allocations')
-    .select('order_id')
-    .eq('status', 'pending_acceptance')
-    .lt('created_at', cutoff)
-    .limit(SWEEP_BATCH);
-  if (staleErr) throw staleErr;
-  const staleOrderIds = [...new Set((stale || []).map((a: any) => a.order_id as string))];
-  if (staleOrderIds.length) {
-    const { data: orders } = await supabaseAdmin
-      .from('customer_orders')
-      .select('id, status, payment_status, payment_method')
-      .in('id', staleOrderIds);
-    for (const o of (orders || []) as any[]) {
-      if (!REALLOCATABLE_ORDER_STATUSES.has(o.status) || !isOrderPaymentReady(o)) continue;
-      try {
-        await expireStaleAllocationsForOrder(o.id);
-        result.expiredOrders++;
-      } catch (err) {
-        console.error('[sweepStuckOrders] expire failed:', err, { orderId: o.id });
-      }
+export async function sweepStuckOrders(): Promise<{ abandonedOrders: number; expiredOrders: number; rehomedOrders: number; settledOrders: number }> {
+  const result = { abandonedOrders: 0, expiredOrders: 0, rehomedOrders: 0, settledOrders: 0 };
+  const lookback = new Date(Date.now() - SWEEP_LOOKBACK_MS).toISOString();
+  const liveStatuses = [...REALLOCATABLE_ORDER_STATUSES];
+
+  // 0. Online-payment orders never paid within UNPAID_ORDER_TTL_MS.
+  const { data: unpaid, error: unpaidErr } = await supabaseAdmin
+    .from('customer_orders')
+    .select('id')
+    .in('status', liveStatuses)
+    .neq('payment_method', 'cod')
+    .or('payment_status.is.null,payment_status.not.in.(paid,partially_refunded,refunded)')
+    .gte('created_at', lookback)
+    .lt('created_at', new Date(Date.now() - UNPAID_ORDER_TTL_MS).toISOString())
+    .order('created_at', { ascending: true })
+    .limit(SWEEP_ABANDONED_BATCH);
+  if (unpaidErr) throw unpaidErr;
+  for (const o of (unpaid || []) as Array<{ id: string }>) {
+    try {
+      await databaseService.cancelOrder(o.id, { reason: 'Cancelled automatically — payment was not completed' });
+      result.abandonedOrders++;
+    } catch (err) {
+      // A payment or rider assignment landed in between — leave it.
+      console.error('[sweepStuckOrders] abandoned-payment cancel skipped:', err, { orderId: o.id });
     }
   }
 
-  // 2. Items left waiting for a store with no allocation in flight to place them.
-  const { data: waiting, error: waitingErr } = await supabaseAdmin
-    .from('order_items')
-    .select('id, customer_order_id')
-    .is('assigned_store_id', null)
-    .eq('item_status', 'pending')
-    .limit(SWEEP_BATCH * 5);
-  if (waitingErr) throw waitingErr;
+  // The live, visible-to-shopkeepers orders this sweep can act on.
+  const { data: live, error: liveErr } = await supabaseAdmin
+    .from('customer_orders')
+    .select('id, status, payment_status, payment_method')
+    .in('status', liveStatuses)
+    .gte('created_at', lookback)
+    .order('created_at', { ascending: true })
+    .limit(SWEEP_LIVE_ORDER_BATCH);
+  if (liveErr) throw liveErr;
+  const orderIds = ((live || []) as any[]).filter((o) => isOrderPaymentReady(o)).map((o) => o.id as string);
+  if (!orderIds.length) return result;
+
+  const staleCutoff = new Date(Date.now() - STALE_ALLOCATION_MS).toISOString();
+  const [staleRes, waitingRes, acceptedRes] = await Promise.all([
+    // 1. Stores that never answered.
+    supabaseAdmin
+      .from('order_store_allocations')
+      .select('order_id')
+      .in('order_id', orderIds)
+      .eq('status', 'pending_acceptance')
+      .lt('created_at', staleCutoff),
+    // 2. Items left waiting for a store.
+    supabaseAdmin
+      .from('order_items')
+      .select('id, customer_order_id')
+      .in('customer_order_id', orderIds)
+      .is('assigned_store_id', null)
+      .eq('item_status', 'pending'),
+    // 3. Stores that answered, on orders that never got finalized (a finalize
+    //    RPC blip or a crash between the last accept and the broadcast).
+    supabaseAdmin
+      .from('order_store_allocations')
+      .select('order_id')
+      .in('order_id', orderIds)
+      .eq('status', 'accepted')
+      .lt('accepted_at', new Date(Date.now() - 60_000).toISOString()),
+  ]);
+  if (staleRes.error) throw staleRes.error;
+  if (waitingRes.error) throw waitingRes.error;
+  if (acceptedRes.error) throw acceptedRes.error;
+
+  const staleOrderIds = new Set(((staleRes.data || []) as any[]).map((a) => a.order_id as string));
+  for (const orderId of staleOrderIds) {
+    try {
+      await expireStaleAllocationsForOrder(orderId);
+      result.expiredOrders++;
+    } catch (err) {
+      console.error('[sweepStuckOrders] expire failed:', err, { orderId });
+    }
+  }
+
   const itemsByOrder = new Map<string, string[]>();
-  for (const it of (waiting || []) as any[]) {
+  for (const it of (waitingRes.data || []) as any[]) {
     if (!it.customer_order_id) continue;
     const list = itemsByOrder.get(it.customer_order_id) ?? [];
     list.push(it.id);
     itemsByOrder.set(it.customer_order_id, list);
   }
-  if (itemsByOrder.size) {
-    const { data: orders } = await supabaseAdmin
-      .from('customer_orders')
-      .select('id, status')
-      .in('id', [...itemsByOrder.keys()]);
-    for (const o of (orders || []) as any[]) {
-      if (!REALLOCATABLE_ORDER_STATUSES.has(o.status)) continue;
-      try {
-        await reallocateMissingItems(o.id, itemsByOrder.get(o.id)!);
-        result.rehomedOrders++;
-      } catch (err) {
-        console.error('[sweepStuckOrders] re-home failed:', err, { orderId: o.id });
-      }
+  for (const [orderId, itemIds] of itemsByOrder) {
+    if (staleOrderIds.has(orderId)) continue; // just handled by the expiry above
+    try {
+      await reallocateMissingItems(orderId, itemIds);
+      result.rehomedOrders++;
+    } catch (err) {
+      console.error('[sweepStuckOrders] re-home failed:', err, { orderId });
     }
   }
 
-  // 3. Orders whose stores have all answered but that never got finalized —
-  //    a finalize RPC blip or a restart between the last accept and the
-  //    broadcast used to leave these at pending_at_store/store_accepted forever.
-  const { data: accepted, error: acceptedErr } = await supabaseAdmin
-    .from('order_store_allocations')
-    .select('order_id')
-    .eq('status', 'accepted')
-    .lt('accepted_at', new Date(Date.now() - 60_000).toISOString())
-    .limit(SWEEP_BATCH * 5);
-  if (acceptedErr) throw acceptedErr;
-  const acceptedOrderIds = [...new Set((accepted || []).map((a: any) => a.order_id as string))]
-    .filter((id) => !staleOrderIds.includes(id) && !itemsByOrder.has(id));
-  if (acceptedOrderIds.length) {
-    const { data: orders } = await supabaseAdmin
-      .from('customer_orders')
-      .select('id, status')
-      .in('id', acceptedOrderIds)
-      .in('status', [...REALLOCATABLE_ORDER_STATUSES]);
-    for (const o of (orders || []) as any[]) {
-      try {
-        await withOrderLock(o.id, () => settleOrderAfterReallocation(o.id));
-        result.settledOrders++;
-      } catch (err) {
-        console.error('[sweepStuckOrders] settle failed:', err, { orderId: o.id });
-      }
+  const acceptedOrderIds = new Set(((acceptedRes.data || []) as any[]).map((a) => a.order_id as string));
+  for (const orderId of acceptedOrderIds) {
+    if (staleOrderIds.has(orderId) || itemsByOrder.has(orderId)) continue;
+    try {
+      await withOrderLock(orderId, () => settleOrderAfterReallocation(orderId));
+      result.settledOrders++;
+    } catch (err) {
+      console.error('[sweepStuckOrders] settle failed:', err, { orderId });
     }
   }
 
   return result;
+}
+
+// A little under the 60 s server interval, so a timer firing a few ms early
+// never makes the interval skip every other run.
+const ORDER_SWEEP_MIN_INTERVAL_MS = 55_000;
+let lastOrderSweepAt = 0;
+let orderSweepInFlight = false;
+
+/**
+ * Starts sweepStuckOrders() in the background unless one ran in this process
+ * within the last minute (or is still running). Called on an interval by a
+ * long-running server and on every request when running on Vercel, where
+ * setInterval never fires — any traffic (shopkeeper/rider/customer polls)
+ * keeps the sweep going about once a minute per warm instance. Concurrent
+ * sweeps across instances are safe (see sweepStuckOrders).
+ */
+export function triggerOrderSweep(): void {
+  const now = Date.now();
+  if (orderSweepInFlight || now - lastOrderSweepAt < ORDER_SWEEP_MIN_INTERVAL_MS) return;
+  lastOrderSweepAt = now;
+  orderSweepInFlight = true;
+  runInBackground('sweepStuckOrders', async () => {
+    try {
+      await sweepStuckOrders();
+    } finally {
+      orderSweepInFlight = false;
+    }
+  });
 }
 
 // Called when a driver comes online — catches any ready_for_pickup orders they missed
@@ -1226,9 +1300,9 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
         .eq('status', 'expired');
     }
 
-    notificationService
-      .notifyRiderOrderOffer(driverId, [...newOrderIds.map((o: any) => o.id), ...reopenOrderIds])
-      .catch((err) => console.error('notifyRiderOrderOffer failed:', err));
+    runInBackground('notifyRiderOrderOffer', () =>
+      notificationService.notifyRiderOrderOffer(driverId, [...newOrderIds.map((o: any) => o.id), ...reopenOrderIds])
+    );
   } catch (err) {
     console.error('dispatchReadyOrdersToDriver error:', err);
   }
@@ -1415,13 +1489,13 @@ export async function broadcastToNearbyDrivers(orderId: string) {
 
   const partnersWithTokens = partners.filter((p) => p.expo_push_token);
   if (partnersWithTokens.length) {
-    notificationService
-      .sendExpoPushBatchToDrivers(
+    runInBackground('sendExpoPushBatchToDrivers', () =>
+      notificationService.sendExpoPushBatchToDrivers(
         partnersWithTokens,
         '🛵 New Delivery Request',
         'New order available — tap to accept!',
         { orderId, type: 'new_order_offer' }
       )
-      .catch((err) => console.error('sendExpoPushBatchToDrivers failed:', err));
+    );
   }
 }

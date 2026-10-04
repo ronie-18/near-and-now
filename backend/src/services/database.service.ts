@@ -6,6 +6,7 @@ import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { notificationService } from './notification.service.js';
 import { AppError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -370,23 +371,36 @@ export class DatabaseService {
    * always thrown; OrdersController.cancelOrder turns "delivery partner" /
    * "already" messages into a 400.
    */
-  private async cancelOrderState(orderId: string): Promise<{ order: any; storeIds: string[] }> {
-    const { data, error } = await supabaseAdmin.rpc('cancel_customer_order', { p_order_id: orderId });
+  private async cancelOrderState(orderId: string, allowDriverAssigned = false): Promise<{ order: any; storeIds: string[] }> {
+    // p_allow_driver_assigned is only sent when true, so the customer and
+    // automatic paths keep working against a database that doesn't have
+    // migration 20261004060000 yet (only the admin override needs it).
+    const args: Record<string, unknown> = { p_order_id: orderId };
+    if (allowDriverAssigned) args.p_allow_driver_assigned = true;
+    const { data, error } = await supabaseAdmin.rpc('cancel_customer_order', args);
     if (!error) {
       const { cancelled_store_ids, ...order } = (data ?? {}) as Record<string, unknown> & { cancelled_store_ids?: string[] };
       return { order, storeIds: cancelled_store_ids ?? [] };
     }
+    // Client-state errors are AppErrors (409), so the admin route reports the
+    // real reason instead of a generic 500. Messages are unchanged —
+    // OrdersController.cancelOrder still matches on them for its 400s.
     const message = String(error.message || '');
     if (message.includes('ORDER_NOT_FOUND')) throw new AppError('Order not found', 404);
-    if (message.includes('ORDER_DELIVERED')) throw new Error('Cannot cancel order - it has already been delivered');
-    if (message.includes('ORDER_ALREADY_CANCELLED')) throw new Error('Order is already cancelled');
-    if (message.includes('DRIVER_ASSIGNED')) throw new Error('Cannot cancel order - delivery partner already assigned');
+    if (message.includes('ORDER_DELIVERED')) throw new AppError('Cannot cancel order - it has already been delivered', 409);
+    if (message.includes('ORDER_ALREADY_CANCELLED')) throw new AppError('Order is already cancelled', 409);
+    if (message.includes('DRIVER_ASSIGNED')) throw new AppError('Cannot cancel order - delivery partner already assigned', 409);
     // (The legacy multi-step fallback for a not-yet-applied migration was
     // removed on 2026-10-02 once 20261002000000 was confirmed live.)
     throw error;
   }
 
-  async cancelOrder(orderId: string, opts: { reason?: string } = {}) {
+  /**
+   * `allowDriverAssigned` is the admin override (orders.controller.ts
+   * updateOrderStatus): it cancels even when a rider already has the order,
+   * and tells that rider. Customer and automatic cancels never pass it.
+   */
+  async cancelOrder(orderId: string, opts: { reason?: string; allowDriverAssigned?: boolean } = {}) {
     console.log('Attempting to cancel order:', orderId, opts.reason ? `(${opts.reason})` : '');
 
     // The database state change is one atomic Postgres function now
@@ -395,7 +409,7 @@ export class DatabaseService {
     // accept could land mid-way and leave the order half-cancelled. Refunds,
     // coupon release and notifications below call external services, so they
     // still run here, after the cancellation has committed.
-    const { order: customerOrder, storeIds: cancelledStoreIds } = await this.cancelOrderState(orderId);
+    const { order: customerOrder, storeIds: cancelledStoreIds } = await this.cancelOrderState(orderId, opts.allowDriverAssigned === true);
     const data = customerOrder;
 
     // Refund whatever's still owed — total_amount minus anything already
@@ -412,23 +426,33 @@ export class DatabaseService {
     // Refunding total_amount against the main payment alone made Razorpay
     // reject the refund outright (amount above what that payment captured), so
     // the customer got nothing back. Refund each leg up to what it captured.
+    //
+    // Add-on payments are refunded whatever the main order's payment method:
+    // a cash-on-delivery order can carry add-ons paid online, and gating the
+    // whole block on payment_status 'paid' (which a COD order never is) kept
+    // that money on cancellation. (2026-10-04 review follow-up)
     const alreadyRefunded = Number(customerOrder?.refunded_amount || 0);
-    const remainingToRefund = Number(customerOrder?.total_amount || 0) - alreadyRefunded;
-    const hasRefundableBalance =
-      remainingToRefund > 0.01 &&
-      (customerOrder?.payment_status === 'paid' || customerOrder?.payment_status === 'partially_refunded');
+    const mainIsPaid =
+      customerOrder?.payment_status === 'paid' || customerOrder?.payment_status === 'partially_refunded';
 
-    if (hasRefundableBalance) {
-      const { data: paidAdditions } = await supabaseAdmin
-        .from('order_addition_requests')
-        .select('razorpay_payment_id, subtotal_amount')
-        .eq('customer_order_id', orderId)
-        .eq('status', 'paid');
-      const additionLegs = ((paidAdditions || []) as Array<{ razorpay_payment_id: string | null; subtotal_amount: number | string }>)
-        .filter((a) => !!a.razorpay_payment_id)
-        .map((a) => ({ paymentId: a.razorpay_payment_id as string, captured: Number(a.subtotal_amount) || 0 }));
-      const additionsTotal = additionLegs.reduce((sum, l) => sum + l.captured, 0);
+    const { data: paidAdditions, error: additionsErr } = await supabaseAdmin
+      .from('order_addition_requests')
+      .select('razorpay_payment_id, subtotal_amount')
+      .eq('customer_order_id', orderId)
+      .eq('status', 'paid');
+    if (additionsErr) console.error('cancelOrder: could not read paid add-ons (they will not be refunded automatically):', additionsErr, { orderId });
+    const additionLegs = ((paidAdditions || []) as Array<{ razorpay_payment_id: string | null; subtotal_amount: number | string }>)
+      .filter((a) => !!a.razorpay_payment_id)
+      .map((a) => ({ paymentId: a.razorpay_payment_id as string, captured: Number(a.subtotal_amount) || 0 }));
+    const additionsTotal = additionLegs.reduce((sum, l) => sum + l.captured, 0);
 
+    // Paid order: everything not yet refunded. Otherwise (COD, or an online
+    // order that was never paid): only the add-ons were actually paid.
+    const remainingToRefund = mainIsPaid
+      ? Number(customerOrder?.total_amount || 0) - alreadyRefunded
+      : additionsTotal - alreadyRefunded;
+
+    if (remainingToRefund > 0.01) {
       let splitUpi: number | null = null;
       if (customerOrder?.notes) {
         try {
@@ -436,7 +460,9 @@ export class DatabaseService {
           if (parsed && typeof parsed.split_upi_amount === 'number') splitUpi = parsed.split_upi_amount;
         } catch { /* plain-text delivery note */ }
       }
-      const mainCaptured = splitUpi != null ? splitUpi : Math.max(0, Number(customerOrder?.total_amount || 0) - additionsTotal);
+      const mainCaptured = !mainIsPaid
+        ? 0
+        : splitUpi != null ? splitUpi : Math.max(0, Number(customerOrder?.total_amount || 0) - additionsTotal);
       // Earlier partial refunds (resolveItemRefund) went against the main payment.
       const mainLegCap = Math.max(0, mainCaptured - alreadyRefunded);
 
@@ -501,13 +527,16 @@ export class DatabaseService {
         // would leave payment_status stuck at 'paid' with real money already
         // refunded, risking a double-refund if anyone later acts on that
         // stale status — log it loudly instead.
+        // A COD (or never-paid) order keeps its payment_status: only its
+        // add-ons were paid, and those are now back with the customer.
         const newRefunded = alreadyRefunded + refundedNow;
+        const refundUpdate: Record<string, unknown> = { refunded_amount: newRefunded };
+        if (mainIsPaid) {
+          refundUpdate.payment_status = newRefunded >= Number(customerOrder?.total_amount || 0) - 0.01 ? 'refunded' : 'partially_refunded';
+        }
         const { error: markRefundedErr } = await supabaseAdmin
           .from('customer_orders')
-          .update({
-            payment_status: newRefunded >= Number(customerOrder?.total_amount || 0) - 0.01 ? 'refunded' : 'partially_refunded',
-            refunded_amount: newRefunded,
-          })
+          .update(refundUpdate)
           .eq('id', orderId);
         if (markRefundedErr) {
           console.error('CRITICAL: refund succeeded but failed to mark order as refunded (double-refund risk):', markRefundedErr, { orderId });
@@ -545,6 +574,21 @@ export class DatabaseService {
       );
     } catch (notifyErr) {
       console.error('Failed to send cancellation notifications (non-fatal):', notifyErr);
+    }
+
+    // Admin override on a rider-assigned order: the rider must stop. Separate
+    // from the block above so a failed customer/store push can't skip it.
+    if (opts.allowDriverAssigned && customerOrder?.assigned_driver_id) {
+      try {
+        const { notificationService } = await import('./notification.service.js');
+        await notificationService.notifyRiderOrderCancelled(
+          String(customerOrder.assigned_driver_id),
+          orderId,
+          customerOrder?.order_code || orderId
+        );
+      } catch (riderNotifyErr) {
+        console.error('CRITICAL: could not tell the assigned rider the order was cancelled:', riderNotifyErr, { orderId, riderId: customerOrder.assigned_driver_id });
+      }
     }
 
     console.log('Order cancelled successfully:', data);
@@ -1279,9 +1323,9 @@ export class DatabaseService {
     // COD is visible immediately. (2026-10-04 audit)
     if (paymentMethodEnum === 'cod') {
       for (const chunk of storeChunks) {
-        notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode).catch((err) => {
-          console.error('[order placement] Failed to notify shopkeeper of new order:', err);
-        });
+        runInBackground('[order placement] shopkeeper new-order notification', () =>
+          notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode)
+        );
       }
     }
 
@@ -2225,7 +2269,7 @@ export class DatabaseService {
     if (status === 'paid') {
       // First time this order became visible to its stores — tell them now.
       // (The idempotent-skip above means a retried verify/webhook can't ping twice.)
-      this.notifyStoresOrderPayable(orderId).catch((err) => console.error('[PAYMENT] notifyStoresOrderPayable failed:', err));
+      runInBackground('[PAYMENT] notifyStoresOrderPayable', () => this.notifyStoresOrderPayable(orderId));
     }
 
     return { success: true };

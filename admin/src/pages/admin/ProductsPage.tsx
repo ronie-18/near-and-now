@@ -706,7 +706,8 @@ const ProductsPage = () => {
         <>
           This permanently removes{" "}
           <span className="font-medium text-gray-900">{productName}</span> from the master
-          catalog. This action cannot be undone.
+          catalog. This action cannot be undone. If stores already stock it (or it has order
+          history), it is archived instead: hidden from customers, history kept.
         </>
       ),
       confirmLabel: "Delete",
@@ -716,30 +717,43 @@ const ProductsPage = () => {
 
     try {
       setDeleteLoading(id);
-      const successResult = await deleteProduct(id);
+      const outcome = await deleteProduct(id);
 
-      if (successResult) {
-        const wasOnlyRowOnPage = products.length === 1;
-        setProducts((prev) => prev.filter((p) => p.id !== id));
-        setTotalProducts((prev) => Math.max(0, prev - 1));
+      if (outcome === "archived") {
+        // Referenced by store listings / order history, so it can't be
+        // removed — deleteProduct deactivated it instead.
+        setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, in_stock: false } : p)));
         void fetchStats();
-        await notifyAdminAction('deleted product', productName, { product_id: id, product_name: productName });
-        showToast(`"${productName}" has been deleted.`, "success");
-        // Deleting the only row of a page > 1 used to leave currentPage
-        // pointing past the end ("Showing 11 to 10 of 10", Next enabled).
-        // Step back a page in that case; otherwise refetch in place so the
-        // row that shifted up from the next page fills the gap.
-        if (wasOnlyRowOnPage && currentPage > 1) {
-          setCurrentPage((prev) => prev - 1);
-        } else {
-          void fetchData("refresh");
-        }
+        await notifyAdminAction('archived product', productName, { product_id: id, product_name: productName });
+        showToast(
+          `"${productName}" is stocked by stores or has order history, so it was archived (hidden from customers) instead of deleted.`,
+          "info",
+          7000
+        );
+        return;
+      }
+
+      const wasOnlyRowOnPage = products.length === 1;
+      setProducts((prev) => prev.filter((p) => p.id !== id));
+      setTotalProducts((prev) => Math.max(0, prev - 1));
+      void fetchStats();
+      await notifyAdminAction('deleted product', productName, { product_id: id, product_name: productName });
+      showToast(`"${productName}" has been deleted.`, "success");
+      // Deleting the only row of a page > 1 used to leave currentPage
+      // pointing past the end ("Showing 11 to 10 of 10", Next enabled).
+      // Step back a page in that case; otherwise refetch in place so the
+      // row that shifted up from the next page fills the gap.
+      if (wasOnlyRowOnPage && currentPage > 1) {
+        setCurrentPage((prev) => prev - 1);
       } else {
-        showToast("Failed to delete product. Please try again.", "error");
+        void fetchData("refresh");
       }
     } catch (err) {
       console.error("Error deleting product:", err);
-      showToast("An error occurred while deleting the product.", "error");
+      // PostgrestError is a plain object with `message`, not always an Error.
+      const message = (err as { message?: unknown } | null)?.message;
+      const reason = typeof message === "string" && message ? ` (${message})` : "";
+      showToast(`Failed to delete product${reason}.`, "error", 7000);
     } finally {
       setDeleteLoading(null);
     }

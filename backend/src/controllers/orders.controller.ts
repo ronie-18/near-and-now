@@ -7,6 +7,7 @@ import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
 import { broadcastToNearbyDrivers } from './shopkeeper.controller.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 import { gstinRejectionMessage, verifyGstin } from '../services/gstVerification.service.js';
 import { haversineKm } from '../utils/geo.js';
 import { PLACEMENT_RADIUS_KM } from '../services/storeAllocation.service.js';
@@ -312,15 +313,15 @@ export class OrdersController {
 
       for (const chunk of storeChunks) {
         // Notify the shopkeeper that a new order is waiting for acceptance.
-        notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode).catch((err) => {
-          console.error('[createOrder] shopkeeper push notification failed (non-fatal)', err);
-        });
+        runInBackground('[createOrder] shopkeeper push notification', () =>
+          notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode)
+        );
       }
 
       if (validatedCouponId && customer_id) {
-        databaseService.recordCouponUsage(validatedCouponId, customer_id, orderId).catch((err) => {
-          console.error('[COUPON] recordCouponUsage failed (non-fatal)', { coupon_id, orderId, err });
-        });
+        runInBackground(`[COUPON] recordCouponUsage ${coupon_id} on ${orderId}`, () =>
+          databaseService.recordCouponUsage(validatedCouponId, customer_id, orderId)
+        );
       }
 
       res.status(201).json({
@@ -461,7 +462,12 @@ export class OrdersController {
       // could still accept and prepare the order) and refunded nothing.
       // (2026-10-04 audit)
       if (status === 'order_cancelled') {
-        const cancelled = await databaseService.cancelOrder(orderId, { reason: notes ? `Cancelled by admin: ${notes}` : 'Cancelled by admin' });
+        // allowDriverAssigned: this is the admin escape hatch — it must work
+        // even once a rider has the order (the customer path refuses that).
+        const cancelled = await databaseService.cancelOrder(orderId, {
+          reason: notes ? `Cancelled by admin: ${notes}` : 'Cancelled by admin',
+          allowDriverAssigned: true,
+        });
         return res.json({ success: true, order: cancelled });
       }
 
@@ -482,7 +488,7 @@ export class OrdersController {
       // finalize_order_if_ready triggers, so no rider was ever offered the
       // order. Broadcast the same way (needs at least one accepted store).
       if (status === 'ready_for_pickup') {
-        broadcastToNearbyDrivers(orderId).catch((err) => console.error('[updateOrderStatus] broadcast failed:', err));
+        runInBackground('[updateOrderStatus] broadcast', () => broadcastToNearbyDrivers(orderId));
       }
 
       await supabaseAdmin.from('order_status_history').insert({
@@ -493,9 +499,9 @@ export class OrdersController {
 
       const notificationType = mapOrderStatusToNotificationType(status);
       if (notificationType) {
-        notificationService.sendOrderNotification(orderId, notificationType).catch((err) => {
-          console.error('[updateOrderStatus] customer push notification failed (non-fatal)', err);
-        });
+        runInBackground('[updateOrderStatus] customer push notification', () =>
+          notificationService.sendOrderNotification(orderId, notificationType)
+        );
       }
 
       // Admin manually setting this order to delivered bypasses the rider's own
@@ -506,9 +512,9 @@ export class OrdersController {
       // if a payout already exists), so this is safe even if the rider's own
       // markDelivered already ran for this order.
       if (status === 'order_delivered' && data.assigned_driver_id) {
-        payRiderForDeliveredOrder(orderId, data.assigned_driver_id, data.customer_id, data.tip_amount).catch((err) => {
-          console.error('[updateOrderStatus] rider payout failed (non-fatal)', err);
-        });
+        runInBackground(`[updateOrderStatus] rider payout for ${orderId}`, () =>
+          payRiderForDeliveredOrder(orderId, data.assigned_driver_id, data.customer_id, data.tip_amount)
+        );
       }
 
       res.json({ success: true, order: data });
