@@ -171,7 +171,7 @@ const HomePage = () => {
         <section className="px-3 sm:px-4 pt-3 pb-4 max-w-[1600px] mx-auto">
           <div className="banner-wrap w-full h-36 sm:h-44 md:h-52 bg-neutral-200">
             <img
-              src="/near_and_now_banner.png"
+              src="/near_and_now_banner.webp"
               alt="Near & Now - Digital Dukan, Local Dil Se - Groceries, Essentials & More Delivered in Minutes"
               className="absolute inset-0 h-full w-full object-cover object-center"
               loading="eager"

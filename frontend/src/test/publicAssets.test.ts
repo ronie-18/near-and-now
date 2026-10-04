@@ -34,4 +34,12 @@ describe('public image assets', () => {
     expect(read('index.html')).toContain('rel="icon" type="image/png" href="/Logo.png"');
     expect(pngSize('logo-192.png')).toEqual({ width: 192, height: 192 });
   });
+
+  it('the home banner and its preload point at the same WebP file (B1)', () => {
+    expect(read('src/pages/HomePage.tsx')).toContain('src="/near_and_now_banner.webp"');
+    expect(read('index.html')).toContain('rel="preload" as="image" type="image/webp" href="/near_and_now_banner.webp"');
+    const webp = readFileSync(path.join(root, 'public', 'near_and_now_banner.webp'));
+    expect(webp.subarray(0, 4).toString('ascii')).toBe('RIFF');
+    expect(webp.subarray(8, 12).toString('ascii')).toBe('WEBP');
+  });
 });
