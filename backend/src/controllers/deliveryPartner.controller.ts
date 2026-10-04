@@ -627,11 +627,14 @@ export class DeliveryPartnerController {
       // last_seen is a connectivity heartbeat ("is this rider's app still
       // alive"), independent of whether this particular fix is trustworthy
       // enough to show as their location — always updated, even when the
-      // coordinates below get rejected.
-      await supabaseAdmin
-        .from('delivery_partners')
-        .update({ last_seen: new Date().toISOString() })
-        .eq('user_id', req.riderId!);
+      // coordinates below get rejected. It is independent of the location
+      // upsert too, so for an accepted fix both writes go out together below
+      // instead of one round trip after the other.
+      const writeHeartbeat = () =>
+        supabaseAdmin
+          .from('delivery_partners')
+          .update({ last_seen: new Date().toISOString() })
+          .eq('user_id', req.riderId!);
 
       // A too-inaccurate fix (e.g. a cold GPS lock) or a stale cached one
       // (e.g. Location.getLastKnownPositionAsync() returning an hours-old
@@ -647,6 +650,7 @@ export class DeliveryPartnerController {
       const tooStale = fixTimestamp != null && Date.now() - fixTimestamp > MAX_LOCATION_FIX_AGE_MS;
 
       if (tooInaccurate || tooStale) {
+        await writeHeartbeat();
         return res.json({ success: true, locationAccepted: false, reason: tooInaccurate ? 'inaccurate' : 'stale' });
       }
 
@@ -660,9 +664,12 @@ export class DeliveryPartnerController {
       if (speed != null) fields.speed = Number(speed);
       if (accuracyNum != null) fields.accuracy = accuracyNum;
 
-      await supabaseAdmin
-        .from('driver_locations')
-        .upsert(fields, { onConflict: 'delivery_partner_id' });
+      await Promise.all([
+        writeHeartbeat(),
+        supabaseAdmin
+          .from('driver_locations')
+          .upsert(fields, { onConflict: 'delivery_partner_id' }),
+      ]);
 
       res.json({ success: true, locationAccepted: true });
 
