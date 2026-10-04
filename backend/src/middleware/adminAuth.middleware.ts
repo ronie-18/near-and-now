@@ -6,6 +6,12 @@ import { sendError } from '../utils/httpError.js';
 declare module 'express' {
   interface Request {
     adminId?: string;
+    /**
+     * Role from the same admins row requireAdmin just checked for
+     * status='active'. requirePermission uses it instead of reading that row
+     * again (one round trip less on every admin API call).
+     */
+    adminRole?: string;
   }
 }
 
@@ -63,7 +69,7 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     // has for customers.
     const { data: admin, error: adminError } = await supabaseAdmin
       .from('admins')
-      .select('status')
+      .select('status, role')
       .eq('id', session.admin_id)
       .maybeSingle();
     if (adminError) {
@@ -74,6 +80,7 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     }
 
     req.adminId = session.admin_id;
+    req.adminRole = (admin as { role: string }).role;
     next();
   } catch (err) {
     return sendError(res, where, 'Could not verify the admin session.', err, 500);
@@ -94,17 +101,24 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 export function requirePermission(permission: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { data: caller, error } = await supabaseAdmin
-        .from('admins')
-        .select('role')
-        .eq('id', req.adminId)
-        .maybeSingle();
+      // requireAdmin already read this admin's row (and rejected it unless
+      // status='active'); use the role from that same row. Only when this
+      // runs without requireAdmin in front of it is the row read here.
+      let role = req.adminRole;
+      if (role === undefined) {
+        const { data: caller, error } = await supabaseAdmin
+          .from('admins')
+          .select('role')
+          .eq('id', req.adminId)
+          .maybeSingle();
 
-      if (error || !caller) {
-        return res.status(401).json({ error: 'Invalid admin session' });
+        if (error || !caller) {
+          return res.status(401).json({ error: 'Invalid admin session' });
+        }
+        role = (caller as { role: string }).role;
       }
 
-      if (!hasPermission((caller as { role: string }).role, permission)) {
+      if (!hasPermission(role, permission)) {
         return res.status(403).json({ error: `Missing permission: ${permission}` });
       }
 

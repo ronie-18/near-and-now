@@ -1,0 +1,99 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`requireAdmin + requirePermission: rejections are unchanged > a thrown database error is a 500 from requireAdmin 1`] = `"{"success":false,"error":"Could not verify the admin session.","where":"adminAuth.requireAdmin","requestId":"rid-1","detail":"socket hang up"}"`;
+
+exports[`requireAdmin + requirePermission: rejections are unchanged > every rejection path keeps its status and body 1`] = `
+"{
+ "noToken": {
+  "status": 401,
+  "body": {
+   "success": false,
+   "error": "Admin login required (no x-admin-token or Authorization: Bearer token was sent).",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1"
+  },
+  "reachedHandler": false
+ },
+ "sessionLookupError": {
+  "status": 500,
+  "body": {
+   "success": false,
+   "error": "Could not check the admin session with the database.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1",
+   "code": "XX000",
+   "detail": "connection reset"
+  },
+  "reachedHandler": false
+ },
+ "unknownOrExpiredSession": {
+  "status": 401,
+  "body": {
+   "success": false,
+   "error": "Your admin session is invalid or has expired — please log in again.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1"
+  },
+  "reachedHandler": false
+ },
+ "revokedSession": {
+  "status": 401,
+  "body": {
+   "success": false,
+   "error": "Your admin session is invalid or has expired — please log in again.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1"
+  },
+  "reachedHandler": false
+ },
+ "adminLookupError": {
+  "status": 500,
+  "body": {
+   "success": false,
+   "error": "Could not check the admin account with the database.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1",
+   "code": "XX000",
+   "detail": "connection reset"
+  },
+  "reachedHandler": false
+ },
+ "adminRowMissing": {
+  "status": 401,
+  "body": {
+   "success": false,
+   "error": "Your admin account is no longer active — please contact a super admin.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1"
+  },
+  "reachedHandler": false
+ },
+ "disabledAdmin": {
+  "status": 401,
+  "body": {
+   "success": false,
+   "error": "Your admin account is no longer active — please contact a super admin.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1"
+  },
+  "reachedHandler": false
+ },
+ "suspendedAdmin": {
+  "status": 401,
+  "body": {
+   "success": false,
+   "error": "Your admin account is no longer active — please contact a super admin.",
+   "where": "adminAuth.requireAdmin",
+   "requestId": "rid-1"
+  },
+  "reachedHandler": false
+ },
+ "missingPermission": {
+  "status": 403,
+  "body": {
+   "error": "Missing permission: orders.edit"
+  },
+  "reachedHandler": false
+ }
+}"
+`;
