@@ -731,22 +731,37 @@ export class DeliveryPartnerController {
         return res.json({ success: true, orders: [] });
       }
 
-      // Fetch stores
+      // Stores, items and (for completed orders) payouts each depend only on
+      // the orders above, so they are read together rather than one after
+      // another (the rider home tab polls the active bucket every 6 s).
       const uniqueStoreIds = [...new Set(orders.map((o: any) => storeIdMap[o.id]).filter(Boolean))];
-      const { data: stores } = await supabaseAdmin
-        .from('stores')
-        .select('id, name, address, latitude, longitude, phone')
-        .in('id', uniqueStoreIds);
+      const orderIdsOnPage = orders.map((o: any) => o.id);
+      const [{ data: stores }, { data: items }, { data: payouts }] = await Promise.all([
+        supabaseAdmin
+          .from('stores')
+          .select('id, name, address, latitude, longitude, phone')
+          .in('id', uniqueStoreIds),
+        supabaseAdmin
+          .from('order_items')
+          .select('customer_order_id, product_name, quantity, unit')
+          .in('customer_order_id', orderIdsOnPage)
+          .neq('item_status', 'unavailable'), // dropped items are not picked up
+        // This rider's real payout row per completed order — the earnings
+        // screen used to compute 15% of total_amount client-side with nothing
+        // server-side backing it. payRiderForDeliveredOrder (see markDelivered)
+        // writes one row per order once delivered; orders delivered before that
+        // existed have no payout row (payout_amount null).
+        statusParam === 'completed'
+          ? supabaseAdmin
+              .from('delivery_partners_payouts')
+              .select('customer_order_id, amount, created_at')
+              .eq('partner_user_id', req.riderId!)
+              .in('customer_order_id', orderIdsOnPage)
+          : Promise.resolve({ data: null }),
+      ]);
 
       const storeById: Record<string, any> = {};
       (stores || []).forEach((s: any) => { storeById[s.id] = s; });
-
-      // Fetch order items
-      const { data: items } = await supabaseAdmin
-        .from('order_items')
-        .select('customer_order_id, product_name, quantity, unit')
-        .in('customer_order_id', orders.map((o: any) => o.id))
-        .neq('item_status', 'unavailable'); // dropped items are not picked up
 
       const itemsByOrder: Record<string, any[]> = {};
       (items || []).forEach((item: any) => {
@@ -758,24 +773,12 @@ export class DeliveryPartnerController {
         });
       });
 
-      // For completed orders, fetch this rider's real payout row per order —
-      // the earnings screen used to compute 15% of total_amount client-side
-      // with nothing server-side backing it. payRiderForDeliveredOrder (see
-      // markDelivered) writes one row per order once delivered; orders
-      // delivered before that existed have no payout row (payout_amount null).
       const payoutByOrder: Record<string, number> = {};
       const payoutCreatedAtByOrder: Record<string, string> = {};
-      if (statusParam === 'completed') {
-        const { data: payouts } = await supabaseAdmin
-          .from('delivery_partners_payouts')
-          .select('customer_order_id, amount, created_at')
-          .eq('partner_user_id', req.riderId!)
-          .in('customer_order_id', orders.map((o: any) => o.id));
-        (payouts || []).forEach((p: any) => {
-          payoutByOrder[p.customer_order_id] = Number(p.amount);
-          payoutCreatedAtByOrder[p.customer_order_id] = p.created_at;
-        });
-      }
+      (payouts || []).forEach((p: any) => {
+        payoutByOrder[p.customer_order_id] = Number(p.amount);
+        payoutCreatedAtByOrder[p.customer_order_id] = p.created_at;
+      });
 
       const mapped = orders.map((o: any) => {
         const storeId = storeIdMap[o.id];
