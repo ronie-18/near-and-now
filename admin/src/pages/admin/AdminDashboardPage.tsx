@@ -1,10 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   ShoppingBag,
   Users,
-  TrendingUp,
-  DollarSign,
+  IndianRupee,
   Package,
   Clock,
   CheckCircle,
@@ -12,252 +11,60 @@ import {
   AlertCircle,
   Truck,
   Store,
-  ArrowUpRight,
-  ArrowDownRight,
   RefreshCw,
-  X,
   BarChart3,
-  Layers
+  Layers,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { getDashboardStats, getOrdersSince, Order } from '../../services/adminService';
+import { getDashboardStats, getOrdersSince, Order, OrderItem } from '../../services/adminService';
+import {
+  PageHeader,
+  Button,
+  LinkButton,
+  StatCard,
+  StatGrid,
+  Card,
+  CardHeader,
+  CardBody,
+  Alert,
+  EmptyState,
+  SegmentedControl,
+  StatusBadge,
+  Skeleton,
+  TableContainer,
+  Table,
+  THead,
+  TBody,
+  Tr,
+  Th,
+  Td,
+  TableEmptyRow,
+  TableSkeletonRows,
+  type StatDelta,
+  type DeltaDirection,
+} from '../../components/ui';
+import { formatCurrency, formatNumber, formatDate, timeAgo, initials, shortId } from '../../utils/format';
+import { cn } from '../../utils/cn';
 
-// Stat tile — label, value, and an optional sub-line (e.g. "42 approved").
-// No decorative gradients/blobs and no fabricated trend percentages — a flat
-// card with a small icon chip lets the number itself be the loud part.
-interface StatCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  iconBg: string;
-  iconColor: string;
-  label: string;
-  value: string | number;
-  sub?: string;
-  href?: string;
+type DashboardStats = Awaited<ReturnType<typeof getDashboardStats>>;
+
+interface TopProduct {
+  name: string;
+  image: string | null;
+  sold: number;
+  revenue: number;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ icon: Icon, iconBg, iconColor, label, value, sub, href }) => {
-  const content = (
-    <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-5 transition-all duration-200 ${href ? 'hover:shadow-md hover:border-gray-200 cursor-pointer' : ''}`}>
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${iconBg} mb-3`}>
-        <Icon className={`w-5 h-5 ${iconColor}`} />
-      </div>
-      <p className="text-sm font-medium text-gray-500">{label}</p>
-      <p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
-    </div>
-  );
+type SalesPeriod = '7' | '30' | '90';
 
-  if (href) {
-    return <Link to={href}>{content}</Link>;
-  }
+const PERIOD_ITEMS: { value: SalesPeriod; label: string }[] = [
+  { value: '7', label: '7 days' },
+  { value: '30', label: '30 days' },
+  { value: '90', label: '90 days' },
+];
 
-  return content;
-};
-
-// Order Status Card
-interface StatusCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: number;
-  gradient: string;
-  iconBg: string;
-}
-
-const StatusCard: React.FC<StatusCardProps> = ({ icon: Icon, label, value, gradient, iconBg }) => (
-  <div className={`${gradient} p-5 rounded-2xl transition-all duration-200 hover:shadow-md`}>
-    <div className="flex items-center justify-between">
-      <div>
-        <p className="text-sm font-medium opacity-80">{label}</p>
-        <p className="text-3xl font-bold mt-1">{value}</p>
-      </div>
-      <div className={`w-12 h-12 ${iconBg} rounded-xl flex items-center justify-center`}>
-        <Icon className="w-6 h-6" />
-      </div>
-    </div>
-  </div>
-);
-
-// Error Alert
-const ErrorAlert = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
-  <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-    <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-      <AlertCircle className="w-5 h-5" />
-    </div>
-    <span className="flex-1 font-medium">{message}</span>
-    <button onClick={onDismiss} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
-      <X size={18} />
-    </button>
-  </div>
-);
-
-// Loading Spinner
-const LoadingSpinner = () => (
-  <div className="flex flex-col justify-center items-center h-64">
-    <div className="relative">
-      <div className="w-16 h-16 border-4 border-emerald-200 rounded-full" />
-      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-emerald-500 rounded-full animate-spin border-t-transparent" />
-    </div>
-    <p className="mt-4 text-gray-500 font-medium">Loading dashboard...</p>
-  </div>
-);
-
-// Interactive Bar Chart Component
-interface SalesChartProps {
-  data: { date: string; sales: number; orders: number }[];
-  period: string;
-}
-
-const SalesChart: React.FC<SalesChartProps> = ({ data }) => {
-  const totalSales = data.reduce((sum, d) => sum + d.sales, 0);
-  const totalOrders = data.reduce((sum, d) => sum + d.orders, 0);
-  const avgSales = data.length > 0 ? Math.round(totalSales / data.length) : 0;
-  
-  // Dynamic Y-axis based on actual max value
-  const actualMax = Math.max(...data.map(d => d.sales), 0);
-  // Round up to nearest nice number (1000, 2000, 5000, 10000, etc.)
-  const getNiceMax = (val: number): number => {
-    if (val === 0) return 5000;
-    if (val <= 1000) return 1000;
-    if (val <= 2000) return 2000;
-    if (val <= 3000) return 3000;
-    if (val <= 4000) return 4000;
-    if (val <= 5000) return 5000;
-    if (val <= 10000) return 10000;
-    if (val <= 20000) return 20000;
-    if (val <= 50000) return 50000;
-    return Math.ceil(val / 10000) * 10000;
-  };
-  const maxYAxis = getNiceMax(actualMax);
-  
-  // Generate Y-axis values (5 ticks)
-  const yAxisValues = [
-    maxYAxis,
-    Math.round(maxYAxis * 0.75),
-    Math.round(maxYAxis * 0.5),
-    Math.round(maxYAxis * 0.25),
-    0
-  ];
-  
-  // Calculate growth
-  const firstHalf = data.slice(0, Math.floor(data.length / 2));
-  const secondHalf = data.slice(Math.floor(data.length / 2));
-  const firstHalfTotal = firstHalf.reduce((sum, d) => sum + d.sales, 0);
-  const secondHalfTotal = secondHalf.reduce((sum, d) => sum + d.sales, 0);
-  const growth = firstHalfTotal > 0 ? ((secondHalfTotal - firstHalfTotal) / firstHalfTotal) * 100 : 0;
-
-  return (
-    <div className="overflow-hidden">
-      {/* Chart Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 border border-emerald-100">
-          <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Total Revenue</p>
-          <p className="text-2xl font-bold text-emerald-700 mt-1">₹{totalSales.toLocaleString()}</p>
-        </div>
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
-          <p className="text-xs text-blue-600 font-semibold uppercase tracking-wide">Total Orders</p>
-          <p className="text-2xl font-bold text-blue-700 mt-1">{totalOrders}</p>
-        </div>
-        <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-100">
-          <p className="text-xs text-violet-600 font-semibold uppercase tracking-wide">Avg. Daily Sales</p>
-          <p className="text-2xl font-bold text-violet-700 mt-1">₹{avgSales.toLocaleString()}</p>
-        </div>
-        <div className={`bg-gradient-to-br ${growth >= 0 ? 'from-green-50 to-emerald-50 border-green-100' : 'from-red-50 to-rose-50 border-red-100'} rounded-xl p-4 border`}>
-          <p className={`text-xs ${growth >= 0 ? 'text-green-600' : 'text-red-600'} font-semibold uppercase tracking-wide`}>Growth</p>
-          <div className="flex items-center gap-2 mt-1">
-            {growth >= 0 ? <TrendingUp className="w-5 h-5 text-green-600" /> : <ArrowDownRight className="w-5 h-5 text-red-600" />}
-            <p className={`text-2xl font-bold ${growth >= 0 ? 'text-green-700' : 'text-red-700'}`}>{growth >= 0 ? '+' : ''}{growth.toFixed(1)}%</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Bar Chart */}
-      {data.length > 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 overflow-hidden">
-          {/* Chart Area */}
-          <div className="flex">
-            {/* Y-axis labels - Dynamic values */}
-            <div className="w-16 flex flex-col justify-between text-xs text-gray-500 font-medium pr-2 h-52 flex-shrink-0">
-              {yAxisValues.map((val, i) => (
-                <span key={i}>₹{val.toLocaleString()}</span>
-              ))}
-            </div>
-
-            {/* Chart with bars - fixed width container */}
-            <div className="flex-1 min-w-0 overflow-hidden">
-              {/* Bars container */}
-              <div className="h-52 border-l-2 border-b-2 border-gray-300 flex items-end px-1">
-                {data.map((item, index) => {
-                  // Calculate height in pixels based on container height (208px = h-52)
-                  const containerHeight = 200; // pixels
-                  const barHeight = maxYAxis > 0 ? (item.sales / maxYAxis) * containerHeight : 0;
-                  
-                  return (
-                    <div 
-                      key={index} 
-                      className="flex-1 flex flex-col items-center justify-end group min-w-0 px-0.5 h-full"
-                    >
-                      {/* Tooltip - only show if there's data */}
-                      {item.sales > 0 && (
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity mb-1 bg-black text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap z-10">
-                          ₹{item.sales.toLocaleString()} ({item.orders} orders)
-                        </div>
-                      )}
-                      {/* Bar - BLACK color, only render if has sales */}
-                      {item.sales > 0 ? (
-                        <div
-                          className="w-full max-w-[30px] bg-gray-900 hover:bg-gray-700 cursor-pointer transition-colors rounded-t mx-auto"
-                          style={{ 
-                            height: `${Math.max(barHeight, 4)}px`
-                          }}
-                        />
-                      ) : (
-                        <div className="w-full h-0" />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* X-axis labels - aligned with bars */}
-              <div className="flex mt-2 px-1">
-                {data.map((item, index) => (
-                  <div 
-                    key={index} 
-                    className="flex-1 text-center min-w-0 px-0.5"
-                  >
-                    <span className="text-[10px] text-gray-500 font-medium truncate block">{item.date}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <div className="text-gray-400 mb-2">
-            <BarChart3 className="w-12 h-12 mx-auto" />
-          </div>
-          <p className="text-gray-500 font-medium">No order data available</p>
-          <p className="text-gray-400 text-sm mt-1">Orders will appear here once placed</p>
-        </div>
-      )}
-
-      {/* Chart Legend */}
-      <div className="flex items-center justify-center gap-8 mt-4 pt-4 border-t border-gray-100">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-gray-900 rounded" />
-          <span className="text-sm text-gray-600 font-medium">Daily Revenue</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-1 px-2 py-1 rounded-full ${growth >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-            {growth >= 0 ? <TrendingUp size={12} /> : <ArrowDownRight size={12} />}
-            <span className="text-xs font-semibold">{growth >= 0 ? 'Upward' : 'Downward'} Trend</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+// Orders are fetched once for the widest period the toggle ever shows; the
+// toggle itself is purely client-side over that set (no refetch).
+const ORDERS_WINDOW_DAYS = 90;
 
 // Online-payment (razorpay/wallet) orders are created before the customer
 // has actually finished paying — same gate shopkeeper.controller.ts's
@@ -269,438 +76,679 @@ const isPaymentReady = (order: Order) =>
   order.payment_method === 'cod' || order.payment_status === 'paid';
 const isCountable = (order: Order) => order.order_status !== 'cancelled' && isPaymentReady(order);
 
-const AdminDashboardPage = () => {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [dashboardStats, setDashboardStats] = useState({
-    totalProducts: 0,
-    totalOrders: 0,
-    totalCustomers: 0,
-    totalSales: 0,
-    totalCategories: 0,
-    totalStores: 0,
-    approvedStores: 0,
-    totalDeliveryPartners: 0,
-    activeDeliveryPartners: 0,
-    processingOrders: 0,
-    shippedOrders: 0,
-    deliveredOrders: 0,
-    cancelledOrders: 0
-  });
-  const [recentOrders, setRecentOrders] = useState<Order[]>([]);
-  const [topProducts, setTopProducts] = useState<any[]>([]);
-  const [allOrders, setAllOrders] = useState<Order[]>([]);
-  const [salesPeriod, setSalesPeriod] = useState<'7' | '30' | '90'>('7');
+// ─── Sales aggregation ───────────────────────────────────────────────────────
 
-  const fetchDashboardData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
+interface ChartBucket {
+  /** ISO date of the bucket start — a stable React key. */
+  key: string;
+  /** X-axis label: the bucket start as "DD Mon". */
+  label: string;
+  /** Tooltip label: the single day, or "DD Mon – DD Mon" for weekly buckets. */
+  rangeLabel: string;
+  sales: number;
+  orders: number;
+}
 
-      // Independent calls — run in parallel instead of one after the other.
-      // Orders are scoped to the last 90 days (the widest the sales-period
-      // toggle below ever shows) instead of the platform's entire history —
-      // recent orders, the sales chart, and the top-products tile all derive
-      // from this same bounded set.
-      const [stats, orders] = await Promise.all([
-        getDashboardStats(),
-        getOrdersSince(90),
-      ]);
-      setDashboardStats(stats);
-      setAllOrders(orders);
-      setRecentOrders(orders.slice(0, 5));
+interface SalesSummary {
+  buckets: ChartBucket[];
+  bucketDays: 1 | 7;
+  /** Totals over EVERY countable order in the period — never over the plotted bars. */
+  periodSales: number;
+  periodOrders: number;
+  avgDailySales: number;
+  /** The equal-length window directly before the period, only when the 90-day fetch fully covers it. */
+  previous: { sales: number; orders: number } | null;
+}
 
-      // Calculate real sales data directly from order items — order_items
-      // already carries name/price/image_url at order time, so there's no
-      // need to separately fetch the full master_products catalog (44k+ rows,
-      // paginated across 45 requests) just to look up an image for the top 5.
-      // Use normalized product names (lowercase, trimmed) as keys for matching.
-      const productSales: Record<string, { name: string; image?: string; productId?: string; sold: number; revenue: number }> = {};
+const startOfDay = (d: Date) => {
+  const copy = new Date(d);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+};
+const daysBefore = (d: Date, n: number) => {
+  const copy = new Date(d);
+  copy.setDate(copy.getDate() - n);
+  return copy;
+};
+const shortDay = (d: Date) => d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 
-      orders
-        .filter(isCountable)
-        .forEach(order => {
-          if (order.items && order.items.length > 0) {
-            order.items.forEach((item: any) => {
-              const displayName = item.name || item.product_name || '';
-              const productName = displayName.trim().toLowerCase();
-              if (productName) {
-                if (!productSales[productName]) {
-                  productSales[productName] = { name: displayName, image: item.image_url || item.image, productId: item.product_id, sold: 0, revenue: 0 };
-                }
-                const quantity = Number(item.quantity) || 1;
-                const price = Number(item.price) || 0;
-                productSales[productName].sold += quantity;
-                productSales[productName].revenue += price * quantity;
-              }
-            });
-          }
-        });
+function summariseSales(orders: Order[], period: SalesPeriod): SalesSummary {
+  const daysToShow = parseInt(period, 10);
+  const today = startOfDay(new Date());
+  const windowEnd = new Date(today);
+  windowEnd.setHours(23, 59, 59, 999);
+  // The window is today plus the (daysToShow - 1) days before it, so it
+  // covers exactly the days the chart renders (it used to reach one day
+  // further back, into a bucket that was never drawn).
+  const windowStart = daysBefore(today, daysToShow - 1);
+  // A real period-over-period comparison needs the previous window to sit
+  // fully inside the fetched 90 days — true for 7 and 30 days, never for 90.
+  const hasPrevious = daysToShow * 2 <= ORDERS_WINDOW_DAYS;
+  const previousStart = daysBefore(windowStart, daysToShow);
 
-      // Sort by revenue and take top 5
-      const topProds = Object.values(productSales)
-        .map(p => ({ name: p.name, image: p.image, productId: p.productId, sold: Math.round(p.sold), revenue: Math.round(p.revenue) }))
-        .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, 5);
+  const byDay: Record<string, { sales: number; orders: number }> = {};
+  let periodSales = 0;
+  let periodOrders = 0;
+  let previousSales = 0;
+  let previousOrders = 0;
 
-      setTopProducts(topProds);
-    } catch (err) {
-      setError('Failed to load dashboard data. Please try again.');
-      console.error('Error fetching dashboard data:', err);
-    } finally {
-      setLoading(false);
+  for (const order of orders) {
+    if (!isCountable(order)) continue;
+    const placed = new Date(order.created_at);
+    if (Number.isNaN(placed.getTime()) || placed > windowEnd) continue;
+    const total = order.order_total || 0;
+    if (placed >= windowStart) {
+      const key = startOfDay(placed).toDateString();
+      if (!byDay[key]) byDay[key] = { sales: 0, orders: 0 };
+      byDay[key].sales += total;
+      byDay[key].orders += 1;
+      periodSales += total;
+      periodOrders += 1;
+    } else if (hasPrevious && placed >= previousStart) {
+      previousSales += total;
+      previousOrders += 1;
     }
+  }
+
+  // 7 and 30 days plot one bar per day; 90 days plots weekly buckets. Walk
+  // back from today in bucket-sized steps so today is always in the newest
+  // bucket and only the oldest bucket is clipped to the window start (the
+  // old every-3rd/9th-day sampling skipped the most recent days entirely).
+  // Every slot in the window is kept even when it had no orders (zero bar).
+  const bucketDays: 1 | 7 = daysToShow > 30 ? 7 : 1;
+  const buckets: ChartBucket[] = [];
+  for (let newest = 0; newest < daysToShow; newest += bucketDays) {
+    const oldest = Math.min(newest + bucketDays - 1, daysToShow - 1);
+    const start = daysBefore(today, oldest);
+    const end = daysBefore(today, newest);
+    let sales = 0;
+    let count = 0;
+    for (let d = newest; d <= oldest; d += 1) {
+      const agg = byDay[daysBefore(today, d).toDateString()];
+      if (agg) {
+        sales += agg.sales;
+        count += agg.orders;
+      }
+    }
+    buckets.push({
+      key: start.toISOString(),
+      label: shortDay(start),
+      rangeLabel: bucketDays === 1 ? formatDate(start) : `${shortDay(start)} – ${shortDay(end)}`,
+      sales,
+      orders: count,
+    });
+  }
+  buckets.reverse();
+
+  return {
+    buckets,
+    bucketDays,
+    periodSales,
+    periodOrders,
+    avgDailySales: periodSales / daysToShow,
+    previous: hasPrevious ? { sales: previousSales, orders: previousOrders } : null,
   };
+}
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
+/** Percentage change against a real previous window; undefined when there is no baseline to compare with. */
+function percentDelta(current: number, previous: number | undefined, periodLabel: string): StatDelta | undefined {
+  if (previous === undefined || previous <= 0) return undefined;
+  const pct = ((current - previous) / previous) * 100;
+  const direction: DeltaDirection = pct > 0.05 ? 'up' : pct < -0.05 ? 'down' : 'flat';
+  return { value: `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`, direction, label: `vs previous ${periodLabel}` };
+}
 
-  // Generate sales data - Show all dates for period, bars only on days with orders
-  const salesData = useMemo(() => {
-    const now = new Date();
-    now.setHours(23, 59, 59, 999);
-    const daysToShow = parseInt(salesPeriod);
-    
-    // Group orders by date - aggregate total sales per day
-    const ordersByDate: Record<string, { sales: number; orders: number }> = {};
-    
-    if (allOrders && allOrders.length > 0) {
-      const startDate = new Date(now);
-      startDate.setDate(startDate.getDate() - daysToShow);
-      startDate.setHours(0, 0, 0, 0);
+/** Round up to a "nice" axis maximum (1, 2, 4, 5 or 10 × a power of ten). */
+function niceCeil(value: number): number {
+  if (value <= 0) return 1000;
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  for (const step of [1, 2, 4, 5, 10]) {
+    if (value <= step * magnitude) return step * magnitude;
+  }
+  return 10 * magnitude;
+}
 
-      allOrders.forEach(order => {
-        if (!isCountable(order)) return;
-        const orderDate = new Date(order.created_at);
-        if (orderDate >= startDate && orderDate <= now) {
-          const dateKey = orderDate.toDateString();
-          if (!ordersByDate[dateKey]) {
-            ordersByDate[dateKey] = { sales: 0, orders: 0 };
-          }
-          ordersByDate[dateKey].sales += order.order_total || 0;
-          ordersByDate[dateKey].orders += 1;
-        }
-      });
-    }
+// ─── Sales chart (page-specific; single series, brand bars) ──────────────────
 
-    // Generate all dates for the period
-    const allDates: { date: string; sales: number; orders: number; dateKey: string }[] = [];
-    
-    // Determine step size to keep chart manageable
-    // 7 days: show all 7 days
-    // 30 days: show every 3rd day (10 points)
-    // 90 days: show every 9th day (10 points)
-    const stepSize = daysToShow <= 7 ? 1 : daysToShow <= 30 ? 3 : 9;
-    
-    for (let i = daysToShow - 1; i >= 0; i -= stepSize) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      date.setHours(0, 0, 0, 0);
-      const dateKey = date.toDateString();
-      const orderData = ordersByDate[dateKey] || { sales: 0, orders: 0 };
-      
-      allDates.push({
-        date: date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-        sales: orderData.sales,
-        orders: orderData.orders,
-        dateKey
-      });
-    }
+interface SalesChartProps {
+  buckets: ChartBucket[];
+  bucketDays: 1 | 7;
+  periodLabel: string;
+}
 
-    return allDates;
-  }, [allOrders, salesPeriod]);
+const Y_TICKS = [1, 0.75, 0.5, 0.25];
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'delivered': return <CheckCircle className="w-4 h-4" />;
-      case 'placed': return <Clock className="w-4 h-4" />;
-      case 'preparing': return <Package className="w-4 h-4" />;
-      case 'ready': case 'confirmed': case 'assigned': case 'picking_up': case 'picked_up': case 'shipped': return <Truck className="w-4 h-4" />;
-      case 'cancelled': return <XCircle className="w-4 h-4" />;
-      default: return <Clock className="w-4 h-4" />;
-    }
-  };
-
-  const getStatusStyle = (status: string) => {
-    switch (status) {
-      case 'delivered': return 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700';
-      case 'placed': return 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700';
-      case 'confirmed': return 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700';
-      case 'preparing': return 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700';
-      case 'ready': return 'bg-gradient-to-r from-cyan-100 to-sky-100 text-cyan-700';
-      case 'assigned': return 'bg-gradient-to-r from-indigo-100 to-blue-100 text-indigo-700';
-      case 'picking_up': return 'bg-gradient-to-r from-fuchsia-100 to-purple-100 text-fuchsia-700';
-      case 'picked_up': return 'bg-gradient-to-r from-purple-100 to-violet-100 text-purple-700';
-      case 'shipped': return 'bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700';
-      case 'cancelled': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700';
-      default: return 'bg-gray-100 text-gray-700';
-    }
-  };
-
-  const periodLabel = salesPeriod === '7' ? 'Last 7 Days' : salesPeriod === '30' ? 'Last 30 Days' : 'Last 90 Days';
+function SalesChart({ buckets, bucketDays, periodLabel }: SalesChartProps) {
+  const actualMax = buckets.reduce((max, b) => Math.max(max, b.sales), 0);
+  const maxY = niceCeil(actualMax);
+  // Label roughly eight bars, always including the newest (today).
+  const labelEvery = Math.max(1, Math.ceil(buckets.length / 8));
+  const last = buckets.length - 1;
+  const unit = bucketDays === 1 ? 'day' : 'week';
 
   return (
-    <AdminLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-500 mt-1">Welcome back! Here&apos;s what&apos;s happening with your store.</p>
-          </div>
-          <button
-            onClick={fetchDashboardData}
-            className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
-          >
-            <RefreshCw size={18} className="mr-2" />
-            Refresh
-          </button>
+    <div>
+      {/* Visual chart — the sr-only table below is the text alternative. */}
+      <div className="flex pt-8" aria-hidden="true">
+        <div className="relative h-56 w-20 shrink-0 text-xs text-gray-500 tabular-nums">
+          {[...Y_TICKS, 0].map((f) => (
+            <span
+              key={f}
+              className="absolute right-3 leading-none"
+              style={{ top: `${(1 - f) * 100}%`, marginTop: '-0.5em' }}
+            >
+              {formatCurrency(Math.round(maxY * f))}
+            </span>
+          ))}
         </div>
-
-        {/* Error Alert */}
-        {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
-
-        {loading ? (
-          <LoadingSpinner />
-        ) : (
-          <>
-            {/* Main Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatCard
-                icon={DollarSign}
-                iconBg="bg-emerald-50"
-                iconColor="text-emerald-600"
-                label="Total Sales"
-                value={`₹${dashboardStats.totalSales.toLocaleString()}`}
-              />
-              <StatCard
-                icon={ShoppingBag}
-                iconBg="bg-amber-50"
-                iconColor="text-amber-600"
-                label="Total Orders"
-                value={dashboardStats.totalOrders}
-                href="/orders"
-              />
-              <StatCard
-                icon={Users}
-                iconBg="bg-rose-50"
-                iconColor="text-rose-600"
-                label="Total Customers"
-                value={dashboardStats.totalCustomers}
-                href="/customers"
-              />
-              <StatCard
-                icon={Package}
-                iconBg="bg-blue-50"
-                iconColor="text-blue-600"
-                label="Total Products"
-                value={dashboardStats.totalProducts}
-                href="/products"
-              />
-              <StatCard
-                icon={Layers}
-                iconBg="bg-violet-50"
-                iconColor="text-violet-600"
-                label="Total Categories"
-                value={dashboardStats.totalCategories || 0}
-                href="/categories"
-              />
-              <StatCard
-                icon={Store}
-                iconBg="bg-teal-50"
-                iconColor="text-teal-600"
-                label="Total Stores"
-                value={dashboardStats.totalStores}
-                sub={`${dashboardStats.approvedStores} approved`}
-                href="/stores"
-              />
-              <StatCard
-                icon={Truck}
-                iconBg="bg-orange-50"
-                iconColor="text-orange-600"
-                label="Delivery Partners"
-                value={dashboardStats.totalDeliveryPartners}
-                sub={`${dashboardStats.activeDeliveryPartners} active`}
-                href="/delivery"
-              />
-            </div>
-
-            {/* Sales Overview Chart */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl flex items-center justify-center">
-                    <BarChart3 className="w-6 h-6 text-emerald-600" />
+        <div className="relative h-56 min-w-0 flex-1 border-b border-l border-gray-200">
+          {Y_TICKS.map((f) => (
+            <div
+              key={f}
+              className="absolute left-0 right-0 border-t border-dashed border-gray-200"
+              style={{ top: `${(1 - f) * 100}%` }}
+            />
+          ))}
+          <div className="absolute inset-0 flex items-end gap-1 px-2">
+            {buckets.map((b, i) => {
+              const pct = maxY > 0 ? (b.sales / maxY) * 100 : 0;
+              const tip = `${b.rangeLabel}: ${formatCurrency(b.sales)} · ${b.orders} ${b.orders === 1 ? 'order' : 'orders'}`;
+              const align =
+                i < buckets.length / 3 ? 'left-0' : i > (buckets.length * 2) / 3 ? 'right-0' : 'left-1/2 -translate-x-1/2';
+              return (
+                <div key={b.key} className="group relative flex h-full min-w-0 flex-1 items-end justify-center">
+                  <div
+                    className={cn(
+                      'pointer-events-none absolute z-10 whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-popover group-hover:opacity-100',
+                      align,
+                    )}
+                    style={{ bottom: `calc(${pct}% + 6px)` }}
+                  >
+                    {tip}
                   </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-gray-800">Sales Overview</h2>
-                    <p className="text-sm text-gray-500">Revenue trends for {periodLabel.toLowerCase()}</p>
-                  </div>
+                  {b.sales > 0 ? (
+                    <div
+                      className="w-full max-w-[32px] rounded-t bg-brand-500 transition-colors group-hover:bg-brand-600"
+                      style={{ height: `${pct}%`, minHeight: '2px' }}
+                    />
+                  ) : null}
                 </div>
-                <div className="flex items-center gap-2 bg-gray-100 rounded-xl p-1">
-                  {(['7', '30', '90'] as const).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setSalesPeriod(p)}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                        salesPeriod === p
-                          ? 'bg-white text-emerald-600 shadow-sm'
-                          : 'text-gray-600 hover:text-gray-900'
-                      }`}
-                    >
-                      {p === '7' ? '7 Days' : p === '30' ? '30 Days' : '90 Days'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <SalesChart data={salesData} period={periodLabel} />
-            </div>
-
-            {/* Order Status Overview */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <h2 className="text-lg font-bold text-gray-800 mb-5">Order Status Overview</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <StatusCard
-                  icon={Clock}
-                  label="Processing"
-                  value={dashboardStats.processingOrders}
-                  gradient="bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-800"
-                  iconBg="bg-blue-100 text-blue-600"
-                />
-                <StatusCard
-                  icon={Truck}
-                  label="Shipped"
-                  value={dashboardStats.shippedOrders}
-                  gradient="bg-gradient-to-br from-amber-50 to-orange-50 text-amber-800"
-                  iconBg="bg-amber-100 text-amber-600"
-                />
-                <StatusCard
-                  icon={CheckCircle}
-                  label="Delivered"
-                  value={dashboardStats.deliveredOrders}
-                  gradient="bg-gradient-to-br from-emerald-50 to-teal-50 text-emerald-800"
-                  iconBg="bg-emerald-100 text-emerald-600"
-                />
-                <StatusCard
-                  icon={XCircle}
-                  label="Cancelled"
-                  value={dashboardStats.cancelledOrders}
-                  gradient="bg-gradient-to-br from-red-50 to-rose-50 text-red-800"
-                  iconBg="bg-red-100 text-red-600"
-                />
-              </div>
-            </div>
-
-            {/* Two Column Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Recent Orders */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="text-lg font-bold text-gray-800">Recent Orders</h2>
-                  <Link to="/orders" className="text-sm text-emerald-600 font-semibold hover:text-emerald-700 flex items-center gap-1">
-                    View All <ArrowUpRight size={14} />
-                  </Link>
-                </div>
-                {recentOrders.length === 0 ? (
-                  <div className="p-12 text-center">
-                    <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                      <ShoppingBag className="w-8 h-8 text-gray-400" />
-                    </div>
-                    <p className="text-gray-500 font-medium">No orders yet</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-gray-100">
-                    {recentOrders.map((order) => (
-                      <Link key={order.id} to={`/orders/${order.id}`} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl flex items-center justify-center">
-                            <Package className="w-5 h-5 text-gray-600" />
-                          </div>
-                          <div>
-                            <p className="font-semibold text-gray-800">#{order.id.substring(0, 8)}</p>
-                            <p className="text-sm text-gray-500">{order.customer_name || 'Unknown Customer'}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-bold text-gray-800">₹{order.order_total}</p>
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getStatusStyle(order.order_status)}`}>
-                            {getStatusIcon(order.order_status)}
-                            {order.order_status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
-                          </span>
-                        </div>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Top Products */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="text-lg font-bold text-gray-800">Top Selling Products</h2>
-                  <Link to="/products" className="text-sm text-emerald-600 font-semibold hover:text-emerald-700 flex items-center gap-1">
-                    View All <ArrowUpRight size={14} />
-                  </Link>
-                </div>
-                {topProducts.length === 0 ? (
-                  <div className="p-12 text-center">
-                    <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                      <Package className="w-8 h-8 text-gray-400" />
-                    </div>
-                    <p className="text-gray-500 font-medium">No products yet</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-gray-100">
-                    {topProducts.map((product, index) => (
-                      <Link
-                        key={index}
-                        to={product.productId ? `/products/edit/${product.productId}` : '/products'}
-                        className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
-                      >
-                        <div className="flex items-center gap-4">
-                          {product.image ? (
-                            <img src={product.image} alt={product.name} className="w-12 h-12 rounded-xl object-cover shadow-sm" />
-                          ) : (
-                            <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center">
-                              <span className="text-white font-bold text-sm">{product.name.substring(0, 2).toUpperCase()}</span>
-                            </div>
-                          )}
-                          <div>
-                            <p className="font-semibold text-gray-800 line-clamp-1">{product.name}</p>
-                            <p className="text-sm text-gray-500">{product.sold} sold</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-bold text-gray-800">₹{product.revenue.toLocaleString()}</p>
-                        </div>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Quick Link to Reports */}
-            <div className="bg-gradient-to-r from-violet-500 to-purple-600 rounded-2xl p-6 text-white">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold">Want more detailed analytics?</h3>
-                  <p className="text-violet-200 mt-1">Check out the Reports section for in-depth insights</p>
-                </div>
-                <Link
-                  to="/reports"
-                  className="inline-flex items-center px-6 py-3 bg-white text-violet-600 rounded-xl hover:bg-violet-50 transition-colors font-semibold shadow-lg"
-                >
-                  View Reports
-                  <ArrowUpRight size={18} className="ml-2" />
-                </Link>
-              </div>
-            </div>
-          </>
-        )}
+              );
+            })}
+          </div>
+        </div>
       </div>
-    </AdminLayout>
+      <div className="ml-20 mt-2 flex gap-1 px-2" aria-hidden="true">
+        {buckets.map((b, i) => (
+          <div key={b.key} className="min-w-0 flex-1 truncate text-center text-xs text-gray-500">
+            {(last - i) % labelEvery === 0 ? b.label : ''}
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-gray-500">
+        Revenue per {unit} for the {periodLabel}. Counts orders that are not cancelled and, for online payments, actually paid.
+      </p>
+      <table className="sr-only">
+        <caption>Revenue per {unit} for the {periodLabel}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{unit === 'day' ? 'Day' : 'Week'}</th>
+            <th scope="col">Revenue</th>
+            <th scope="col">Orders</th>
+          </tr>
+        </thead>
+        <tbody>
+          {buckets.map((b) => (
+            <tr key={b.key}>
+              <th scope="row">{b.rangeLabel}</th>
+              <td>{formatCurrency(b.sales)}</td>
+              <td>{b.orders}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ProductThumb({ name, src }: { name: string; src: string | null }) {
+  return src ? (
+    <img src={src} alt="" className="h-9 w-9 shrink-0 rounded-md border border-gray-200 object-cover" />
+  ) : (
+    <span
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-50 text-xs font-semibold text-brand-700"
+      aria-hidden="true"
+    >
+      {initials(name, 'P')}
+    </span>
+  );
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+const AdminDashboardPage = () => {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  // null = never loaded successfully — distinct from "loaded, but zero".
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [statsError, setStatsError] = useState(false);
+  const [allOrders, setAllOrders] = useState<Order[] | null>(null);
+  const [ordersError, setOrdersError] = useState(false);
+  const [salesPeriod, setSalesPeriod] = useState<SalesPeriod>('7');
+  // Only the most recent request may commit its results (Refresh/Retry
+  // re-clicked while a fetch is in flight, StrictMode double-invoking the
+  // effect) — otherwise whichever response resolved last would win.
+  const requestIdRef = useRef(0);
+
+  const fetchDashboardData = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+
+    // Independent calls — run in parallel instead of one after the other.
+    // Orders are scoped to the last 90 days (the widest the sales-period
+    // toggle below ever shows) instead of the platform's entire history —
+    // recent orders, the sales chart, and the top-products tile all derive
+    // from this same bounded set. allSettled so a failure in one call does
+    // not throw away the other call's result.
+    const [statsResult, ordersResult] = await Promise.allSettled([
+      getDashboardStats(),
+      getOrdersSince(ORDERS_WINDOW_DAYS),
+    ]);
+    if (requestId !== requestIdRef.current) return;
+
+    if (statsResult.status === 'fulfilled') {
+      setStats(statsResult.value);
+      setStatsError(false);
+    } else {
+      console.error('Error fetching dashboard stats:', statsResult.reason);
+      setStatsError(true);
+    }
+    if (ordersResult.status === 'fulfilled') {
+      setAllOrders(ordersResult.value);
+      setOrdersError(false);
+    } else {
+      console.error('Error fetching dashboard orders:', ordersResult.reason);
+      setOrdersError(true);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  const recentOrders = useMemo(() => (allOrders ?? []).slice(0, 5), [allOrders]);
+
+  const topProducts = useMemo<TopProduct[]>(() => {
+    if (!allOrders) return [];
+    // Calculate real sales data directly from order items — order_items
+    // already carries name/price/image_url at order time, so there's no
+    // need to separately fetch the full master_products catalog (44k+ rows,
+    // paginated across 45 requests) just to look up an image for the top 5.
+    // Use normalized product names (lowercase, trimmed) as keys for matching.
+    const productSales: Record<string, TopProduct> = {};
+    allOrders.filter(isCountable).forEach((order) => {
+      const items: OrderItem[] = order.items ?? [];
+      items.forEach((item) => {
+        // Number() guards against numeric columns arriving as strings; the
+        // quantity→1 / price→0 defaults are deliberate (see risk notes).
+        const displayName = (item.name ?? '').trim();
+        const productName = displayName.toLowerCase();
+        if (!productName) return;
+        if (!productSales[productName]) {
+          productSales[productName] = { name: displayName, image: item.image ?? null, sold: 0, revenue: 0 };
+        }
+        const quantity = Number(item.quantity) || 1;
+        const price = Number(item.price) || 0;
+        productSales[productName].sold += quantity;
+        productSales[productName].revenue += price * quantity;
+      });
+    });
+    // Sort by revenue and take top 5
+    return Object.values(productSales)
+      .map((p) => ({ ...p, sold: Math.round(p.sold), revenue: Math.round(p.revenue) }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5);
+  }, [allOrders]);
+
+  const sales = useMemo(() => summariseSales(allOrders ?? [], salesPeriod), [allOrders, salesPeriod]);
+
+  const periodLabel = `last ${salesPeriod} days`;
+  const hasStats = stats !== null;
+  const hasOrders = allOrders !== null;
+  // Stats tiles skeleton whenever a fetch is in flight and there is nothing to
+  // show yet — covers both the first load and a Retry after a stats-only failure.
+  const statsLoading = loading && !hasStats;
+  // Orders never loaded and the latest attempt failed: show an error, not "no orders".
+  const ordersUnavailable = !hasOrders && !loading && ordersError;
+  const statValue = (pick: (s: DashboardStats) => string) => (stats ? pick(stats) : '—');
+
+  const errorTitle =
+    statsError && ordersError
+      ? 'Failed to load dashboard data.'
+      : statsError
+        ? 'Failed to load the platform totals.'
+        : ordersError
+          ? 'Failed to load orders for the last 90 days.'
+          : null;
+  const showingStale = (statsError && hasStats) || (ordersError && hasOrders);
+
+  const retryButton = (
+    <Button variant="secondary" size="sm" loading={loading} onClick={() => void fetchDashboardData()}>
+      Retry
+    </Button>
+  );
+  const ordersErrorState = (
+    <EmptyState
+      compact
+      icon={AlertCircle}
+      title="Orders could not be loaded"
+      description="The sales chart, recent orders and top products all come from the last 90 days of orders."
+      action={retryButton}
+    />
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Dashboard"
+        description="Platform-wide sales, orders, catalogue and partner figures."
+        actions={
+          <>
+            <LinkButton to="/reports" variant="secondary" leftIcon={<BarChart3 />}>
+              View reports
+            </LinkButton>
+            <Button variant="secondary" leftIcon={<RefreshCw />} loading={loading} onClick={() => void fetchDashboardData()}>
+              Refresh
+            </Button>
+          </>
+        }
+      />
+
+      {errorTitle ? (
+        <Alert tone="danger" title={errorTitle} actions={retryButton}>
+          {showingStale ? 'The affected figures are from the last successful load.' : 'Check your connection and try again.'}
+        </Alert>
+      ) : null}
+
+      {/* Nothing has ever loaded and the fetch failed: the alert above is the whole page. */}
+      {!loading && !hasStats && !hasOrders ? null : (
+        <>
+          {/* Platform KPIs — values come from getDashboardStats() exactly as returned. */}
+          <StatGrid columns={4}>
+            <StatCard
+              label="Total sales"
+              value={statValue((s) => formatCurrency(s.totalSales))}
+              hint="All time, countable orders"
+              icon={IndianRupee}
+              loading={statsLoading}
+            />
+            <StatCard
+              label="Total orders"
+              value={statValue((s) => formatNumber(s.totalOrders))}
+              icon={ShoppingBag}
+              to="/orders"
+              loading={statsLoading}
+            />
+            <StatCard
+              label="Customers"
+              value={statValue((s) => formatNumber(s.totalCustomers))}
+              icon={Users}
+              to="/customers"
+              loading={statsLoading}
+            />
+            <StatCard
+              label="Products"
+              value={statValue((s) => formatNumber(s.totalProducts))}
+              icon={Package}
+              to="/products"
+              loading={statsLoading}
+            />
+          </StatGrid>
+          <StatGrid columns={3}>
+            <StatCard
+              label="Categories"
+              value={statValue((s) => formatNumber(s.totalCategories))}
+              hint="With at least one product"
+              icon={Layers}
+              to="/categories"
+              loading={statsLoading}
+            />
+            <StatCard
+              label="Stores"
+              value={statValue((s) => formatNumber(s.totalStores))}
+              hint={stats ? `${formatNumber(stats.approvedStores)} approved` : undefined}
+              icon={Store}
+              to="/stores"
+              loading={statsLoading}
+            />
+            <StatCard
+              label="Delivery partners"
+              value={statValue((s) => formatNumber(s.totalDeliveryPartners))}
+              hint={stats ? `${formatNumber(stats.activeDeliveryPartners)} active` : undefined}
+              icon={Truck}
+              to="/delivery"
+              loading={statsLoading}
+            />
+          </StatGrid>
+
+          {/* Sales overview — client-side over the already-fetched 90 days */}
+          <Card>
+            <CardHeader
+              title="Sales overview"
+              description={`Revenue from countable orders, ${periodLabel}`}
+              actions={
+                <SegmentedControl value={salesPeriod} onChange={setSalesPeriod} items={PERIOD_ITEMS} aria-label="Sales period" />
+              }
+            />
+            {ordersUnavailable ? (
+              <CardBody>{ordersErrorState}</CardBody>
+            ) : !hasOrders ? (
+              <CardBody>
+                <Skeleton className="h-64 w-full" />
+              </CardBody>
+            ) : (
+              <>
+                <div className="grid gap-px border-b border-gray-200 bg-gray-200 sm:grid-cols-3">
+                  <StatCard
+                    className="rounded-none border-0"
+                    label={`Revenue (${periodLabel})`}
+                    value={formatCurrency(sales.periodSales)}
+                    delta={percentDelta(sales.periodSales, sales.previous?.sales, `${salesPeriod} days`)}
+                  />
+                  <StatCard
+                    className="rounded-none border-0"
+                    label={`Orders (${periodLabel})`}
+                    value={formatNumber(sales.periodOrders)}
+                    delta={percentDelta(sales.periodOrders, sales.previous?.orders, `${salesPeriod} days`)}
+                  />
+                  <StatCard
+                    className="rounded-none border-0"
+                    label="Average daily revenue"
+                    value={formatCurrency(sales.avgDailySales)}
+                    hint={`Across all ${salesPeriod} days`}
+                  />
+                </div>
+                <CardBody>
+                  {sales.periodOrders === 0 ? (
+                    <EmptyState
+                      compact
+                      icon={BarChart3}
+                      title={`No sales in the ${periodLabel}`}
+                      description="Cancelled orders and unpaid online orders are not counted."
+                    />
+                  ) : (
+                    <SalesChart buckets={sales.buckets} bucketDays={sales.bucketDays} periodLabel={periodLabel} />
+                  )}
+                </CardBody>
+              </>
+            )}
+          </Card>
+
+          {/* Order status — server-side counts from get_admin_dashboard_order_stats()
+              (migration 20260930380000). processingOrders = placed_orders (pending_at_store,
+              store_accepted) + confirmed_orders (preparing_order, ready_for_pickup);
+              shippedOrders = delivery_partner_assigned, picking_up, order_picked_up, in_transit.
+              The hints below spell those groupings out so the tiles and the
+              StatusBadge vocabulary in Recent orders agree. */}
+          <Card>
+            <CardHeader title="Order status" description="Live counts across all orders" />
+            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-b-md bg-gray-200 lg:grid-cols-4">
+              <StatCard
+                className="rounded-none border-0"
+                label="Processing"
+                value={statValue((s) => formatNumber(s.processingOrders))}
+                hint="Placed, accepted, being prepared or ready for pickup"
+                icon={Clock}
+                loading={statsLoading}
+              />
+              <StatCard
+                className="rounded-none border-0"
+                label="In transit"
+                value={statValue((s) => formatNumber(s.shippedOrders))}
+                hint="Rider assigned, picking up, picked up or out for delivery"
+                icon={Truck}
+                loading={statsLoading}
+              />
+              <StatCard
+                className="rounded-none border-0"
+                label="Delivered"
+                value={statValue((s) => formatNumber(s.deliveredOrders))}
+                icon={CheckCircle}
+                loading={statsLoading}
+              />
+              <StatCard
+                className="rounded-none border-0"
+                label="Cancelled"
+                value={statValue((s) => formatNumber(s.cancelledOrders))}
+                icon={XCircle}
+                loading={statsLoading}
+              />
+            </div>
+          </Card>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            {/* Recent orders */}
+            <Card>
+              <CardHeader
+                title="Recent orders"
+                description="The five most recently placed"
+                actions={
+                  <LinkButton to="/orders" variant="link" size="sm">
+                    View all
+                  </LinkButton>
+                }
+              />
+              <CardBody padding="none">
+                <TableContainer className="border-0 rounded-none">
+                  <Table>
+                    <THead>
+                      <Tr>
+                        <Th>Order</Th>
+                        <Th>Customer</Th>
+                        <Th>Status</Th>
+                        <Th align="right">Total</Th>
+                      </Tr>
+                    </THead>
+                    <TBody>
+                      {ordersUnavailable ? (
+                        <TableEmptyRow colSpan={4}>{ordersErrorState}</TableEmptyRow>
+                      ) : !hasOrders ? (
+                        <TableSkeletonRows rows={5} cols={4} />
+                      ) : recentOrders.length === 0 ? (
+                        <TableEmptyRow colSpan={4}>
+                          <EmptyState compact icon={ShoppingBag} title="No orders in the last 90 days" />
+                        </TableEmptyRow>
+                      ) : (
+                        recentOrders.map((order) => (
+                          <Tr key={order.id} clickable onClick={() => navigate(`/orders/${order.id}`)}>
+                            <Td nowrap>
+                              <Link
+                                to={`/orders/${order.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                title={order.id}
+                                className="font-medium text-brand-700 hover:underline"
+                              >
+                                {order.order_number || `#${shortId(order.id)}`}
+                              </Link>
+                              <div className="mt-0.5 text-xs text-gray-500">{timeAgo(order.created_at)}</div>
+                            </Td>
+                            <Td>
+                              <span className="line-clamp-1">{order.customer_name || 'Unknown customer'}</span>
+                            </Td>
+                            <Td nowrap>
+                              <StatusBadge kind="order" value={order.order_status} />
+                            </Td>
+                            <Td align="right" nowrap className="font-medium text-gray-900 tabular-nums">
+                              {formatCurrency(order.order_total)}
+                            </Td>
+                          </Tr>
+                        ))
+                      )}
+                    </TBody>
+                  </Table>
+                </TableContainer>
+              </CardBody>
+            </Card>
+
+            {/* Top products — rows are not linked: order_items.product_id points at the
+                store inventory row, not the master product the edit page expects. */}
+            <Card>
+              <CardHeader
+                title="Top selling products"
+                description="By revenue, last 90 days"
+                actions={
+                  <LinkButton to="/products" variant="link" size="sm">
+                    View all
+                  </LinkButton>
+                }
+              />
+              <CardBody padding="none">
+                <TableContainer className="border-0 rounded-none">
+                  <Table>
+                    <THead>
+                      <Tr>
+                        <Th>Product</Th>
+                        <Th align="right">Sold</Th>
+                        <Th align="right">Revenue</Th>
+                      </Tr>
+                    </THead>
+                    <TBody>
+                      {ordersUnavailable ? (
+                        <TableEmptyRow colSpan={3}>{ordersErrorState}</TableEmptyRow>
+                      ) : !hasOrders ? (
+                        <TableSkeletonRows rows={5} cols={3} />
+                      ) : topProducts.length === 0 ? (
+                        <TableEmptyRow colSpan={3}>
+                          <EmptyState compact icon={Package} title="No product sales in the last 90 days" />
+                        </TableEmptyRow>
+                      ) : (
+                        topProducts.map((product) => (
+                          <Tr key={product.name.toLowerCase()}>
+                            <Td>
+                              <div className="flex items-center gap-3">
+                                <ProductThumb name={product.name} src={product.image} />
+                                <span className="line-clamp-1 font-medium text-gray-900">{product.name}</span>
+                              </div>
+                            </Td>
+                            <Td align="right" nowrap className="tabular-nums">
+                              {formatNumber(product.sold)}
+                            </Td>
+                            <Td align="right" nowrap className="font-medium text-gray-900 tabular-nums">
+                              {formatCurrency(product.revenue)}
+                            </Td>
+                          </Tr>
+                        ))
+                      )}
+                    </TBody>
+                  </Table>
+                </TableContainer>
+              </CardBody>
+            </Card>
+          </div>
+        </>
+      )}
+    </div>
   );
 };
 

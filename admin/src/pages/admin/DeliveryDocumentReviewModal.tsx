@@ -1,16 +1,35 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { FileText, FileCheck, ImageOff, Landmark } from 'lucide-react';
 import { getAdminToken } from '../../services/adminSession';
-import { X, CheckCircle, XCircle, AlertCircle, FileText, FileCheck, Landmark } from 'lucide-react';
 import { getAdminClient } from '../../services/supabase';
-
-const API_BASE = import.meta.env.VITE_API_URL || '';
+import { useToast } from '../../context/ToastContext';
+import { apiUrl } from '../../utils/apiBase';
+import { formatDateTime } from '../../utils/format';
+import {
+  Modal,
+  Button,
+  Alert,
+  Card,
+  Spinner,
+  StatusBadge,
+  FormField,
+  Textarea,
+  Avatar,
+  DescriptionList,
+  EmptyState,
+} from '../../components/ui';
 
 function adminAuthHeaders(): Record<string, string> {
   const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Consumed by DeliveryPage.approvalReadiness via Object.keys(DOC_LABELS): the
+// key set defines which documents a rider must have approved before they can
+// be approved themselves (vehicle_registration is conditionally excluded by
+// vehicle type). utils/docLabels.DOC_TYPE_LABELS is a superset that also holds
+// store-only keys, so it must NOT be swapped in here.
 export const DOC_LABELS: Record<string, string> = {
   aadhaar_front: 'Aadhaar Card (Front)',
   aadhaar_back: 'Aadhaar Card (Back)',
@@ -51,6 +70,29 @@ interface RiderBillingInfo {
   pendingUpiId: string | null;
 }
 
+// Signed URLs carry an opaque token after the path, so test only the pathname
+// (storage_path keeps the mime-derived extension).
+function isPdfUrl(url: string): boolean {
+  try {
+    return new URL(url, window.location.origin).pathname.toLowerCase().endsWith('.pdf');
+  } catch {
+    return url.toLowerCase().includes('.pdf');
+  }
+}
+
+export interface DeliveryDocumentReviewModalProps {
+  partner: { id: string; name: string };
+  onClose: () => void;
+  onDocumentUpdated: (partnerId: string, updatedAt: string, docType: string, status: string) => void;
+  /**
+   * Fired when the PATCH response reports `riderSuspended`: the backend
+   * revoked an approved rider's approval (is_approved/is_online false,
+   * approved_at/by cleared) because an identity document was rejected. Lets
+   * the parent patch its row immediately instead of waiting for Realtime.
+   */
+  onRiderSuspended?: (partnerId: string) => void;
+}
+
 /**
  * Delivery-partner equivalent of StoresPage.tsx's DocumentReviewModal — same
  * shape (per-document approve/reject, shared rejectingType/reason state,
@@ -61,61 +103,80 @@ export const DeliveryDocumentReviewModal = ({
   partner,
   onClose,
   onDocumentUpdated,
-}: {
-  partner: { id: string; name: string };
-  onClose: () => void;
-  onDocumentUpdated: (partnerId: string, updatedAt: string, docType: string, status: string) => void;
-}) => {
+  onRiderSuspended,
+}: DeliveryDocumentReviewModalProps) => {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [actingType, setActingType] = useState<string | null>(null);
+  // Review failures are shown under the card that was acted on, not at the
+  // top of the scroll area where the admin cannot see them.
+  const [reviewError, setReviewError] = useState<{ docType: string; message: string } | null>(null);
+  const [suspensionNotice, setSuspensionNotice] = useState<string | null>(null);
+  const suspensionNoticeRef = useRef<HTMLDivElement>(null);
+  // Which document AND which action is in flight, so only the button that
+  // was pressed shows a spinner (the other one is merely disabled).
+  const [acting, setActing] = useState<{ docType: string; status: 'approved' | 'rejected' } | null>(null);
   const [rejectingType, setRejectingType] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [reviewerNames, setReviewerNames] = useState<Record<string, string>>({});
+  // Signed document URLs expire after 10 minutes; thumbnails that fail to
+  // load are swapped for a placeholder and a reload hint.
+  const [brokenDocs, setBrokenDocs] = useState<Set<string>>(new Set());
 
   const [billingInfo, setBillingInfo] = useState<RiderBillingInfo | null>(null);
   const [billingLoading, setBillingLoading] = useState(true);
   const [billingError, setBillingError] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
+    setBrokenDocs(new Set());
     try {
-      const res = await fetch(`${API_BASE}/api/delivery/partners/${partner.id}/verification-documents`, {
+      const res = await fetch(apiUrl(`/api/delivery/partners/${partner.id}/verification-documents`), {
         headers: adminAuthHeaders(),
+        signal,
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load documents');
+      if (signal?.aborted) return;
       setDocuments(json.documents);
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       setError(err.message || 'Failed to load documents');
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   };
 
-  const loadBilling = async () => {
+  const loadBilling = async (signal?: AbortSignal) => {
     setBillingLoading(true);
     setBillingError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/delivery/partners/${partner.id}/billing-info`, {
+      const res = await fetch(apiUrl(`/api/delivery/partners/${partner.id}/billing-info`), {
         headers: adminAuthHeaders(),
+        signal,
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load billing info');
+      if (signal?.aborted) return;
       setBillingInfo(json.billingInfo);
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       setBillingError(err.message || 'Failed to load billing info');
     } finally {
-      setBillingLoading(false);
+      if (!signal?.aborted) setBillingLoading(false);
     }
   };
 
   useEffect(() => {
-    load();
-    loadBilling();
+    // Abort both fetches if the modal closes (or the partner changes) before
+    // they resolve, instead of setting state on an unmounted component.
+    const controller = new AbortController();
+    void load(controller.signal);
+    void loadBilling(controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partner.id]);
 
@@ -128,296 +189,367 @@ export const DeliveryDocumentReviewModal = ({
       )
     );
     if (ids.length === 0) return;
+    let cancelled = false;
     (async () => {
-      const { data } = await getAdminClient().from('admins').select('id, full_name').in('id', ids);
-      if (data) {
+      try {
+        const { data, error: namesError } = await getAdminClient()
+          .from('admins')
+          .select('id, full_name')
+          .in('id', ids);
+        if (namesError) throw namesError;
+        if (cancelled || !data) return;
         const map: Record<string, string> = {};
         for (const row of data) map[row.id] = row.full_name;
         setReviewerNames(map);
+      } catch (err) {
+        // Non-fatal: the UI falls back to the generic "admin" label.
+        console.error('Error fetching reviewer names:', err);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [documents]);
 
+  // The suspension notice sits above the document list; when the rejected
+  // card is far down the scroll area, bring the notice into view so the
+  // admin actually sees that the rider was just taken offline.
+  useEffect(() => {
+    if (!suspensionNotice) return;
+    suspensionNoticeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [suspensionNotice]);
+
   const review = async (docType: string, status: 'approved' | 'rejected', rejectionReason?: string) => {
-    setActingType(docType);
-    setError(null);
+    setActing({ docType, status });
+    setReviewError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}/api/delivery/partners/${partner.id}/verification-documents/${docType}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-          body: JSON.stringify({ status, rejection_reason: rejectionReason }),
-        }
-      );
+      const res = await fetch(apiUrl(`/api/delivery/partners/${partner.id}/verification-documents/${docType}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+        body: JSON.stringify({ status, rejection_reason: rejectionReason }),
+      });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to update document');
+      // Merge rather than replace: json.document is the raw DB row (it has
+      // storage_path but no signed `url`), so replacing the doc would blank
+      // the thumbnail and hide the Approve/Reject buttons, which are gated
+      // on doc.url. Same as StoresPage.tsx's DocumentReviewModal.
       setDocuments((prev) =>
         prev.map((d) => (d.doc_type === docType ? { ...d, ...json.document } : d))
       );
       if (json.document?.updated_at) {
         onDocumentUpdated(partner.id, json.document.updated_at, docType, json.document.status ?? status);
       }
+      // The backend revokes an approved rider's approval and sets them
+      // offline when an identity document is rejected
+      // (adminDeliveryDocuments.controller.ts). Tell the admin — the card
+      // alone just says "Rejected".
+      if (json.riderSuspended) {
+        setSuspensionNotice(
+          `Rejecting this identity document revoked ${partner.name}'s approval. They have been set offline and must be approved again once the document is fixed.`
+        );
+        showToast(`${partner.name}'s approval was revoked and they were set offline.`, 'warning');
+        onRiderSuspended?.(partner.id);
+      }
       setRejectingType(null);
       setReason('');
     } catch (err: any) {
-      setError(err.message || 'Failed to update document');
+      setReviewError({ docType, message: err.message || 'Failed to update document' });
     } finally {
-      setActingType(null);
+      setActing(null);
     }
   };
 
+  const markBroken = (docType: string) => {
+    setBrokenDocs((prev) => {
+      if (prev.has(docType)) return prev;
+      const next = new Set(prev);
+      next.add(docType);
+      return next;
+    });
+  };
+
+  const cancelReject = () => {
+    setRejectingType(null);
+    setReason('');
+  };
+
+  const hasBillingInfo = Boolean(billingInfo && (billingInfo.upiId || billingInfo.pendingUpiId));
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="bg-gradient-to-r from-orange-500 to-amber-600 px-6 py-5 flex-shrink-0">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-white font-bold text-lg">Verification Documents</h2>
-              <p className="text-white/80 text-sm mt-0.5">{partner.name}</p>
-            </div>
-            <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors text-white">
-              <X size={18} />
-            </button>
+    <Modal
+      open
+      onClose={onClose}
+      title="Verification documents"
+      description={partner.name}
+      size="lg"
+      // A half-typed rejection reason should not be lost to a stray click
+      // on the backdrop; Escape and the Close buttons still close.
+      closeOnOverlay={!rejectingType}
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      <div className="space-y-4">
+        {suspensionNotice && (
+          <div ref={suspensionNoticeRef}>
+            <Alert tone="warning" title="Rider approval revoked" onDismiss={() => setSuspensionNotice(null)}>
+              {suspensionNotice}
+            </Alert>
           </div>
-        </div>
+        )}
 
-        <div className="p-6 overflow-y-auto space-y-4">
-          {error && (
-            <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium">
-              {error}
-            </div>
-          )}
+        {error && (
+          <Alert
+            tone="danger"
+            title="Could not load documents"
+            actions={
+              <Button variant="secondary" size="sm" onClick={() => void load()}>
+                Retry
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
+        )}
 
-          {loading ? (
-            <div className="py-12 flex justify-center">
-              <div className="relative w-10 h-10">
-                <div className="w-10 h-10 border-4 border-orange-200 rounded-full" />
-                <div className="absolute top-0 left-0 w-10 h-10 border-4 border-orange-500 rounded-full animate-spin border-t-transparent" />
-              </div>
-            </div>
-          ) : (
-            documents.map((doc) => (
-              <div key={doc.doc_type} className="border border-gray-200 rounded-2xl p-4">
+        {brokenDocs.size > 0 && (
+          <Alert
+            tone="info"
+            actions={
+              <Button variant="secondary" size="sm" onClick={() => void load()}>
+                Reload documents
+              </Button>
+            }
+          >
+            Some previews could not be loaded. Secure document links expire after 10 minutes.
+          </Alert>
+        )}
+
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Spinner size="lg" label="Loading documents" />
+          </div>
+        ) : (
+          // Keep whatever loaded last on screen even when a reload fails:
+          // the danger Alert above carries the error and the Retry button.
+          documents.map((doc) => {
+            const label = DOC_LABELS[doc.doc_type] || doc.doc_type;
+            const isActing = acting?.docType === doc.doc_type;
+            const isApproving = isActing && acting.status === 'approved';
+            const isRejecting = isActing && acting.status === 'rejected';
+            // "Pending review" only means something once a file exists;
+            // an empty slot reads as "Not uploaded" instead.
+            const badgeValue = !doc.url && (doc.status === 'pending' || !doc.status) ? null : doc.status;
+            const pairedNumber = doc.doc_type.endsWith('_back')
+              ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
+              : doc.number;
+            const meta = [
+              doc.file_size,
+              doc.uploaded_at ? `Uploaded ${formatDateTime(doc.uploaded_at)}` : null,
+            ].filter(Boolean);
+
+            return (
+              <Card key={doc.doc_type} className="p-4">
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-3 min-w-0">
-                    {doc.url ? (
-                      doc.url.toLowerCase().includes('.pdf') ? (
+                  <div className="flex min-w-0 items-start gap-3">
+                    {doc.url && !brokenDocs.has(doc.doc_type) ? (
+                      isPdfUrl(doc.url) ? (
                         <a
                           href={doc.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0"
+                          aria-label={`Open ${label} (PDF)`}
+                          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-500 transition-colors hover:bg-gray-100"
                         >
-                          <FileText className="w-7 h-7 text-gray-500" />
+                          <FileText className="h-6 w-6" aria-hidden="true" />
                         </a>
                       ) : (
-                        <a href={doc.url} target="_blank" rel="noreferrer" className="flex-shrink-0">
-                          <img src={doc.url} alt={DOC_LABELS[doc.doc_type]} className="w-16 h-16 rounded-xl object-cover border border-gray-200" />
+                        <a href={doc.url} target="_blank" rel="noreferrer" className="shrink-0">
+                          <img
+                            src={doc.url}
+                            alt={label}
+                            onError={() => markBroken(doc.doc_type)}
+                            className="h-16 w-16 rounded-md border border-gray-200 object-cover"
+                          />
                         </a>
                       )
                     ) : (
-                      <div className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
-                        <FileCheck className="w-6 h-6 text-gray-300" />
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50 text-gray-400">
+                        {doc.url ? (
+                          <ImageOff className="h-5 w-5" aria-hidden="true" />
+                        ) : (
+                          <FileCheck className="h-5 w-5" aria-hidden="true" />
+                        )}
                       </div>
                     )}
+
                     <div className="min-w-0">
-                      <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
-                      {!NO_NUMBER_DOC_TYPES.has(doc.doc_type) && (
-                        <p className="text-sm text-gray-500 truncate">
-                          {(doc.doc_type.endsWith('_back')
-                            ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
-                            : doc.number) || 'No number provided'}
+                      <p className="text-sm font-medium text-gray-900">{label}</p>
+                      {doc.url && !NO_NUMBER_DOC_TYPES.has(doc.doc_type) && (
+                        <p className="truncate text-sm text-gray-600">{pairedNumber || 'No number provided'}</p>
+                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <StatusBadge kind="document" value={badgeValue} />
+                        {meta.length > 0 && <span className="text-xs text-gray-500">{meta.join(' · ')}</span>}
+                      </div>
+                      {doc.status === 'rejected' && doc.rejection_reason && (
+                        <p className="mt-1 text-xs text-gray-700">
+                          <span className="font-medium">Reason:</span> {doc.rejection_reason}
                         </p>
                       )}
-                      {doc.file_size && (
-                        <p className="text-xs text-gray-400 mt-0.5">{doc.file_size}</p>
-                      )}
-                      {doc.status === 'approved' && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                          <CheckCircle size={11} /> Approved
-                        </span>
-                      )}
-                      {doc.status === 'rejected' && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                          <XCircle size={11} /> Rejected
-                        </span>
-                      )}
-                      {doc.status === 'pending' && doc.url && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                          <AlertCircle size={11} /> Pending review
-                        </span>
-                      )}
-                      {doc.status === 'rejected' && doc.rejection_reason && (
-                        <p className="text-xs text-red-600 mt-1">Reason: {doc.rejection_reason}</p>
-                      )}
                       {doc.status === 'rejected' && doc.reviewed_at && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          Reviewed by {reviewerNames[doc.reviewed_by || ''] || 'admin'} on{' '}
-                          {new Date(doc.reviewed_at).toLocaleString('en-IN', {
-                            day: '2-digit',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                        <p className="mt-1 text-xs text-gray-500">
+                          Reviewed by {reviewerNames[doc.reviewed_by || ''] || 'admin'} on {formatDateTime(doc.reviewed_at)}
                         </p>
                       )}
                       {doc.approved_at && (
-                        <p className="text-xs text-emerald-600 mt-1">
-                          Approved by {reviewerNames[doc.approved_by || ''] || 'admin'} on{' '}
-                          {new Date(doc.approved_at).toLocaleString('en-IN', {
-                            day: '2-digit',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                          {doc.status !== 'approved' && ' (since re-uploaded)'}
+                        <p className="mt-1 text-xs text-gray-500">
+                          Approved by {reviewerNames[doc.approved_by || ''] || 'admin'} on {formatDateTime(doc.approved_at)}
+                          {/* The PATCH never clears approved_at on rejection, so a
+                              rejected doc still carries its old approval; only a
+                              pending doc with an approval date was re-uploaded. */}
+                          {doc.status === 'rejected'
+                            ? ' (before rejection)'
+                            : doc.status !== 'approved'
+                              ? ' (since re-uploaded)'
+                              : null}
                         </p>
                       )}
                     </div>
                   </div>
 
                   {doc.url && (
-                    <div className="flex gap-2 flex-shrink-0">
-                      <button
-                        onClick={() => review(doc.doc_type, 'approved')}
-                        disabled={actingType === doc.doc_type || doc.status === 'approved'}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 disabled:opacity-50"
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => void review(doc.doc_type, 'approved')}
+                        loading={isApproving}
+                        disabled={isActing || doc.status === 'approved'}
                       >
                         Approve
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="dangerOutline"
                         onClick={() => {
                           setRejectingType(doc.doc_type);
                           setReason('');
                         }}
-                        disabled={actingType === doc.doc_type}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 disabled:opacity-50"
+                        disabled={isActing || doc.status === 'rejected' || rejectingType === doc.doc_type}
                       >
                         Reject
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>
+
+                {reviewError?.docType === doc.doc_type && (
+                  <Alert tone="danger" className="mt-3" onDismiss={() => setReviewError(null)}>
+                    {reviewError.message}
+                  </Alert>
+                )}
 
                 {rejectingType === doc.doc_type && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <textarea
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="Reason for rejecting this document (shown to the rider)"
-                      className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-red-400 focus:ring-0 text-sm"
-                      rows={2}
-                    />
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => {
-                          setRejectingType(null);
-                          setReason('');
-                        }}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
-                      >
+                  <div className="mt-3 border-t border-gray-200 pt-3">
+                    <FormField
+                      label="Rejection reason"
+                      htmlFor={`reject-reason-${doc.doc_type}`}
+                      hint="Shown to the rider so they can fix and re-upload the document."
+                      required
+                    >
+                      <Textarea
+                        id={`reject-reason-${doc.doc_type}`}
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        disabled={isActing}
+                        autoFocus
+                      />
+                    </FormField>
+                    <div className="mt-3 flex justify-end gap-2">
+                      <Button size="sm" variant="secondary" onClick={cancelReject} disabled={isActing}>
                         Cancel
-                      </button>
-                      <button
-                        onClick={() => review(doc.doc_type, 'rejected', reason.trim())}
-                        disabled={!reason.trim() || actingType === doc.doc_type}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => void review(doc.doc_type, 'rejected', reason.trim())}
+                        disabled={!reason.trim() || isActing}
+                        loading={isRejecting}
                       >
-                        Confirm Rejection
-                      </button>
+                        Confirm rejection
+                      </Button>
                     </div>
                   </div>
                 )}
-              </div>
-            ))
+              </Card>
+            );
+          })
+        )}
+
+        <section className="border-t border-gray-200 pt-5">
+          <h3 className="mb-3 flex items-center gap-2 text-base font-semibold text-gray-900">
+            <Landmark className="h-4 w-4 text-gray-500" aria-hidden="true" />
+            Billing info
+          </h3>
+
+          {billingError && (
+            <Alert
+              tone="danger"
+              className="mb-3"
+              actions={
+                <Button variant="secondary" size="sm" onClick={() => void loadBilling()}>
+                  Retry
+                </Button>
+              }
+            >
+              {billingError}
+            </Alert>
           )}
 
-          <div className="pt-2 border-t border-gray-100">
-            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-              <Landmark size={16} className="text-gray-500" />
-              Billing Info
-            </h3>
-
-            {billingError && (
-              <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-3">
-                {billingError}
+          {billingLoading ? (
+            <div className="flex justify-center py-6">
+              <Spinner label="Loading billing info" />
+            </div>
+          ) : billingError ? null : !billingInfo || !hasBillingInfo ? (
+            <EmptyState compact icon={Landmark} title="No billing info submitted yet" />
+          ) : (
+            <Card className="p-4">
+              <div className="flex items-start gap-4">
+                <Avatar name={billingInfo.name} src={billingInfo.profileImageUrl} size="lg" />
+                <DescriptionList
+                  className="flex-1"
+                  columns={2}
+                  items={[
+                    { label: 'Rider name', value: billingInfo.name },
+                    { label: 'UPI ID', value: billingInfo.upiId },
+                  ]}
+                />
               </div>
-            )}
-
-            {billingLoading ? (
-              <div className="py-8 flex justify-center">
-                <div className="relative w-8 h-8">
-                  <div className="w-8 h-8 border-4 border-orange-200 rounded-full" />
-                  <div className="absolute top-0 left-0 w-8 h-8 border-4 border-orange-500 rounded-full animate-spin border-t-transparent" />
-                </div>
-              </div>
-            ) : !billingInfo || (!billingInfo.upiId && !billingInfo.pendingUpiId) ? (
-              <p className="text-sm text-gray-400">No billing info submitted yet.</p>
-            ) : (
-              <div className="border border-gray-200 rounded-2xl p-4">
-                <div className="flex items-start gap-3">
-                  {billingInfo.profileImageUrl ? (
-                    <img
-                      src={billingInfo.profileImageUrl}
-                      alt={billingInfo.name || 'Rider'}
-                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
-                      <Landmark className="w-6 h-6 text-gray-300" />
-                    </div>
-                  )}
-                  <div className="min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 flex-1">
-                    <div>
-                      <p className="text-xs text-gray-400">Rider name</p>
-                      <p className="text-sm font-medium text-gray-800">{billingInfo.name || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400">UPI ID</p>
-                      <p className="text-sm font-medium text-gray-800">{billingInfo.upiId || '—'}</p>
-                    </div>
-                  </div>
-                </div>
-                {billingInfo.pendingUpiId && (
-                  <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center gap-2">
-                    <AlertCircle size={14} className="text-amber-600 flex-shrink-0" />
-                    <p className="text-xs text-amber-800">
-                      <span className="font-semibold">Pending review:</span> {billingInfo.pendingUpiId}
-                      {' — review in '}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onClose();
-                          navigate('/delivery/profile-change-requests');
-                        }}
-                        className="underline font-medium"
-                      >
-                        Rider Profile Change Requests
-                      </button>
-                      {' to approve or reject.'}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="px-6 pb-6 pt-2 flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="w-full px-4 py-2.5 text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors font-semibold text-sm"
-          >
-            Close
-          </button>
-        </div>
+              {billingInfo.pendingUpiId && (
+                <Alert tone="warning" className="mt-3" title={`Pending review: ${billingInfo.pendingUpiId}`}>
+                  Review it in{' '}
+                  <Button
+                    variant="link"
+                    size="md"
+                    onClick={() => {
+                      // Close first so the parent's reviewingPartner state
+                      // clears before the route changes.
+                      onClose();
+                      navigate('/delivery/profile-change-requests');
+                    }}
+                  >
+                    Rider change requests
+                  </Button>{' '}
+                  to approve or reject.
+                </Alert>
+              )}
+            </Card>
+          )}
+        </section>
       </div>
-    </div>
+    </Modal>
   );
 };

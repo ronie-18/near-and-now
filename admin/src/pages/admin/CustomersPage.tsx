@@ -1,94 +1,118 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
-import { 
-  Search, 
-  Filter, 
-  Eye, 
-  ChevronLeft, 
-  ChevronRight, 
-  Mail, 
-  Phone, 
-  Calendar, 
-  MapPin,
+import { useState, useEffect, useRef } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import {
+  Eye,
   Users,
   ShoppingBag,
-  TrendingUp,
-  X,
+  IndianRupee,
   RefreshCw,
   UserCheck,
   UserX,
-  Download
+  Download,
+  AlertTriangle,
 } from 'lucide-react';
 import { getCustomersPaginated, getCustomerStats, setCustomerSuspended, notifyAdminAction, Customer } from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
 import { exportToCsv } from '../../utils/csvExport';
+import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
+import {
+  Alert,
+  Avatar,
+  Button,
+  Card,
+  CardBody,
+  EmptyState,
+  FilterBar,
+  IconButton,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  Select,
+  StatCard,
+  StatGrid,
+  StatusBadge,
+  Table,
+  TableContainer,
+  TableEmptyRow,
+  TableSkeletonRows,
+  TBody,
+  Td,
+  Th,
+  THead,
+  Tooltip,
+  Tr,
+  useConfirm,
+} from '../../components/ui';
+import { useToast } from '../../context/ToastContext';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
 
-// Modern Stat Card
-interface StatCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-  label: string;
-  value: number | string;
-  subtitle?: string;
+// Select values are passed verbatim to getCustomersPaginated, which maps
+// them to app_users.is_suspended — do not rename.
+const STATUSES = ['All', 'Active', 'Inactive'] as const;
+
+// Customer, Contact, Joined, Orders, Total Spent, Status, Actions
+const TABLE_COLUMNS = 7;
+
+interface CustomerStats {
+  total: number;
+  active: number;
+  totalOrders: number;
+  totalRevenue: number;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ icon: Icon, gradient, label, value, subtitle }) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="relative z-10">
-      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
-        <Icon className="w-6 h-6" />
-      </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-      {subtitle && <p className="text-white/60 text-xs mt-1">{subtitle}</p>}
-    </div>
-  </div>
-);
+// Rows can come back with an empty name (the service returns `name || ''`),
+// so links and the avatar fall back to something readable.
+const displayNameOf = (customer: Customer) =>
+  customer.name.trim() || customer.email || customer.phone || 'Unnamed customer';
 
-// Loading Spinner
-const LoadingSpinner = () => (
-  <div className="p-16 flex flex-col items-center justify-center">
-    <div className="relative">
-      <div className="w-16 h-16 border-4 border-purple-200 rounded-full" />
-      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-purple-500 rounded-full animate-spin border-t-transparent" />
-    </div>
-    <p className="mt-4 text-gray-500 font-medium">Loading customers...</p>
-  </div>
-);
-
-// Empty State
-const EmptyState = ({ searchTerm }: { searchTerm: string }) => (
-  <div className="p-16 text-center">
-    <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
-      <Users className="w-12 h-12 text-gray-400" />
-    </div>
-    <h3 className="text-xl font-bold text-gray-800 mb-2">No customers found</h3>
-    <p className="text-gray-500">
-      {searchTerm ? 'Try a different search term.' : 'Customers will appear here when they make purchases.'}
-    </p>
-  </div>
-);
+// PostgREST/network failures are not always Error instances; never show
+// "[object Object]" to the admin.
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string' && message) return message;
+  }
+  return fallback;
+}
 
 const CustomersPage = () => {
+  const navigate = useNavigate();
+  const confirm = useConfirm();
+  const { showToast } = useToast();
+
   // Server-paginated: `customers` only ever holds the current page's rows.
   // `stats` is fetched independently via lightweight count/aggregate
   // queries so the stat cards still reflect the whole customer base, not
   // just the current page.
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [totalCustomers, setTotalCustomers] = useState(0);
-  const [stats, setStats] = useState({ total: 0, active: 0, totalOrders: 0, totalRevenue: 0 });
+  // `null` until the first stats response so the cards show a skeleton /
+  // dash instead of a fabricated 0 while loading or after a failed fetch.
+  const [stats, setStats] = useState<CustomerStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  // `loading` blanks the table (first load, page/search/filter change);
+  // `refreshing` is a manual Refresh with rows already on screen — the
+  // table stays visible and only the Refresh button spins.
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [selectedStatus, setSelectedStatus] = useState('All');
+  const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [togglingId, setTogglingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Load failures and suspend/reactivate failures are tracked separately:
+  // a failed page load must never render as "no customers found".
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Monotonic request ids so an older response (page 2 resolving after
+  // page 3, or a Refresh overlapping a filter change) can never overwrite
+  // newer data. The debounce below only protects typing.
+  const customersRequestRef = useRef(0);
+  const statsRequestRef = useRef(0);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -98,36 +122,66 @@ const CustomersPage = () => {
     return () => clearTimeout(t);
   }, [searchTerm]);
 
-  // Fetch the current page of customers
-  const fetchCustomers = async () => {
+  // Invalidate any in-flight request on unmount so late responses are dropped.
+  useEffect(() => {
+    return () => {
+      customersRequestRef.current += 1;
+      statsRequestRef.current += 1;
+    };
+  }, []);
+
+  // Fetch the current page of customers. `silent` keeps the current rows on
+  // screen (manual Refresh, post-toggle resync) instead of showing skeletons.
+  const fetchCustomers = async ({ silent = false }: { silent?: boolean } = {}) => {
+    const requestId = ++customersRequestRef.current;
+    if (!silent) setLoading(true);
+    setLoadError(null);
     try {
-      setLoading(true);
       const { customers: data, total } = await getCustomersPaginated({
         page: currentPage,
         pageSize: ITEMS_PER_PAGE,
         search: debouncedSearch,
         status: selectedStatus,
       });
+      if (requestId !== customersRequestRef.current) return; // stale response
       setCustomers(data);
       setTotalCustomers(total);
     } catch (err) {
+      if (requestId !== customersRequestRef.current) return;
       console.error('Error fetching customers:', err);
+      // A non-silent load (first load, page/search/filter change) was already
+      // showing skeletons in place of the previous rows, which belong to a
+      // different page/filter — drop them so the error state replaces them
+      // rather than the old rows reappearing under the new page number. A
+      // silent failure (Refresh, post-toggle resync) keeps the rows and is
+      // reported in the Alert above the table instead.
+      if (!silent) setCustomers([]);
+      setLoadError(getErrorMessage(err, 'Please check your connection and try again.'));
     } finally {
-      setLoading(false);
+      if (requestId === customersRequestRef.current) setLoading(false);
     }
   };
 
   const fetchStats = async () => {
+    const requestId = ++statsRequestRef.current;
     try {
-      setStats(await getCustomerStats());
+      const next = await getCustomerStats();
+      if (requestId !== statsRequestRef.current) return;
+      setStats(next);
     } catch (err) {
       console.error('Error fetching customer stats:', err);
+    } finally {
+      if (requestId === statsRequestRef.current) setStatsLoading(false);
     }
   };
 
-  const handleRefresh = () => {
-    fetchCustomers();
-    fetchStats();
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([fetchCustomers({ silent: true }), fetchStats()]);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // Suspend/reactivate — matches the online-offline toggle pattern already
@@ -135,23 +189,39 @@ const CustomersPage = () => {
   // with no way to block an abusive/fraudulent account at all.
   const handleToggleSuspend = async (customer: Customer) => {
     const suspending = customer.status === 'Active';
-    if (suspending && !window.confirm(`Suspend "${customer.name}"? They won't be able to log in or place orders until reactivated.`)) {
-      return;
+    const name = displayNameOf(customer);
+    // Confirm only when suspending; reactivation is harmless. Cancelling
+    // must return before any state is touched.
+    if (suspending) {
+      const ok = await confirm({
+        title: `Suspend ${name}?`,
+        message: "They won't be able to log in or place orders until reactivated.",
+        confirmLabel: 'Suspend',
+        tone: 'danger',
+      });
+      if (!ok) return;
     }
     setTogglingId(customer.id);
-    setError(null);
+    setActionError(null);
     try {
+      // Throws 'Update was blocked…' when zero rows were updated (no admin
+      // session / insufficient permissions) — surfaced in the Alert below.
       await setCustomerSuspended(customer.id, suspending);
       setCustomers(prev => prev.map(c => c.id === customer.id ? { ...c, status: suspending ? 'Inactive' : 'Active' } : c));
-      fetchStats();
+      showToast(`${name} ${suspending ? 'suspended' : 'reactivated'}`, 'success');
+      // Resync the page as well as the stats: under an Active/Inactive
+      // filter the toggled row no longer belongs on this page, and the
+      // result total in the pagination footer changes.
+      void fetchCustomers({ silent: true });
+      void fetchStats();
       await notifyAdminAction(
         `${suspending ? 'suspended' : 'reactivated'} customer`,
         customer.name,
         { customer_id: customer.id, customer_name: customer.name, is_suspended: suspending },
         'admin_review_action'
       );
-    } catch (err: any) {
-      setError(`Failed to update customer status: ${err.message}`);
+    } catch (err) {
+      setActionError(`Failed to update customer status: ${getErrorMessage(err, 'Unknown error')}`);
     } finally {
       setTogglingId(null);
     }
@@ -168,19 +238,22 @@ const CustomersPage = () => {
 
   // `customers` already holds only the current page's rows, filtered
   // server-side by fetchCustomers' query — no client-side filter pass needed.
-  const currentCustomers = customers;
+  // `totalCustomers` is the server-reported total for the current
+  // search/status filter; Pagination derives the page count from it and
+  // ITEMS_PER_PAGE, and clamps `currentPage` back into range when the total
+  // shrinks underneath us.
 
-  // Pagination — `totalCustomers` is the server-reported total for the
-  // current search/status filter.
-  const totalPages = Math.ceil(totalCustomers / ITEMS_PER_PAGE) || 1;
-  const indexOfFirstCustomer = (currentPage - 1) * ITEMS_PER_PAGE;
-  const indexOfLastCustomer = indexOfFirstCustomer + customers.length;
+  const isFiltered = debouncedSearch.trim() !== '' || selectedStatus !== 'All';
 
-  const statuses = ['All', 'Active', 'Inactive'];
+  const clearFilters = () => {
+    setSearchTerm('');
+    setSelectedStatus('All');
+    setCurrentPage(1);
+  };
 
-  // Customers are server-paginated (see the comment on `currentCustomers`
-  // above) — this exports only the currently-loaded page, hence "Export
-  // Page" rather than a plain "Export".
+  // Customers are server-paginated (see the comment above) — this exports
+  // only the currently-loaded page, hence "Export Page" rather than a plain
+  // "Export". The Location column was dropped: the service never populates it.
   const exportCsv = () => {
     exportToCsv(
       `customers-page-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -191,280 +264,247 @@ const CustomersPage = () => {
         { header: 'Status', value: (c: Customer) => c.status },
         { header: 'Orders', value: (c: Customer) => c.orders_count },
         { header: 'Total Spent', value: (c: Customer) => c.total_spent },
-        { header: 'Location', value: (c: Customer) => c.location ?? '' },
         { header: 'Joined', value: (c: Customer) => c.created_at },
         { header: 'ID', value: (c: Customer) => c.id },
       ],
-      currentCustomers
+      customers
     );
   };
 
-  return (
-    <AdminLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
-            <p className="text-gray-500 mt-1">View and manage your customer database</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={exportCsv}
-              disabled={currentCustomers.length === 0}
-              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium disabled:opacity-50"
-              title="Exports only the currently-loaded page, not every matching customer"
-            >
-              <Download size={18} className="mr-2" />
-              Export Page CSV
-            </button>
-            <button
-              onClick={handleRefresh}
-              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm font-medium"
-            >
-              <RefreshCw size={18} className="mr-2" />
-              Refresh
-            </button>
-          </div>
-        </div>
+  const retryButton = (
+    <Button variant="secondary" size="sm" onClick={() => fetchCustomers()} loading={loading}>
+      Retry
+    </Button>
+  );
 
-        {error && (
-          <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium">
-            {error}
-          </div>
+  const activePercent = stats && stats.total > 0 ? Math.round((stats.active / stats.total) * 100) : 0;
+
+  return (
+    <>
+      <PageHeader title="Customers" description="View and manage customer accounts." />
+
+      <div className="space-y-6">
+        {actionError && (
+          <Alert tone="danger" title="Status update failed" onDismiss={() => setActionError(null)}>
+            {actionError}
+          </Alert>
         )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        {/* Only a silent load (Refresh, post-toggle resync) can fail with rows
+            still on screen; it is reported here, above the table. A failed
+            first load / page change empties the rows and is shown in the
+            table body instead, so the two never appear together. */}
+        {loadError && customers.length > 0 && (
+          <Alert tone="danger" title="Could not refresh customers" actions={retryButton} onDismiss={() => setLoadError(null)}>
+            {loadError}
+          </Alert>
+        )}
+
+        {/* Stats — whole customer base, not the current page */}
+        <StatGrid columns={4}>
           <StatCard
             icon={Users}
-            gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-            label="Total Customers"
-            value={stats.total}
+            label="Total customers"
+            value={stats ? formatNumber(stats.total) : '—'}
+            loading={statsLoading}
           />
           <StatCard
             icon={UserCheck}
-            gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
-            label="Active Customers"
-            value={stats.active}
-            subtitle={`${stats.total > 0 ? Math.round((stats.active / stats.total) * 100) : 0}% of total`}
+            label="Active customers"
+            value={stats ? formatNumber(stats.active) : '—'}
+            hint={stats ? `${activePercent}% of total` : undefined}
+            loading={statsLoading}
           />
           <StatCard
             icon={ShoppingBag}
-            gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-            label="Total Orders"
-            value={stats.totalOrders}
+            label="Total orders"
+            value={stats ? formatNumber(stats.totalOrders) : '—'}
+            hint="Includes cancelled orders"
+            loading={statsLoading}
           />
           <StatCard
-            icon={TrendingUp}
-            gradient="bg-gradient-to-br from-amber-500 to-orange-600"
-            label="Total Revenue"
-            value={`₹${stats.totalRevenue.toLocaleString()}`}
+            icon={IndianRupee}
+            label="Total revenue"
+            value={stats ? formatCurrency(stats.totalRevenue) : '—'}
+            hint="Excludes cancelled orders"
+            loading={statsLoading}
           />
-        </div>
+        </StatGrid>
 
-        {/* Filters */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-          <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-            <div className="relative flex-1">
-              <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by name, email, phone, or ID..."
+        {/* Customers list */}
+        <Card>
+          <CardBody padding="none">
+            <FilterBar
+              actions={
+                <>
+                  <Tooltip content="Exports the current page only">
+                    <Button
+                      variant="secondary"
+                      leftIcon={<Download />}
+                      onClick={exportCsv}
+                      disabled={customers.length === 0}
+                    >
+                      Export Page CSV
+                    </Button>
+                  </Tooltip>
+                  <Button
+                    variant="secondary"
+                    leftIcon={<RefreshCw />}
+                    onClick={handleRefresh}
+                    loading={refreshing}
+                    disabled={loading}
+                  >
+                    Refresh
+                  </Button>
+                </>
+              }
+            >
+              <SearchInput
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:ring-0 transition-colors text-gray-800"
+                onChange={setSearchTerm}
+                placeholder="Search by name, email or phone"
+                containerClassName="w-full sm:w-80"
+                aria-label="Search customers"
               />
-              {searchTerm && (
-                <button onClick={() => setSearchTerm('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  <X size={18} />
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <Filter size={18} className="text-gray-400" />
-              <select
+              <Select
                 value={selectedStatus}
                 onChange={(e) => { setSelectedStatus(e.target.value); setCurrentPage(1); }}
-                className="px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:ring-0 transition-colors min-w-[140px] text-gray-700"
+                containerClassName="w-40"
+                aria-label="Filter by status"
               >
-                {statuses.map(status => (
-                  <option key={status} value={status}>{status}</option>
+                {STATUSES.map(status => (
+                  <option key={status} value={status}>{status === 'All' ? 'All statuses' : status}</option>
                 ))}
-              </select>
-            </div>
-          </div>
-        </div>
+              </Select>
+            </FilterBar>
 
-        {/* Customers Table */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {loading ? (
-            <LoadingSpinner />
-          ) : currentCustomers.length === 0 ? (
-            <EmptyState searchTerm={searchTerm} />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-                  <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-                    <th className="px-6 py-4">Customer</th>
-                    <th className="px-6 py-4">Contact</th>
-                    <th className="px-6 py-4">Location</th>
-                    <th className="px-6 py-4">Joined</th>
-                    <th className="px-6 py-4">Orders</th>
-                    <th className="px-6 py-4">Total Spent</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {currentCustomers.map((customer) => (
-                    <tr key={customer.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-purple-50/30 transition-all duration-200">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center shadow-md">
-                            <span className="text-white font-bold">
-                              {customer.name.split(' ').map(n => n[0]).join('').toUpperCase()}
-                            </span>
-                          </div>
-                          <div>
-                            <Link
-                              to={`/customers/${customer.id}`}
-                              className="font-semibold text-gray-800 group-hover:text-purple-600 transition-colors hover:underline"
-                            >
-                              {customer.name}
-                            </Link>
-                            <div className="mt-1"><IdCell id={customer.id} prefix="#" /></div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="space-y-1">
-                          {customer.email && (
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Mail size={14} className="text-gray-400" />
-                              <span>{customer.email}</span>
+            <TableContainer className="border-0 rounded-none">
+              <Table>
+                <THead>
+                  <Tr>
+                    <Th>Customer</Th>
+                    <Th>Contact</Th>
+                    <Th>Joined</Th>
+                    <Th align="right">Orders</Th>
+                    <Th align="right">Total spent</Th>
+                    <Th>Status</Th>
+                    <Th align="right">Actions</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {loading ? (
+                    <TableSkeletonRows rows={6} cols={TABLE_COLUMNS} />
+                  ) : loadError && customers.length === 0 ? (
+                    <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                      <EmptyState
+                        compact
+                        icon={AlertTriangle}
+                        title="Customers could not be loaded"
+                        description={loadError}
+                        action={retryButton}
+                      />
+                    </TableEmptyRow>
+                  ) : customers.length === 0 ? (
+                    <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                      <EmptyState
+                        compact
+                        icon={Users}
+                        title={isFiltered ? 'No customers match the current filters' : 'No customer accounts yet'}
+                        description={
+                          isFiltered
+                            ? 'Try a different search term or status.'
+                            : 'Customers appear here as soon as they create an account.'
+                        }
+                        action={
+                          isFiltered ? (
+                            <Button variant="secondary" size="sm" onClick={clearFilters}>
+                              Clear filters
+                            </Button>
+                          ) : undefined
+                        }
+                      />
+                    </TableEmptyRow>
+                  ) : (
+                    customers.map((customer) => {
+                      const name = displayNameOf(customer);
+                      const isActive = customer.status === 'Active';
+                      const isToggling = togglingId === customer.id;
+                      return (
+                        <Tr key={customer.id}>
+                          <Td>
+                            <div className="flex items-center gap-3">
+                              <Avatar name={name} size="md" />
+                              <div className="min-w-0">
+                                <Link
+                                  to={`/customers/${customer.id}`}
+                                  className="block truncate font-medium text-gray-900 hover:text-brand-700 hover:underline"
+                                >
+                                  {name}
+                                </Link>
+                                <div className="mt-0.5"><IdCell id={customer.id} prefix="#" /></div>
+                              </div>
                             </div>
-                          )}
-                          {customer.phone && (
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Phone size={14} className="text-gray-400" />
-                              <span>{customer.phone}</span>
+                          </Td>
+                          <Td>
+                            {customer.email || customer.phone ? (
+                              <div className="space-y-0.5">
+                                {customer.email && <div className="text-gray-700">{customer.email}</div>}
+                                {customer.phone && <div className="text-gray-500">{customer.phone}</div>}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </Td>
+                          <Td nowrap muted>{formatDate(customer.created_at)}</Td>
+                          <Td align="right" className="tabular-nums">{formatNumber(customer.orders_count)}</Td>
+                          <Td align="right" className="tabular-nums font-medium text-gray-900">{formatCurrency(customer.total_spent)}</Td>
+                          <Td>
+                            <StatusBadge kind="generic" value={customer.status} />
+                          </Td>
+                          <Td align="right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Tooltip content="View details">
+                                <IconButton
+                                  size="sm"
+                                  aria-label={`View ${name}`}
+                                  onClick={() => navigate(`/customers/${customer.id}`)}
+                                >
+                                  <Eye />
+                                </IconButton>
+                              </Tooltip>
+                              {/* Last cell: a top-centred bubble would be clipped by the
+                                  overflow-x-auto TableContainer, so open it to the left. */}
+                              <Tooltip side="left" content={isActive ? 'Suspend customer' : 'Reactivate customer'}>
+                                <IconButton
+                                  size="sm"
+                                  aria-label={isActive ? `Suspend ${name}` : `Reactivate ${name}`}
+                                  onClick={() => handleToggleSuspend(customer)}
+                                  loading={isToggling}
+                                  disabled={togglingId !== null && !isToggling}
+                                >
+                                  {isActive ? <UserX /> : <UserCheck />}
+                                </IconButton>
+                              </Tooltip>
                             </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {customer.location ? (
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <MapPin size={14} className="text-gray-400" />
-                            <span>{customer.location}</span>
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 italic text-sm">Not available</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Calendar size={14} className="text-gray-400" />
-                          <span>{new Date(customer.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center px-3 py-1.5 rounded-xl bg-blue-100 text-blue-700 text-sm font-semibold">
-                          {customer.orders_count} orders
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-lg font-bold text-gray-800">₹{customer.total_spent.toLocaleString()}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => handleToggleSuspend(customer)}
-                          disabled={togglingId === customer.id}
-                          title={customer.status === 'Active' ? 'Suspend customer' : 'Reactivate customer'}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed
-                            ${customer.status === 'Active'
-                              ? 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                          {togglingId === customer.id ? (
-                            <RefreshCw size={14} className="animate-spin" />
-                          ) : customer.status === 'Active' ? (
-                            <UserCheck size={14} />
-                          ) : (
-                            <UserX size={14} />
-                          )}
-                          {customer.status}
-                        </button>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-end">
-                          <Link
-                            to={`/customers/${customer.id}`}
-                            className="p-2.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                            title="View Details"
-                          >
-                            <Eye size={18} />
-                          </Link>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                          </Td>
+                        </Tr>
+                      );
+                    })
+                  )}
+                </TBody>
+              </Table>
+            </TableContainer>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <p className="text-sm text-gray-600">
-                Showing <span className="font-semibold text-gray-800">{indexOfFirstCustomer + 1}</span> to{' '}
-                <span className="font-semibold text-gray-800">{Math.min(indexOfLastCustomer, totalCustomers)}</span> of{' '}
-                <span className="font-semibold text-gray-800">{totalCustomers}</span> customers
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
-                  className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                >
-                  <ChevronLeft size={20} />
-                </button>
-                <div className="flex gap-1">
-                  {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                    let page: number;
-                    if (totalPages <= 5) page = i + 1;
-                    else if (currentPage <= 3) page = i + 1;
-                    else if (currentPage >= totalPages - 2) page = totalPages - 4 + i;
-                    else page = currentPage - 2 + i;
-                    return (
-                      <button
-                        key={page}
-                        onClick={() => setCurrentPage(page)}
-                        className={`w-10 h-10 rounded-xl font-semibold transition-all
-                          ${currentPage === page
-                            ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-lg'
-                            : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}
-                      >
-                        {page}
-                      </button>
-                    );
-                  })}
-                </div>
-                <button
-                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                  disabled={currentPage === totalPages}
-                  className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                >
-                  <ChevronRight size={20} />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+            <Pagination
+              page={currentPage}
+              pageSize={ITEMS_PER_PAGE}
+              total={totalCustomers}
+              onPageChange={setCurrentPage}
+            />
+          </CardBody>
+        </Card>
       </div>
-    </AdminLayout>
+    </>
   );
 };
 

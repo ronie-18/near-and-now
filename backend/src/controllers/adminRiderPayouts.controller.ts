@@ -19,15 +19,18 @@ export async function listRiderPayouts(req: Request, res: Response) {
     // Same row-cap pattern as adminSecurityLog.controller.ts / adminActivityLog.controller.ts —
     // this had no .limit() at all before, growing unbounded with every delivery.
     const limit = Math.min(Number(req.query.limit) || 100, 500);
+    // `count: 'exact'` so the response can say how many rows match the filter
+    // in total — the page used to present a sum over the loaded (capped) rows
+    // as "owed", silently understating once there were more than `limit`.
     let query = supabaseAdmin
       .from('delivery_partners_payouts')
-      .select('id, partner_user_id, customer_order_id, store_id, amount, currency, status, reference_date, created_at, paid_at')
+      .select('id, partner_user_id, customer_order_id, store_id, amount, currency, status, reference_date, created_at, paid_at', { count: 'exact' })
       .order('created_at', { ascending: false })
       .limit(limit);
     if (status === 'pending' || status === 'paid') {
       query = query.eq('status', status);
     }
-    const { data: payouts, error } = await query;
+    const { data: payouts, error, count } = await query;
     if (error) throw error;
 
     const partnerIds = [...new Set((payouts || []).map((p: any) => p.partner_user_id))];
@@ -53,7 +56,7 @@ export async function listRiderPayouts(req: Request, res: Response) {
       order_code: orderById.get(p.customer_order_id)?.order_code ?? null,
     }));
 
-    res.json({ success: true, payouts: enriched });
+    res.json({ success: true, payouts: enriched, total: count ?? enriched.length });
   } catch (error) {
     return sendError(res, 'adminRiderPayouts.listRiderPayouts', 'Could not load rider payouts', error, undefined, { success: false });
   }

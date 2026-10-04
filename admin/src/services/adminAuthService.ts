@@ -18,13 +18,14 @@ export interface Admin {
   display_preferences?: Record<string, unknown> | null;
 }
 
+// created_by is not part of the create payload: the backend derives it from
+// the caller's Bearer token (admin.controller.ts createAdmin).
 export interface CreateAdminData {
   email: string;
   password: string;
   full_name: string;
   role: Admin['role'];
   permissions?: string[];
-  created_by?: string;
 }
 
 export interface UpdateAdminData {
@@ -182,24 +183,31 @@ export async function getAdmins(): Promise<Admin[]> {
   }
 }
 
-// Get admin by ID
+// Get admin by ID. Resolves to null only when no such row exists (PGRST116
+// from .single()); any other failure is thrown so callers can tell "not
+// found" from "could not load". Explicit column list, never select('*'):
+// 20260930270000 restricts SELECT on admins to these columns (password_hash
+// is excluded), and the preference columns are in that grant.
 export async function getAdminById(id: string): Promise<Admin | null> {
   try {
     const { data, error } = await getAdminClient()
       .from('admins')
-      .select('id, email, full_name, role, permissions, created_by, status, last_login_at, created_at, updated_at')
+      .select(
+        'id, email, full_name, role, permissions, created_by, status, last_login_at, created_at, updated_at, notification_preferences, display_preferences'
+      )
       .eq('id', id)
       .single();
 
     if (error) {
+      if (error.code === 'PGRST116') return null;
       console.error('❌ Error fetching admin by ID:', error);
-      return null;
+      throw error;
     }
 
     return data;
   } catch (error) {
     console.error('❌ Error in getAdminById:', error);
-    return null;
+    throw error;
   }
 }
 

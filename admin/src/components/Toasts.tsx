@@ -1,35 +1,50 @@
-import { CheckCircle, XCircle, Info, AlertTriangle, X } from 'lucide-react';
+import type { ComponentType } from 'react';
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 import { useToast, type ToastType } from '../context/ToastContext';
+import { IconButton } from './ui';
 
-const STYLES: Record<ToastType, { className: string; icon: React.ComponentType<{ className?: string }> }> = {
-  success: { className: 'from-emerald-500 to-teal-500', icon: CheckCircle },
-  error: { className: 'from-red-500 to-rose-500', icon: XCircle },
-  warning: { className: 'from-amber-500 to-orange-500', icon: AlertTriangle },
-  info: { className: 'from-sky-500 to-blue-500', icon: Info },
+const TONE: Record<ToastType, { border: string; icon: string; Icon: ComponentType<{ className?: string }> }> = {
+  success: { border: 'border-l-green-600', icon: 'text-green-600', Icon: CheckCircle2 },
+  error: { border: 'border-l-red-600', icon: 'text-red-600', Icon: XCircle },
+  warning: { border: 'border-l-amber-500', icon: 'text-amber-500', Icon: AlertTriangle },
+  info: { border: 'border-l-brand-600', icon: 'text-brand-600', Icon: Info },
 };
 
 // Renders whatever ToastProvider's showToast() calls produce.
 // The context previously had no visual consumer anywhere — calling
 // showToast() updated state but nothing ever displayed it.
+//
+// The live region is always mounted (even when empty) so screen readers pick
+// up new toasts; `pointer-events-none` keeps the empty region from blocking
+// clicks on the header beneath it. z-[100] must stay above Modal (z-50) and
+// the sidebar (z-50).
 export function Toasts() {
   const { toasts, removeToast } = useToast();
 
-  if (toasts.length === 0) return null;
-
   return (
-    <div className="fixed top-4 right-4 z-[100] space-y-2 w-full max-w-sm">
-      {toasts.map((n) => {
-        const { className, icon: Icon } = STYLES[n.type];
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none fixed right-4 top-4 z-[100] w-full max-w-sm space-y-2"
+    >
+      {toasts.map((toast) => {
+        const { border, icon, Icon } = TONE[toast.type];
         return (
           <div
-            key={n.id}
-            className={`bg-gradient-to-r ${className} text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3`}
+            key={toast.id}
+            className={`pointer-events-auto flex items-start gap-3 rounded-md border border-gray-200 border-l-4 bg-white p-4 shadow-popover ${border}`}
           >
-            <Icon className="w-5 h-5 flex-shrink-0" />
-            <span className="flex-1 text-sm font-medium">{n.message}</span>
-            <button onClick={() => removeToast(n.id)} className="p-1 hover:bg-white/20 rounded-lg flex-shrink-0">
-              <X size={14} />
-            </button>
+            <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${icon}`} aria-hidden="true" />
+            <p className="min-w-0 flex-1 break-words text-sm text-gray-800">{toast.message}</p>
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label="Dismiss"
+              onClick={() => removeToast(toast.id)}
+              className="-mr-2 -mt-2 shrink-0"
+            >
+              <X aria-hidden="true" />
+            </IconButton>
           </div>
         );
       })}

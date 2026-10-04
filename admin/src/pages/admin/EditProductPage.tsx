@@ -1,249 +1,264 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { ImageOff, IndianRupee, RefreshCw, Save, ShieldAlert, Trash2, Upload } from 'lucide-react';
 import {
-  ArrowLeft,
-  Save,
-  AlertCircle,
-  Plus,
-  X,
-  Trash2,
-  GripVertical,
-  Check,
-  Loader2,
-  ImageOff,
-  Star,
-  Sparkles,
-  Upload,
-  FileImage
-} from 'lucide-react';
-import { getProductById, updateProduct, createCategory, uploadProductImage, getCategories, notifyAdminAction } from '../../services/adminService';
+  getProductById,
+  updateProduct,
+  createCategory,
+  uploadProductImage,
+  getCategories,
+  notifyAdminAction,
+} from '../../services/adminService';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { hasRole } from '../../services/adminAuthService';
+import { useToast } from '../../context/ToastContext';
+import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  FormField,
+  Input,
+  LinkButton,
+  PageHeader,
+  PageLoader,
+  Select,
+  Spinner,
+  Textarea,
+  Toggle,
+} from '../../components/ui';
+import { cn } from '../../utils/cn';
 
-// Image item interface
+/**
+ * The one image persisted for a product (master_products.image_url).
+ *
+ * This page used to offer a multi-image gallery with reorder / set-primary
+ * controls, but updateProduct only maps the first URL to image_url and nothing
+ * reads or writes product_images, so every extra upload was silently
+ * discarded. The UI now promises exactly what is stored: a single image.
+ */
 interface ImageData {
   id: string;
   url: string;
-  file?: File;
   isUploading: boolean;
-  isUploaded: boolean;
-  error?: string;
 }
 
-// Image item component (reuse from AddProductPage)
-interface ImageItemProps {
+// Mirrors the product-images storage bucket configuration.
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+/** Select sentinel that reveals the inline "new category" fields. */
+const NEW_CATEGORY = '__NEW_CATEGORY__';
+
+// `color` was removed from the inline category form: the categories table has
+// no such column, so a filled-in value made the insert fail.
+const EMPTY_NEW_CATEGORY = { name: '', description: '', image_url: '', display_order: '' };
+
+interface FormState {
+  name: string;
+  price: string;
+  original_price: string;
+  description: string;
+  category: string;
+  /** Persisted as master_products.is_active (updateProduct maps in_stock -> is_active). */
+  in_stock: boolean;
+  rating: string;
+  rating_count: string;
+  /** master_products.unit (NOT NULL) holds the pack size, e.g. "1kg"; there is no `size` column. */
+  unit: string;
+  brand: string;
+  min_quantity: string;
+  max_quantity: string;
+  gst_rate: string;
+  hsn_code: string;
+  hsn_description: string;
+  cgst: string;
+  sgst: string;
+}
+
+const EMPTY_FORM: FormState = {
+  name: '',
+  price: '',
+  original_price: '',
+  description: '',
+  category: '',
+  in_stock: true,
+  rating: '4.5',
+  rating_count: '0',
+  unit: '',
+  brand: '',
+  min_quantity: '1',
+  max_quantity: '100',
+  gst_rate: '',
+  hsn_code: '',
+  hsn_description: '',
+  cgst: '',
+  sgst: '',
+};
+
+type FieldErrors = Partial<Record<keyof FormState | 'newCategoryName', string>>;
+
+const generateId = () => `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+// Cleared optional fields are sent as null so updateProduct writes NULL; it
+// only skips `undefined`, which is why `value || undefined` could never clear.
+const textOrNull = (value: string) => (value.trim() ? value.trim() : null);
+const numberOrNull = (value: string) => (value.trim() ? parseFloat(value) : null);
+
+/** Human-readable message for save failures, including DB CHECK constraints. */
+function describeSaveError(err: unknown): string {
+  const e = err as { code?: string; message?: string } | null;
+  const message = e?.message ?? '';
+  if (message.includes('check_discounted_price')) {
+    return 'Selling price cannot be higher than the original price.';
+  }
+  if (message.includes('master_products_rating_check')) {
+    return 'Rating must be between 0 and 5.';
+  }
+  // categories.name is UNIQUE (categories_name_key); createCategory rethrows the raw error.
+  if (e?.code === '23505' && message.includes('categories')) {
+    return 'A category with that name already exists. Pick it from the list instead.';
+  }
+  return message || 'An error occurred while updating the product.';
+}
+
+interface ImageTileProps {
   image: ImageData;
-  index: number;
-  isPrimary: boolean;
-  onRemove: (id: string) => void;
-  onSetPrimary: (id: string) => void;
-  onMoveUp: (index: number) => void;
-  onMoveDown: (index: number) => void;
-  totalCount: number;
+  onRemove: () => void;
 }
 
-const ImageItem: React.FC<ImageItemProps> = ({
-  image,
-  index,
-  isPrimary,
-  onRemove,
-  onSetPrimary,
-  onMoveUp,
-  onMoveDown,
-  totalCount
-}) => {
-  const [imageError, setImageError] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
+function ImageTile({ image, onRemove }: ImageTileProps) {
+  const [failed, setFailed] = useState(false);
 
   return (
-    <div className={`relative group bg-white rounded-xl border-2 transition-all duration-200 overflow-hidden
-      ${isPrimary ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-gray-200 hover:border-gray-300'}
-      ${image.isUploading ? 'opacity-75' : ''}`}>
-      {isPrimary && !image.isUploading && (
-        <div className="absolute top-2 left-2 z-10 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-bold px-2 py-1 rounded-lg flex items-center gap-1 shadow-lg">
-          <Star size={12} className="fill-white" />
-          Primary
-        </div>
-      )}
-      {image.isUploading && (
-        <div className="absolute inset-0 z-20 bg-white/80 flex flex-col items-center justify-center">
-          <Loader2 size={28} className="animate-spin text-emerald-500 mb-2" />
-          <span className="text-xs font-medium text-gray-600">Uploading...</span>
-        </div>
-      )}
-      {image.error && (
-        <div className="absolute inset-0 z-20 bg-red-50/90 flex flex-col items-center justify-center p-3">
-          <AlertCircle size={24} className="text-red-500 mb-2" />
-          <span className="text-xs font-medium text-red-600 text-center">{image.error}</span>
-        </div>
-      )}
-      <div className="aspect-square bg-gray-50 flex items-center justify-center relative">
-        {!imageError && image.url ? (
-          <>
-            {!imageLoaded && !image.isUploading && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Loader2 size={24} className="animate-spin text-gray-400" />
-              </div>
-            )}
-            <img
-              src={image.url}
-              alt={`Product image ${index + 1}`}
-              className={`w-full h-full object-cover transition-opacity duration-200 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
-              onLoad={() => setImageLoaded(true)}
-              onError={() => setImageError(true)}
-            />
-          </>
-        ) : imageError ? (
-          <div className="flex flex-col items-center text-gray-400">
-            <ImageOff size={32} />
-            <span className="text-xs mt-2">Failed to load</span>
+    <div className="w-full shrink-0 sm:w-48">
+      <div className="relative aspect-square overflow-hidden rounded-md border border-gray-200 bg-gray-50">
+        {failed ? (
+          <div className="flex h-full flex-col items-center justify-center text-gray-400">
+            <ImageOff className="h-5 w-5" />
+            <span className="mt-2 text-xs">Failed to load</span>
           </div>
         ) : (
-          <div className="flex flex-col items-center text-gray-400">
-            <FileImage size={32} />
-            <span className="text-xs mt-2">Preview unavailable</span>
-          </div>
+          <img
+            src={image.url}
+            alt="Current product image"
+            className="h-full w-full object-cover"
+            onError={() => setFailed(true)}
+          />
         )}
-        {!image.isUploading && !image.error && (
-          <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-            {!isPrimary && (
-              <button
-                type="button"
-                onClick={() => onSetPrimary(image.id)}
-                className="p-2 bg-white/20 hover:bg-white/30 rounded-lg text-white transition-colors"
-                title="Set as primary"
-              >
-                <Star size={18} />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => onRemove(image.id)}
-              className="p-2 bg-red-500/80 hover:bg-red-500 rounded-lg text-white transition-colors"
-              title="Remove image"
-            >
-              <Trash2 size={18} />
-            </button>
+        {image.isUploading ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/80">
+            <Spinner size="sm" />
+            <span className="text-xs font-medium text-gray-600">Uploading…</span>
           </div>
-        )}
+        ) : null}
       </div>
-      <div className="p-2 flex items-center justify-between bg-gray-50 border-t border-gray-100">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onMoveUp(index)}
-            disabled={index === 0 || image.isUploading}
-            className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Move up"
-          >
-            <GripVertical size={14} className="rotate-90" />
-          </button>
-          <span className="text-xs text-gray-500 font-medium">#{index + 1}</span>
-          <button
-            type="button"
-            onClick={() => onMoveDown(index)}
-            disabled={index === totalCount - 1 || image.isUploading}
-            className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Move down"
-          >
-            <GripVertical size={14} className="-rotate-90" />
-          </button>
-        </div>
-        <button
-          type="button"
-          onClick={() => onRemove(image.id)}
-          disabled={image.isUploading}
-          className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30"
-          title="Remove"
-        >
-          <X size={14} />
-        </button>
-      </div>
+      <Button
+        variant="dangerOutline"
+        size="sm"
+        leftIcon={<Trash2 />}
+        onClick={onRemove}
+        disabled={image.isUploading}
+        className="mt-2"
+        fullWidth
+      >
+        Remove image
+      </Button>
     </div>
   );
-};
+}
 
 const EditProductPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const currentAdmin = getCurrentAdmin();
-  const canEditProducts = Boolean(currentAdmin && hasRole(currentAdmin, ['super_admin', 'admin']));
+  const { showToast } = useToast();
+
+  // getCurrentAdmin parses localStorage; evaluate once instead of every render.
+  const canEditProducts = useMemo(() => {
+    const admin = getCurrentAdmin();
+    return Boolean(admin && hasRole(admin, ['super_admin', 'admin']));
+  }, []);
+
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [productName, setProductName] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
   const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
-  const [images, setImages] = useState<ImageData[]>([]);
+  const [newCategoryData, setNewCategoryData] = useState(EMPTY_NEW_CATEGORY);
+  const [formData, setFormData] = useState<FormState>(EMPTY_FORM);
+
+  const [image, setImage] = useState<ImageData | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const dropZoneRef = useRef<HTMLDivElement>(null);
+  // Latest image for the upload pipeline and the unmount cleanup.
+  const imageRef = useRef<ImageData | null>(null);
+  // Ignores a slow response for a previous :id (or an earlier retry).
+  const requestIdRef = useRef(0);
 
-  const [newCategoryData, setNewCategoryData] = useState({
-    name: '',
-    description: '',
-    image_url: '',
-    color: '',
-    display_order: '',
-  });
+  useEffect(() => {
+    imageRef.current = image;
+  }, [image]);
 
-  const [formData, setFormData] = useState({
-    name: '',
-    price: '',
-    original_price: '',
-    description: '',
-    category: '',
-    in_stock: true,
-    rating: '4.5',
-    rating_count: '0',
-    size: '',
-    brand: '',
-    min_quantity: '1',
-    max_quantity: '100',
-    gst_rate: '',
-    hsn_code: '',
-    hsn_description: '',
-    cgst: '',
-    sgst: '',
-  });
+  // Revoke a blob preview that is still on screen when the page unmounts.
+  useEffect(
+    () => () => {
+      const current = imageRef.current;
+      if (current?.url.startsWith('blob:')) URL.revokeObjectURL(current.url);
+    },
+    [],
+  );
 
   // Fetch product and categories
   useEffect(() => {
-    const fetchData = async () => {
-      if (!id) {
-        setError('Product ID is missing');
-        setLoading(false);
-        return;
-      }
+    // The role gate runs before any fetch so unpermitted roles never trigger the queries.
+    if (!canEditProducts) {
+      setLoading(false);
+      return;
+    }
+    if (!id) {
+      setLoadError('Product ID is missing');
+      setLoading(false);
+      return;
+    }
 
+    const requestId = ++requestIdRef.current;
+    const isCurrent = () => requestId === requestIdRef.current;
+
+    const fetchData = async () => {
+      setLoading(true);
+      setLoadError(null);
       try {
-        setLoading(true);
-        const [product, categoriesData] = await Promise.all([
-          getProductById(id),
-          getCategories()
-        ]);
+        const [product, categoriesData] = await Promise.all([getProductById(id), getCategories()]);
+        if (!isCurrent()) return;
 
         if (!product) {
-          setError('Product not found');
-          setLoading(false);
+          setLoadError('Product not found');
           return;
         }
 
-        // Populate form with product data
+        setProductName(product.name || '');
+        // `!= null` rather than `||` so a 0 price or 0 rating is not coerced away.
         setFormData({
           name: product.name || '',
-          price: String(product.price || ''),
-          original_price: String(product.original_price || ''),
+          price: product.price != null ? String(product.price) : '',
+          original_price: product.original_price != null ? String(product.original_price) : '',
           description: product.description || '',
           category: product.category || '',
           in_stock: product.in_stock ?? true,
-          rating: String(product.rating || '4.5'),
-          rating_count: String(product.rating_count ?? '0'),
-          size: product.size || '',
+          rating: product.rating != null ? String(product.rating) : '4.5',
+          rating_count: product.rating_count != null ? String(product.rating_count) : '0',
+          unit: product.unit || '',
           brand: product.brand || '',
-          min_quantity: String(product.min_quantity ?? '1'),
-          max_quantity: String(product.max_quantity ?? '100'),
+          min_quantity: product.min_quantity != null ? String(product.min_quantity) : '1',
+          max_quantity: product.max_quantity != null ? String(product.max_quantity) : '100',
           gst_rate: product.gst_rate != null ? String(product.gst_rate) : '',
           hsn_code: product.hsn_code || '',
           hsn_description: product.hsn_description || '',
@@ -251,160 +266,102 @@ const EditProductPage = () => {
           sgst: product.sgst != null ? String(product.sgst) : '',
         });
 
-        // Load existing images
-        const existingImages: ImageData[] = [];
-        if (product.image) {
-          existingImages.push({
-            id: 'existing_0',
-            url: product.image,
-            isUploading: false,
-            isUploaded: true
-          });
-        }
-        if (product.images && product.images.length > 0) {
-          product.images.forEach((img: string, idx: number) => {
-            existingImages.push({
-              id: `existing_${idx + 1}`,
-              url: img,
-              isUploading: false,
-              isUploaded: true
-            });
-          });
-        }
-        setImages(existingImages);
-
-        const categoryNames = categoriesData.map(cat => cat.name);
-        setCategories(categoryNames);
+        setImage(product.image ? { id: 'existing', url: product.image, isUploading: false } : null);
+        setCategories(categoriesData.map((cat) => cat.name));
       } catch (err) {
+        if (!isCurrent()) return;
         console.error('Error fetching product:', err);
-        setError('Failed to load product. Please try again.');
+        setLoadError('Failed to load product. Please try again.');
       } finally {
-        setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     };
 
     fetchData();
-  }, [id]);
+  }, [id, canEditProducts, reloadKey]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value, type } = e.target;
+  const clearFieldError = (field: keyof FieldErrors) => {
+    setFieldErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev));
+  };
 
-    if (type === 'checkbox') {
-      const checked = (e.target as HTMLInputElement).checked;
-      setFormData(prev => ({ ...prev, [name]: checked }));
-    } else {
-      setFormData(prev => ({ ...prev, [name]: value }));
-    }
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    clearFieldError(name as keyof FormState);
   };
 
   const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
-    if (value === '__NEW_CATEGORY__') {
+    if (value === NEW_CATEGORY) {
       setShowNewCategoryInput(true);
-      setFormData(prev => ({ ...prev, category: '' }));
+      setFormData((prev) => ({ ...prev, category: '' }));
     } else {
+      // Choosing a real category discards any half-typed new-category details.
       setShowNewCategoryInput(false);
-      setNewCategoryData({
-        name: '',
-        description: '',
-        image_url: '',
-        color: '',
-        display_order: '',
-      });
-      setFormData(prev => ({ ...prev, category: value }));
+      setNewCategoryData(EMPTY_NEW_CATEGORY);
+      setFormData((prev) => ({ ...prev, category: value }));
     }
+    clearFieldError('category');
+    clearFieldError('newCategoryName');
   };
 
   const handleNewCategoryChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setNewCategoryData(prev => ({ ...prev, [name]: value }));
+    setNewCategoryData((prev) => ({ ...prev, [name]: value }));
+    if (name === 'name') clearFieldError('newCategoryName');
   };
 
-  const generateId = () => `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const handleFile = useCallback(async (file: File) => {
+    if (imageRef.current?.isUploading) return;
 
-  const handleFiles = useCallback(async (files: FileList | File[]) => {
-    const fileArray = Array.from(files);
-    const validFiles = fileArray.filter(file => {
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-      const maxSize = 5 * 1024 * 1024;
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      setImageError(`Unsupported file type: ${file.name}. Use JPG, PNG, WebP or GIF.`);
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setImageError(`File too large: ${file.name}. Maximum size is 5MB.`);
+      return;
+    }
+    setImageError(null);
 
-      if (!validTypes.includes(file.type)) {
-        setError(`Invalid file type: ${file.name}. Supported: JPG, PNG, WebP, GIF`);
-        return false;
-      }
-      if (file.size > maxSize) {
-        setError(`File too large: ${file.name}. Max size: 5MB`);
-        return false;
-      }
-      return true;
+    // Optimistic placeholder: show the local file at once, swap in the public
+    // URL when the upload finishes, and put the previous image back if it
+    // fails so a failed replacement never wipes the stored image on save.
+    const previous = imageRef.current;
+    const placeholder: ImageData = { id: generateId(), url: URL.createObjectURL(file), isUploading: true };
+    setImage(placeholder);
+
+    let uploadedUrl: string | null = null;
+    try {
+      uploadedUrl = await uploadProductImage(file);
+    } catch (err) {
+      console.error('Upload error:', err);
+    }
+
+    setImage((current) => {
+      // Removed while uploading: leave the user's choice alone.
+      if (current?.id !== placeholder.id) return current;
+      return uploadedUrl ? { id: placeholder.id, url: uploadedUrl, isUploading: false } : previous;
     });
-
-    if (validFiles.length === 0) return;
-
-    const placeholders: ImageData[] = validFiles.map(file => ({
-      id: generateId(),
-      url: URL.createObjectURL(file),
-      file,
-      isUploading: true,
-      isUploaded: false
-    }));
-
-    setImages(prev => [...prev, ...placeholders]);
-
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i];
-      const placeholder = placeholders[i];
-
-      try {
-        const uploadedUrl = await uploadProductImage(file);
-        setImages(prev => prev.map(img => {
-          if (img.id === placeholder.id) {
-            if (uploadedUrl) {
-              URL.revokeObjectURL(img.url);
-              return {
-                ...img,
-                url: uploadedUrl,
-                isUploading: false,
-                isUploaded: true
-              };
-            } else {
-              return {
-                ...img,
-                isUploading: false,
-                error: 'Upload failed'
-              };
-            }
-          }
-          return img;
-        }));
-      } catch (err) {
-        console.error('Upload error:', err);
-        setImages(prev => prev.map(img => {
-          if (img.id === placeholder.id) {
-            return {
-              ...img,
-              isUploading: false,
-              error: 'Upload failed'
-            };
-          }
-          return img;
-        }));
-      }
+    // Revoked outside the state updater (updaters may run twice under StrictMode).
+    URL.revokeObjectURL(placeholder.url);
+    if (!uploadedUrl) {
+      setImageError(previous ? 'Upload failed. The previous image was kept.' : 'Upload failed. Please try again.');
     }
   }, []);
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(true);
+    if (!image?.isUploading) setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.currentTarget === dropZoneRef.current) {
-      setIsDragging(false);
-    }
+    // dragleave also fires when moving between the zone's own children; ignore those.
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragging(false);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -416,741 +373,616 @@ const EditProductPage = () => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      handleFiles(files);
-    }
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      handleFiles(files);
-    }
+    const file = e.target.files?.[0];
+    if (file) handleFile(file);
+    // Reset so picking the same file again re-triggers onChange.
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  const removeImage = (id: string) => {
-    setImages(prev => {
-      const img = prev.find(i => i.id === id);
-      if (img && img.url.startsWith('blob:')) {
-        URL.revokeObjectURL(img.url);
-      }
-      return prev.filter(i => i.id !== id);
-    });
+  const removeImage = () => {
+    if (!image || image.isUploading) return;
+    if (image.url.startsWith('blob:')) URL.revokeObjectURL(image.url);
+    setImage(null);
+    setImageError(null);
   };
 
-  const setPrimaryImage = (id: string) => {
-    setImages(prev => {
-      const index = prev.findIndex(i => i.id === id);
-      if (index <= 0) return prev;
-      const newImages = [...prev];
-      const [selected] = newImages.splice(index, 1);
-      return [selected, ...newImages];
-    });
-  };
+  const validate = (): FieldErrors => {
+    const errors: FieldErrors = {};
+    const price = parseFloat(formData.price);
+    const originalPrice = formData.original_price.trim() ? parseFloat(formData.original_price) : null;
 
-  const moveImageUp = (index: number) => {
-    if (index === 0) return;
-    setImages(prev => {
-      const newImages = [...prev];
-      [newImages[index - 1], newImages[index]] = [newImages[index], newImages[index - 1]];
-      return newImages;
-    });
-  };
+    if (!formData.name.trim()) errors.name = 'Product name is required';
+    if (!formData.price.trim() || Number.isNaN(price) || price <= 0) errors.price = 'Valid price is required';
+    // master_products enforces discounted_price <= base_price; checked here so
+    // the admin sees a readable message instead of a raw constraint violation.
+    if (originalPrice != null && !Number.isNaN(price) && originalPrice < price) {
+      errors.original_price = 'Original price must be at least the selling price';
+    }
+    if (!formData.category && !showNewCategoryInput) errors.category = 'Category is required';
+    if (showNewCategoryInput && !newCategoryData.name.trim()) errors.newCategoryName = 'New category name is required';
+    if (!formData.unit.trim()) errors.unit = 'Unit is required';
 
-  const moveImageDown = (index: number) => {
-    if (index === images.length - 1) return;
-    setImages(prev => {
-      const newImages = [...prev];
-      [newImages[index], newImages[index + 1]] = [newImages[index + 1], newImages[index]];
-      return newImages;
-    });
+    const rating = parseFloat(formData.rating);
+    if (!formData.rating.trim() || Number.isNaN(rating) || rating < 0 || rating > 5) {
+      errors.rating = 'Rating must be between 0 and 5';
+    }
+    const ratingCount = parseInt(formData.rating_count, 10);
+    if (!formData.rating_count.trim() || Number.isNaN(ratingCount) || ratingCount < 0) {
+      errors.rating_count = 'Enter 0 or more';
+    }
+    const minQty = parseInt(formData.min_quantity, 10);
+    const maxQty = parseInt(formData.max_quantity, 10);
+    if (!formData.min_quantity.trim() || Number.isNaN(minQty) || minQty < 1) errors.min_quantity = 'Enter 1 or more';
+    if (!formData.max_quantity.trim() || Number.isNaN(maxQty) || maxQty < 1) {
+      errors.max_quantity = 'Enter 1 or more';
+    } else if (!Number.isNaN(minQty) && maxQty < minQty) {
+      errors.max_quantity = 'Must be at least the minimum quantity';
+    }
+    for (const field of ['gst_rate', 'cgst', 'sgst'] as const) {
+      const raw = formData[field].trim();
+      if (!raw) continue;
+      const value = parseFloat(raw);
+      if (Number.isNaN(value) || value < 0 || value > 100) errors[field] = 'Enter a percentage between 0 and 100';
+    }
+    return errors;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!id) return;
+    if (!id || saving) return;
 
     setError(null);
-    setSuccess(false);
 
-    if (!formData.name.trim()) {
-      setError('Product name is required');
+    const errors = validate();
+    const firstInvalid = Object.keys(errors)[0];
+    if (firstInvalid) {
+      setFieldErrors(errors);
+      setError('Please correct the highlighted fields.');
+      // The Save button sits at the bottom of a long form; move focus to the
+      // first invalid control (ids match the FieldErrors keys) so the error is
+      // seen and announced instead of being left off-screen at the top.
+      requestAnimationFrame(() => document.getElementById(firstInvalid)?.focus());
       return;
     }
-    if (!formData.price || parseFloat(formData.price) <= 0) {
-      setError('Valid price is required');
-      return;
-    }
-    if (!formData.category && !showNewCategoryInput) {
-      setError('Category is required');
-      return;
-    }
-    if (showNewCategoryInput && !newCategoryData.name.trim()) {
-      setError('New category name is required');
-      return;
-    }
+    setFieldErrors({});
 
-    const uploadingImages = images.filter(img => img.isUploading);
-    if (uploadingImages.length > 0) {
-      setError('Please wait for all images to finish uploading');
+    if (image?.isUploading) {
+      setError('Please wait for the image to finish uploading');
       return;
     }
 
+    setSaving(true);
     try {
-      setSaving(true);
-
+      // Inline category creation runs only after validation passes. Once it
+      // succeeds the new category is selected like any existing one, so a
+      // failed product update can be retried without creating it twice.
       let categoryToUse = formData.category;
       if (showNewCategoryInput && newCategoryData.name.trim()) {
-        const categoryPayload = {
+        const newCategory = await createCategory({
           name: newCategoryData.name.trim(),
           description: newCategoryData.description.trim() || undefined,
           image_url: newCategoryData.image_url.trim() || undefined,
-          color: newCategoryData.color.trim() || undefined,
-          display_order: newCategoryData.display_order ? parseInt(newCategoryData.display_order) : undefined,
-        };
-
-        const newCategory = await createCategory(categoryPayload);
+          display_order: newCategoryData.display_order ? parseInt(newCategoryData.display_order, 10) : undefined,
+        });
         if (!newCategory) {
           setError('Failed to create new category. Please try again.');
-          setSaving(false);
           return;
         }
         categoryToUse = newCategory.name;
+        setCategories((prev) => (prev.includes(newCategory.name) ? prev : [...prev, newCategory.name].sort()));
+        setFormData((prev) => ({ ...prev, category: newCategory.name }));
+        setShowNewCategoryInput(false);
+        setNewCategoryData(EMPTY_NEW_CATEGORY);
       }
 
-      const uploadedImages = images.filter(img => img.isUploaded && !img.error);
-      const primaryImage = uploadedImages[0]?.url || undefined;
-      const additionalImages = uploadedImages.slice(1).map(img => img.url);
-
+      const price = parseFloat(formData.price);
       const productData = {
         name: formData.name.trim(),
-        price: parseFloat(formData.price),
-        original_price: formData.original_price ? parseFloat(formData.original_price) : undefined,
-        description: formData.description.trim() || undefined,
-        image: primaryImage,
-        images: additionalImages.length > 0 ? additionalImages : undefined,
+        price,
+        // base_price is NOT NULL: a blank MRP means "no discount", i.e. equal to the price.
+        original_price: formData.original_price.trim() ? parseFloat(formData.original_price) : price,
+        description: textOrNull(formData.description),
+        // null, not undefined, so removing the image is persisted (updateProduct skips undefined).
+        image: image && !image.isUploading ? image.url : null,
         category: categoryToUse,
         in_stock: formData.in_stock,
-        rating: formData.rating ? parseFloat(formData.rating) : undefined,
-        rating_count: formData.rating_count ? parseInt(formData.rating_count, 10) : undefined,
-        size: formData.size.trim() || undefined,
-        unit: formData.size?.trim() || 'piece',
-        brand: formData.brand.trim() || undefined,
-        min_quantity: formData.min_quantity ? parseInt(formData.min_quantity, 10) : undefined,
-        max_quantity: formData.max_quantity ? parseInt(formData.max_quantity, 10) : undefined,
-        gst_rate: formData.gst_rate ? parseFloat(formData.gst_rate) : undefined,
-        hsn_code: formData.hsn_code.trim() || undefined,
-        hsn_description: formData.hsn_description.trim() || undefined,
-        cgst: formData.cgst ? parseFloat(formData.cgst) : undefined,
-        sgst: formData.sgst ? parseFloat(formData.sgst) : undefined,
+        rating: parseFloat(formData.rating),
+        rating_count: parseInt(formData.rating_count, 10),
+        // Never default to 'piece' here: that overwrote every product's real unit on edit.
+        unit: formData.unit.trim(),
+        brand: textOrNull(formData.brand),
+        min_quantity: parseInt(formData.min_quantity, 10),
+        max_quantity: parseInt(formData.max_quantity, 10),
+        gst_rate: numberOrNull(formData.gst_rate),
+        hsn_code: textOrNull(formData.hsn_code),
+        hsn_description: textOrNull(formData.hsn_description),
+        cgst: numberOrNull(formData.cgst),
+        sgst: numberOrNull(formData.sgst),
       };
 
+      // ProductUpdate accepts null for the nullable columns (= clear) and
+      // treats undefined as "leave unchanged".
       const result = await updateProduct(id, productData);
 
       if (result) {
         await notifyAdminAction('updated product', productData.name, { product_id: id, product_name: productData.name });
-        setSuccess(true);
-        setTimeout(() => {
-          navigate('/products');
-        }, 1500);
+        showToast('Product updated', 'success');
+        navigate('/products');
       } else {
         setError('Failed to update product. Please try again.');
       }
-    } catch (err: any) {
-      setError(err.message || 'An error occurred while updating the product.');
+    } catch (err) {
       console.error('Error updating product:', err);
+      setError(describeSaveError(err));
     } finally {
       setSaving(false);
     }
   };
 
-  const uploadingCount = images.filter(img => img.isUploading).length;
-  const uploadedCount = images.filter(img => img.isUploaded).length;
-  const errorCount = images.filter(img => img.error).length;
-
-  if (loading) {
-    return (
-      <AdminLayout>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-center">
-            <Loader2 size={48} className="animate-spin text-emerald-500 mx-auto mb-4" />
-            <p className="text-gray-600">Loading product...</p>
-          </div>
-        </div>
-      </AdminLayout>
-    );
-  }
+  // Same title and description in every state so loading -> loaded does not shift the layout.
+  const description = productName
+    ? `Update the master catalog entry for ${productName}; changes apply in every store.`
+    : 'Update the master catalog entry; changes apply in every store.';
+  const header = (
+    <PageHeader title="Edit product" description={description} backTo="/products" backLabel="Back to products" />
+  );
 
   if (!canEditProducts) {
     return (
-      <AdminLayout>
-        <div className="max-w-2xl mx-auto mt-12 p-8 bg-white rounded-2xl border-2 border-gray-100 text-center">
-          <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-4" />
-          <h1 className="text-xl font-bold text-gray-900 mb-2">Not permitted</h1>
-          <p className="text-gray-500">Only super admins and admins can edit catalog products.</p>
-        </div>
-      </AdminLayout>
+      <div className="space-y-6">
+        {header}
+        <Card>
+          <EmptyState
+            icon={ShieldAlert}
+            title="Not permitted"
+            description="Only super admins and admins can edit catalog products."
+            action={
+              <LinkButton to="/products" variant="secondary">
+                Back to products
+              </LinkButton>
+            }
+          />
+        </Card>
+      </div>
     );
   }
 
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <PageLoader label="Loading product…" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <Alert
+          tone="danger"
+          title="Could not load product"
+          actions={
+            <>
+              {id ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<RefreshCw />}
+                  onClick={() => setReloadKey((key) => key + 1)}
+                >
+                  Retry
+                </Button>
+              ) : null}
+              <LinkButton to="/products" variant="secondary" size="sm">
+                Back to products
+              </LinkButton>
+            </>
+          }
+        >
+          {loadError}
+        </Alert>
+      </div>
+    );
+  }
+
+  const uploading = Boolean(image?.isUploading);
+  // A stored category that is no longer in the categories table would make the
+  // select fall back to "Select a category" while the hidden value still saves.
+  const staleCategory = formData.category && !categories.includes(formData.category) ? formData.category : null;
+
   return (
-    <AdminLayout>
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-8">
-          <button
-            onClick={() => navigate('/products')}
-            className="inline-flex items-center text-gray-500 hover:text-gray-700 transition-colors mb-4 group"
-          >
-            <ArrowLeft size={18} className="mr-2 group-hover:-translate-x-1 transition-transform" />
-            Back to Products
-          </button>
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-2xl flex items-center justify-center shadow-lg">
-              <Sparkles className="w-7 h-7 text-white" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Edit Product</h1>
-              <p className="text-gray-500 mt-1">Update product information</p>
-            </div>
-          </div>
-        </div>
+    <div className="space-y-6">
+      {header}
 
-        {success && (
-          <div className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-              <Check className="w-5 h-5" />
-            </div>
-            <span className="font-medium">Product updated successfully! Redirecting...</span>
-          </div>
-        )}
+      {error ? (
+        <Alert tone="danger" title="Product not saved" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
+      ) : null}
 
-        {error && (
-          <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-              <AlertCircle className="w-5 h-5" />
-            </div>
-            <span className="flex-1 font-medium">{error}</span>
-            <button
-              onClick={() => setError(null)}
-              className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <X size={18} />
-            </button>
-          </div>
-        )}
-
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <form onSubmit={handleSubmit}>
-            <div className="p-6 border-b border-gray-100">
-              <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <span className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 text-sm font-bold">1</span>
-                Basic Information
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="md:col-span-2">
-                  <label htmlFor="name" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Product Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="name"
-                    name="name"
-                    value={formData.name}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., Organic Basmati Rice"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label htmlFor="category" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Category <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    id="category"
-                    name="category"
-                    value={showNewCategoryInput ? '__NEW_CATEGORY__' : formData.category}
-                    onChange={handleCategoryChange}
-                    required={!showNewCategoryInput}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                  >
-                    <option value="">Select a category</option>
-                    <option value="__NEW_CATEGORY__">+ Create New Category</option>
-                    {categories.map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-
-                  {showNewCategoryInput && (
-                    <div className="mt-4 p-5 border-2 border-dashed border-emerald-300 rounded-xl bg-emerald-50/50">
-                      <h3 className="text-sm font-bold text-emerald-800 mb-4 flex items-center gap-2">
-                        <Plus size={16} />
-                        New Category Details
-                      </h3>
-                      <div className="space-y-4">
-                        <div>
-                          <label htmlFor="newCategoryName" className="block text-sm font-medium text-gray-700 mb-1">
-                            Category Name <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="newCategoryName"
-                            name="name"
-                            value={newCategoryData.name}
-                            onChange={handleNewCategoryChange}
-                            placeholder="e.g., Vegetables, Fruits, Dairy"
-                            required
-                            className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label htmlFor="newCategoryColor" className="block text-sm font-medium text-gray-700 mb-1">
-                              Color Theme <span className="text-gray-400 text-xs">(Optional)</span>
-                            </label>
-                            <input
-                              type="text"
-                              id="newCategoryColor"
-                              name="color"
-                              value={newCategoryData.color}
-                              onChange={handleNewCategoryChange}
-                              placeholder="e.g., from-green-100 to-green-200"
-                              className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors"
-                            />
-                          </div>
-                          <div>
-                            <label htmlFor="newCategoryDisplayOrder" className="block text-sm font-medium text-gray-700 mb-1">
-                              Display Order <span className="text-gray-400 text-xs">(Optional)</span>
-                            </label>
-                            <input
-                              type="number"
-                              id="newCategoryDisplayOrder"
-                              name="display_order"
-                              value={newCategoryData.display_order}
-                              onChange={handleNewCategoryChange}
-                              min="0"
-                              placeholder="1, 2, 3..."
-                              className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors"
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label htmlFor="newCategoryImageUrl" className="block text-sm font-medium text-gray-700 mb-1">
-                            Image URL <span className="text-gray-400 text-xs">(Optional)</span>
-                          </label>
-                          <input
-                            type="url"
-                            id="newCategoryImageUrl"
-                            name="image_url"
-                            value={newCategoryData.image_url}
-                            onChange={handleNewCategoryChange}
-                            placeholder="https://example.com/category-image.jpg"
-                            className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="newCategoryDescription" className="block text-sm font-medium text-gray-700 mb-1">
-                            Description <span className="text-gray-400 text-xs">(Optional)</span>
-                          </label>
-                          <textarea
-                            id="newCategoryDescription"
-                            name="description"
-                            value={newCategoryData.description}
-                            onChange={handleNewCategoryChange}
-                            rows={2}
-                            placeholder="Enter category description..."
-                            className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors resize-none"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="md:col-span-2">
-                  <label htmlFor="description" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Description <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <textarea
-                    id="description"
-                    name="description"
-                    value={formData.description}
-                    onChange={handleChange}
-                    rows={3}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800 resize-none"
-                    placeholder="Enter product description..."
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 border-b border-gray-100 bg-gradient-to-br from-purple-50/50 to-indigo-50/50">
-              <h2 className="text-lg font-bold text-gray-800 mb-1 flex items-center gap-2">
-                <span className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center text-purple-600 text-sm font-bold">2</span>
-                Product Images
-              </h2>
-              <p className="text-sm text-gray-500 mb-5 ml-10">
-                Upload product images. First image will be the primary image.
-                {images.length > 0 && (
-                  <span className="ml-2">
-                    ({uploadedCount} uploaded
-                    {uploadingCount > 0 && `, ${uploadingCount} uploading`}
-                    {errorCount > 0 && `, ${errorCount} failed`})
-                  </span>
-                )}
-              </p>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                multiple
-                onChange={handleFileInputChange}
-                className="hidden"
+      <form onSubmit={handleSubmit} noValidate className="max-w-4xl space-y-6">
+        <Card>
+          <CardHeader title="Basic information" description="Name, category and description shown to customers." />
+          <CardBody className="grid gap-5 md:grid-cols-2">
+            <FormField label="Product name" htmlFor="name" required error={fieldErrors.name} className="md:col-span-2">
+              <Input
+                id="name"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                required
+                invalid={Boolean(fieldErrors.name)}
+                placeholder="e.g. Organic Basmati Rice"
               />
+            </FormField>
 
-              <div
-                ref={dropZoneRef}
-                onDragEnter={handleDragEnter}
-                onDragLeave={handleDragLeave}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 mb-5
-                  ${isDragging
-                    ? 'border-purple-500 bg-purple-50 scale-[1.02]'
-                    : 'border-gray-300 hover:border-purple-400 hover:bg-purple-50/50'}`}
-              >
-                <div className={`w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center transition-colors
-                  ${isDragging ? 'bg-purple-200' : 'bg-gray-100'}`}>
-                  <Upload size={32} className={isDragging ? 'text-purple-600' : 'text-gray-400'} />
-                </div>
-                <h3 className="font-semibold text-gray-700 mb-1">
-                  {isDragging ? 'Drop images here' : 'Drag & drop images here'}
-                </h3>
-                <p className="text-sm text-gray-500 mb-3">or click to browse files</p>
-                <div className="flex items-center justify-center gap-4 text-xs text-gray-400">
-                  <span className="flex items-center gap-1">
-                    <FileImage size={14} />
-                    JPG, PNG, WebP, GIF
-                  </span>
-                  <span>•</span>
-                  <span>Max 5MB per file</span>
-                </div>
-              </div>
-
-              {images.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                  {images.map((image, index) => (
-                    <ImageItem
-                      key={image.id}
-                      image={image}
-                      index={index}
-                      isPrimary={index === 0}
-                      onRemove={removeImage}
-                      onSetPrimary={setPrimaryImage}
-                      onMoveUp={moveImageUp}
-                      onMoveDown={moveImageDown}
-                      totalCount={images.length}
-                    />
+            <div className="md:col-span-2">
+              <FormField label="Category" htmlFor="category" required error={fieldErrors.category}>
+                <Select
+                  id="category"
+                  name="category"
+                  value={showNewCategoryInput ? NEW_CATEGORY : formData.category}
+                  onChange={handleCategoryChange}
+                  required={!showNewCategoryInput}
+                  invalid={Boolean(fieldErrors.category)}
+                >
+                  <option value="">Select a category</option>
+                  <option value={NEW_CATEGORY}>Create new category</option>
+                  {staleCategory ? <option value={staleCategory}>{staleCategory} (not in category list)</option> : null}
+                  {categories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
                   ))}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="aspect-square border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 hover:bg-purple-50 transition-all"
-                  >
-                    <Plus size={24} />
-                    <span className="text-xs mt-2 font-medium">Add More</span>
-                  </button>
+                </Select>
+              </FormField>
+
+              {showNewCategoryInput ? (
+                <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4">
+                  <p className="text-sm font-medium text-gray-900">New category</p>
+                  <p className="mt-0.5 text-xs text-gray-500">Created when you save the product.</p>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <FormField
+                      label="Category name"
+                      htmlFor="newCategoryName"
+                      required
+                      error={fieldErrors.newCategoryName}
+                    >
+                      <Input
+                        id="newCategoryName"
+                        name="name"
+                        value={newCategoryData.name}
+                        onChange={handleNewCategoryChange}
+                        required
+                        invalid={Boolean(fieldErrors.newCategoryName)}
+                        placeholder="e.g. Vegetables, Fruits, Dairy"
+                      />
+                    </FormField>
+                    <FormField label="Display order" htmlFor="newCategoryDisplayOrder" hint="Lower numbers appear first">
+                      <Input
+                        type="number"
+                        id="newCategoryDisplayOrder"
+                        name="display_order"
+                        value={newCategoryData.display_order}
+                        onChange={handleNewCategoryChange}
+                        min={0}
+                        step={1}
+                        placeholder="1, 2, 3…"
+                      />
+                    </FormField>
+                    <FormField label="Image URL" htmlFor="newCategoryImageUrl" className="md:col-span-2">
+                      <Input
+                        type="url"
+                        id="newCategoryImageUrl"
+                        name="image_url"
+                        value={newCategoryData.image_url}
+                        onChange={handleNewCategoryChange}
+                        placeholder="https://example.com/category-image.jpg"
+                      />
+                    </FormField>
+                    <FormField label="Description" htmlFor="newCategoryDescription" className="md:col-span-2">
+                      <Textarea
+                        id="newCategoryDescription"
+                        name="description"
+                        value={newCategoryData.description}
+                        onChange={handleNewCategoryChange}
+                        rows={2}
+                        placeholder="Enter category description…"
+                      />
+                    </FormField>
+                  </div>
                 </div>
-              )}
+              ) : null}
             </div>
 
-            <div className="p-6 border-b border-gray-100">
-              <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <span className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center text-green-600 text-sm font-bold">3</span>
-                Pricing & Details
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-                <div>
-                  <label htmlFor="price" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Price (₹) <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    id="price"
-                    name="price"
-                    value={formData.price}
-                    onChange={handleChange}
-                    required
-                    min="0"
-                    step="0.01"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="0.00"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="original_price" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Original Price <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="number"
-                    id="original_price"
-                    name="original_price"
-                    value={formData.original_price}
-                    onChange={handleChange}
-                    min="0"
-                    step="0.01"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="0.00"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="rating" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Rating <span className="text-gray-400 text-xs font-normal">(0-5)</span>
-                  </label>
-                  <input
-                    type="number"
-                    id="rating"
-                    name="rating"
-                    value={formData.rating}
-                    onChange={handleChange}
-                    min="0"
-                    max="5"
-                    step="0.1"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="4.5"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="size" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Size/Weight <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="size"
-                    name="size"
-                    value={formData.size}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., 1kg, 500g"
-                  />
-                </div>
+            <FormField label="Description" htmlFor="description" className="md:col-span-2">
+              <Textarea
+                id="description"
+                name="description"
+                value={formData.description}
+                onChange={handleChange}
+                rows={3}
+                placeholder="Enter product description…"
+              />
+            </FormField>
+          </CardBody>
+        </Card>
 
-                <div>
-                  <label htmlFor="brand" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Brand <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="brand"
-                    name="brand"
-                    value={formData.brand}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., Amul"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="rating_count" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Rating Count
-                  </label>
-                  <input
-                    type="number"
-                    id="rating_count"
-                    name="rating_count"
-                    value={formData.rating_count}
-                    onChange={handleChange}
-                    min="0"
-                    step="1"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="0"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="min_quantity" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Min Order Quantity
-                  </label>
-                  <input
-                    type="number"
-                    id="min_quantity"
-                    name="min_quantity"
-                    value={formData.min_quantity}
-                    onChange={handleChange}
-                    min="1"
-                    step="1"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="1"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="max_quantity" className="block text-sm font-semibold text-gray-700 mb-2">
-                    Max Order Quantity
-                  </label>
-                  <input
-                    type="number"
-                    id="max_quantity"
-                    name="max_quantity"
-                    value={formData.max_quantity}
-                    onChange={handleChange}
-                    min="1"
-                    step="1"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="100"
-                  />
-                </div>
-              </div>
-
-              <h2 className="text-lg font-bold text-gray-800 mb-4 mt-6 flex items-center gap-2">
-                Tax &amp; HSN Details
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-                <div>
-                  <label htmlFor="gst_rate" className="block text-sm font-semibold text-gray-700 mb-2">
-                    GST Rate (%) <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="number"
-                    id="gst_rate"
-                    name="gst_rate"
-                    value={formData.gst_rate}
-                    onChange={handleChange}
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., 18"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="cgst" className="block text-sm font-semibold text-gray-700 mb-2">
-                    CGST (%) <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="number"
-                    id="cgst"
-                    name="cgst"
-                    value={formData.cgst}
-                    onChange={handleChange}
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., 9"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="sgst" className="block text-sm font-semibold text-gray-700 mb-2">
-                    SGST (%) <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="number"
-                    id="sgst"
-                    name="sgst"
-                    value={formData.sgst}
-                    onChange={handleChange}
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., 9"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="hsn_code" className="block text-sm font-semibold text-gray-700 mb-2">
-                    HSN Code <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="hsn_code"
-                    name="hsn_code"
-                    value={formData.hsn_code}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., 1905"
-                  />
-                </div>
-
-                <div className="md:col-span-2 lg:col-span-4">
-                  <label htmlFor="hsn_description" className="block text-sm font-semibold text-gray-700 mb-2">
-                    HSN Description <span className="text-gray-400 text-xs font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="hsn_description"
-                    name="hsn_description"
-                    value={formData.hsn_description}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-gray-800"
-                    placeholder="e.g., Bread, pastry, cakes"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-5 p-4 bg-gray-50 rounded-xl flex items-center justify-between">
-                <div>
-                  <p className="font-semibold text-gray-800">Stock Status</p>
-                  <p className="text-sm text-gray-500">Is this product available for purchase?</p>
-                </div>
+        <Card>
+          <CardHeader
+            title="Product image"
+            description="One image is stored per product and shown in listings and on the product page."
+          />
+          <CardBody>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED_TYPES.join(',')}
+              onChange={handleFileInputChange}
+              className="hidden"
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+            <FormField error={imageError ?? undefined}>
+              <div className="flex flex-col gap-5 sm:flex-row">
+                {image ? <ImageTile key={image.id} image={image} onRemove={removeImage} /> : null}
                 <button
                   type="button"
-                  onClick={() => setFormData(prev => ({ ...prev, in_stock: !prev.in_stock }))}
-                  className={`relative w-14 h-8 rounded-full transition-colors ${formData.in_stock ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragEnter={handleDragEnter}
+                  onDragLeave={handleDragLeave}
+                  onDragOver={handleDragOver}
+                  onDrop={handleDrop}
+                  disabled={uploading}
+                  aria-describedby="product-image-hint"
+                  className={cn(
+                    'flex min-h-[12rem] flex-1 flex-col items-center justify-center rounded-md border-2 border-dashed px-6 py-8 text-center transition-colors',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2',
+                    'disabled:cursor-not-allowed disabled:opacity-60',
+                    isDragging
+                      ? 'border-brand-500 bg-brand-50'
+                      : 'border-gray-300 bg-white hover:border-brand-400 hover:bg-gray-50',
+                  )}
                 >
                   <span
-                    className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${formData.in_stock ? 'left-7' : 'left-1'}`}
-                  />
+                    className={cn(
+                      'flex h-10 w-10 items-center justify-center rounded-md',
+                      isDragging ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500',
+                    )}
+                  >
+                    <Upload className="h-5 w-5" />
+                  </span>
+                  <span className="mt-3 text-sm font-medium text-gray-900">
+                    {isDragging
+                      ? 'Drop the image here'
+                      : image
+                        ? 'Drop a new image to replace the current one'
+                        : 'Drag and drop an image here'}
+                  </span>
+                  <span className="mt-1 text-sm text-gray-500">or click to browse</span>
+                  <span id="product-image-hint" className="mt-3 text-xs text-gray-500">
+                    JPG, PNG, WebP or GIF, up to 5MB
+                  </span>
                 </button>
               </div>
-            </div>
+            </FormField>
+          </CardBody>
+        </Card>
 
-            <div className="p-6 bg-gray-50 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => navigate('/products')}
-                className="px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-xl hover:bg-gray-100 transition-colors font-semibold"
-                disabled={saving}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saving || uploadingCount > 0}
-                className="inline-flex items-center px-8 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 transition-all font-semibold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 size={20} className="animate-spin mr-2" />
-                    Updating...
-                  </>
-                ) : uploadingCount > 0 ? (
-                  <>
-                    <Loader2 size={20} className="animate-spin mr-2" />
-                    Uploading Images...
-                  </>
-                ) : (
-                  <>
-                    <Save size={20} className="mr-2" />
-                    Update Product
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </AdminLayout>
+        <Card>
+          <CardHeader title="Pricing and details" description="Prices are in rupees and apply to every store." />
+          <CardBody className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+            <FormField label="Price" htmlFor="price" required error={fieldErrors.price}>
+              <Input
+                type="number"
+                id="price"
+                name="price"
+                value={formData.price}
+                onChange={handleChange}
+                required
+                min={0}
+                step="0.01"
+                inputMode="decimal"
+                invalid={Boolean(fieldErrors.price)}
+                leftIcon={<IndianRupee />}
+                placeholder="0.00"
+              />
+            </FormField>
+            <FormField
+              label="Original price"
+              htmlFor="original_price"
+              hint="MRP before discount. Leave blank when there is no discount."
+              error={fieldErrors.original_price}
+            >
+              <Input
+                type="number"
+                id="original_price"
+                name="original_price"
+                value={formData.original_price}
+                onChange={handleChange}
+                min={0}
+                step="0.01"
+                inputMode="decimal"
+                invalid={Boolean(fieldErrors.original_price)}
+                leftIcon={<IndianRupee />}
+                placeholder="0.00"
+              />
+            </FormField>
+            <FormField label="Unit / size" htmlFor="unit" required hint="e.g. 1kg, 500ml, piece" error={fieldErrors.unit}>
+              <Input
+                id="unit"
+                name="unit"
+                value={formData.unit}
+                onChange={handleChange}
+                required
+                invalid={Boolean(fieldErrors.unit)}
+                placeholder="e.g. 1kg"
+              />
+            </FormField>
+            <FormField label="Brand" htmlFor="brand">
+              <Input id="brand" name="brand" value={formData.brand} onChange={handleChange} placeholder="e.g. Amul" />
+            </FormField>
+
+            <FormField label="Rating" htmlFor="rating" required hint="0 to 5" error={fieldErrors.rating}>
+              <Input
+                type="number"
+                id="rating"
+                name="rating"
+                value={formData.rating}
+                onChange={handleChange}
+                required
+                min={0}
+                max={5}
+                step="0.1"
+                inputMode="decimal"
+                invalid={Boolean(fieldErrors.rating)}
+                placeholder="4.5"
+              />
+            </FormField>
+            <FormField label="Rating count" htmlFor="rating_count" required error={fieldErrors.rating_count}>
+              <Input
+                type="number"
+                id="rating_count"
+                name="rating_count"
+                value={formData.rating_count}
+                onChange={handleChange}
+                required
+                min={0}
+                step={1}
+                inputMode="numeric"
+                invalid={Boolean(fieldErrors.rating_count)}
+                placeholder="0"
+              />
+            </FormField>
+            <FormField label="Min order quantity" htmlFor="min_quantity" required error={fieldErrors.min_quantity}>
+              <Input
+                type="number"
+                id="min_quantity"
+                name="min_quantity"
+                value={formData.min_quantity}
+                onChange={handleChange}
+                required
+                min={1}
+                step={1}
+                inputMode="numeric"
+                invalid={Boolean(fieldErrors.min_quantity)}
+                placeholder="1"
+              />
+            </FormField>
+            <FormField label="Max order quantity" htmlFor="max_quantity" required error={fieldErrors.max_quantity}>
+              <Input
+                type="number"
+                id="max_quantity"
+                name="max_quantity"
+                value={formData.max_quantity}
+                onChange={handleChange}
+                required
+                min={1}
+                step={1}
+                inputMode="numeric"
+                invalid={Boolean(fieldErrors.max_quantity)}
+                placeholder="100"
+              />
+            </FormField>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader title="Tax and HSN" description="Used on invoices. Leave blank for products without GST." />
+          <CardBody className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+            <FormField label="GST rate (%)" htmlFor="gst_rate" error={fieldErrors.gst_rate}>
+              <Input
+                type="number"
+                id="gst_rate"
+                name="gst_rate"
+                value={formData.gst_rate}
+                onChange={handleChange}
+                min={0}
+                max={100}
+                step="0.01"
+                inputMode="decimal"
+                invalid={Boolean(fieldErrors.gst_rate)}
+                placeholder="e.g. 18"
+              />
+            </FormField>
+            <FormField label="CGST (%)" htmlFor="cgst" error={fieldErrors.cgst}>
+              <Input
+                type="number"
+                id="cgst"
+                name="cgst"
+                value={formData.cgst}
+                onChange={handleChange}
+                min={0}
+                max={100}
+                step="0.01"
+                inputMode="decimal"
+                invalid={Boolean(fieldErrors.cgst)}
+                placeholder="e.g. 9"
+              />
+            </FormField>
+            <FormField label="SGST (%)" htmlFor="sgst" error={fieldErrors.sgst}>
+              <Input
+                type="number"
+                id="sgst"
+                name="sgst"
+                value={formData.sgst}
+                onChange={handleChange}
+                min={0}
+                max={100}
+                step="0.01"
+                inputMode="decimal"
+                invalid={Boolean(fieldErrors.sgst)}
+                placeholder="e.g. 9"
+              />
+            </FormField>
+            <FormField label="HSN code" htmlFor="hsn_code">
+              <Input id="hsn_code" name="hsn_code" value={formData.hsn_code} onChange={handleChange} placeholder="e.g. 1905" />
+            </FormField>
+            <FormField label="HSN description" htmlFor="hsn_description" className="md:col-span-2 lg:col-span-4">
+              <Input
+                id="hsn_description"
+                name="hsn_description"
+                value={formData.hsn_description}
+                onChange={handleChange}
+                placeholder="e.g. Bread, pastry, cakes"
+              />
+            </FormField>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader title="Availability" />
+          <CardBody>
+            {/* Writes master_products.is_active (ProductsPage toggles the same flag);
+                per-store stock lives in store_products, so this is "listed", not "in stock". */}
+            <Toggle
+              id="is_active"
+              checked={formData.in_stock}
+              onChange={(next) => setFormData((prev) => ({ ...prev, in_stock: next }))}
+              label="Active in catalog"
+              description="Inactive products are hidden from every store and cannot be ordered. Per-store stock is managed in store inventory."
+            />
+          </CardBody>
+          <CardFooter className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => navigate('/products')} disabled={saving}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={saving} disabled={uploading} leftIcon={<Save />}>
+              {uploading ? 'Uploading image…' : 'Save changes'}
+            </Button>
+          </CardFooter>
+        </Card>
+      </form>
+    </div>
   );
 };
 

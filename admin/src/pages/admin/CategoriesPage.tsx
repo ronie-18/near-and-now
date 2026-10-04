@@ -1,113 +1,60 @@
-import { useState, useEffect, useMemo } from 'react';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
-import {
-  Search,
-  Plus,
-  Edit,
-  Trash2,
-  ChevronLeft,
-  ChevronRight,
-  Layers,
-  AlertCircle,
-  Package,
-  X,
-  Loader2,
-  RefreshCw,
-  ImageOff,
-  Check,
-  FolderOpen
-} from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Plus, Edit, Trash2, Layers, Package, RefreshCw, ImageOff, FolderOpen, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getCategories, deleteCategory, getProductCountsByCategory, Category } from '../../services/adminService';
+import {
+  getCategories,
+  deleteCategory,
+  getProductCountsByCategory,
+  getProductCountForCategory,
+  Category,
+} from '../../services/adminService';
 import IdCell from '../../components/admin/IdCell';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  EmptyState,
+  FilterBar,
+  IconButton,
+  LinkButton,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  StatCard,
+  StatGrid,
+  Table,
+  TableContainer,
+  TableEmptyRow,
+  TableSkeletonRows,
+  TBody,
+  Td,
+  Th,
+  THead,
+  Tooltip,
+  Tr,
+  useConfirm,
+} from '../../components/ui';
+import { useToast } from '../../context/ToastContext';
+import { formatNumber } from '../../utils/format';
+import { cn } from '../../utils/cn';
 
 // Constants
 const ITEMS_PER_PAGE = 10;
+const TABLE_COLUMNS = 6;
 
-// Modern Stat Card
-interface StatCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-  label: string;
-  value: number | string;
-}
+/**
+ * Whether the per-category product counts can be trusted by the delete guard.
+ * - loading:    first fetch still in flight
+ * - ready:      counts came back and are safe to act on
+ * - unverified: the counts RPC failed (see fetchData) — deleting is disabled
+ */
+type CountsStatus = 'loading' | 'ready' | 'unverified';
 
-const StatCard: React.FC<StatCardProps> = ({ icon: Icon, gradient, label, value }) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-20 h-20 bg-white/10 rounded-full blur-xl" />
-    <div className="relative z-10">
-      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
-        <Icon className="w-6 h-6" />
-      </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-    </div>
-  </div>
-);
-
-// Error Alert
-const ErrorAlert = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
-  <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-    <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-      <AlertCircle className="w-5 h-5" />
-    </div>
-    <span className="flex-1 font-medium">{message}</span>
-    <button onClick={onDismiss} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
-      <X size={18} />
-    </button>
-  </div>
-);
-
-// Success Alert
-const SuccessAlert = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
-  <div className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-    <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-      <Check className="w-5 h-5" />
-    </div>
-    <span className="flex-1 font-medium">{message}</span>
-    <button onClick={onDismiss} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
-      <X size={18} />
-    </button>
-  </div>
-);
-
-// Loading Spinner
-const LoadingSpinner = () => (
-  <div className="p-16 flex flex-col items-center justify-center">
-    <div className="relative">
-      <div className="w-16 h-16 border-4 border-violet-200 rounded-full" />
-      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-    </div>
-    <p className="mt-4 text-gray-500 font-medium">Loading categories...</p>
-  </div>
-);
-
-// Empty State
-const EmptyState = ({ searchTerm }: { searchTerm: string }) => (
-  <div className="p-16 text-center">
-    <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
-      <FolderOpen className="w-12 h-12 text-gray-400" />
-    </div>
-    <h3 className="text-xl font-bold text-gray-800 mb-2">No categories found</h3>
-    <p className="text-gray-500 mb-6 max-w-md mx-auto">
-      {searchTerm
-        ? 'Try a different search term or clear your filters.'
-        : 'Get started by creating your first category to organize products.'}
-    </p>
-    {!searchTerm && (
-      <Link
-        to="/categories/add"
-        className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-xl hover:from-violet-600 hover:to-purple-600 transition-all shadow-lg hover:shadow-xl font-semibold"
-      >
-        <Plus size={20} className="mr-2" />
-        Create First Category
-      </Link>
-    )}
-  </div>
-);
-
-// Category Image
+// Category Image — page-specific square thumbnail. Falls back to initials
+// when there is no URL and to an ImageOff glyph when the image fails to load.
+// Decorative: the category name is rendered right next to it.
 const CategoryImage = ({ imageUrl, categoryName }: { imageUrl?: string; categoryName: string }) => {
   const [imgError, setImgError] = useState(false);
 
@@ -115,8 +62,8 @@ const CategoryImage = ({ imageUrl, categoryName }: { imageUrl?: string; category
     return (
       <img
         src={imageUrl}
-        alt={categoryName}
-        className="w-14 h-14 object-cover rounded-xl shadow-md ring-2 ring-white"
+        alt=""
+        className="h-10 w-10 shrink-0 rounded-md border border-gray-200 object-cover"
         loading="lazy"
         onError={() => setImgError(true)}
       />
@@ -124,87 +71,171 @@ const CategoryImage = ({ imageUrl, categoryName }: { imageUrl?: string; category
   }
 
   return (
-    <div className="w-14 h-14 bg-gradient-to-br from-violet-400 via-purple-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-md ring-2 ring-white">
-      {imgError ? (
-        <ImageOff className="w-6 h-6 text-white/80" />
-      ) : (
-        <span className="text-sm font-bold text-white">{categoryName.substring(0, 2).toUpperCase()}</span>
+    <span
+      aria-hidden="true"
+      className={cn(
+        'flex h-10 w-10 shrink-0 items-center justify-center rounded-md border',
+        imgError ? 'border-gray-200 bg-gray-100 text-gray-400' : 'border-brand-100 bg-brand-50 text-brand-700',
       )}
-    </div>
+    >
+      {imgError ? (
+        <ImageOff className="h-4 w-4" />
+      ) : (
+        <span className="text-xs font-semibold">{categoryName.substring(0, 2).toUpperCase()}</span>
+      )}
+    </span>
   );
 };
 
 const CategoriesPage = () => {
+  const confirm = useConfirm();
+  const { showToast } = useToast();
+
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [productCounts, setProductCounts] = useState<Record<string, number>>({});
+  const [countsStatus, setCountsStatus] = useState<CountsStatus>('loading');
+
+  // Stale-response guard: Refresh used to be clickable while a fetch was in
+  // flight, so two concurrent fetchData() calls raced and the last resolver
+  // won. Only the most recent request may write state now. `loadedOnceRef`
+  // decides between the first-load skeleton and a keep-content-visible
+  // refresh.
+  const requestIdRef = useRef(0);
+  const loadedOnceRef = useRef(false);
 
   // Fetch data
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await getCategories();
-      setCategories(data);
+  const fetchData = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    if (loadedOnceRef.current) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
 
-      const countsByCategory = await getProductCountsByCategory();
-      const counts: Record<string, number> = {};
-      data.forEach(category => {
-        counts[category.id] = countsByCategory[category.name] || 0;
-      });
-      setProductCounts(counts);
+    try {
+      const data = await getCategories();
+      if (requestId !== requestIdRef.current) return;
+      setCategories(data);
+      loadedOnceRef.current = true;
+
+      // Counts are loaded separately from the list so a failed RPC marks them
+      // 'unverified' (Delete disabled + Alert) while the categories still
+      // render. getProductCountsByCategory() throws on failure, so an empty
+      // map genuinely means "no products in any category" and is 'ready'.
+      try {
+        const countsByCategory = await getProductCountsByCategory();
+        if (requestId !== requestIdRef.current) return;
+        const counts: Record<string, number> = {};
+        data.forEach(category => {
+          counts[category.id] = countsByCategory[category.name] || 0;
+        });
+        setProductCounts(counts);
+        setCountsStatus('ready');
+      } catch (countsErr) {
+        if (requestId !== requestIdRef.current) return;
+        console.error('Error fetching product counts:', countsErr);
+        setProductCounts({});
+        setCountsStatus('unverified');
+      }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setError('Failed to load categories. Please try again.');
       console.error('Error fetching categories:', err);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
 
   // Handle category deletion
-  const handleDeleteCategory = async (id: string, categoryName: string) => {
-    const hasProducts = productCounts[id] > 0;
+  const handleDeleteCategory = async (category: Category) => {
+    const { id, name } = category;
+    if (deleteLoading) return; // one delete at a time
 
     // The DB FK (master_products.category -> categories.name) is ON DELETE
     // CASCADE, so deleting a non-empty category permanently deletes every
     // product in it, not just orphans them. Block outright rather than
-    // warning-and-proceeding — there's no undo.
-    if (hasProducts) {
-      setError(
-        `Cannot delete "${categoryName}": it still has ${productCounts[id]} product(s). ` +
-          `Move or delete those products first, then delete the category.`
+    // warning-and-proceeding — there's no undo. Unknown counts are treated
+    // as unsafe for the same reason.
+    if (countsStatus !== 'ready') {
+      showToast('Product counts could not be verified, so deleting is disabled. Refresh and try again.', 'error');
+      return;
+    }
+    if (productCounts[id] > 0) {
+      showToast(
+        `Cannot delete "${name}": it still has ${formatNumber(productCounts[id])} product(s). ` +
+          'Move or delete those products first, then delete the category.',
+        'error',
       );
       return;
     }
 
-    if (confirm(`Are you sure you want to delete "${categoryName}"?`)) {
-      try {
-        setDeleteLoading(id);
-        setError(null);
-        const deleted = await deleteCategory(id);
+    const confirmed = await confirm({
+      title: 'Delete category?',
+      message: (
+        <>
+          Delete <strong className="font-medium text-gray-900">{name}</strong>? This cannot be undone.
+        </>
+      ),
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
 
-        if (deleted) {
-          setCategories(prev => prev.filter(cat => cat.id !== id));
-          setSuccess(`"${categoryName}" has been deleted successfully.`);
-          setTimeout(() => setSuccess(null), 3000);
-        } else {
-          setError('Failed to delete category. Please try again.');
-        }
-      } catch (err) {
-        setError('An error occurred while deleting the category.');
-        console.error('Error deleting category:', err);
-      } finally {
-        setDeleteLoading(null);
+    try {
+      setDeleteLoading(id);
+
+      // The counts above are a page-load snapshot; products may have been
+      // added to this category since. Re-check live (one head:true count)
+      // right before the irreversible delete and abort if the category is no
+      // longer empty or the count cannot be fetched.
+      let liveCount: number;
+      try {
+        liveCount = await getProductCountForCategory(name);
+      } catch (countErr) {
+        console.error('Error verifying product count before delete:', countErr);
+        showToast('Could not verify product counts, so the category was not deleted. Please try again.', 'error');
+        return;
       }
+      if (liveCount > 0) {
+        setProductCounts(prev => ({ ...prev, [id]: liveCount }));
+        showToast(
+          `Cannot delete "${name}": it now has ${formatNumber(liveCount)} product(s). ` +
+            'Move or delete those products first, then delete the category.',
+          'error',
+        );
+        return;
+      }
+
+      // deleteCategory throws on failure (with the Supabase error, e.g. an FK
+      // violation), so the toast can carry the real reason.
+      await deleteCategory(id);
+      setCategories(prev => prev.filter(cat => cat.id !== id));
+      setProductCounts(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      showToast(`"${name}" has been deleted.`, 'success');
+    } catch (err) {
+      const message = (err as { message?: string } | null)?.message;
+      showToast(
+        message ? `Could not delete "${name}": ${message}` : 'An error occurred while deleting the category.',
+        'error',
+      );
+      console.error('Error deleting category:', err);
+    } finally {
+      setDeleteLoading(null);
     }
   };
 
@@ -231,9 +262,12 @@ const CategoriesPage = () => {
     totalProducts: Object.values(productCounts).reduce((sum, count) => sum + count, 0),
   }), [categories, productCounts]);
 
-  // Pagination
-  const totalPages = Math.ceil(filteredCategories.length / ITEMS_PER_PAGE);
-  const indexOfLastCategory = currentPage * ITEMS_PER_PAGE;
+  // Pagination — clamped so that deleting the last row on the final page (or
+  // a refresh that shrank the list) never renders an empty page; the shared
+  // Pagination also resyncs `currentPage` state when it falls out of range.
+  const totalPages = Math.max(1, Math.ceil(filteredCategories.length / ITEMS_PER_PAGE));
+  const safePage = Math.min(currentPage, totalPages);
+  const indexOfLastCategory = safePage * ITEMS_PER_PAGE;
   const indexOfFirstCategory = indexOfLastCategory - ITEMS_PER_PAGE;
   const currentCategories = filteredCategories.slice(indexOfFirstCategory, indexOfLastCategory);
 
@@ -242,214 +276,248 @@ const CategoriesPage = () => {
     setCurrentPage(1);
   }, [searchTerm]);
 
-  return (
-    <AdminLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Categories</h1>
-            <p className="text-gray-500 mt-1">Organize and manage your product categories</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={fetchData}
-              className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
-              title="Refresh"
-            >
-              <RefreshCw size={20} />
-            </button>
-            <Link
-              to="/categories/add"
-              className="inline-flex items-center px-5 py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-xl hover:from-violet-600 hover:to-purple-600 transition-all shadow-lg hover:shadow-xl font-semibold"
-            >
-              <Plus size={18} className="mr-2" />
-              Add Category
-            </Link>
-          </div>
-        </div>
+  // After a failed first load nothing is known: show "—" rather than a "0"
+  // category count (and never leave the products stat on its skeleton —
+  // countsStatus stays 'loading' when getCategories itself threw).
+  const listUnavailable = error !== null && categories.length === 0;
 
+  const retryAction = (
+    <Button variant="secondary" size="sm" loading={refreshing} onClick={() => fetchData()}>
+      Retry
+    </Button>
+  );
+
+  const deleteTooltip = (category: Category): string => {
+    if (countsStatus !== 'ready') return 'Deleting disabled until product counts load';
+    if (productCounts[category.id] > 0) return 'Cannot delete: category has products';
+    return 'Delete';
+  };
+
+  const renderTableBody = () => {
+    if (loading) {
+      return <TableSkeletonRows rows={6} cols={TABLE_COLUMNS} />;
+    }
+
+    // A failed fetch is not an empty list — never show "No categories" here.
+    if (error && categories.length === 0) {
+      return (
+        <TableEmptyRow colSpan={TABLE_COLUMNS}>
+          <EmptyState
+            compact
+            icon={AlertCircle}
+            title="Categories could not be loaded"
+            description="Use Retry above to load the list again."
+          />
+        </TableEmptyRow>
+      );
+    }
+
+    if (filteredCategories.length === 0) {
+      return (
+        <TableEmptyRow colSpan={TABLE_COLUMNS}>
+          <EmptyState
+            compact
+            icon={FolderOpen}
+            title="No categories found"
+            description={
+              searchTerm
+                ? 'Try a different search term or clear the search.'
+                : 'Get started by creating your first category to organize products.'
+            }
+            action={
+              !searchTerm ? (
+                <LinkButton to="/categories/add" leftIcon={<Plus />}>
+                  Create first category
+                </LinkButton>
+              ) : undefined
+            }
+          />
+        </TableEmptyRow>
+      );
+    }
+
+    return currentCategories.map((category) => {
+      const count = productCounts[category.id] ?? 0;
+      const isDeleting = deleteLoading === category.id;
+      return (
+        <Tr key={category.id} className="hover:bg-gray-50">
+          <Td nowrap>
+            <IdCell id={category.id} />
+          </Td>
+          <Td>
+            <div className="flex items-center gap-3">
+              <CategoryImage imageUrl={category.image_url ?? undefined} categoryName={category.name} />
+              <Link
+                to={`/categories/edit/${category.id}`}
+                className="rounded font-medium text-gray-900 hover:text-brand-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              >
+                {category.name}
+              </Link>
+            </div>
+          </Td>
+          <Td>
+            {/* No `block` on the clamped span: Tailwind emits `.block` after
+                `.line-clamp-*`, so display:block would override -webkit-box
+                and defeat the two-line clamp. */}
+            {category.description ? (
+              <span className="max-w-xs text-gray-600 line-clamp-2">{category.description}</span>
+            ) : (
+              <span className="text-gray-400">No description</span>
+            )}
+          </Td>
+          <Td align="right" nowrap className="tabular-nums">
+            {countsStatus === 'unverified' ? (
+              <span className="text-gray-400" title="Product counts could not be loaded">
+                —
+              </span>
+            ) : (
+              <Badge tone={count > 0 ? 'brand' : 'neutral'}>
+                {formatNumber(count)} {count === 1 ? 'product' : 'products'}
+              </Badge>
+            )}
+          </Td>
+          <Td align="right" nowrap muted className="tabular-nums">
+            {/* `??` not `||`: a display_order of 0 is a real value, not "unset". */}
+            {category.display_order ?? '—'}
+          </Td>
+          <Td align="right" nowrap>
+            <div className="flex items-center justify-end gap-1">
+              <Tooltip content="Edit">
+                {/* `!px-0`: the sm button's px-3 would otherwise win over px-0 in CSS order. */}
+                <LinkButton
+                  to={`/categories/edit/${category.id}`}
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Edit ${category.name}`}
+                  className="w-8 !px-0"
+                >
+                  <Edit className="h-4 w-4" aria-hidden="true" />
+                </LinkButton>
+              </Tooltip>
+              <Tooltip content={deleteTooltip(category)}>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Delete ${category.name}`}
+                  className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                  loading={isDeleting}
+                  disabled={countsStatus !== 'ready' || (deleteLoading !== null && !isDeleting)}
+                  onClick={() => handleDeleteCategory(category)}
+                >
+                  <Trash2 aria-hidden="true" />
+                </IconButton>
+              </Tooltip>
+            </div>
+          </Td>
+        </Tr>
+      );
+    });
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Categories"
+        description="Organize and manage your product categories."
+        actions={
+          <LinkButton to="/categories/add" leftIcon={<Plus />}>
+            Add category
+          </LinkButton>
+        }
+      />
+
+      <div className="space-y-6">
         {/* Alerts */}
-        {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
-        {success && <SuccessAlert message={success} onDismiss={() => setSuccess(null)} />}
+        {error ? (
+          <Alert
+            tone="danger"
+            actions={retryAction}
+            // Dismissible only when a previous list is still on screen; with
+            // nothing loaded, dismissing would swap the error row for the
+            // "No categories found" CTA and orphan its "Use Retry above".
+            onDismiss={categories.length > 0 ? () => setError(null) : undefined}
+          >
+            {error}
+          </Alert>
+        ) : null}
+        {countsStatus === 'unverified' && !error ? (
+          <Alert tone="warning" title="Product counts could not be loaded" actions={retryAction}>
+            Deleting is disabled until the counts load, because deleting a category also permanently deletes
+            every product in it.
+          </Alert>
+        ) : null}
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <StatGrid columns={4}>
           <StatCard
+            label="Total categories"
+            value={listUnavailable ? '—' : formatNumber(stats.totalCategories)}
             icon={Layers}
-            gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-            label="Total Categories"
-            value={stats.totalCategories}
+            loading={loading}
           />
           <StatCard
+            label="Total products"
+            value={countsStatus === 'ready' ? formatNumber(stats.totalProducts) : '—'}
+            hint={countsStatus === 'unverified' ? 'Counts could not be loaded' : undefined}
             icon={Package}
-            gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
-            label="Total Products"
-            value={stats.totalProducts}
+            loading={loading}
           />
-        </div>
-
-        {/* Search */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-          <div className="relative">
-            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search categories by name, description, or ID..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-violet-500 focus:ring-0 transition-colors text-gray-800"
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                <X size={18} />
-              </button>
-            )}
-          </div>
-        </div>
+        </StatGrid>
 
         {/* Categories Table */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {loading ? (
-            <LoadingSpinner />
-          ) : filteredCategories.length === 0 ? (
-            <EmptyState searchTerm={searchTerm} />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-                  <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-                    <th className="px-6 py-4">ID</th>
-                    <th className="px-6 py-4">Category</th>
-                    <th className="px-6 py-4">Description</th>
-                    <th className="px-6 py-4">Products</th>
-                    <th className="px-6 py-4">Order</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {currentCategories.map((category) => (
-                    <tr key={category.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
-                      <td className="px-6 py-4">
-                        <IdCell id={category.id} />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-4">
-                          <CategoryImage imageUrl={category.image_url} categoryName={category.name} />
-                          <Link
-                            to={`/categories/edit/${category.id}`}
-                            className="font-semibold text-gray-800 group-hover:text-violet-600 transition-colors hover:underline"
-                          >
-                            {category.name}
-                          </Link>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600 max-w-xs line-clamp-2">
-                          {category.description || <span className="text-gray-400 italic">No description</span>}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold
-                          ${productCounts[category.id] > 0
-                            ? 'bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700'
-                            : 'bg-gray-100 text-gray-500'}`}>
-                          {productCounts[category.id] || 0} products
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-sm font-medium text-gray-600">
-                          {category.display_order || '-'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Link
-                            to={`/categories/edit/${category.id}`}
-                            className="p-2.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-all"
-                            title="Edit"
-                          >
-                            <Edit size={18} />
-                          </Link>
-                          <button
-                            onClick={() => handleDeleteCategory(category.id, category.name)}
-                            disabled={deleteLoading === category.id}
-                            className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
-                            title="Delete"
-                          >
-                            {deleteLoading === category.id ? (
-                              <Loader2 size={18} className="animate-spin" />
-                            ) : (
-                              <Trash2 size={18} />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+        <Card>
+          <CardBody padding="none">
+            <FilterBar
+              actions={
+                <Button
+                  variant="secondary"
+                  leftIcon={<RefreshCw />}
+                  loading={refreshing}
+                  disabled={loading}
+                  onClick={() => fetchData()}
+                >
+                  Refresh
+                </Button>
+              }
+            >
+              <SearchInput
+                id="category-search"
+                value={searchTerm}
+                onChange={setSearchTerm}
+                placeholder="Search categories…"
+                aria-label="Search categories by name, description or ID"
+              />
+            </FilterBar>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <p className="text-sm text-gray-600">
-                Showing <span className="font-semibold text-gray-800">{indexOfFirstCategory + 1}</span> to{' '}
-                <span className="font-semibold text-gray-800">{Math.min(indexOfLastCategory, filteredCategories.length)}</span> of{' '}
-                <span className="font-semibold text-gray-800">{filteredCategories.length}</span> categories
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
-                  className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                >
-                  <ChevronLeft size={20} />
-                </button>
-                <div className="flex gap-1">
-                  {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                    let page: number;
-                    if (totalPages <= 5) {
-                      page = i + 1;
-                    } else if (currentPage <= 3) {
-                      page = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      page = totalPages - 4 + i;
-                    } else {
-                      page = currentPage - 2 + i;
-                    }
-                    return (
-                      <button
-                        key={page}
-                        onClick={() => setCurrentPage(page)}
-                        className={`w-10 h-10 rounded-xl font-semibold transition-all
-                          ${currentPage === page
-                            ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-lg'
-                            : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}
-                      >
-                        {page}
-                      </button>
-                    );
-                  })}
-                </div>
-                <button
-                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                  disabled={currentPage === totalPages}
-                  className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                >
-                  <ChevronRight size={20} />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+            <TableContainer className="border-0 rounded-none">
+              <Table aria-label="Categories">
+                <THead>
+                  <Tr>
+                    <Th>ID</Th>
+                    <Th>Category</Th>
+                    <Th>Description</Th>
+                    <Th align="right">Products</Th>
+                    <Th align="right">Order</Th>
+                    <Th align="right">Actions</Th>
+                  </Tr>
+                </THead>
+                <TBody>{renderTableBody()}</TBody>
+              </Table>
+            </TableContainer>
+
+            {/* Pagination */}
+            {!loading && filteredCategories.length > 0 ? (
+              <Pagination
+                page={currentPage}
+                pageSize={ITEMS_PER_PAGE}
+                total={filteredCategories.length}
+                onPageChange={setCurrentPage}
+              />
+            ) : null}
+          </CardBody>
+        </Card>
       </div>
-    </AdminLayout>
+    </>
   );
 };
 

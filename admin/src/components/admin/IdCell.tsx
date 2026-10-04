@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { Copy, Check } from 'lucide-react';
 
 /**
@@ -10,7 +10,8 @@ import { Copy, Check } from 'lucide-react';
 export default function IdCell({ id, prefix = '' }: { id: string; prefix?: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = async (e: React.MouseEvent) => {
+  const handleCopy = async (e: MouseEvent) => {
+    // Rows are clickable — never let the copy click open the row.
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(id);
@@ -22,17 +23,25 @@ export default function IdCell({ id, prefix = '' }: { id: string; prefix?: strin
   };
 
   return (
-    <span className="inline-flex items-center gap-1 font-mono text-[11px] leading-none text-gray-400 whitespace-nowrap">
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-xs leading-none text-gray-600">
       {prefix}
       {id}
       <button
         type="button"
         onClick={handleCopy}
+        aria-label="Copy ID"
         title="Copy ID"
-        className="text-gray-300 hover:text-emerald-600 transition-colors shrink-0"
+        className="shrink-0 rounded text-gray-400 transition-colors hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
       >
-        {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+        {copied ? (
+          <Check size={12} className="text-brand-600" aria-hidden="true" />
+        ) : (
+          <Copy size={12} aria-hidden="true" />
+        )}
       </button>
+      <span className="sr-only" aria-live="polite">
+        {copied ? 'ID copied' : ''}
+      </span>
     </span>
   );
 }

@@ -236,7 +236,10 @@ export class DeliveryController {
         .notifyRiderProfileChangeReviewed(updated.rider_id, status === 'approved', status === 'rejected' ? reason : null)
         .catch((err) => console.error('notifyRiderProfileChangeReviewed failed:', err));
 
-      const { data: rider } = await supabaseAdmin.from('app_users').select('name').eq('id', updated.rider_id).maybeSingle();
+      const [{ data: rider }, { data: reviewer }] = await Promise.all([
+        supabaseAdmin.from('app_users').select('name').eq('id', updated.rider_id).maybeSingle(),
+        supabaseAdmin.from('admins').select('full_name, role').eq('id', req.adminId).maybeSingle(),
+      ]);
       notificationService
         .notifyAdminsOfReviewAction({
           actorAdminId: req.adminId!,
@@ -247,7 +250,17 @@ export class DeliveryController {
         })
         .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
-      res.json({ success: true, request: updated });
+      // Shaped like a list row (rider_name + reviewer name/role) so the client
+      // can use the returned row verbatim instead of patching it from the session.
+      res.json({
+        success: true,
+        request: {
+          ...updated,
+          rider_name: rider?.name ?? null,
+          reviewed_by_name: reviewer?.full_name ?? null,
+          reviewed_by_role: reviewer?.role ?? null,
+        },
+      });
     } catch (error) {
       return sendError(res, 'DeliveryController.reviewRiderProfileChangeRequest', 'Could not review change request', error, undefined, { success: false });
     }

@@ -1,23 +1,52 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Eye, Lock, Mail, Save, Shield, ShieldAlert, ShieldCheck, User } from 'lucide-react';
 import {
-  ArrowLeft,
-  Save,
-  AlertCircle,
-  Shield,
-  ShieldCheck,
-  ShieldAlert,
-  Eye,
-  Mail,
-  User,
-  Lock,
-  Info,
-  Loader2
-} from 'lucide-react';
-import { getAdminById, updateAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  FormField,
+  Input,
+  LinkButton,
+  PageHeader,
+  PageLoader,
+  SegmentedControl,
+  StatusBadge,
+  genericStatusMeta,
+} from '../../components/ui';
+import { cn } from '../../utils/cn';
+import {
+  getAdminById,
+  updateAdmin,
+  Admin,
+  UpdateAdminData,
+  getRoleDisplayName,
+  getRoleDescription,
+  getDefaultPermissions,
+  hasPermission,
+} from '../../services/adminAuthService';
 import { UpdateAdminSchema } from '../../schemas/admin.schema';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+
+type FieldKey = 'full_name' | 'email' | 'password' | 'confirmPassword';
+type FieldErrors = Partial<Record<FieldKey, string>>;
+
+const ROLES: Array<{ value: Admin['role']; icon: typeof Shield }> = [
+  { value: 'super_admin', icon: ShieldCheck },
+  { value: 'admin', icon: Shield },
+  { value: 'manager', icon: ShieldAlert },
+  { value: 'viewer', icon: Eye },
+];
+
+const STATUSES: Admin['status'][] = ['active', 'inactive', 'suspended'];
+
+const PASSWORD_HINT =
+  'Leave blank to keep the current password. If set: min. 8 characters, with at least one ' +
+  'uppercase, lowercase, number, and special character.';
 
 const EditAdminPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -25,8 +54,11 @@ const EditAdminPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [admin, setAdmin] = useState<Admin | null>(null);
-  
+  // Bumped by the Retry button so a failed load can be re-attempted in place.
+  const [reloadKey, setReloadKey] = useState(0);
+
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -39,21 +71,45 @@ const EditAdminPage = () => {
   const currentAdmin: Admin | null = getCurrentAdmin();
 
   // Check permission
-  const canEdit = currentAdmin && hasPermission(currentAdmin, 'admins.edit');
+  const canEdit = !!currentAdmin && hasPermission(currentAdmin, 'admins.edit');
+
+  // Editing your own account: the backend (admin.controller.ts updateAdmin)
+  // refuses role !== super_admin, status !== active, and a password change
+  // without oldPassword (that flow lives in SettingsPage). Previously the
+  // controls were fully interactive and the user only learnt on submit, so
+  // the role/status pickers are locked and the password fields hidden here.
+  const isSelf = !!currentAdmin && currentAdmin.id === id;
 
   useEffect(() => {
-    const fetchAdmin = async () => {
-      if (!id) {
-        setError('Invalid admin ID');
-        setLoading(false);
-        return;
-      }
+    // Unauthorised users never see the form; do not fire the fetch for them.
+    if (!canEdit) {
+      setLoading(false);
+      return;
+    }
 
+    if (!id) {
+      setError('Invalid admin ID.');
+      setLoading(false);
+      return;
+    }
+
+    // Reset when the id changes (/admins/edit/A -> /admins/edit/B) so the
+    // previous admin's form is never shown against the new URL, and drop
+    // out-of-order responses via the cancelled flag.
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setAdmin(null);
+    setFieldErrors({});
+
+    const fetchAdmin = async () => {
       try {
         const data = await getAdminById(id);
+        if (cancelled) return;
         if (!data) {
-          setError('Admin not found');
-          setLoading(false);
+          // getAdminById resolves to null only when no such row exists; load
+          // failures throw and are handled by the catch below.
+          setError('Admin not found.');
           return;
         }
 
@@ -67,340 +123,403 @@ const EditAdminPage = () => {
           status: data.status
         });
       } catch (err) {
+        if (cancelled) return;
         console.error('Error fetching admin:', err);
-        setError('Failed to load admin details');
+        setError('Failed to load admin details.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchAdmin();
-  }, [id]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, canEdit, reloadKey]);
 
   if (!canEdit) {
     return (
-      <AdminLayout>
-        <div className="max-w-2xl mx-auto py-12">
-          <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-xl flex items-center">
-            <AlertCircle className="w-6 h-6 mr-3" />
-            <span className="font-medium">You do not have permission to edit admins.</span>
-          </div>
-        </div>
-      </AdminLayout>
+      <div className="max-w-3xl space-y-6">
+        <PageHeader title="Edit admin" backTo="/admins" backLabel="Admin users" />
+        <Alert
+          tone="danger"
+          title="You do not have permission to edit admins."
+          actions={
+            <LinkButton to="/admins" variant="secondary" size="sm">
+              Back to admin users
+            </LinkButton>
+          }
+        />
+      </div>
     );
   }
 
+  const updateField = (key: FieldKey, value: string) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => ({ ...prev, [key]: undefined }));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Enter in a field can re-submit while the button is already spinning.
+    if (saving) return;
     setError(null);
+    setFieldErrors({});
 
     if (!id) return;
 
     // Validation
-    if (!formData.email || !formData.full_name) {
-      setError('Please fill in all required fields.');
-      return;
+    const fullName = formData.full_name.trim();
+    const email = formData.email.trim();
+    const nextErrors: FieldErrors = {};
+
+    // UpdateAdminSchema was imported but only its password rule was ever
+    // applied client-side. Email now goes through the schema; the name uses
+    // the schema's length bounds (2-100) but deliberately NOT its
+    // letters-only regex: the backend never enforces it, so names already
+    // saved with hyphens/apostrophes would otherwise become uneditable here.
+    const emailCheck = UpdateAdminSchema.shape.email.unwrap().safeParse(email);
+    if (!emailCheck.success) {
+      nextErrors.email = emailCheck.error.issues[0]?.message || 'Invalid email address';
+    }
+    if (fullName.length < 2) {
+      nextErrors.full_name = 'Name must be at least 2 characters';
+    } else if (fullName.length > 100) {
+      nextErrors.full_name = 'Name is too long';
     }
 
-    if (formData.password && formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
+    if (!isSelf && formData.password) {
+      if (formData.password !== formData.confirmPassword) {
+        nextErrors.confirmPassword = 'Passwords do not match.';
+      }
 
-    if (formData.password) {
       // Same schema as CreateAdminPage — was already defined but never
       // actually enforced here either, only a bare length check.
       const passwordCheck = UpdateAdminSchema.shape.password.unwrap().safeParse(formData.password);
       if (!passwordCheck.success) {
-        setError(passwordCheck.error.issues[0]?.message || 'Password does not meet the strength requirements.');
-        return;
+        nextErrors.password = passwordCheck.error.issues[0]?.message || 'Password does not meet the strength requirements.';
       }
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      return;
     }
 
     try {
       setSaving(true);
 
-      const updates: any = {
-        email: formData.email,
-        full_name: formData.full_name,
-        role: formData.role,
-        status: formData.status
+      const updates: UpdateAdminData = {
+        email,
+        full_name: fullName
       };
 
-      if (formData.password) {
+      // Self-edit: role/status are locked in the UI and the backend rejects
+      // any change to them for the caller, so leave them undefined
+      // (= unchanged) instead of echoing values the server may refuse.
+      if (!isSelf) {
+        updates.role = formData.role;
+        updates.status = formData.status;
+      }
+
+      // Only included when set so "leave blank to keep current" keeps working.
+      if (!isSelf && formData.password) {
         updates.password = formData.password;
       }
 
       await updateAdmin(id, updates);
 
-      navigate('/admins', { 
-        state: { success: `Admin "${formData.full_name}" updated successfully!` } 
+      // AdminManagementPage reads state.success once and shows it as a toast
+      // (same contract as CreateAdminPage); the list page used to ignore it.
+      navigate('/admins', {
+        state: { success: `Admin "${fullName}" updated successfully.` }
       });
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error updating admin:', err);
-      if (err.message?.includes('duplicate key')) {
-        setError('An admin with this email already exists.');
-      } else {
-        setError(err.message || 'Failed to update admin. Please try again.');
-      }
+      // Backend already maps 23505 to a readable "already exists" message.
+      setError(err instanceof Error && err.message ? err.message : 'Failed to update admin. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  const roles: Array<{ value: Admin['role']; icon: typeof Shield }> = [
-    { value: 'super_admin', icon: ShieldCheck },
-    { value: 'admin', icon: Shield },
-    { value: 'manager', icon: ShieldAlert },
-    { value: 'viewer', icon: Eye }
-  ];
-
-  const statuses: Array<{ value: Admin['status']; label: string; color: string }> = [
-    { value: 'active', label: 'Active', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-    { value: 'inactive', label: 'Inactive', color: 'bg-gray-100 text-gray-700 border-gray-200' },
-    { value: 'suspended', label: 'Suspended', color: 'bg-red-100 text-red-700 border-red-200' }
-  ];
+  const header = (
+    <PageHeader
+      title="Edit admin"
+      description="Update administrator details, role and status."
+      backTo="/admins"
+      backLabel="Admin users"
+      actions={
+        admin ? (
+          <>
+            <StatusBadge kind="role" value={admin.role} />
+            <StatusBadge kind="generic" value={admin.status} />
+          </>
+        ) : undefined
+      }
+    />
+  );
 
   if (loading) {
     return (
-      <AdminLayout>
-        <div className="max-w-3xl mx-auto py-12">
-          <div className="flex flex-col items-center justify-center">
-            <Loader2 className="w-12 h-12 text-violet-500 animate-spin" />
-            <p className="mt-4 text-gray-500 font-medium">Loading admin details...</p>
-          </div>
-        </div>
-      </AdminLayout>
+      <div className="max-w-3xl space-y-6">
+        {header}
+        <PageLoader label="Loading admin details" />
+      </div>
     );
   }
 
   if (error && !admin) {
     return (
-      <AdminLayout>
-        <div className="max-w-2xl mx-auto py-12">
-          <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-xl flex items-center">
-            <AlertCircle className="w-6 h-6 mr-3" />
-            <span className="font-medium">{error}</span>
-          </div>
-        </div>
-      </AdminLayout>
+      <div className="max-w-3xl space-y-6">
+        {header}
+        <Alert
+          tone="danger"
+          title={error}
+          actions={
+            <>
+              {/* Nothing to retry without an id in the URL. */}
+              {id ? (
+                <Button variant="secondary" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+                  Retry
+                </Button>
+              ) : null}
+              <LinkButton to="/admins" variant="secondary" size="sm">
+                Back to admin users
+              </LinkButton>
+            </>
+          }
+        />
+      </div>
     );
   }
 
+  const lockRoleAndStatus = saving || isSelf;
+
   return (
-    <AdminLayout>
-      <div className="max-w-3xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/admins')}
-            className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Edit Admin</h1>
-            <p className="text-gray-500 mt-1">Update administrator details and permissions</p>
-          </div>
-        </div>
+    <div className="max-w-3xl space-y-6">
+      {header}
 
-        {/* Error Alert */}
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl flex items-center">
-            <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-            <span className="font-medium">{error}</span>
-          </div>
-        )}
+      {error ? (
+        <Alert tone="danger" title="Could not save changes" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
+      ) : null}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 space-y-6">
-          {/* Full Name */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Full Name <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="text"
-                value={formData.full_name}
-                onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="John Doe"
-                required
-              />
-            </div>
-          </div>
-
-          {/* Email */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Email Address <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="admin@example.com"
-                required
-              />
-            </div>
-          </div>
-
-          {/* Password (Optional) */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              New Password (Optional)
-            </label>
-            <div className="relative">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="••••••••"
-                minLength={8}
-              />
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Leave blank to keep current password. If set: min. 8 characters, with at least one
-              uppercase, lowercase, number, and special character.
-            </p>
-          </div>
-
-          {/* Confirm Password */}
-          {formData.password && (
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Confirm New Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-                <input
-                  type="password"
-                  value={formData.confirmPassword}
-                  onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                  placeholder="••••••••"
+      <form onSubmit={handleSubmit} noValidate className="space-y-6">
+        {/* Account details */}
+        <Card>
+          <CardHeader title="Account details" description="Name and sign-in email for this administrator." />
+          <CardBody>
+            <div className="grid gap-5 md:grid-cols-2">
+              <FormField label="Full name" htmlFor="admin-full-name" required error={fieldErrors.full_name}>
+                <Input
+                  id="admin-full-name"
+                  name="full_name"
+                  type="text"
+                  autoComplete="name"
+                  value={formData.full_name}
+                  onChange={(e) => updateField('full_name', e.target.value)}
+                  leftIcon={<User aria-hidden="true" />}
+                  placeholder="Full name"
+                  invalid={!!fieldErrors.full_name}
+                  required
+                  disabled={saving}
                 />
+              </FormField>
+
+              <FormField label="Email address" htmlFor="admin-email" required error={fieldErrors.email}>
+                <Input
+                  id="admin-email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  value={formData.email}
+                  onChange={(e) => updateField('email', e.target.value)}
+                  leftIcon={<Mail aria-hidden="true" />}
+                  placeholder="name@company.com"
+                  invalid={!!fieldErrors.email}
+                  required
+                  disabled={saving}
+                />
+              </FormField>
+            </div>
+          </CardBody>
+        </Card>
+
+        {/* Password */}
+        <Card>
+          <CardHeader
+            title="Password"
+            description={
+              isSelf
+                ? 'Your own password is changed from Settings.'
+                : 'Optionally set a new password for this administrator.'
+            }
+          />
+          <CardBody>
+            {isSelf ? (
+              <Alert tone="info">
+                Changing your own password requires your current password. Use{' '}
+                <Link to="/settings" className="font-medium underline">
+                  Settings
+                </Link>{' '}
+                to change it.
+              </Alert>
+            ) : (
+              <div className="grid gap-5 md:grid-cols-2">
+                <FormField label="New password" htmlFor="admin-password" hint={PASSWORD_HINT} error={fieldErrors.password}>
+                  <Input
+                    id="admin-password"
+                    name="password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={formData.password}
+                    onChange={(e) => updateField('password', e.target.value)}
+                    leftIcon={<Lock aria-hidden="true" />}
+                    placeholder="Leave blank to keep current"
+                    minLength={8}
+                    invalid={!!fieldErrors.password}
+                    disabled={saving}
+                  />
+                </FormField>
+
+                {/* Confirm field only appears once a new password is being typed. */}
+                {formData.password ? (
+                  <FormField label="Confirm new password" htmlFor="admin-confirm-password" error={fieldErrors.confirmPassword}>
+                    <Input
+                      id="admin-confirm-password"
+                      name="confirmPassword"
+                      type="password"
+                      autoComplete="new-password"
+                      value={formData.confirmPassword}
+                      onChange={(e) => updateField('confirmPassword', e.target.value)}
+                      leftIcon={<Lock aria-hidden="true" />}
+                      placeholder="Repeat the new password"
+                      invalid={!!fieldErrors.confirmPassword}
+                      disabled={saving}
+                    />
+                  </FormField>
+                ) : null}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        {/* Role and status */}
+        <Card>
+          <CardHeader title="Role and status" description="Controls what this administrator can see and do." />
+          <CardBody className="space-y-6">
+            {isSelf ? (
+              <Alert tone="warning" title="You are editing your own account">
+                Your role must stay {getRoleDisplayName('super_admin')} and your account must stay active, so these options are locked.
+              </Alert>
+            ) : null}
+
+            {/* Role */}
+            <fieldset>
+              <legend className="text-sm font-medium text-gray-700">
+                Role
+                <span className="ml-0.5 text-red-600" aria-hidden="true">
+                  *
+                </span>
+              </legend>
+              <div className="mt-2 grid gap-3 md:grid-cols-2">
+                {ROLES.map(({ value, icon: Icon }) => {
+                  const selected = formData.role === value;
+                  return (
+                    <label
+                      key={value}
+                      className={cn(
+                        'relative flex items-start gap-3 rounded-md border p-4 transition-colors',
+                        selected ? 'border-brand-500 bg-brand-50' : 'border-gray-200 bg-white',
+                        lockRoleAndStatus ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                        !lockRoleAndStatus && !selected && 'hover:border-gray-300',
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="role"
+                        value={value}
+                        checked={selected}
+                        disabled={lockRoleAndStatus}
+                        onChange={() => setFormData((prev) => ({ ...prev, role: value }))}
+                        className="peer sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 rounded-md peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500 peer-focus-visible:ring-offset-2"
+                      />
+                      <span
+                        className={cn(
+                          'flex h-9 w-9 shrink-0 items-center justify-center rounded-md',
+                          selected ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500',
+                        )}
+                      >
+                        <Icon className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className={cn('block text-sm font-medium', selected ? 'text-brand-800' : 'text-gray-900')}>
+                          {getRoleDisplayName(value)}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-gray-500">{getRoleDescription(value)}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            {/* Status */}
+            <fieldset>
+              <legend className="text-sm font-medium text-gray-700">
+                Status
+                <span className="ml-0.5 text-red-600" aria-hidden="true">
+                  *
+                </span>
+              </legend>
+              <SegmentedControl<Admin['status']>
+                aria-label="Status"
+                size="md"
+                className="mt-2"
+                value={formData.status}
+                onChange={(status) => setFormData((prev) => ({ ...prev, status }))}
+                items={STATUSES.map((value) => ({
+                  value,
+                  label: genericStatusMeta(value).label,
+                  disabled: lockRoleAndStatus,
+                }))}
+              />
+            </fieldset>
+
+            {/* Permissions preview (same presentation as CreateAdminPage) */}
+            <div className="rounded-md border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm font-medium text-gray-900">Default permissions</p>
+              <p className="mt-0.5 text-xs text-gray-500">The {getRoleDisplayName(formData.role)} role includes:</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {getDefaultPermissions(formData.role).map((perm) => (
+                  <Badge key={perm} tone={perm === '*' ? 'brand' : 'neutral'} title={perm}>
+                    {perm === '*' ? 'All permissions' : perm}
+                  </Badge>
+                ))}
               </div>
             </div>
-          )}
+          </CardBody>
 
-          {/* Role Selection */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              Role <span className="text-red-500">*</span>
-            </label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {roles.map(({ value, icon: Icon }) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setFormData({ ...formData, role: value })}
-                  className={`p-4 rounded-xl border-2 transition-all text-left ${
-                    formData.role === value
-                      ? 'border-violet-500 bg-violet-50'
-                      : 'border-gray-200 hover:border-gray-300 bg-white'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                      formData.role === value ? 'bg-violet-100 text-violet-600' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <div className="flex-1">
-                      <p className={`font-semibold ${formData.role === value ? 'text-violet-700' : 'text-gray-800'}`}>
-                        {getRoleDisplayName(value)}
-                      </p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        {getRoleDescription(value)}
-                      </p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Status Selection */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              Status <span className="text-red-500">*</span>
-            </label>
-            <div className="flex gap-3">
-              {statuses.map(({ value, label, color }) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setFormData({ ...formData, status: value })}
-                  className={`px-4 py-2 rounded-xl border-2 font-semibold text-sm transition-all ${
-                    formData.status === value
-                      ? color
-                      : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Permissions Info */}
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-            <div className="flex items-start gap-3">
-              <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-blue-900 mb-1">Default Permissions</p>
-                <p className="text-xs text-blue-700">
-                  The selected role will have the following permissions:
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {getDefaultPermissions(formData.role).map((perm, idx) => (
-                    <span key={idx} className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-md font-medium">
-                      {perm}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => navigate('/admins')}
-              className="px-6 py-3 border-2 border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors font-semibold"
-            >
+          <CardFooter className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => navigate('/admins')} disabled={saving}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex-1 inline-flex items-center justify-center px-6 py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-xl hover:from-violet-600 hover:to-purple-600 transition-all shadow-lg hover:shadow-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save size={20} className="mr-2" />
-                  Save Changes
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </AdminLayout>
+            </Button>
+            <Button type="submit" loading={saving} leftIcon={<Save aria-hidden="true" />}>
+              Save changes
+            </Button>
+          </CardFooter>
+        </Card>
+      </form>
+    </div>
   );
 };
 

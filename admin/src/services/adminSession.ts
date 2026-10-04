@@ -8,6 +8,20 @@
 
 const KEYS = ['adminToken', 'adminData', 'adminTokenExpiry'] as const;
 
+/**
+ * Fired on `window` whenever the stored session changes (login, profile save,
+ * logout). The app shell is now a persistent layout route that mounts once,
+ * so the header/sidebar re-read `adminData` on this event (see
+ * hooks/useCurrentAdmin.ts) instead of relying on a remount per navigation.
+ */
+export const ADMIN_SESSION_EVENT = 'admin-session-updated';
+
+function notifySessionUpdated(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(ADMIN_SESSION_EVENT));
+  }
+}
+
 function readItem(key: string): string | null {
   return localStorage.getItem(key) ?? sessionStorage.getItem(key);
 }
@@ -35,6 +49,7 @@ export function setAdminSession(admin: unknown, token: string, expiresAt: number
   for (const key of KEYS) {
     other.removeItem(key);
   }
+  notifySessionUpdated();
 }
 
 /**
@@ -44,6 +59,7 @@ export function setAdminSession(admin: unknown, token: string, expiresAt: number
 export function updateStoredAdminData(admin: unknown): void {
   const store = localStorage.getItem('adminData') !== null ? localStorage : sessionStorage;
   store.setItem('adminData', JSON.stringify(admin));
+  notifySessionUpdated();
 }
 
 export function clearAdminSession(): void {
@@ -51,4 +67,5 @@ export function clearAdminSession(): void {
     localStorage.removeItem(key);
     sessionStorage.removeItem(key);
   }
+  notifySessionUpdated();
 }

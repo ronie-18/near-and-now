@@ -1,34 +1,61 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { getAdminToken } from '../../services/adminSession';
 import {
-  Bell, Check, Search, RefreshCw, ShoppingBag, Users, Package,
-  AlertCircle, X, Send, Truck, CheckCircle, Megaphone, Filter, IndianRupee,
-  FileText, ShieldCheck, Image, Wifi, MessageCircle
+  useState, useEffect, useCallback, useRef,
+  type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
+} from 'react';
+import {
+  Bell, Check, RefreshCw, ShoppingBag, Users, Package, AlertCircle, X, Send, Truck,
+  CheckCircle, Megaphone, IndianRupee, FileText, ShieldCheck, Image, Wifi, MessageCircle,
+  Trash2, Inbox, Clock, UserCog,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { getAdminToken } from '../../services/adminSession';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import { hasPermission } from '../../services/adminAuthService';
 import { getNotificationLink } from '../../utils/notificationLink';
 import { docTypeLabel } from '../../utils/docLabels';
+import { formatCurrency, formatDateTime, formatNumber, timeAgo } from '../../utils/format';
+import { cn } from '../../utils/cn';
+import { useToast } from '../../context/ToastContext';
+import {
+  PageHeader, Button, IconButton, Card, CardHeader, CardBody, CardFooter, FormField, Input, Textarea,
+  SegmentedControl, Alert, Badge, StatusBadge, StatCard, StatGrid, FilterBar, SearchInput, Select,
+  TableContainer, Table, THead, TBody, Tr, Th, Td, TableEmptyRow, TableSkeletonRows,
+  EmptyState, Tooltip, useConfirm, notificationTypeMeta,
+} from '../../components/ui';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * Known `admin_notifications.type` values. The column is free text, so this
+ * union is documentation and autocomplete only — unknown values still render
+ * through the `system` fallback (TYPE_ICON / notificationTypeMeta). Labels and
+ * badge tones come from the shared registry in utils/statusMeta.ts, which the
+ * header bell uses too, so both surfaces agree.
+ */
+type KnownNotificationType =
+  | 'new_order' | 'order_delivered' | 'order_cancelled' | 'refund_required'
+  | 'new_user' | 'system' | 'product_updated' | 'store_added'
+  | 'document_uploaded' | 'document_removed' | 'verification_submitted'
+  | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
+  | 'owner_photo_updated' | 'store_image_added' | 'store_image_removed'
+  | 'rider_profile_photo_updated' | 'rider_vehicle_photo_updated'
+  | 'admin_review_action' | 'store_status_changed' | 'rider_status_changed'
+  | 'profile_change_request' | 'support_message';
+
 interface AdminNotification {
   id: string;
-  type: 'new_order' | 'new_user' | 'system' | 'refund_required'
-    | 'document_uploaded' | 'document_removed' | 'verification_submitted'
-    | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
-    | 'owner_photo_updated' | 'store_image_added' | 'store_image_removed'
-    | 'rider_profile_photo_updated' | 'rider_vehicle_photo_updated'
-    | 'product_updated' | 'admin_review_action'
-    | 'store_status_changed' | 'rider_status_changed' | 'support_message' | 'store_added';
+  type: KnownNotificationType | (string & {});
   title: string;
   message: string;
   data: Record<string, any>;
   read_by: string[];
   created_at: string;
 }
+
+type Filter = 'all' | 'unread' | (string & {});
+
+type TargetApp = 'all' | 'drivers' | 'stores' | 'customers';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -39,230 +66,266 @@ function adminAuthHeaders(): Record<string, string> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+type IconComponent = ComponentType<{ className?: string }>;
+
+/** Neutral leading icon per type; colour and label come from notificationTypeMeta. */
+const TYPE_ICON: Record<string, IconComponent> = {
+  new_order: ShoppingBag,
+  order_delivered: ShoppingBag,
+  order_cancelled: ShoppingBag,
+  refund_required: IndianRupee,
+  new_user: Users,
+  system: AlertCircle,
+  product_updated: Package,
+  store_added: Package,
+  store_status_changed: Wifi,
+  rider_status_changed: Wifi,
+  document_uploaded: FileText,
+  document_removed: FileText,
+  verification_submitted: ShieldCheck,
+  rider_document_uploaded: Truck,
+  rider_document_removed: Truck,
+  rider_verification_submitted: Truck,
+  owner_photo_updated: Image,
+  store_image_added: Image,
+  store_image_removed: Image,
+  rider_profile_photo_updated: Image,
+  rider_vehicle_photo_updated: Image,
+  profile_change_request: UserCog,
+  admin_review_action: CheckCircle,
+  support_message: MessageCircle,
+};
+
+/** Every known type is filterable; grouped so the Select stays scannable. */
+const FILTER_GROUPS: { label: string; types: KnownNotificationType[] }[] = [
+  { label: 'Orders and payments', types: ['new_order', 'order_delivered', 'order_cancelled', 'refund_required'] },
+  { label: 'Customers and support', types: ['new_user', 'support_message'] },
+  {
+    label: 'Stores',
+    types: [
+      'store_added', 'verification_submitted', 'document_uploaded', 'document_removed',
+      'store_status_changed', 'store_image_added', 'store_image_removed', 'owner_photo_updated',
+    ],
+  },
+  {
+    label: 'Riders',
+    types: [
+      'rider_verification_submitted', 'rider_document_uploaded', 'rider_document_removed',
+      'rider_status_changed', 'rider_profile_photo_updated', 'rider_vehicle_photo_updated',
+    ],
+  },
+  { label: 'Other', types: ['profile_change_request', 'product_updated', 'admin_review_action', 'system'] },
+];
+
+function filterLabel(filter: Filter): string {
+  if (filter === 'all') return 'all';
+  if (filter === 'unread') return 'unread';
+  return notificationTypeMeta(filter).label.toLowerCase();
 }
 
-const TYPE_META: Record<string, { icon: React.ComponentType<any>; color: string; bg: string }> = {
-  new_order: { icon: ShoppingBag, color: 'text-blue-600', bg: 'bg-blue-100' },
-  new_user: { icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  system: { icon: AlertCircle, color: 'text-violet-600', bg: 'bg-violet-100' },
-  refund_required: { icon: IndianRupee, color: 'text-red-600', bg: 'bg-red-100' },
-  document_uploaded: { icon: FileText, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  document_removed: { icon: FileText, color: 'text-gray-600', bg: 'bg-gray-100' },
-  verification_submitted: { icon: ShieldCheck, color: 'text-teal-600', bg: 'bg-teal-100' },
-  rider_document_uploaded: { icon: Truck, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  rider_document_removed: { icon: Truck, color: 'text-gray-600', bg: 'bg-gray-100' },
-  rider_verification_submitted: { icon: Truck, color: 'text-teal-600', bg: 'bg-teal-100' },
-  owner_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  store_image_added: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  store_image_removed: { icon: Image, color: 'text-gray-600', bg: 'bg-gray-100' },
-  rider_profile_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  rider_vehicle_photo_updated: { icon: Image, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  product_updated: { icon: Package, color: 'text-orange-600', bg: 'bg-orange-100' },
-  admin_review_action: { icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  store_status_changed: { icon: Wifi, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  rider_status_changed: { icon: Wifi, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  support_message: { icon: MessageCircle, color: 'text-blue-600', bg: 'bg-blue-100' },
-  store_added: { icon: Package, color: 'text-teal-600', bg: 'bg-teal-100' },
-};
+const TARGET_ITEMS: { value: TargetApp; label: string }[] = [
+  { value: 'all', label: 'All apps' },
+  { value: 'drivers', label: 'Drivers' },
+  { value: 'stores', label: 'Stores' },
+  { value: 'customers', label: 'Customers' },
+];
 
 // ─── Push Notification Panel ──────────────────────────────────────────────────
 
-const PushNotificationPanel = () => {
+interface PushResult {
+  tone: 'success' | 'warning' | 'danger';
+  message: string;
+}
+
+/** POST /api/notifications/broadcast — `tokens` is the distinct-device count the API found. */
+interface BroadcastResponse {
+  success?: boolean;
+  error?: string;
+  target?: TargetApp;
+  tokens?: number;
+  sent?: number;
+  failed?: number;
+  errors?: string[];
+}
+
+/** Counts come off the wire; anything non-numeric is treated as 0 rather than NaN. */
+function toCount(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Mirrors broadcastPushSchema in backend notifications.routes.ts. */
+const PUSH_TITLE_MAX = 200;
+const PUSH_MESSAGE_MAX = 2000;
+
+interface PushNotificationPanelProps {
+  onClose: () => void;
+}
+
+const PushNotificationPanel = ({ onClose }: PushNotificationPanelProps) => {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [targetApp, setTargetApp] = useState<'drivers' | 'stores' | 'customers' | 'all'>('all');
+  const [targetApp, setTargetApp] = useState<TargetApp>('all');
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [result, setResult] = useState<PushResult | null>(null);
+
+  const canSend = title.trim() !== '' && body.trim() !== '';
 
   const handleSend = async () => {
-    if (!title.trim() || !body.trim()) return;
+    if (sending || !canSend) return;
     setSending(true);
     setResult(null);
 
     try {
-      const db = getAdminClient();
-
-      // Fetch push tokens based on target. Previously "All Apps" only ever
-      // queried delivery_partners regardless — same as picking "Drivers" — so
-      // neither shopkeepers nor customers actually received an "all apps"
-      // broadcast, despite the UI's "Connected Apps" panel implying otherwise.
-      let tokens: string[] = [];
-
-      if (targetApp === 'drivers' || targetApp === 'all') {
-        // expo_push_token is no longer directly readable off delivery_partners
-        // (see 20260930290000 migration, closing an unrestricted-admin-read
-        // exposure of every rider's live push token) — this admin-gated RPC
-        // is the only remaining way to fetch it.
-        const { data: driverData } = await db.rpc('admin_get_delivery_partner_push_tokens');
-        tokens = [...tokens, ...((driverData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
+      // The broadcast runs server-side (POST /api/notifications/broadcast,
+      // notifications.edit): the API looks the tokens up, sends in Expo-sized
+      // chunks under its outbound deadline, clears DeviceNotRegistered tokens,
+      // logs the broadcast in this inbox and reports per-ticket delivery
+      // counts. This page used to POST to exp.host itself and judged success
+      // by the HTTP status alone — which Expo returns as 200 even when every
+      // ticket failed — so admins were told "sent to N devices" regardless.
+      const res = await fetch(`${API_BASE}/api/notifications/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+        body: JSON.stringify({ target: targetApp, title: title.trim(), message: body.trim() }),
+      });
+      // Error bodies are not always JSON (a 502 or proxy page is HTML).
+      const json = (await res.json().catch(() => null)) as BroadcastResponse | null;
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || `Failed to send notification (HTTP ${res.status})`);
       }
 
-      if (targetApp === 'stores' || targetApp === 'all') {
-        // expo_push_token is no longer anon-readable off stores directly (see
-        // 20260830000000 migration, closing a public read of every store's push
-        // token) — this admin-gated RPC is the only remaining way to fetch it.
-        const { data: storeData } = await db.rpc('admin_get_store_push_tokens');
-        tokens = [...tokens, ...((storeData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
-      }
-
-      if (targetApp === 'customers' || targetApp === 'all') {
-        // expo_push_token is no longer directly readable off app_users either
-        // (same 20260930290000 migration) — same admin-gated RPC pattern.
-        const { data: customerData } = await db.rpc('admin_get_customer_push_tokens');
-        tokens = [...tokens, ...((customerData as { expo_push_token: string }[] | null)?.map(r => r.expo_push_token).filter(Boolean) || [])];
-      }
-
-      const uniqueTokens = [...new Set(tokens)];
-
-      if (uniqueTokens.length === 0) {
-        setResult({ ok: false, message: 'No push tokens found for the selected target.' });
+      const tokens = toCount(json.tokens);
+      const sent = toCount(json.sent);
+      const failed = toCount(json.failed);
+      const errors = Array.isArray(json.errors) ? json.errors : [];
+      const reason = errors.length ? ` (${errors.slice(0, 3).join('; ')})` : '';
+      if (tokens === 0) {
+        setResult({ tone: 'danger', message: 'No push tokens found for the selected target.' });
         return;
       }
-
-      // Actually send the push — this previously only logged an admin_notifications
-      // row and reported success with no real Expo push API call anywhere, so
-      // admins believed a broadcast went out when nothing was ever delivered to
-      // any device. Same request shape already used server-side for real order
-      // broadcasts (backend/src/controllers/delivery.controller.ts).
-      const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          uniqueTokens.map((t) => ({ to: t, sound: 'default', title, body, data: { type: 'admin_broadcast' } }))
-        ),
-      });
-      if (!pushRes.ok) {
-        throw new Error(`Push API returned ${pushRes.status} — no notifications were delivered.`);
+      if (sent === 0) {
+        setResult({
+          tone: 'danger',
+          message: `The push service rejected all ${formatNumber(failed)} message(s)${reason}. No notifications were delivered.`,
+        });
+        return;
       }
-
-      // Log the notification in admin_notifications
-      const { data: inserted, error: insertError } = await db
-        .from('admin_notifications')
-        .insert({
-          type: 'system',
-          title,
-          message: body,
-          data: { target: targetApp, tokens_count: uniqueTokens.length }
-        })
-        .select('id');
-      if (insertError) throw insertError;
-      if (!inserted || inserted.length === 0) {
-        throw new Error('Insert was blocked (no admin session or insufficient permissions).');
+      if (failed === 0) {
+        setResult({ tone: 'success', message: `Notification sent to ${formatNumber(sent)} device(s).` });
+      } else {
+        setResult({
+          tone: 'warning',
+          message: `Sent to ${formatNumber(sent)} of ${formatNumber(tokens)} device(s); ${formatNumber(failed)} could not be reached${reason}.`,
+        });
       }
-
-      setResult({ ok: true, message: `Notification sent to ${uniqueTokens.length} device(s).` });
       setTitle('');
       setBody('');
     } catch (err: any) {
-      setResult({ ok: false, message: err?.message || 'Failed to send notification.' });
+      setResult({ tone: 'danger', message: err?.message || 'Failed to send notification.' });
     } finally {
       setSending(false);
     }
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-      <div className="flex items-center gap-3 mb-5">
-        <div className="w-10 h-10 bg-gradient-to-br from-violet-100 to-purple-100 rounded-xl flex items-center justify-center">
-          <Megaphone className="w-5 h-5 text-violet-600" />
-        </div>
-        <div>
-          <h2 className="text-lg font-bold text-gray-800">Send Push Notification</h2>
-          <p className="text-sm text-gray-500">Broadcast to connected apps</p>
-        </div>
-      </div>
+    <Card id="push-panel">
+      <CardHeader
+        title="Send push notification"
+        description="Broadcast an Expo push notification to every registered device of the selected apps. Each broadcast is also logged in this inbox."
+        actions={
+          <IconButton aria-label="Close push notification form" onClick={onClose} disabled={sending}>
+            <X />
+          </IconButton>
+        }
+      />
+      <CardBody className="space-y-5">
+        {result && (
+          <Alert tone={result.tone} onDismiss={() => setResult(null)}>
+            {result.message}
+          </Alert>
+        )}
 
-      {result && (
-        <div className={`flex items-center gap-3 p-3 rounded-xl mb-4 text-sm font-medium ${result.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-          {result.ok ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-          {result.message}
-          <button onClick={() => setResult(null)} className="ml-auto"><X size={14} /></button>
-        </div>
-      )}
+        <div className="grid gap-5 md:grid-cols-2">
+          <FormField label="Title" htmlFor="push-title" required>
+            <Input
+              id="push-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Notification title"
+              maxLength={PUSH_TITLE_MAX}
+              disabled={sending}
+            />
+          </FormField>
 
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Target App</label>
-          <div className="grid grid-cols-4 gap-2">
-            {(['all', 'drivers', 'stores', 'customers'] as const).map(t => (
-              <button
-                key={t}
-                onClick={() => setTargetApp(t)}
-                className={`py-2 px-3 rounded-xl text-sm font-medium border-2 transition-all ${
-                  targetApp === t
-                    ? 'border-violet-500 bg-violet-50 text-violet-700'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                }`}
-              >
-                {t === 'all' ? 'All Apps' : t === 'drivers' ? 'Drivers' : t === 'stores' ? 'Stores' : 'Customers'}
-              </button>
-            ))}
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-gray-700">Target apps</p>
+            <SegmentedControl<TargetApp>
+              aria-label="Target apps"
+              size="md"
+              value={targetApp}
+              onChange={setTargetApp}
+              items={TARGET_ITEMS}
+            />
           </div>
-        </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Title</label>
-          <input
-            type="text"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            placeholder="Notification title..."
-            className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-violet-400 transition-colors"
-          />
+          <FormField label="Message" htmlFor="push-message" required className="md:col-span-2">
+            <Textarea
+              id="push-message"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Notification message"
+              rows={3}
+              maxLength={PUSH_MESSAGE_MAX}
+              disabled={sending}
+            />
+          </FormField>
         </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Message</label>
-          <textarea
-            value={body}
-            onChange={e => setBody(e.target.value)}
-            placeholder="Notification message..."
-            rows={3}
-            className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-violet-400 transition-colors resize-none"
-          />
-        </div>
-
-        <button
-          onClick={handleSend}
-          disabled={sending || !title.trim() || !body.trim()}
-          className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-violet-500 to-purple-600 text-white font-semibold rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-        >
-          {sending ? (
-            <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-          ) : (
-            <Send size={16} />
-          )}
-          {sending ? 'Sending...' : 'Send Notification'}
-        </button>
-      </div>
-    </div>
+      </CardBody>
+      <CardFooter className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose} disabled={sending}>
+          Cancel
+        </Button>
+        <Button leftIcon={<Send />} loading={sending} disabled={!canSend} onClick={handleSend}>
+          Send notification
+        </Button>
+      </CardFooter>
+    </Card>
   );
 };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+const PAGE_SIZE = 100;
+const TABLE_COLS = 4;
+
 const NotificationsPage = () => {
   const navigate = useNavigate();
-  const currentAdmin = getCurrentAdmin();
-  const isUnread = (n: AdminNotification) => !currentAdmin?.id || !n.read_by.includes(currentAdmin.id);
+  const { showToast } = useToast();
+  const confirm = useConfirm();
+  // Parsed from storage once per mount instead of on every render.
+  const [currentAdmin] = useState(() => getCurrentAdmin());
+  const adminId: string | undefined = currentAdmin?.id;
+  // Delete is RLS-gated to notifications.edit (migration 20260930130000), the
+  // broadcast endpoint requires the same permission (POST /api/notifications/
+  // broadcast, notifications.routes.ts) and the refund endpoint requires
+  // payments.edit (payment.routes.ts) — hide the controls instead of letting
+  // viewers click and get a permission error.
+  const canEditNotifications = Boolean(currentAdmin && hasPermission(currentAdmin, 'notifications.edit'));
+  const canDelete = canEditNotifications;
+  const canBroadcast = canEditNotifications;
+  const canRefund = Boolean(currentAdmin && hasPermission(currentAdmin, 'payments.edit'));
+  const isUnread = (n: AdminNotification) => !adminId || !n.read_by.includes(adminId);
+
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'unread' | 'new_order' | 'new_user' | 'system' | 'refund_required'
-    | 'document_uploaded' | 'document_removed' | 'verification_submitted'
-    | 'rider_document_uploaded' | 'rider_document_removed' | 'rider_verification_submitted'
-    | 'product_updated'>('all');
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [refunding, setRefunding] = useState<string | null>(null);
-  const PAGE_SIZE = 100;
+  const [markingAll, setMarkingAll] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   // Unread count/total were previously derived purely from `notifications`,
@@ -272,30 +335,65 @@ const NotificationsPage = () => {
   // unread notification older than the 100 most recent silently vanished
   // from both the list and this count, with no indication anything was
   // missing. Fetched separately via an exact `count` query (head: true, no
-  // rows returned) so it's never bounded by the list's own page size.
+  // rows returned) so it's never bounded by the list's own page size. The
+  // total and today's count use the same exact-count pattern.
   const [unreadTotal, setUnreadTotal] = useState(0);
+  const [total, setTotal] = useState<number | null>(null);
+  const [todayTotal, setTodayTotal] = useState<number | null>(null);
   // Mirrors `notifications.length` without being a dependency of fetchNotifications
-  // itself — see fetchNotifications' silent-poll branch below for why.
+  // itself — see fetchNotifications' poll branch below for why.
   const notificationsCountRef = useRef(0);
   useEffect(() => {
     notificationsCountRef.current = notifications.length;
   }, [notifications]);
+  const loadingMoreRef = useRef(false);
+  // Monotonic request id: only the newest list fetch may write state, so a
+  // slow poll cannot overwrite a newer refresh (or vice versa).
+  const fetchSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  const fetchUnreadTotal = useCallback(async () => {
-    if (!currentAdmin?.id) return;
+  const fetchCounts = useCallback(async () => {
     try {
-      const { count, error } = await getAdminClient()
-        .from('admin_notifications')
-        .select('id', { count: 'exact', head: true })
-        .not('read_by', 'cs', `{${currentAdmin.id}}`);
-      if (!error && count != null) setUnreadTotal(count);
+      const db = getAdminClient();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const unreadQuery = adminId
+        ? db
+            .from('admin_notifications')
+            .select('id', { count: 'exact', head: true })
+            .not('read_by', 'cs', `{${adminId}}`)
+        : null;
+      const [all, today, unread] = await Promise.all([
+        db.from('admin_notifications').select('id', { count: 'exact', head: true }),
+        db
+          .from('admin_notifications')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', startOfToday.toISOString()),
+        unreadQuery,
+      ]);
+      if (!mountedRef.current) return;
+      if (!all.error && all.count != null) setTotal(all.count);
+      if (!today.error && today.count != null) setTodayTotal(today.count);
+      if (unread && !unread.error && unread.count != null) setUnreadTotal(unread.count);
     } catch (err) {
-      console.error('Failed to fetch unread total:', err);
+      console.error('Failed to fetch notification counts:', err);
     }
-  }, [currentAdmin?.id]);
+  }, [adminId]);
 
-  const fetchNotifications = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+  const fetchNotifications = useCallback(async (mode: 'initial' | 'refresh' | 'poll' = 'initial') => {
+    // A poll that lands while "Load older" is appending would replace the
+    // array with the pre-append row count and drop the new page — skip this
+    // tick; the next one picks the rows up.
+    if (mode === 'poll' && loadingMoreRef.current) return;
+    const seq = ++fetchSeqRef.current;
+    if (mode === 'initial') setLoading(true);
+    if (mode === 'refresh') setRefreshing(true);
     try {
       const db = getAdminClient();
       // The silent 15s poll used to always refetch just the first PAGE_SIZE
@@ -304,140 +402,202 @@ const NotificationsPage = () => {
       // that progress and snapped the list back to the first page with no
       // warning. Found 2026-09-09. Re-fetch as many rows as are currently
       // loaded (at least PAGE_SIZE) on a silent poll instead, so "Load More"
-      // progress survives a background refresh.
-      const rowCount = silent ? Math.max(notificationsCountRef.current, PAGE_SIZE) : PAGE_SIZE;
+      // progress survives a background refresh. A manual Refresh keeps the
+      // loaded window for the same reason.
+      const rowCount = mode === 'initial' ? PAGE_SIZE : Math.max(notificationsCountRef.current, PAGE_SIZE);
       const { data, error } = await db
         .from('admin_notifications')
         .select('id, type, title, message, data, read_by, created_at')
         .order('created_at', { ascending: false })
         .range(0, rowCount - 1);
 
-      if (!error && data) {
-        setNotifications(data);
-        setHasMore(data.length === rowCount);
-      }
-    } catch (err) {
+      // Supabase errors used to be swallowed by `if (!error && data)`, leaving
+      // the page on a false "No notifications" empty state.
+      if (error) throw error;
+      if (!mountedRef.current || seq !== fetchSeqRef.current) return;
+      const rows = (data as AdminNotification[] | null) || [];
+      setNotifications(rows);
+      setHasMore(rows.length === rowCount);
+      setLoadError(null);
+    } catch (err: any) {
       console.error('Failed to fetch notifications:', err);
+      if (!mountedRef.current || seq !== fetchSeqRef.current) return;
+      setLoadError(err?.message || 'Failed to load notifications.');
     } finally {
-      if (!silent) setLoading(false);
+      if (mountedRef.current) {
+        if (mode === 'initial') setLoading(false);
+        if (mode === 'refresh') setRefreshing(false);
+      }
     }
-    fetchUnreadTotal();
-  }, [fetchUnreadTotal]);
+    fetchCounts();
+  }, [fetchCounts]);
 
   const loadMoreNotifications = async () => {
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    // Invalidate any list fetch already in flight: a poll or refresh that
+    // started before this click and resolves after the append would replace
+    // the array with its pre-append row count and drop the page just loaded
+    // (the loadingMoreRef guard above only covers polls that start during
+    // the append). Bumping the request id makes that fetch discard its result;
+    // the next poll re-fetches the full loaded window.
+    fetchSeqRef.current += 1;
     setLoadingMore(true);
     try {
       const db = getAdminClient();
+      const offset = notificationsCountRef.current;
       const { data, error } = await db
         .from('admin_notifications')
         .select('id, type, title, message, data, read_by, created_at')
         .order('created_at', { ascending: false })
-        .range(notifications.length, notifications.length + PAGE_SIZE - 1);
+        .range(offset, offset + PAGE_SIZE - 1);
 
-      if (!error && data) {
-        setNotifications(prev => [...prev, ...data]);
-        setHasMore(data.length === PAGE_SIZE);
-      }
-    } catch (err) {
+      if (error) throw error;
+      if (!mountedRef.current) return;
+      const page = (data as AdminNotification[] | null) || [];
+      // Offset pagination over a live, append-heavy table: any row inserted
+      // since the first page was fetched shifts every offset, so the next page
+      // can repeat rows already in state (duplicate React keys, visibly
+      // doubled rows). Drop anything already loaded.
+      setNotifications((prev) => {
+        const seen = new Set(prev.map((n) => n.id));
+        return [...prev, ...page.filter((n) => !seen.has(n.id))];
+      });
+      setHasMore(page.length === PAGE_SIZE);
+    } catch (err: any) {
       console.error('Failed to load more notifications:', err);
+      showToast(err?.message || 'Failed to load older notifications', 'error');
     } finally {
-      setLoadingMore(false);
+      loadingMoreRef.current = false;
+      if (mountedRef.current) setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    fetchNotifications();
+    fetchNotifications('initial');
 
     // Polled, not Realtime: admin_notifications' RLS policy (is_admin_authenticated())
     // reads PostgREST's request.headers GUC, which Realtime's postgres_changes feed
     // never populates (it's a WAL broadcast, not an HTTP request) — so a
     // postgres_changes subscription here would silently never receive events.
-    const intervalId = setInterval(() => fetchNotifications(true), 15_000);
+    const intervalId = setInterval(() => fetchNotifications('poll'), 15_000);
     return () => clearInterval(intervalId);
   }, [fetchNotifications]);
 
   const markAllRead = async () => {
-    if (!currentAdmin?.id) return;
+    if (!adminId || markingAll) return;
+    setMarkingAll(true);
     try {
       // Per-admin (mark_all_admin_notifications_read RPC, migration
       // 20260827000001) — this admin marking read must never hide anything
       // from any other admin's list/bell.
       const { error } = await getAdminClient().rpc('mark_all_admin_notifications_read');
       if (error) throw error;
-      setNotifications(prev => prev.map(n => (
-        n.read_by.includes(currentAdmin.id) ? n : { ...n, read_by: [...n.read_by, currentAdmin.id] }
+      setNotifications((prev) => prev.map((n) => (
+        n.read_by.includes(adminId) ? n : { ...n, read_by: [...n.read_by, adminId] }
       )));
       // The RPC marks every row read server-side, including any beyond the
       // loaded page — safe to zero out directly rather than re-fetching.
       setUnreadTotal(0);
+      showToast('All notifications marked as read', 'success');
     } catch (err: any) {
-      alert(err?.message || 'Failed to mark notifications as read');
+      showToast(err?.message || 'Failed to mark notifications as read', 'error');
+    } finally {
+      setMarkingAll(false);
     }
   };
 
-  const markOneRead = async (id: string) => {
-    if (!currentAdmin?.id) return;
+  const markOneRead = async (notif: AdminNotification) => {
+    if (!adminId) return;
+    // Decided up front, like deleteNotification: reading a flag set inside the
+    // setNotifications updater is unreliable because React 18 only evaluates
+    // the updater eagerly when the hook's queue is empty — with a poll update
+    // pending it runs later and unreadTotal would never be decremented.
+    const wasUnread = isUnread(notif);
     try {
-      const { error } = await getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: id });
+      const { error } = await getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: notif.id });
       if (error) throw error;
-      let wasUnread = false;
-      setNotifications(prev => prev.map(n => {
-        if (n.id === id && !n.read_by.includes(currentAdmin.id)) {
-          wasUnread = true;
-          return { ...n, read_by: [...n.read_by, currentAdmin.id] };
-        }
-        return n;
-      }));
-      if (wasUnread) setUnreadTotal(prev => Math.max(0, prev - 1));
+      setNotifications((prev) => prev.map((n) => (
+        n.id === notif.id && !n.read_by.includes(adminId) ? { ...n, read_by: [...n.read_by, adminId] } : n
+      )));
+      if (wasUnread) setUnreadTotal((prev) => Math.max(0, prev - 1));
     } catch (err: any) {
-      alert(err?.message || 'Failed to mark notification as read');
+      showToast(err?.message || 'Failed to mark notification as read', 'error');
     }
   };
 
   const handleRowClick = (notif: AdminNotification) => {
-    if (isUnread(notif)) markOneRead(notif.id);
+    if (isUnread(notif)) markOneRead(notif);
     const link = getNotificationLink(notif.type, notif.data);
     if (link) navigate(link);
   };
 
-  const deleteNotification = async (id: string) => {
+  const onRowKeyDown = (e: ReactKeyboardEvent<HTMLTableRowElement>, notif: AdminNotification) => {
+    // Nested buttons (mark read, delete, refund) handle their own keys.
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleRowClick(notif);
+    }
+  };
+
+  const deleteNotification = async (notif: AdminNotification) => {
+    if (!canDelete) return;
+    // Unlike read state, delete removes the row for every admin — confirm first.
+    const ok = await confirm({
+      title: 'Delete notification?',
+      message: `"${notif.title}" will be removed for every admin, not just you. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       const db = getAdminClient();
+      // Keep `.select('id')`: RLS filters silently, so a zero-row result is
+      // the only way to detect a blocked delete.
       const { data, error } = await db
         .from('admin_notifications')
         .delete()
-        .eq('id', id)
+        .eq('id', notif.id)
         .select('id');
       if (error) throw error;
       if (!data || data.length === 0) {
         throw new Error('Delete was blocked (no admin session or insufficient permissions).');
       }
-      setNotifications(prev => prev.filter(n => n.id !== id));
+      const wasUnread = isUnread(notif);
+      setNotifications((prev) => prev.filter((n) => n.id !== notif.id));
+      setTotal((prev) => (prev == null ? prev : Math.max(0, prev - 1)));
+      if (wasUnread) setUnreadTotal((prev) => Math.max(0, prev - 1));
+      showToast('Notification deleted', 'success');
+      fetchCounts();
     } catch (err: any) {
-      alert(err?.message || 'Failed to delete notification');
+      showToast(err?.message || 'Failed to delete notification', 'error');
     }
   };
 
-  const resolveRefund = async (id: string) => {
-    setRefunding(id);
+  const resolveRefund = async (notif: AdminNotification) => {
+    if (!canRefund || refunding) return;
+    setRefunding(notif.id);
     try {
-      const res = await fetch(`${API_BASE}/api/payment/resolve-item-refund/${id}`, {
+      const res = await fetch(`${API_BASE}/api/payment/resolve-item-refund/${notif.id}`, {
         method: 'POST',
         headers: adminAuthHeaders(),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Refund failed');
-      setNotifications(prev => prev.map(n => n.id === id
+      // Error bodies are not always JSON (a 502 or proxy page is HTML).
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || `Refund failed (HTTP ${res.status})`);
+      setNotifications((prev) => prev.map((n) => (n.id === notif.id
         ? { ...n, data: { ...n.data, resolved: true, resolved_at: new Date().toISOString() } }
-        : n));
+        : n)));
+      showToast(`Refund of ${formatCurrency(notif.data?.refund_amount || 0, { paise: true })} processed`, 'success');
     } catch (err: any) {
-      alert(err?.message || 'Failed to process refund');
+      showToast(err?.message || 'Failed to process refund', 'error');
     } finally {
       setRefunding(null);
     }
   };
 
-  const filtered = notifications.filter(n => {
+  const filtered = notifications.filter((n) => {
     if (filter === 'unread' && !isUnread(n)) return false;
     if (filter !== 'all' && filter !== 'unread' && n.type !== filter) return false;
     if (search && !n.title.toLowerCase().includes(search.toLowerCase()) &&
@@ -445,266 +605,314 @@ const NotificationsPage = () => {
     return true;
   });
 
-  // Sourced from the uncapped fetchUnreadTotal() query, not the loaded page
-  // window — notifications.filter(isUnread).length would undercount once
-  // more than PAGE_SIZE rows exist.
-  const unreadCount = unreadTotal;
+  const trimmedSearch = search.trim();
+  const isFiltered = filter !== 'all' || trimmedSearch !== '';
+  const clearFilters = () => {
+    setFilter('all');
+    setSearch('');
+  };
+  const showErrorOnly = Boolean(loadError) && !loading && notifications.length === 0;
+
+  /** Type-specific detail under the message: refund action, document, product. */
+  const renderExtra = (notif: AdminNotification): ReactNode => {
+    const d = notif.data || {};
+    switch (notif.type) {
+      case 'refund_required': {
+        const amount = formatCurrency(d.refund_amount || 0, { paise: true });
+        // Button only when `refund_eligible` and not `resolved`; "Refunded"
+        // when resolved; otherwise the COD/unpaid explanation.
+        if (d.resolved) return <Badge tone="success" dot>Refunded</Badge>;
+        if (d.refund_eligible) {
+          if (canRefund) {
+            return (
+              <Button
+                size="sm"
+                leftIcon={<IndianRupee />}
+                loading={refunding === notif.id}
+                onClick={(e) => { e.stopPropagation(); resolveRefund(notif); }}
+              >
+                Refund {amount}
+              </Button>
+            );
+          }
+          return (
+            <Badge tone="warning" title="Processing refunds requires the payments.edit permission">
+              Refund pending: {amount}
+            </Badge>
+          );
+        }
+        return <Badge tone="neutral">Not eligible for online refund (COD/unpaid)</Badge>;
+      }
+      case 'document_uploaded':
+      case 'document_removed':
+      case 'rider_document_uploaded':
+      case 'rider_document_removed':
+        return d.doc_type ? <Badge tone="neutral">Document: {docTypeLabel(d.doc_type)}</Badge> : null;
+      case 'verification_submitted':
+      case 'rider_verification_submitted':
+        return <Badge tone="warning">All documents submitted, ready for review</Badge>;
+      case 'product_updated':
+        return d.product_name || d.product_id
+          ? <Badge tone="neutral">Product: {d.product_name || d.product_id}</Badge>
+          : null;
+      default:
+        return null;
+    }
+  };
 
   return (
-    <AdminLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-3xl font-bold text-gray-900">Notifications</h1>
-              {unreadCount > 0 && (
-                <span className="bg-red-500 text-white text-xs font-bold px-2.5 py-1 rounded-full">
-                  {unreadCount} new
-                </span>
+    <div className="space-y-6">
+      <PageHeader
+        title="Notifications"
+        description="Events from orders, customers, stores and riders. Read state is per admin; the list refreshes every 15 seconds."
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              leftIcon={<Check />}
+              onClick={markAllRead}
+              loading={markingAll}
+              disabled={unreadTotal === 0}
+            >
+              Mark all read
+            </Button>
+            {canBroadcast && (
+              <Button
+                variant={showSendPanel ? 'secondary' : 'primary'}
+                leftIcon={<Megaphone />}
+                onClick={() => setShowSendPanel((v) => !v)}
+                aria-expanded={showSendPanel}
+                aria-controls={showSendPanel ? 'push-panel' : undefined}
+              >
+                {showSendPanel ? 'Hide push form' : 'Send push'}
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      {canBroadcast && showSendPanel && <PushNotificationPanel onClose={() => setShowSendPanel(false)} />}
+
+      {/* Exact server-side counts (head: true) — never derived from the loaded page. */}
+      <StatGrid columns={3}>
+        <StatCard
+          label="Total notifications"
+          value={total == null ? '—' : formatNumber(total)}
+          icon={Inbox}
+          loading={loading}
+        />
+        <StatCard
+          label="Unread"
+          value={formatNumber(unreadTotal)}
+          hint="For your account, across every page"
+          icon={Bell}
+          loading={loading}
+          onClick={() => setFilter(filter === 'unread' ? 'all' : 'unread')}
+          active={filter === 'unread'}
+        />
+        <StatCard
+          label="Today"
+          value={todayTotal == null ? '—' : formatNumber(todayTotal)}
+          hint="Since midnight, local time"
+          icon={Clock}
+          loading={loading}
+        />
+      </StatGrid>
+
+      <Card>
+        <CardBody padding="none">
+          <FilterBar
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<RefreshCw />}
+                loading={refreshing}
+                onClick={() => fetchNotifications('refresh')}
+              >
+                Refresh
+              </Button>
+            }
+          >
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Search title or message"
+              aria-label="Search notifications"
+              inputSize="sm"
+            />
+            <Select
+              aria-label="Filter by type"
+              selectSize="sm"
+              containerClassName="w-56"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            >
+              <option value="all">All types</option>
+              <option value="unread">Unread only</option>
+              {FILTER_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.types.map((t) => (
+                    <option key={t} value={t}>{notificationTypeMeta(t).label}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </Select>
+            {isFiltered && (
+              <Button variant="link" size="sm" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
+          </FilterBar>
+
+          {loadError && (
+            <div className={cn('p-4', !showErrorOnly && 'border-b border-gray-200')}>
+              <Alert
+                tone="danger"
+                title={notifications.length > 0 ? 'Could not refresh notifications' : 'Could not load notifications'}
+                actions={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={refreshing || loading}
+                    onClick={() => fetchNotifications(notifications.length > 0 ? 'refresh' : 'initial')}
+                  >
+                    Retry
+                  </Button>
+                }
+              >
+                {loadError}
+                {notifications.length > 0 ? ' Showing the last successfully loaded list.' : ''}
+              </Alert>
+            </div>
+          )}
+
+          {!showErrorOnly && (
+            <TableContainer className="border-0 rounded-none">
+              <Table>
+                <THead>
+                  <Tr>
+                    <Th className="w-48">Type</Th>
+                    <Th>Notification</Th>
+                    <Th align="right" className="w-28">When</Th>
+                    <Th align="right" className="w-24">
+                      <span className="sr-only">Actions</span>
+                    </Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {loading ? (
+                    <TableSkeletonRows rows={8} cols={TABLE_COLS} />
+                  ) : filtered.length === 0 ? (
+                    <TableEmptyRow colSpan={TABLE_COLS}>
+                      <EmptyState
+                        compact
+                        icon={Bell}
+                        title={isFiltered ? 'No matching notifications' : 'No notifications yet'}
+                        description={isFiltered
+                          ? `No ${filter === 'all' ? '' : `${filterLabel(filter)} `}notifications${trimmedSearch ? ` matching "${trimmedSearch}"` : ''} among the ${formatNumber(notifications.length)} loaded so far.${hasMore ? ' Older notifications have not been loaded yet.' : ''}`
+                          : 'Events from orders, customers, stores and riders will appear here.'}
+                        action={isFiltered ? (
+                          <Button variant="secondary" size="sm" onClick={clearFilters}>
+                            Clear filters
+                          </Button>
+                        ) : undefined}
+                      />
+                    </TableEmptyRow>
+                  ) : (
+                    filtered.map((notif) => {
+                      const Icon = TYPE_ICON[notif.type] || TYPE_ICON.system;
+                      const unread = isUnread(notif);
+                      // Clickable only when there is somewhere to go or something to mark read.
+                      const clickable = Boolean(getNotificationLink(notif.type, notif.data)) || unread;
+                      const extra = renderExtra(notif);
+                      return (
+                        <Tr
+                          key={notif.id}
+                          clickable={clickable}
+                          onClick={clickable ? () => handleRowClick(notif) : undefined}
+                          tabIndex={clickable ? 0 : undefined}
+                          onKeyDown={clickable ? (e) => onRowKeyDown(e, notif) : undefined}
+                          className={cn(
+                            unread && 'bg-brand-50/40',
+                            clickable && 'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500',
+                          )}
+                        >
+                          <Td>
+                            <div className="flex items-center gap-2">
+                              <Icon className="h-4 w-4 shrink-0 text-gray-400" aria-hidden="true" />
+                              <StatusBadge kind="notification" value={notif.type} size="sm" dot={false} />
+                            </div>
+                          </Td>
+                          <Td>
+                            <div className="flex items-start gap-2">
+                              {unread && (
+                                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-600" aria-hidden="true" />
+                              )}
+                              <div className="min-w-0">
+                                <p className={cn('text-sm', unread ? 'font-semibold text-gray-900' : 'font-medium text-gray-800')}>
+                                  {notif.title}
+                                  {unread && <span className="sr-only"> (unread)</span>}
+                                </p>
+                                <p className="mt-0.5 text-sm text-gray-500 line-clamp-2">{notif.message}</p>
+                                {extra && <div className="mt-2 flex flex-wrap items-center gap-2">{extra}</div>}
+                              </div>
+                            </div>
+                          </Td>
+                          <Td align="right" muted nowrap className="tabular-nums">
+                            <span title={formatDateTime(notif.created_at)}>{timeAgo(notif.created_at)}</span>
+                          </Td>
+                          <Td align="right" nowrap>
+                            <div className="inline-flex items-center gap-1">
+                              {unread && (
+                                <Tooltip content="Mark as read">
+                                  <IconButton
+                                    size="sm"
+                                    aria-label="Mark as read"
+                                    onClick={(e) => { e.stopPropagation(); markOneRead(notif); }}
+                                  >
+                                    <Check />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              {canDelete && (
+                                <Tooltip content="Delete">
+                                  <IconButton
+                                    size="sm"
+                                    aria-label="Delete notification"
+                                    onClick={(e) => { e.stopPropagation(); deleteNotification(notif); }}
+                                  >
+                                    <Trash2 />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </div>
+                          </Td>
+                        </Tr>
+                      );
+                    })
+                  )}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
+
+          {!loading && notifications.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-4 py-3 text-sm text-gray-600">
+              <span className="tabular-nums">
+                Showing {formatNumber(filtered.length)} of {formatNumber(notifications.length)} loaded
+                {total != null ? ` (${formatNumber(total)} total)` : ''}
+              </span>
+              {hasMore && (
+                <Button variant="secondary" size="sm" loading={loadingMore} onClick={loadMoreNotifications}>
+                  Load older notifications
+                </Button>
               )}
             </div>
-            <p className="text-gray-500 mt-1">Real-time events from orders, customers, and apps</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowSendPanel(v => !v)}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${
-                showSendPanel
-                  ? 'bg-violet-600 text-white border-violet-600'
-                  : 'bg-white text-violet-600 border-violet-200 hover:border-violet-400'
-              }`}
-            >
-              <Megaphone size={16} />
-              Send Push
-            </button>
-            <button
-              onClick={markAllRead}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-gray-200 text-gray-700 rounded-xl hover:border-gray-300 transition-all text-sm font-medium"
-            >
-              <Check size={16} />
-              Mark all read
-            </button>
-            <button
-              onClick={() => fetchNotifications()}
-              className="p-2.5 bg-white border-2 border-gray-200 text-gray-500 rounded-xl hover:border-gray-300 transition-all"
-            >
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
-        </div>
-
-        {/* Push Panel */}
-        {showSendPanel && <PushNotificationPanel />}
-
-        {/* Stats row */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label: 'Total', value: notifications.length, color: 'from-gray-50 to-slate-50', text: 'text-gray-700', border: 'border-gray-200' },
-            { label: 'Unread', value: unreadCount, color: 'from-red-50 to-rose-50', text: 'text-red-700', border: 'border-red-100' },
-            { label: 'Orders', value: notifications.filter(n => n.type === 'new_order').length, color: 'from-blue-50 to-indigo-50', text: 'text-blue-700', border: 'border-blue-100' },
-            { label: 'Customers', value: notifications.filter(n => n.type === 'new_user').length, color: 'from-emerald-50 to-teal-50', text: 'text-emerald-700', border: 'border-emerald-100' },
-          ].map(stat => (
-            <div key={stat.label} className={`bg-gradient-to-br ${stat.color} rounded-2xl p-4 border ${stat.border}`}>
-              <p className={`text-xs font-semibold uppercase tracking-wide ${stat.text} opacity-70`}>{stat.label}</p>
-              <p className={`text-3xl font-bold ${stat.text} mt-1`}>{stat.value}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Filters */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-              <input
-                type="text"
-                placeholder="Search notifications..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-400 transition-colors"
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Filter size={16} className="text-gray-400 flex-shrink-0" />
-              {(['all', 'unread', 'new_order', 'new_user', 'refund_required', 'verification_submitted', 'document_uploaded', 'document_removed', 'rider_verification_submitted', 'rider_document_uploaded', 'rider_document_removed', 'product_updated', 'system'] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                    filter === f
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {f === 'new_order' ? 'Orders' : f === 'new_user' ? 'Customers' : f === 'refund_required' ? 'Refunds' : f === 'product_updated' ? 'Products' : f.charAt(0).toUpperCase() + f.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Notification List */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <div className="relative">
-                <div className="w-12 h-12 border-4 border-emerald-200 rounded-full" />
-                <div className="absolute top-0 left-0 w-12 h-12 border-4 border-emerald-500 rounded-full animate-spin border-t-transparent" />
-              </div>
-              <p className="mt-4 text-gray-500 text-sm">Loading notifications...</p>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center px-6">
-              <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
-                <Bell className="w-8 h-8 text-gray-400" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-700 mb-1">No notifications</h3>
-              <p className="text-gray-500 text-sm max-w-sm">
-                {filter === 'all'
-                  ? 'Notifications will appear here automatically as orders are placed and customers register.'
-                  : `No ${filter} notifications found.`}
-              </p>
-            </div>
-          ) : (
-            <div className="p-4 space-y-3">
-              {filtered.map(notif => {
-                const meta = TYPE_META[notif.type] || TYPE_META.system;
-                const Icon = meta.icon;
-                const unread = isUnread(notif);
-                const clickable = Boolean(getNotificationLink(notif.type, notif.data)) || unread;
-                return (
-                  <div
-                    key={notif.id}
-                    onClick={clickable ? () => handleRowClick(notif) : undefined}
-                    className={`flex items-start gap-4 p-4 rounded-2xl border transition-all ${clickable ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5' : ''} ${
-                      unread ? 'bg-blue-50/60 border-blue-100' : 'bg-white border-gray-100 hover:border-gray-200'
-                    }`}
-                  >
-                    <div className={`w-10 h-10 ${meta.bg} rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5`}>
-                      <Icon className={`w-5 h-5 ${meta.color}`} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className={`text-sm font-semibold ${unread ? 'text-gray-900' : 'text-gray-700'}`}>
-                            {notif.title}
-                            {unread && (
-                              <span className="ml-2 inline-block w-2 h-2 bg-blue-500 rounded-full align-middle" />
-                            )}
-                          </p>
-                          <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{notif.message}</p>
-                          {notif.type === 'refund_required' && (
-                            notif.data?.resolved ? (
-                              <span className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
-                                <CheckCircle size={12} /> Refunded
-                              </span>
-                            ) : notif.data?.refund_eligible ? (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); resolveRefund(notif.id); }}
-                                disabled={refunding === notif.id}
-                                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 px-3 py-1.5 rounded-lg transition-colors"
-                              >
-                                {refunding === notif.id ? (
-                                  <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                                ) : (
-                                  <IndianRupee size={12} />
-                                )}
-                                Refund ₹{Number(notif.data?.refund_amount || 0).toFixed(2)}
-                              </button>
-                            ) : (
-                              <span className="inline-block mt-2 text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-lg">
-                                Not eligible for online refund (COD/unpaid)
-                              </span>
-                            )
-                          )}
-                          {(notif.type === 'document_uploaded' || notif.type === 'document_removed'
-                            || notif.type === 'rider_document_uploaded' || notif.type === 'rider_document_removed') && notif.data?.doc_type && (
-                            <span className="inline-block mt-2 text-xs font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
-                              Document: {docTypeLabel(notif.data.doc_type)}
-                            </span>
-                          )}
-                          {(notif.type === 'verification_submitted' || notif.type === 'rider_verification_submitted') && (
-                            <span className="inline-block mt-2 text-xs font-medium text-teal-700 bg-teal-50 px-2.5 py-1 rounded-lg">
-                              All documents submitted — ready for review
-                            </span>
-                          )}
-                          {notif.type === 'product_updated' && (notif.data?.product_name || notif.data?.product_id) && (
-                            <span className="inline-block mt-2 text-xs font-medium text-orange-700 bg-orange-50 px-2.5 py-1 rounded-lg">
-                              Product: {notif.data?.product_name || notif.data?.product_id}
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">{timeAgo(notif.created_at)}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {unread && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); markOneRead(notif.id); }}
-                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                          title="Mark as read"
-                        >
-                          <Check size={14} />
-                        </button>
-                      )}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteNotification(notif.id); }}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           )}
-          {hasMore && !loading && (
-            <div className="p-4 border-t border-gray-100 flex justify-center">
-              <button
-                onClick={loadMoreNotifications}
-                disabled={loadingMore}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 rounded-xl transition-colors"
-              >
-                {loadingMore ? (
-                  <div className="w-4 h-4 border-2 border-gray-400/40 border-t-gray-600 rounded-full animate-spin" />
-                ) : null}
-                {loadingMore ? 'Loading…' : 'Load older notifications'}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Connection status */}
-        <div className="bg-gradient-to-br from-slate-50 to-gray-50 rounded-2xl border border-gray-200 p-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-            <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-            Connected Apps & Notification Sources
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {[
-              { label: 'Customer App', icon: Users, desc: 'New orders & registrations', color: 'text-blue-600', bg: 'bg-blue-50' },
-              { label: 'Shopkeeper App', icon: ShoppingBag, desc: 'Order acceptance & updates', color: 'text-emerald-600', bg: 'bg-emerald-50' },
-              { label: 'Driver App', icon: Truck, desc: 'Delivery status updates', color: 'text-amber-600', bg: 'bg-amber-50' },
-            ].map(app => {
-              const Icon = app.icon;
-              return (
-                <div key={app.label} className={`${app.bg} rounded-xl p-3 flex items-center gap-3`}>
-                  <Icon className={`w-5 h-5 ${app.color} flex-shrink-0`} />
-                  <div>
-                    <p className={`text-sm font-semibold ${app.color}`}>{app.label}</p>
-                    <p className="text-xs text-gray-500">{app.desc}</p>
-                  </div>
-                  <CheckCircle className="w-4 h-4 text-emerald-400 ml-auto flex-shrink-0" />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </AdminLayout>
+        </CardBody>
+      </Card>
+    </div>
   );
 };
 

@@ -1,14 +1,30 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Eye, EyeOff } from 'lucide-react';
 import { authenticateAdmin } from '../../services/adminAuthService';
 import { setAdminSession } from '../../services/adminSession';
 import { isAdminAuthenticated } from '../../services/secureAdminAuth';
+import { Alert, Button, Checkbox, FormField, IconButton, Input } from '../../components/ui';
 // Was the repo-root near_now_image.png (781KB, 1315x1196px) displayed at
 // 64x64px — a properly-sized/compressed copy (9KB) is used instead. Found
 // 2026-08-13 during an optimization pass.
 import logoUrl from '../../assets/login-logo.png';
 
+/**
+ * Only an in-app path may be the post-login destination. AdminAuthGuard sets
+ * `state.from` from location.pathname, but a crafted link such as
+ * https://admin.host//evil.example/ yields a pathname of "//evil.example/",
+ * and react-router falls back to window.location.assign() when pushState
+ * rejects a cross-origin URL — an open redirect right after sign-in. Anything
+ * that is not a single-slash-rooted path falls back to the dashboard.
+ */
+const safeReturnPath = (value: unknown): string =>
+  typeof value === 'string' && /^\/(?!\/)/.test(value) ? value : '/';
+
+/**
+ * Standalone sign-in page. Mounted at /login in App.tsx, outside
+ * AdminRoutes/AdminLayout, so it must stay a full-page layout with no shell.
+ */
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,24 +33,48 @@ const AdminLoginPage = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // AdminAuthGuard redirects here with `state.from` (path + search) when a
+  // deep link or an expired session bounced the admin, so they land back on
+  // the page they wanted instead of always on the dashboard.
+  const from = safeReturnPath((location.state as { from?: unknown } | null)?.from);
+
+  // The mount-time session check is kept in a ref so handleSubmit can await
+  // it: while a stored token is still being validated against admin_sessions
+  // the form is fully interactive, and a submit in that window used to open a
+  // second session row for an admin who was about to be redirected anyway.
+  const sessionCheckRef = useRef<Promise<boolean>>(Promise.resolve(false));
 
   // Previously only redirected post-submit — an already-logged-in admin
   // navigating back here (browser back, stale tab, bookmark) saw the login
   // form again instead of being bounced to the dashboard.
   useEffect(() => {
     let cancelled = false;
-    isAdminAuthenticated().then((authed) => {
-      if (authed && !cancelled) navigate('/', { replace: true });
+    // isAdminAuthenticated() fails open on Supabase errors; the catch only
+    // covers a storage-access exception so it can neither surface as an
+    // unhandled rejection nor leave handleSubmit waiting forever.
+    const check = isAdminAuthenticated().catch(() => false);
+    sessionCheckRef.current = check;
+    check.then((authed) => {
+      if (authed && !cancelled) navigate(from, { replace: true });
     });
     return () => { cancelled = true; };
-  }, [navigate]);
+  }, [navigate, from]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
+      // A live session found by the mount-time check means the redirect above
+      // is already in flight — do not stack a second admin_sessions row on it.
+      if (await sessionCheckRef.current) {
+        navigate(from, { replace: true });
+        return;
+      }
+
       // Rate limiting (including "too many attempts") is enforced server-side
       // (express-rate-limit on POST /api/admin/login) — a client-side-only
       // check here was trivially bypassed by a page refresh and gave a false
@@ -46,135 +86,132 @@ const AdminLoginPage = () => {
 
       if (!result) {
         setError('Could not reach the server. Please check your connection and try again.');
-        setLoading(false);
         return;
       }
 
-      // Store admin data and token — localStorage if "Remember me" is checked
-      // (survives tab/browser close), sessionStorage otherwise (old behavior).
+      // Store admin data and token — localStorage if "Keep me signed in" is
+      // checked (survives tab/browser close), sessionStorage otherwise.
       setAdminSession(result.admin, result.token, Date.now() + 12 * 60 * 60 * 1000, rememberMe);
 
-      // Redirect to dashboard
-      navigate('/');
-    } catch (error: any) {
+      // `replace` so Back after signing in does not return to /login (which
+      // would run the session check and bounce forward again with a flash).
+      navigate(from, { replace: true });
+    } catch (err: unknown) {
       // Full error (message/stack/email) only ever goes to the dev console —
       // was previously logged unconditionally on every login attempt/failure,
       // in production too.
       if (import.meta.env.DEV) {
-        console.error('❌ Login error:', error);
+        console.error('Login error:', err);
       }
-      setError(error.message || 'An error occurred. Please try again.');
+      const message = err instanceof Error ? err.message : '';
+      setError(message || 'An error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary/5 via-white to-secondary/5 flex items-center justify-center px-4 py-12">
-      <div className="max-w-md w-full">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 transform hover:scale-[1.02] transition-all duration-300">
-          {/* Logo */}
-          <div className="flex justify-center mb-6">
-            <img src={logoUrl} alt="Near & Now" className="h-16 w-16 object-contain" />
-          </div>
-
-          <h1 className="text-3xl font-bold text-gray-800 mb-2 text-center">Admin Login</h1>
-          <p className="text-gray-600 mb-8 text-center">Enter your credentials to access the admin panel</p>
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center">
-              <AlertCircle className="w-5 h-5 mr-2" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit}>
-            <div className="mb-6">
-              <label htmlFor="email" className="block text-gray-700 mb-2 font-medium">Email</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="pl-10 w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
-                  placeholder="admin@example.com"
-                />
-              </div>
-            </div>
-
-            <div className="mb-8">
-              <label htmlFor="password" className="block text-gray-700 mb-2 font-medium">Password</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="pl-10 pr-12 w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
-                  placeholder="••••••••"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
-                  tabIndex={-1}
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-5 w-5" />
-                  ) : (
-                    <Eye className="h-5 w-5" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <div className="mb-6 flex items-center">
-              <input
-                id="rememberMe"
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary/20"
-              />
-              <label htmlFor="rememberMe" className="ml-2 text-sm text-gray-700">
-                Remember me on this device
-              </label>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className={`w-full py-4 px-6 bg-gradient-to-r from-primary to-secondary text-white font-bold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300 flex items-center justify-center ${
-                loading ? 'opacity-70 cursor-not-allowed' : ''
-              }`}
-            >
-              {loading ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                  Logging in...
-                </>
-              ) : (
-                'Login to Admin Panel'
-              )}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center">
-            <p className="text-sm text-gray-600">
-              <span className="font-medium">Note:</span> Use your admin credentials to login
-            </p>
-          </div>
+    <div className="flex min-h-screen bg-white">
+      {/* Brand panel (desktop only). Plain text, not headings: the page's one
+          heading is the "Sign in" h1 in the form panel. */}
+      <aside className="hidden lg:flex lg:w-1/2 flex-col justify-between bg-brand-900 p-10 text-white">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white p-1.5">
+            <img src={logoUrl} alt="" className="h-full w-full object-contain" />
+          </span>
+          <span className="text-base font-semibold text-white">Near &amp; Now</span>
         </div>
-      </div>
+
+        <div className="max-w-md">
+          <p className="text-3xl font-semibold text-white">Admin console</p>
+          <p className="mt-3 text-sm text-brand-200">
+            Manage orders, stores, riders and the catalogue from one place.
+          </p>
+        </div>
+
+        <p className="text-xs text-brand-300">Near &amp; Now Admin</p>
+      </aside>
+
+      {/* Form panel */}
+      <main className="flex flex-1 items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white p-1.5">
+              <img src={logoUrl} alt="" className="h-full w-full object-contain" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Near &amp; Now</p>
+              <p className="text-xs text-gray-500">Admin console</p>
+            </div>
+          </div>
+
+          <h1 className="text-2xl font-semibold text-gray-900">Sign in</h1>
+          <p className="mt-1 text-sm text-gray-500">Use your administrator credentials.</p>
+
+          {error ? (
+            <Alert tone="danger" className="mt-6">
+              {error}
+            </Alert>
+          ) : null}
+
+          <form onSubmit={handleSubmit} className="mt-6 space-y-5">
+            <FormField label="Email" htmlFor="email">
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="username"
+                autoFocus
+                placeholder="admin@example.com"
+              />
+            </FormField>
+
+            {/* Show/hide follows the APG toggle-button pattern: a fixed name
+                plus aria-pressed. A name that flips with the state would read
+                as "Hide password, pressed", which contradicts itself. */}
+            <FormField label="Password" htmlFor="password">
+              <Input
+                id="password"
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+                placeholder="••••••••"
+                className="pr-11"
+                rightElement={
+                  <IconButton
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Show password"
+                    aria-pressed={showPassword}
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                  </IconButton>
+                }
+              />
+            </FormField>
+
+            <Checkbox
+              id="rememberMe"
+              name="rememberMe"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              label="Keep me signed in on this device"
+            />
+
+            <Button type="submit" variant="primary" size="lg" fullWidth loading={loading}>
+              Sign in
+            </Button>
+          </form>
+        </div>
+      </main>
     </div>
   );
 };

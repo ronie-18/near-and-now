@@ -1,434 +1,192 @@
-import { useState, useEffect, useMemo } from 'react';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   BarChart3,
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
+  IndianRupee,
   ShoppingBag,
   Users,
-  Calendar,
+  Target,
   Download,
   RefreshCw,
-  ArrowUpRight,
-  ArrowDownRight,
-  PieChart,
-  Activity,
-  Target,
-  Award,
-  AlertCircle,
-  X,
-  FileText,
-  Layers,
+  Package,
+  PackageX,
+  Tag,
+  CheckCircle2,
+  Clock,
   XCircle,
-  Eye,
-  Clock
+  Layers,
+  Award,
 } from 'lucide-react';
-import { getOrdersSince, getAdminProducts, getCategories, Order, Category } from '../../services/adminService';
+import { getOrdersSince, getAdminProducts, getCategories, Order, OrderItem, Category } from '../../services/adminService';
 import { Product } from '../../services/supabase';
+import {
+  PageHeader,
+  Button,
+  SegmentedControl,
+  StatCard,
+  StatGrid,
+  Card,
+  CardHeader,
+  CardBody,
+  TableContainer,
+  Table,
+  THead,
+  TBody,
+  Tr,
+  Th,
+  Td,
+  TableEmptyRow,
+  Badge,
+  Alert,
+  EmptyState,
+  Skeleton,
+  type StatDelta,
+  type SegmentedControlItem,
+} from '../../components/ui';
+import { useToast } from '../../context/ToastContext';
+import { cn } from '../../utils/cn';
+import { formatCurrency, formatNumber, formatTime } from '../../utils/format';
 
 // Types
+type Period = '7' | '30' | '90' | '365';
+
+const PERIOD_ITEMS: SegmentedControlItem<Period>[] = [
+  { value: '7', label: '7 days' },
+  { value: '30', label: '30 days' },
+  { value: '90', label: '90 days' },
+  { value: '365', label: '1 year' },
+];
+
+// Kept verbatim: the export filename is derived from these labels.
+const PERIOD_LABELS: Record<Period, string> = {
+  '7': 'Last 7 Days',
+  '30': 'Last 30 Days',
+  '90': 'Last 90 Days',
+  '365': 'Last Year',
+};
+
 interface ReportStats {
   totalRevenue: number;
   totalOrders: number;
   totalProducts: number;
   totalCustomers: number;
   avgOrderValue: number;
-  revenueGrowth: number;
-  ordersGrowth: number;
-  customersGrowth: number;
+  /** Percent change vs the previous equal-length period; null when there is nothing to compare against. */
+  revenueGrowth: number | null;
+  ordersGrowth: number | null;
+  customersGrowth: number | null;
 }
 
 interface CategorySales {
   name: string;
   sales: number;
-  orders: number;
+  /** Number of order lines (not units) attributed to the category. */
+  lineItems: number;
+  /** Share of ALL category revenue in the period, not just of the rows shown. */
   percentage: number;
-  color: string;
 }
 
 interface TopProduct {
+  id: string;
   name: string;
   image?: string;
+  category: string;
   sales: number;
   revenue: number;
-  category: string;
 }
 
 interface DailySale {
+  /** Local calendar day, yyyy-mm-dd. */
   date: string;
   sales: number;
+  orders: number;
 }
 
-// Color palette for charts
-const COLORS = [
-  'from-emerald-500 to-teal-500',
-  'from-blue-500 to-indigo-500',
-  'from-violet-500 to-purple-500',
-  'from-amber-500 to-orange-500',
-  'from-rose-500 to-pink-500',
-  'from-cyan-500 to-sky-500',
-  'from-lime-500 to-green-500',
-  'from-fuchsia-500 to-pink-500',
-];
-
-// Tailwind background classes for cards/legends
-const BG_COLORS = [
-  'bg-emerald-500',
-  'bg-blue-500',
-  'bg-violet-500',
-  'bg-amber-500',
-  'bg-rose-500',
-  'bg-cyan-500',
-  'bg-lime-500',
-  'bg-fuchsia-500',
-];
-
-// Actual hex colors for SVG fills (matching the bg colors above)
-const PIE_COLORS = [
-  '#10b981', // emerald-500
-  '#3b82f6', // blue-500
-  '#8b5cf6', // violet-500
-  '#f59e0b', // amber-500
-  '#f43f5e', // rose-500
-  '#06b6d4', // cyan-500
-  '#84cc16', // lime-500
-  '#d946ef', // fuchsia-500
-];
-
-// Stat Card Component
-interface StatCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
+interface ChartBucket {
+  key: string;
   label: string;
-  value: string | number;
-  change?: number;
-  prefix?: string;
+  start: Date;
+  days: number;
+  sales: number;
+  orders: number;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ icon: Icon, gradient, label, value, change, prefix = '' }) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-6 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="relative z-10">
-      <div className="flex items-center justify-between mb-4">
-        <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-          <Icon className="w-6 h-6" />
-        </div>
-        {change !== undefined && (
-          <div className={`flex items-center gap-1 text-sm font-medium px-2 py-1 rounded-full backdrop-blur-sm ${change >= 0 ? 'bg-white/20' : 'bg-red-400/30'}`}>
-            {change >= 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-            {Math.abs(change).toFixed(1)}%
-          </div>
-        )}
-      </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{prefix}{typeof value === 'number' ? value.toLocaleString() : value}</p>
-    </div>
-  </div>
-);
+/** Shape of `Order.items` as emitted by adminService's order transforms. */
+type OrderLineItem = OrderItem;
 
-// Pie Chart Component (SVG-based with proper colors)
-const PieChartComponent: React.FC<{ data: CategorySales[] }> = ({ data }) => {
-  // Filter out categories with 0 sales for the pie chart
-  const activeData = data.filter(d => d.sales > 0);
+interface PeriodWindow {
+  days: number;
+  start: Date;
+  end: Date;
+  previousStart: Date;
+  previousEnd: Date;
+}
 
-  // If no sales data, show empty state
-  if (activeData.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-8">
-        <div className="w-32 h-32 rounded-full border-4 border-dashed border-gray-200 flex items-center justify-center">
-          <p className="text-gray-400 text-sm">No sales data</p>
-        </div>
-      </div>
-    );
-  }
+// Date helpers
+const pad2 = (n: number) => String(n).padStart(2, '0');
 
-  // Recalculate percentages for active data only
-  const totalSales = activeData.reduce((sum, d) => sum + d.sales, 0);
-  const dataWithPercent = activeData.map((item, index) => ({
-    ...item,
-    percentage: totalSales > 0 ? (item.sales / totalSales) * 100 : 0,
-    color: PIE_COLORS[index % PIE_COLORS.length],
-    bgColor: BG_COLORS[index % BG_COLORS.length]
-  }));
-
-  let cumulativePercent = 0;
-
-  const getCoordinatesForPercent = (percent: number) => {
-    const x = Math.cos(2 * Math.PI * percent);
-    const y = Math.sin(2 * Math.PI * percent);
-    return [x, y];
-  };
-
-  return (
-    <div className="flex flex-col md:flex-row items-center justify-center gap-8 py-4">
-      <div className="relative w-52 h-52">
-        <svg viewBox="-1 -1 2 2" className="transform -rotate-90 w-full h-full drop-shadow-lg">
-          {dataWithPercent.map((item, index) => {
-            const startPercent = cumulativePercent;
-            const [startX, startY] = getCoordinatesForPercent(startPercent);
-            cumulativePercent += item.percentage / 100;
-            const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
-            const largeArcFlag = item.percentage > 50 ? 1 : 0;
-
-            // Handle case where one category is 100%
-            if (item.percentage >= 99.9) {
-              return (
-                <circle
-                  key={index}
-                  cx="0"
-                  cy="0"
-                  r="1"
-                  fill={item.color}
-                  className="transition-all duration-300 hover:opacity-80 cursor-pointer"
-                />
-              );
-            }
-
-            const pathData = [
-              `M ${startX} ${startY}`,
-              `A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY}`,
-              `L 0 0`,
-            ].join(' ');
-
-            return (
-              <path
-                key={index}
-                d={pathData}
-                fill={item.color}
-                className="transition-all duration-300 hover:opacity-80 cursor-pointer"
-              />
-            );
-          })}
-          <circle cx="0" cy="0" r="0.55" fill="white" />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center">
-            <p className="text-3xl font-bold text-gray-800">{dataWithPercent.length}</p>
-            <p className="text-xs text-gray-500 font-medium">Categories</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-1 gap-2 max-w-xs">
-        {dataWithPercent.slice(0, 8).map((item, index) => (
-          <div key={index} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 transition-colors">
-            <div
-              className="w-4 h-4 rounded-full shadow-sm flex-shrink-0"
-              style={{ backgroundColor: item.color }}
-            />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
-              <p className="text-xs text-gray-500">{item.percentage.toFixed(1)}% · ₹{item.sales.toLocaleString()}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+const startOfDay = (d: Date) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
 };
 
-// Enhanced Bar Chart for Daily Sales - BLACK bars, all dates shown
-const DailySalesChart: React.FC<{ data: DailySale[] }> = ({ data }) => {
-  const totalSales = data.reduce((sum, d) => sum + d.sales, 0);
-  const daysWithSales = data.filter(d => d.sales > 0).length;
-  const avgSales = daysWithSales > 0 ? Math.round(totalSales / daysWithSales) : 0;
-
-  // Dynamic Y-axis based on actual max value
-  const actualMax = Math.max(...data.map(d => d.sales), 0);
-  const getNiceMax = (val: number): number => {
-    if (val === 0) return 5000;
-    if (val <= 1000) return 1000;
-    if (val <= 2000) return 2000;
-    if (val <= 3000) return 3000;
-    if (val <= 4000) return 4000;
-    if (val <= 5000) return 5000;
-    if (val <= 10000) return 10000;
-    if (val <= 20000) return 20000;
-    if (val <= 50000) return 50000;
-    return Math.ceil(val / 10000) * 10000;
-  };
-  const maxYAxis = getNiceMax(actualMax);
-
-  // Generate Y-axis values (4 ticks)
-  const yAxisValues = [
-    maxYAxis,
-    Math.round(maxYAxis * 0.66),
-    Math.round(maxYAxis * 0.33),
-    0
-  ];
-
-  return (
-    <div className="overflow-hidden">
-      {/* Chart Stats */}
-      <div className="flex items-center justify-between mb-4 px-2">
-        <div>
-          <p className="text-sm text-gray-500">Total Period Revenue</p>
-          <p className="text-2xl font-bold text-gray-800">₹{totalSales.toLocaleString()}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-sm text-gray-500">Daily Average</p>
-          <p className="text-xl font-semibold text-blue-600">₹{avgSales.toLocaleString()}</p>
-        </div>
-      </div>
-
-      {/* Bar Chart - always show if we have dates */}
-      {data.length > 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 overflow-hidden">
-          {/* Chart Area */}
-          <div className="flex">
-            {/* Y-axis labels - Dynamic values */}
-            <div className="w-14 flex flex-col justify-between text-xs text-gray-500 font-medium pr-2 h-44 flex-shrink-0">
-              {yAxisValues.map((val, i) => (
-                <span key={i}>₹{val.toLocaleString()}</span>
-              ))}
-            </div>
-
-            {/* Chart with bars - fixed width container */}
-            <div className="flex-1 min-w-0 overflow-hidden">
-              {/* Bars container */}
-              <div className="h-44 border-l-2 border-b-2 border-gray-300 flex items-end px-1">
-                {data.map((item, index) => {
-                  // Calculate height in pixels based on container height (176px = h-44)
-                  const containerHeight = 170; // pixels
-                  const barHeight = maxYAxis > 0 ? (item.sales / maxYAxis) * containerHeight : 0;
-
-                  return (
-                    <div
-                      key={index}
-                      className="flex-1 flex flex-col items-center justify-end group min-w-0 px-0.5 h-full"
-                    >
-                      {/* Tooltip - only show if there's data */}
-                      {item.sales > 0 && (
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity mb-1 bg-black text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap z-10">
-                          ₹{item.sales.toLocaleString()}
-                        </div>
-                      )}
-                      {/* Bar - BLACK color, only render if has sales */}
-                      {item.sales > 0 ? (
-                        <div
-                          className="w-full max-w-[30px] bg-gray-900 hover:bg-gray-700 cursor-pointer transition-colors rounded-t mx-auto"
-                          style={{
-                            height: `${Math.max(barHeight, 4)}px`
-                          }}
-                        />
-                      ) : (
-                        <div className="w-full h-0" />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* X-axis labels - aligned with bars */}
-              <div className="flex mt-2 px-1">
-                {data.map((item, index) => (
-                  <div
-                    key={index}
-                    className="flex-1 text-center min-w-0 px-0.5"
-                  >
-                    <span className="text-[10px] text-gray-500 font-medium truncate block">{item.date}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-          <p className="text-gray-500">No data available</p>
-          <p className="text-gray-400 text-sm mt-1">Orders will appear here once placed</p>
-        </div>
-      )}
-    </div>
-  );
+const addDays = (d: Date, n: number) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
 };
 
-// Top Products Table
-const TopProductsTable: React.FC<{ products: TopProduct[] }> = ({ products }) => (
-  <div className="overflow-x-auto">
-    <table className="w-full">
-      <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
-        <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-          <th className="px-4 py-4 rounded-tl-xl">Rank</th>
-          <th className="px-4 py-4">Product</th>
-          <th className="px-4 py-4">Category</th>
-          <th className="px-4 py-4 text-right">Units Sold</th>
-          <th className="px-4 py-4 text-right rounded-tr-xl">Revenue</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-gray-100">
-        {products.map((product, index) => (
-          <tr key={index} className="hover:bg-gray-50/80 transition-colors">
-            <td className="px-4 py-4">
-              <div className={`flex items-center justify-center w-8 h-8 rounded-lg font-bold text-sm
-                ${index === 0 ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white' :
-                  index === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400 text-white' :
-                  index === 2 ? 'bg-gradient-to-br from-amber-600 to-orange-700 text-white' :
-                  'bg-gray-100 text-gray-600'}`}>
-                {index + 1}
-              </div>
-            </td>
-            <td className="px-4 py-4">
-              <div className="flex items-center gap-3">
-                {product.image ? (
-                  <img src={product.image} alt={product.name} className="w-10 h-10 rounded-xl object-cover shadow-sm" />
-                ) : (
-                  <div className={`w-10 h-10 bg-gradient-to-br ${COLORS[index % COLORS.length]} rounded-xl flex items-center justify-center shadow-sm`}>
-                    <span className="text-white text-xs font-bold">{product.name.substring(0, 2).toUpperCase()}</span>
-                  </div>
-                )}
-                <span className="font-semibold text-gray-800 line-clamp-1">{product.name}</span>
-              </div>
-            </td>
-            <td className="px-4 py-4">
-              <span className="inline-flex items-center px-3 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-semibold">
-                {product.category}
-              </span>
-            </td>
-            <td className="px-4 py-4 text-right font-bold text-gray-800">{product.sales}</td>
-            <td className="px-4 py-4 text-right">
-              <span className="font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-lg">
-                ₹{product.revenue.toLocaleString()}
-              </span>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
+/** Local calendar-day key (yyyy-mm-dd). toISOString() would shift IST evenings onto the next UTC day. */
+const dayKey = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
-// Metric Card
-interface MetricCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  iconBg: string;
-  label: string;
-  value: string | number;
-  subtext?: string;
+const shortDate = (d: Date) => d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+
+/**
+ * The selected window is the last `days` calendar days INCLUDING today
+ * (midnight of today-(days-1) through the end of today) and the comparison
+ * window is the `days` calendar days immediately before it. Previously the
+ * window started at midnight of today-days — one day longer than its name —
+ * and the previous window ended at the end of that same day, so every order
+ * on the boundary day was counted in both totals. Found in the 2026-10
+ * reports audit.
+ */
+function getPeriodWindow(period: Period, now: Date): PeriodWindow {
+  const days = parseInt(period, 10);
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999); // End of today
+  const start = startOfDay(addDays(now, -(days - 1)));
+  const previousEnd = new Date(start.getTime() - 1);
+  const previousStart = startOfDay(addDays(start, -days));
+  return { days, start, end, previousStart, previousEnd };
 }
 
-const MetricCard: React.FC<MetricCardProps> = ({ icon: Icon, iconBg, label, value, subtext }) => (
-  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 text-center hover:shadow-md transition-all hover:-translate-y-0.5">
-    <div className={`w-12 h-12 ${iconBg} rounded-xl flex items-center justify-center mx-auto mb-3`}>
-      <Icon className="w-6 h-6" />
-    </div>
-    <p className="text-2xl font-bold text-gray-800">{value}</p>
-    <p className="text-sm text-gray-500 font-medium">{label}</p>
-    {subtext && <p className="text-xs text-gray-400 mt-1">{subtext}</p>}
-  </div>
-);
+/**
+ * 1 / 2 / 2.5 / 5 × 10^n step so axis ticks land on round rupee amounts.
+ * Never below ₹1: formatCurrency rounds to whole rupees, so a sub-rupee
+ * step would print the same label on neighbouring ticks.
+ */
+function getNiceStep(maxValue: number, targetTicks: number): number {
+  const raw = maxValue / targetTicks;
+  if (!(raw > 0)) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const normalized = raw / magnitude;
+  const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
+  return Math.max(1, nice * magnitude);
+}
 
-// Loading Spinner
-const LoadingSpinner = () => (
-  <div className="flex flex-col justify-center items-center h-64">
-    <div className="relative">
-      <div className="w-16 h-16 border-4 border-violet-200 rounded-full" />
-      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-    </div>
-    <p className="mt-4 text-gray-500 font-medium">Loading reports...</p>
-  </div>
-);
+const growthPct = (current: number, previous: number): number | null =>
+  previous > 0 ? ((current - previous) / previous) * 100 : null;
+
+const NO_COMPARISON_HINT = 'No previous period to compare';
+
+const growthDelta = (growth: number | null, days: number): StatDelta | undefined =>
+  growth === null
+    ? undefined
+    : {
+        value: `${Math.abs(growth).toFixed(1)}%`,
+        direction: growth > 0 ? 'up' : growth < 0 ? 'down' : 'flat',
+        label: `vs previous ${days} days`,
+      };
 
 // Online-payment (razorpay/wallet) orders are created immediately at
 // checkout, before the customer has actually finished paying — the same
@@ -443,108 +201,435 @@ const isPaymentReady = (order: Order) =>
   order.payment_method === 'cod' || order.payment_status === 'paid';
 const isCountable = (order: Order) => order.order_status !== 'cancelled' && isPaymentReady(order);
 
+// Revenue bar chart: one bar per day (7/30 days) or per week (90/365 days).
+// Hover shows the exact figure; a visually hidden table carries the same
+// numbers for screen readers.
+interface RevenueChartProps {
+  buckets: ChartBucket[];
+  weekly: boolean;
+}
+
+function RevenueChart({ buckets, weekly }: RevenueChartProps) {
+  const max = Math.max(0, ...buckets.map((b) => b.sales));
+
+  if (max === 0) {
+    return (
+      <EmptyState
+        compact
+        icon={BarChart3}
+        title="No revenue in this period"
+        description="Paid and cash-on-delivery orders will appear here once they are placed."
+      />
+    );
+  }
+
+  const step = getNiceStep(max, 4);
+  const top = Math.ceil(max / step) * step;
+  const tickCount = Math.round(top / step);
+  // Top of the axis first, baseline last.
+  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => step * (tickCount - i));
+  const labelStride = Math.max(1, Math.ceil(buckets.length / 8));
+  // Counted from the newest bar so today is always labelled.
+  const showLabel = (index: number) => (buckets.length - 1 - index) % labelStride === 0;
+  const tickLabel = (value: number) => formatCurrency(value, { compact: value >= 100000 });
+  const bucketTitle = (b: ChartBucket) =>
+    weekly ? `Week of ${b.label}${b.days < 7 ? ` (${b.days} ${b.days === 1 ? 'day' : 'days'})` : ''}` : b.label;
+  // Tooltips near either edge hug that edge instead of centring, so the
+  // first and last bars cannot push a nowrap tooltip outside the card.
+  const tooltipAlign = (index: number) =>
+    index < buckets.length / 3 ? 'left-0' : index > (buckets.length * 2) / 3 ? 'right-0' : 'left-1/2 -translate-x-1/2';
+
+  return (
+    <div>
+      <div className="flex gap-3 pt-6">
+        {/* Y axis */}
+        <div className="relative h-48 w-16 shrink-0" aria-hidden="true">
+          {ticks.map((tick, i) => (
+            <span
+              key={tick}
+              className="absolute right-0 text-xs leading-none text-gray-500 tabular-nums"
+              style={{ top: `${(i / tickCount) * 100}%`, transform: 'translateY(-50%)' }}
+            >
+              {tickLabel(tick)}
+            </span>
+          ))}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="relative h-48 border-b border-l border-gray-200">
+            {ticks.slice(0, tickCount).map((tick, i) => (
+              <div
+                key={tick}
+                aria-hidden="true"
+                className="absolute inset-x-0 border-t border-gray-200"
+                style={{ top: `${(i / tickCount) * 100}%` }}
+              />
+            ))}
+            <div className="absolute inset-0 flex items-end gap-px px-1 sm:gap-0.5" aria-hidden="true">
+              {buckets.map((b, i) => {
+                const height = Math.max((b.sales / top) * 100, b.sales > 0 ? 1 : 0);
+                return (
+                  <div key={b.key} className="group/bar relative flex h-full min-w-0 flex-1 items-end justify-center">
+                    <div
+                      className={cn(
+                        'pointer-events-none invisible absolute z-10 whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-xs text-white shadow-popover group-hover/bar:visible',
+                        tooltipAlign(i),
+                      )}
+                      style={{ bottom: `calc(${height}% + 6px)` }}
+                    >
+                      <span className="block font-medium">{bucketTitle(b)}</span>
+                      <span className="block tabular-nums">
+                        {formatCurrency(b.sales)} · {formatNumber(b.orders)} {b.orders === 1 ? 'order' : 'orders'}
+                      </span>
+                    </div>
+                    <div
+                      className={cn(
+                        'w-full max-w-[28px] rounded-t-sm transition-colors',
+                        b.sales > 0 ? 'bg-brand-500 group-hover/bar:bg-brand-600' : 'bg-transparent',
+                      )}
+                      style={{ height: `${height}%` }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* X axis labels, aligned with the bars */}
+          <div className="mt-2 flex px-1" aria-hidden="true">
+            {buckets.map((b, i) => (
+              <div key={b.key} className="min-w-0 flex-1 text-center text-xs text-gray-500">
+                {showLabel(i) ? <span className="inline-block whitespace-nowrap">{b.label}</span> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <table className="sr-only">
+        <caption>{weekly ? 'Revenue by week' : 'Revenue by day'}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{weekly ? 'Week starting' : 'Date'}</th>
+            <th scope="col">Revenue</th>
+            <th scope="col">Orders</th>
+          </tr>
+        </thead>
+        <tbody>
+          {buckets.map((b) => (
+            <tr key={b.key}>
+              <td>{bucketTitle(b)}</td>
+              <td>{formatCurrency(b.sales)}</td>
+              <td>{formatNumber(b.orders)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Sales by category: sorted share bars. Each row is identified by its label,
+// so the single brand hue carries no identity and nothing depends on telling
+// eight tints apart.
+function CategoryShareBars({ data }: { data: CategorySales[] }) {
+  const active = data.filter((d) => d.sales > 0);
+
+  if (active.length === 0) {
+    return (
+      <EmptyState
+        compact
+        icon={Layers}
+        title="No category sales in this period"
+        description="Revenue is attributed to categories from the items on paid and cash-on-delivery orders."
+      />
+    );
+  }
+
+  return (
+    <ul className="space-y-3">
+      {active.map((item) => (
+        <li key={item.name}>
+          <div className="flex items-baseline justify-between gap-3 text-sm">
+            <span className="truncate font-medium text-gray-900">{item.name}</span>
+            <span className="shrink-0 text-gray-700 tabular-nums">
+              {formatCurrency(item.sales)} <span className="text-gray-500">· {item.percentage.toFixed(1)}%</span>
+            </span>
+          </div>
+          <div
+            className="mt-1 h-2 w-full rounded-sm bg-gray-100"
+            role="img"
+            aria-label={`${item.name}: ${item.percentage.toFixed(1)}% of revenue`}
+          >
+            <div className="h-full rounded-sm bg-brand-500" style={{ width: `${Math.min(100, item.percentage)}%` }} />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ProductThumb({ name, src }: { name: string; src?: string }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (src && !failed) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="h-9 w-9 shrink-0 rounded-md border border-gray-200 object-cover"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gray-100 text-xs font-medium text-gray-500"
+    >
+      {name.substring(0, 2).toUpperCase()}
+    </span>
+  );
+}
+
+function TopProductsTable({ products }: { products: TopProduct[] }) {
+  return (
+    <TableContainer className="border-0 rounded-none">
+      <Table>
+        <THead>
+          <Tr>
+            <Th className="w-12">#</Th>
+            <Th>Product</Th>
+            <Th>Category</Th>
+            <Th align="right">Units sold</Th>
+            <Th align="right">Revenue</Th>
+          </Tr>
+        </THead>
+        <TBody>
+          {products.length === 0 ? (
+            <TableEmptyRow colSpan={5}>
+              <EmptyState
+                compact
+                icon={Award}
+                title="No product sales in this period"
+                description="Products from paid and cash-on-delivery orders are ranked here by revenue."
+              />
+            </TableEmptyRow>
+          ) : (
+            products.map((product, index) => (
+              <Tr key={product.id}>
+                <Td muted className="tabular-nums">
+                  {index + 1}
+                </Td>
+                <Td>
+                  <div className="flex items-center gap-3">
+                    <ProductThumb name={product.name} src={product.image} />
+                    <span className="line-clamp-1 font-medium text-gray-900">{product.name}</span>
+                  </div>
+                </Td>
+                <Td>
+                  <Badge>{product.category}</Badge>
+                </Td>
+                <Td align="right" className="tabular-nums">
+                  {formatNumber(product.sales)}
+                </Td>
+                <Td align="right" className="font-medium text-gray-900 tabular-nums">
+                  {formatCurrency(product.revenue)}
+                </Td>
+              </Tr>
+            ))
+          )}
+        </TBody>
+      </Table>
+    </TableContainer>
+  );
+}
+
+function CategoryTable({ data }: { data: CategorySales[] }) {
+  return (
+    <TableContainer className="border-0 rounded-none">
+      <Table>
+        <THead>
+          <Tr>
+            <Th>Category</Th>
+            <Th align="right">Order lines</Th>
+            <Th align="right">Revenue</Th>
+            <Th align="right">Share of revenue</Th>
+          </Tr>
+        </THead>
+        <TBody>
+          {data.length === 0 ? (
+            <TableEmptyRow colSpan={4}>
+              <EmptyState compact icon={Layers} title="No category sales in this period" />
+            </TableEmptyRow>
+          ) : (
+            data.map((category) => (
+              <Tr key={category.name}>
+                <Td className="font-medium text-gray-900">{category.name}</Td>
+                <Td align="right" className="tabular-nums">
+                  {formatNumber(category.lineItems)}
+                </Td>
+                <Td align="right" className="tabular-nums">
+                  {formatCurrency(category.sales)}
+                </Td>
+                <Td align="right">
+                  <div className="flex items-center justify-end gap-3">
+                    <div aria-hidden="true" className="h-1.5 w-24 rounded-sm bg-gray-100">
+                      <div
+                        className="h-full rounded-sm bg-brand-500"
+                        style={{ width: `${Math.min(100, category.percentage)}%` }}
+                      />
+                    </div>
+                    <span className="w-14 tabular-nums">{category.percentage.toFixed(1)}%</span>
+                  </div>
+                </Td>
+              </Tr>
+            ))
+          )}
+        </TBody>
+      </Table>
+    </TableContainer>
+  );
+}
+
+const KPI_LABELS = ['Total revenue', 'Total orders', 'Avg order value', 'Unique customers'];
+
+function ReportsSkeleton() {
+  return (
+    <>
+      <StatGrid>
+        {KPI_LABELS.map((label) => (
+          <StatCard key={label} label={label} value="" loading />
+        ))}
+      </StatGrid>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {[0, 1].map((i) => (
+          <Card key={i}>
+            <CardBody>
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="mt-4 h-48 w-full" />
+            </CardBody>
+          </Card>
+        ))}
+      </div>
+      <Card>
+        <CardBody>
+          <Skeleton className="h-5 w-48" />
+          <div className="mt-4 space-y-3">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
+          </div>
+        </CardBody>
+      </Card>
+    </>
+  );
+}
+
 const ReportsPage = () => {
+  const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [period, setPeriod] = useState<'7' | '30' | '90' | '365'>('30');
+  const [period, setPeriod] = useState<Period>('30');
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  // Incremented per fetch so a slow earlier response (or StrictMode's second
+  // dev-mode mount) can never overwrite a newer result.
+  const requestIdRef = useRef(0);
 
-  // Fetch data
-  const fetchData = async () => {
+  // Fetch data. 'initial' blanks the page behind a skeleton; 'refresh' keeps
+  // the current figures visible and only disables the Refresh button.
+  const fetchData = useCallback(async (mode: 'initial' | 'refresh') => {
+    const requestId = ++requestIdRef.current;
+    if (mode === 'initial') setLoading(true);
+    else setRefreshing(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
       // getCustomers() was previously fetched here too, but this page derives
       // its unique-customers figure from order rows (see `stats` below), not
       // from that array — it was fetched and never read. Orders are bounded
       // to 2 years + 1 day, comfortably covering this page's widest period
       // selector (365 days) plus the equal-length "previous period" the
       // growth comparison needs, instead of the platform's entire order
-      // history. The +1 day margin matters: `stats` below truncates the
-      // previous-period start to midnight (`previousPeriodStart.setHours(0,0,0,0)`
-      // after subtracting `days*2`), which lands slightly earlier than a
-      // plain `now - 730 days` cutoff computed at the current time of day —
-      // without the margin, orders in that sub-day gap were silently never
-      // fetched at all, undercounting the year-over-year growth comparison.
-      // Found 2026-09-01 during a cross-app audit.
+      // history. The +1 day margin matters: getPeriodWindow truncates the
+      // previous-period start to local midnight (today minus 2*days-1 days,
+      // at 00:00), which lands earlier than a plain `now - 730 days` cutoff
+      // computed at the current time of day — without the margin, orders in
+      // that sub-day gap were silently never fetched at all, undercounting
+      // the year-over-year growth comparison. Found 2026-09-01 during a
+      // cross-app audit.
       const [ordersData, productsData, categoriesData] = await Promise.all([
         getOrdersSince(731),
         getAdminProducts(),
-        getCategories()
+        getCategories(),
       ]);
+      if (requestId !== requestIdRef.current) return;
       setOrders(ordersData);
       setProducts(productsData);
       setCategories(categoriesData);
+      setLoaded(true);
+      setLastUpdated(new Date());
     } catch (err) {
-      setError('Failed to load report data. Please try again.');
+      if (requestId !== requestIdRef.current) return;
       console.error('Error fetching report data:', err);
+      setError('Failed to load report data. Please try again.');
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  };
-
-  useEffect(() => {
-    fetchData();
   }, []);
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await fetchData();
-    setRefreshing(false);
-  };
+  useEffect(() => {
+    fetchData('initial');
+  }, [fetchData]);
 
+  // Anchored to the time of the last successful fetch, so a tab left open
+  // past midnight re-aligns to the new "today" when it is refreshed.
+  const range = useMemo(() => getPeriodWindow(period, lastUpdated ?? new Date()), [period, lastUpdated]);
 
   // Filter orders by period
-  const filteredOrders = useMemo(() => {
-    const days = parseInt(period);
-    const now = new Date();
-    now.setHours(23, 59, 59, 999); // End of today
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((order) => {
+        const orderDate = new Date(order.created_at);
+        return orderDate >= range.start && orderDate <= range.end;
+      }),
+    [orders, range],
+  );
 
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
-    cutoffDate.setHours(0, 0, 0, 0); // Start of the cutoff day (midnight)
-
-    return orders.filter(order => {
-      const orderDate = new Date(order.created_at);
-      return orderDate >= cutoffDate && orderDate <= now;
-    });
-  }, [orders, period]);
+  // Every revenue, count, product and category figure below is derived from
+  // this set — never from the plotted chart series.
+  const countableOrders = useMemo(() => filteredOrders.filter(isCountable), [filteredOrders]);
 
   // Calculate stats - using actual data from database
   const stats = useMemo((): ReportStats => {
-    const completedOrders = filteredOrders.filter(isCountable);
-    const totalRevenue = completedOrders.reduce((sum, o) => sum + (o.order_total || 0), 0);
-    const totalOrders = completedOrders.length;
+    const totalRevenue = countableOrders.reduce((sum, o) => sum + (o.order_total || 0), 0);
+    const totalOrders = countableOrders.length;
     const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
-    // Calculate unique customers from orders in this period
-    const uniqueCustomersFromOrders = new Set(completedOrders.map(o => o.customer_email || o.customer_phone || o.customer_name));
-    const totalCustomers = uniqueCustomersFromOrders.size;
+    // Unique customers from orders in this period
+    const customerKey = (o: Order) => o.customer_email || o.customer_phone || o.customer_name;
+    const totalCustomers = new Set(countableOrders.map(customerKey)).size;
 
-    // Calculate growth (comparing to previous period)
-    const days = parseInt(period);
-
-    // Previous period: from (days*2) ago to (days) ago
-    const previousPeriodEnd = new Date();
-    previousPeriodEnd.setDate(previousPeriodEnd.getDate() - days);
-    previousPeriodEnd.setHours(23, 59, 59, 999);
-
-    const previousPeriodStart = new Date();
-    previousPeriodStart.setDate(previousPeriodStart.getDate() - days * 2);
-    previousPeriodStart.setHours(0, 0, 0, 0);
-
-    const previousOrders = orders.filter(o => {
+    // Growth compares against the equal-length window immediately before
+    // this one, computed over the full `orders` array (not filteredOrders).
+    const previousOrders = orders.filter((o) => {
       const date = new Date(o.created_at);
-      return date >= previousPeriodStart && date <= previousPeriodEnd && isCountable(o);
+      return date >= range.previousStart && date <= range.previousEnd && isCountable(o);
     });
     const previousRevenue = previousOrders.reduce((sum, o) => sum + (o.order_total || 0), 0);
-
-    // Calculate actual growth or show 0 if no previous data
-    const revenueGrowth = previousRevenue > 0 ? ((totalRevenue - previousRevenue) / previousRevenue) * 100 : 0;
-    const ordersGrowth = previousOrders.length > 0 ? ((totalOrders - previousOrders.length) / previousOrders.length) * 100 : 0;
+    const previousCustomers = new Set(previousOrders.map(customerKey)).size;
 
     return {
       totalRevenue,
@@ -552,208 +637,203 @@ const ReportsPage = () => {
       totalProducts: products.length,
       totalCustomers,
       avgOrderValue,
-      revenueGrowth,
-      ordersGrowth,
-      customersGrowth: 0
+      // null (not 0) when the previous period is empty, so the cards can omit the delta instead of claiming "0.0%".
+      revenueGrowth: growthPct(totalRevenue, previousRevenue),
+      ordersGrowth: growthPct(totalOrders, previousOrders.length),
+      customersGrowth: growthPct(totalCustomers, previousCustomers),
     };
-  }, [filteredOrders, orders, products, period]);
+  }, [countableOrders, orders, products.length, range]);
 
   // Category sales data - from actual order data, lookup category from products
-  const categorySales = useMemo((): CategorySales[] => {
-    const salesByCategory: Record<string, { sales: number; orders: number }> = {};
+  const categoryBreakdown = useMemo(() => {
+    const salesByCategory: Record<string, { sales: number; lineItems: number }> = {};
 
-    // Create a map of product id/name to category for quick lookup
+    // Map product id and lowercase name to category for quick lookup
     const productCategoryMap: Record<string, string> = {};
-    products.forEach(product => {
-      // Map by product ID
+    products.forEach((product) => {
       productCategoryMap[product.id] = product.category || 'Uncategorized';
-      // Also map by lowercase name for fallback matching
-      productCategoryMap[product.name.toLowerCase()] = product.category || 'Uncategorized';
+      if (product.name) productCategoryMap[product.name.toLowerCase()] = product.category || 'Uncategorized';
     });
 
-    filteredOrders.forEach(order => {
-      if (order.items && isCountable(order)) {
-        order.items.forEach((item: any) => {
-          // Try to find category: first by 'id' (cart item structure), then 'product_id', then by name
-          let category = 'Uncategorized';
+    countableOrders.forEach((order) => {
+      const items: OrderLineItem[] = order.items ?? [];
+      items.forEach((item) => {
+        // Lookup order: product_id, then lowercase name. `item.id` is
+        // order_items.id (a line-item key), not a product id, so it is not used.
+        let category = 'Uncategorized';
+        if (item.product_id && productCategoryMap[item.product_id]) {
+          category = productCategoryMap[item.product_id];
+        } else if (item.name && productCategoryMap[item.name.toLowerCase()]) {
+          category = productCategoryMap[item.name.toLowerCase()];
+        }
 
-          // CartItem uses 'id' field for product ID
-          if (item.id && productCategoryMap[item.id]) {
-            category = productCategoryMap[item.id];
-          } else if (item.product_id && productCategoryMap[item.product_id]) {
-            category = productCategoryMap[item.product_id];
-          } else if (item.name && productCategoryMap[item.name.toLowerCase()]) {
-            category = productCategoryMap[item.name.toLowerCase()];
-          }
-
-          if (!salesByCategory[category]) {
-            salesByCategory[category] = { sales: 0, orders: 0 };
-          }
-          salesByCategory[category].sales += (item.price || 0) * (item.quantity || 1);
-          salesByCategory[category].orders += 1;
-        });
-      }
+        if (!salesByCategory[category]) {
+          salesByCategory[category] = { sales: 0, lineItems: 0 };
+        }
+        salesByCategory[category].sales += (item.price || 0) * (item.quantity || 1);
+        salesByCategory[category].lineItems += 1;
+      });
     });
-
-    // If no order data, show categories from database with 0 sales
-    if (Object.keys(salesByCategory).length === 0 && categories.length > 0) {
-      return categories.slice(0, 8).map((cat, index) => ({
-        name: cat.name,
-        sales: 0,
-        orders: 0,
-        percentage: 0,
-        color: COLORS[index % COLORS.length]
-      }));
-    }
 
     const totalSales = Object.values(salesByCategory).reduce((sum, c) => sum + c.sales, 0);
-
-    return Object.entries(salesByCategory)
-      .map(([name, data], index) => ({
+    const all: CategorySales[] = Object.entries(salesByCategory)
+      .map(([name, data]) => ({
         name,
         sales: data.sales,
-        orders: data.orders,
+        lineItems: data.lineItems,
         percentage: totalSales > 0 ? (data.sales / totalSales) * 100 : 0,
-        color: COLORS[index % COLORS.length]
       }))
-      .sort((a, b) => b.sales - a.sales)
-      .slice(0, 8);
-  }, [filteredOrders, categories, products]);
+      .sort((a, b) => b.sales - a.sales);
 
-  // Daily sales data - Show all dates for period, bars only on days with orders
+    // No catalog fallback: with no sales the sections show an empty state
+    // instead of listing catalogue categories at ₹0.
+    return { items: all.slice(0, 8), totalCategories: all.length, totalSales };
+  }, [countableOrders, products]);
+
+  // Daily totals for every calendar day in the period (exported as-is)
   const dailySales = useMemo((): DailySale[] => {
-    const now = new Date();
-    now.setHours(23, 59, 59, 999);
-    const daysToShow = parseInt(period);
+    const byDay = new Map<string, { sales: number; orders: number }>();
+    countableOrders.forEach((order) => {
+      const key = dayKey(new Date(order.created_at));
+      const entry = byDay.get(key) ?? { sales: 0, orders: 0 };
+      entry.sales += order.order_total || 0;
+      entry.orders += 1;
+      byDay.set(key, entry);
+    });
 
-    // Group orders by date - aggregate total sales per day
-    const ordersByDate: Record<string, { sales: number }> = {};
+    return Array.from({ length: range.days }, (_, i) => {
+      const key = dayKey(addDays(range.start, i));
+      const entry = byDay.get(key);
+      return { date: key, sales: entry?.sales ?? 0, orders: entry?.orders ?? 0 };
+    });
+  }, [countableOrders, range]);
 
-    if (orders && orders.length > 0) {
-      const startDate = new Date(now);
-      startDate.setDate(startDate.getDate() - daysToShow);
-      startDate.setHours(0, 0, 0, 0);
-
-      orders.forEach(order => {
-        if (!isCountable(order)) return;
-        const orderDate = new Date(order.created_at);
-        if (orderDate >= startDate && orderDate <= now) {
-          const dateKey = orderDate.toDateString();
-          if (!ordersByDate[dateKey]) {
-            ordersByDate[dateKey] = { sales: 0 };
-          }
-          ordersByDate[dateKey].sales += order.order_total || 0;
-        }
+  // Chart series: daily bars for 7/30 days, weekly buckets for 90/365 days.
+  // Buckets are contiguous and cover the whole period, so they sum to the
+  // period total; today is always in the last bucket.
+  const weeklyChart = range.days > 30;
+  const chartBuckets = useMemo((): ChartBucket[] => {
+    if (!weeklyChart) {
+      return dailySales.map((d, i) => {
+        const start = addDays(range.start, i);
+        return { key: d.date, label: shortDate(start), start, days: 1, sales: d.sales, orders: d.orders };
       });
     }
 
-    // Generate all dates for the period
-    const allDates: DailySale[] = [];
-
-    // Determine step size to keep chart manageable
-    // 7 days: show all 7 days
-    // 30 days: show every 3rd day (10 points)
-    // 90 days: show every 9th day (10 points)
-    // 365 days: show every 36th day (10 points)
-    const stepSize = daysToShow <= 7 ? 1 : daysToShow <= 30 ? 3 : daysToShow <= 90 ? 9 : 36;
-
-    for (let i = daysToShow - 1; i >= 0; i -= stepSize) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      date.setHours(0, 0, 0, 0);
-      const dateKey = date.toDateString();
-      const orderData = ordersByDate[dateKey] || { sales: 0 };
-
-      allDates.push({
-        date: date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-        sales: orderData.sales
-      });
-    }
-
-    return allDates;
-  }, [orders, period]);
+    // Weeks are anchored at today so the newest bar is always a full seven
+    // days; only the oldest bucket can be partial (its tooltip says so).
+    const bucketCount = Math.ceil(range.days / 7);
+    const buckets: ChartBucket[] = [];
+    dailySales.forEach((d, i) => {
+      const bucketIndex = bucketCount - 1 - Math.floor((range.days - 1 - i) / 7);
+      const day = addDays(range.start, i);
+      const bucket = buckets[bucketIndex];
+      if (!bucket) {
+        buckets[bucketIndex] = { key: d.date, label: shortDate(day), start: day, days: 1, sales: d.sales, orders: d.orders };
+      } else {
+        bucket.days += 1;
+        bucket.sales += d.sales;
+        bucket.orders += d.orders;
+      }
+    });
+    return buckets;
+  }, [dailySales, range, weeklyChart]);
 
   // Top products - from actual order data, lookup category from products
   const topProducts = useMemo((): TopProduct[] => {
     const productSales: Record<string, TopProduct> = {};
 
-    // Create a map of product id/name to product for quick lookup
+    // Map product id and lowercase name to product for quick lookup
     const productMap: Record<string, { category: string; image?: string }> = {};
-    products.forEach(product => {
-      productMap[product.id] = { category: product.category || 'Uncategorized', image: product.image };
-      productMap[product.name.toLowerCase()] = { category: product.category || 'Uncategorized', image: product.image };
+    products.forEach((product) => {
+      const entry = { category: product.category || 'Uncategorized', image: product.image };
+      productMap[product.id] = entry;
+      if (product.name) productMap[product.name.toLowerCase()] = entry;
     });
 
-    filteredOrders.forEach(order => {
-      if (order.items && isCountable(order)) {
-        order.items.forEach((item: any) => {
-          // CartItem uses 'id' for product ID, fallback to product_id then name
-          const itemId = item.id || item.product_id || item.name;
+    countableOrders.forEach((order) => {
+      const items: OrderLineItem[] = order.items ?? [];
+      items.forEach((item) => {
+        // product_id, then name (`item.id` is order_items.id, not a product id)
+        const itemId = item.product_id || item.name || 'unknown';
 
-          // Look up category from products
-          let category = 'Uncategorized';
-          let productImage = item.image;
+        let category = 'Uncategorized';
+        let productImage: string | undefined = item.image ?? undefined;
 
-          if (item.id && productMap[item.id]) {
-            category = productMap[item.id].category;
-            productImage = productImage || productMap[item.id].image;
-          } else if (item.product_id && productMap[item.product_id]) {
-            category = productMap[item.product_id].category;
-            productImage = productImage || productMap[item.product_id].image;
-          } else if (item.name && productMap[item.name.toLowerCase()]) {
-            category = productMap[item.name.toLowerCase()].category;
-            productImage = productImage || productMap[item.name.toLowerCase()].image;
-          }
+        if (item.product_id && productMap[item.product_id]) {
+          category = productMap[item.product_id].category;
+          productImage = productImage || productMap[item.product_id].image;
+        } else if (item.name && productMap[item.name.toLowerCase()]) {
+          category = productMap[item.name.toLowerCase()].category;
+          productImage = productImage || productMap[item.name.toLowerCase()].image;
+        }
 
-          if (!productSales[itemId]) {
-            productSales[itemId] = {
-              name: item.name || 'Unknown Product',
-              image: productImage,
-              sales: 0,
-              revenue: 0,
-              category: category
-            };
-          }
-          productSales[itemId].sales += item.quantity || 1;
-          productSales[itemId].revenue += (item.price || 0) * (item.quantity || 1);
-        });
-      }
+        if (!productSales[itemId]) {
+          productSales[itemId] = {
+            id: itemId,
+            name: item.name || 'Unknown Product',
+            image: productImage,
+            category,
+            sales: 0,
+            revenue: 0,
+          };
+        }
+        productSales[itemId].sales += item.quantity || 1;
+        productSales[itemId].revenue += (item.price || 0) * (item.quantity || 1);
+      });
     });
 
-    // If no order data, show products from catalog with 0 sales
-    if (Object.keys(productSales).length === 0 && products.length > 0) {
-      return products.slice(0, 10).map(p => ({
-        name: p.name,
-        image: p.image,
-        sales: 0,
-        revenue: 0,
-        category: p.category
-      }));
-    }
-
+    // No catalog fallback: an empty period shows an empty state rather than
+    // ten catalogue products with 0 units.
     return Object.values(productSales)
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
-  }, [filteredOrders, products]);
+  }, [countableOrders, products]);
 
-  const periodLabel = period === '7' ? 'Last 7 Days' : period === '30' ? 'Last 30 Days' : period === '90' ? 'Last 90 Days' : 'Last Year';
+  // Order status counts cover every order in the period, including unpaid
+  // and cancelled ones, so they do not reconcile with the countable totals.
+  const statusCounts = useMemo(() => {
+    let delivered = 0;
+    let cancelled = 0;
+    let open = 0;
+    filteredOrders.forEach((o) => {
+      if (o.order_status === 'delivered') delivered += 1;
+      else if (o.order_status === 'cancelled') cancelled += 1;
+      else open += 1;
+    });
+    return { delivered, cancelled, open };
+  }, [filteredOrders]);
+
+  const inStockCount = useMemo(() => products.filter((p) => p.in_stock).length, [products]);
+
+  const periodLabel = PERIOD_LABELS[period];
+  const periodNoun = periodLabel.toLowerCase();
+  // Sentence-case form for on-screen copy ("Last 30 days"); PERIOD_LABELS stays Title Case for the export filename.
+  const periodTitle = periodLabel.charAt(0) + periodNoun.slice(1);
 
   const handleExportReport = () => {
     try {
+      const round1 = (value: number | null) => (value === null ? null : Math.round(value * 10) / 10);
       // Prepare report data using the computed stats
       const reportData = {
         period: periodLabel,
+        periodStart: dayKey(range.start),
+        periodEnd: dayKey(range.end),
         generatedAt: new Date().toISOString(),
         summary: {
           totalRevenue: Math.round(stats.totalRevenue),
           totalOrders: stats.totalOrders,
           totalProducts: stats.totalProducts,
           totalCustomers: stats.totalCustomers,
-          avgOrderValue: Math.round(stats.avgOrderValue)
+          avgOrderValue: Math.round(stats.avgOrderValue),
+          // null when there is no previous period to compare against
+          revenueGrowthPct: round1(stats.revenueGrowth),
+          ordersGrowthPct: round1(stats.ordersGrowth),
+          customersGrowthPct: round1(stats.customersGrowth),
         },
         topProducts: topProducts.slice(0, 10),
-        categorySales: categorySales,
-        dailySales: dailySales
+        categorySales: categoryBreakdown.items,
+        dailySales,
       };
 
       // Convert to JSON string
@@ -775,251 +855,179 @@ const ReportsPage = () => {
       }, 100);
     } catch (err) {
       console.error('Error exporting report:', err);
-      setError('Failed to export report. Please try again.');
+      showToast('Failed to export report. Please try again.', 'error');
     }
   };
 
+  const revenueDelta = growthDelta(stats.revenueGrowth, range.days);
+  const ordersDelta = growthDelta(stats.ordersGrowth, range.days);
+  const customersDelta = growthDelta(stats.customersGrowth, range.days);
+
+  const categoryDescription =
+    categoryBreakdown.totalCategories > categoryBreakdown.items.length
+      ? `Share of revenue · top ${categoryBreakdown.items.length} of ${categoryBreakdown.totalCategories} categories`
+      : 'Share of revenue by category';
+
+  const headerActions = (
+    <>
+      {lastUpdated ? <span className="text-xs text-gray-500">Updated {formatTime(lastUpdated)}</span> : null}
+      <SegmentedControl value={period} onChange={setPeriod} items={PERIOD_ITEMS} size="md" aria-label="Report period" />
+      {/* Stays clickable during the first load (not only while refreshing):
+          a stalled initial fetch can be retried without reloading the page,
+          and the request-id guard makes the overlap harmless. */}
+      <Button variant="secondary" leftIcon={<RefreshCw />} loading={refreshing} onClick={() => fetchData('refresh')}>
+        Refresh
+      </Button>
+      <Button leftIcon={<Download />} onClick={handleExportReport} disabled={!loaded}>
+        Export report
+      </Button>
+    </>
+  );
+
   return (
-    <AdminLayout>
+    <>
+      <PageHeader
+        title="Reports"
+        description="Revenue, orders, customers and product performance for the selected period."
+        actions={headerActions}
+      />
+
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Reports & Analytics</h1>
-            <p className="text-gray-500 mt-1">Comprehensive insights into your store performance</p>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="inline-flex items-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors font-medium shadow-sm disabled:opacity-50"
-            >
-              <RefreshCw size={18} className={`mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-2 shadow-sm">
-              <Calendar size={18} className="text-gray-400" />
-              <select
-                value={period}
-                onChange={(e) => setPeriod(e.target.value as '7' | '30' | '90' | '365')}
-                className="text-sm font-medium text-gray-700 focus:outline-none bg-transparent"
+        {error ? (
+          <Alert
+            tone="danger"
+            title="Could not load report data"
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={loading || refreshing}
+                onClick={() => fetchData(loaded ? 'refresh' : 'initial')}
               >
-                <option value="7">Last 7 Days</option>
-                <option value="30">Last 30 Days</option>
-                <option value="90">Last 90 Days</option>
-                <option value="365">Last Year</option>
-              </select>
-            </div>
-            <button
-              onClick={handleExportReport}
-              className="inline-flex items-center px-4 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-xl hover:from-violet-600 hover:to-purple-700 transition-all shadow-lg font-medium"
-            >
-              <Download size={18} className="mr-2" />
-              Export Report
-            </button>
-          </div>
-        </div>
+                Retry
+              </Button>
+            }
+            onDismiss={loaded ? () => setError(null) : undefined}
+          >
+            {error}
+          </Alert>
+        ) : null}
 
-        {/* Error */}
-        {error && (
-          <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl flex items-center shadow-lg">
-            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-              <AlertCircle className="w-5 h-5" />
-            </div>
-            <span className="flex-1 font-medium">{error}</span>
-            <button onClick={() => setError(null)} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
-              <X size={18} />
-            </button>
-          </div>
-        )}
-
-        {loading ? (
-          <LoadingSpinner />
-        ) : (
+        {loading && !loaded ? (
+          <ReportsSkeleton />
+        ) : !loaded ? null : (
           <>
-            {/* Key Metrics */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+            {/* Key metrics */}
+            <StatGrid>
               <StatCard
-                icon={DollarSign}
-                gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
-                label="Total Revenue"
-                value={stats.totalRevenue}
-                prefix="₹"
-                change={stats.revenueGrowth}
+                label="Total revenue"
+                value={formatCurrency(stats.totalRevenue)}
+                icon={IndianRupee}
+                delta={revenueDelta}
+                hint={revenueDelta ? undefined : NO_COMPARISON_HINT}
               />
               <StatCard
+                label="Total orders"
+                value={formatNumber(stats.totalOrders)}
                 icon={ShoppingBag}
-                gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-                label="Total Orders"
-                value={stats.totalOrders}
-                change={stats.ordersGrowth}
+                delta={ordersDelta}
+                hint={ordersDelta ? undefined : NO_COMPARISON_HINT}
               />
               <StatCard
+                label="Avg order value"
+                value={formatCurrency(stats.avgOrderValue)}
                 icon={Target}
-                gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-                label="Avg Order Value"
-                value={Math.round(stats.avgOrderValue)}
-                prefix="₹"
+                hint="Revenue divided by orders"
               />
               <StatCard
+                label="Unique customers"
+                value={formatNumber(stats.totalCustomers)}
                 icon={Users}
-                gradient="bg-gradient-to-br from-amber-500 to-orange-600"
-                label="Unique Customers"
-                value={stats.totalCustomers}
-                change={stats.customersGrowth}
+                delta={customersDelta}
+                hint={customersDelta ? undefined : NO_COMPARISON_HINT}
               />
-            </div>
+            </StatGrid>
 
-            {/* Charts Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Revenue Trend */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-indigo-100 rounded-xl flex items-center justify-center">
-                      <Activity className="w-6 h-6 text-blue-600" />
-                    </div>
+            {/* Charts */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Card>
+                <CardHeader title="Revenue trend" description={`${periodTitle} · ${weeklyChart ? 'weekly' : 'daily'} totals`} />
+                <CardBody>
+                  <dl className="grid grid-cols-2 gap-4">
                     <div>
-                      <h3 className="font-bold text-gray-800 text-lg">Revenue Trend</h3>
-                      <p className="text-sm text-gray-500">{periodLabel}</p>
+                      <dt className="text-xs text-gray-500">Period revenue</dt>
+                      <dd className="mt-0.5 text-lg font-semibold text-gray-900 tabular-nums">
+                        {formatCurrency(stats.totalRevenue)}
+                      </dd>
                     </div>
-                  </div>
-                  <div className={`flex items-center gap-2 px-3 py-1 rounded-full ${stats.revenueGrowth >= 0 ? 'bg-emerald-50' : 'bg-red-50'}`}>
-                    {stats.revenueGrowth >= 0 ? (
-                      <TrendingUp size={14} className="text-emerald-600" />
-                    ) : (
-                      <TrendingDown size={14} className="text-red-600" />
-                    )}
-                    <span className={`text-sm font-semibold ${stats.revenueGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {stats.revenueGrowth >= 0 ? 'Growing' : 'Declining'}
-                    </span>
-                  </div>
-                </div>
-                <DailySalesChart data={dailySales} />
-              </div>
+                    <div className="text-right">
+                      <dt className="text-xs text-gray-500">Average per day</dt>
+                      <dd className="mt-0.5 text-lg font-semibold text-gray-900 tabular-nums">
+                        {formatCurrency(stats.totalRevenue / range.days)}
+                      </dd>
+                    </div>
+                  </dl>
+                  <RevenueChart buckets={chartBuckets} weekly={weeklyChart} />
+                </CardBody>
+              </Card>
 
-              {/* Category Distribution */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-violet-100 to-purple-100 rounded-xl flex items-center justify-center">
-                      <PieChart className="w-6 h-6 text-violet-600" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-gray-800 text-lg">Sales by Category</h3>
-                      <p className="text-sm text-gray-500">Revenue distribution</p>
-                    </div>
-                  </div>
-                </div>
-                <PieChartComponent data={categorySales} />
-              </div>
+              <Card>
+                <CardHeader title="Sales by category" description={categoryDescription} />
+                <CardBody>
+                  <CategoryShareBars data={categoryBreakdown.items} />
+                </CardBody>
+              </Card>
             </div>
 
-            {/* Top Products */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-amber-50 to-orange-50">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center shadow-lg">
-                    <Award className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-gray-800 text-lg">Top Selling Products</h3>
-                    <p className="text-sm text-gray-500">Best performers in {periodLabel.toLowerCase()}</p>
-                  </div>
-                </div>
-              </div>
-              <TopProductsTable products={topProducts} />
-            </div>
+            {/* Top products */}
+            <Card>
+              <CardHeader title="Top selling products" description={`Best performers in the ${periodNoun}, ranked by revenue`} />
+              <CardBody padding="none">
+                <TopProductsTable products={topProducts} />
+              </CardBody>
+            </Card>
 
-            {/* Category Performance Cards */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-12 h-12 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl flex items-center justify-center">
-                  <Layers className="w-6 h-6 text-emerald-600" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-800 text-lg">Category Performance</h3>
-                  <p className="text-sm text-gray-500">Detailed breakdown by category</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {categorySales.slice(0, 8).map((category, index) => (
-                  <div
-                    key={index}
-                    className={`p-5 rounded-2xl bg-gradient-to-br ${category.color} text-white transition-all hover:shadow-xl hover:-translate-y-1 cursor-pointer`}
-                  >
-                    <p className="text-white/80 text-sm font-semibold">{category.name}</p>
-                    <p className="text-3xl font-bold mt-2">₹{category.sales.toLocaleString()}</p>
-                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/20">
-                      <span className="text-sm text-white/80 flex items-center gap-1">
-                        <ShoppingBag size={12} />
-                        {category.orders} orders
-                      </span>
-                      <span className="text-sm font-bold bg-white/20 px-2 py-0.5 rounded-full">{category.percentage.toFixed(1)}%</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* Category performance */}
+            <Card>
+              <CardHeader title="Category performance" description={`Revenue and order lines by category, ${periodNoun}`} />
+              <CardBody padding="none">
+                <CategoryTable data={categoryBreakdown.items} />
+              </CardBody>
+            </Card>
 
-            {/* Additional Metrics Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              <MetricCard
-                icon={TrendingUp}
-                iconBg="bg-emerald-100 text-emerald-600"
-                label="Products In Stock"
-                value={products.filter(p => p.in_stock).length}
+            {/* Catalogue and order status counts */}
+            <StatGrid columns={6}>
+              <StatCard label="Products in stock" value={formatNumber(inStockCount)} icon={Package} hint="Catalogue" />
+              <StatCard
+                label="Out of stock"
+                value={formatNumber(products.length - inStockCount)}
+                icon={PackageX}
+                hint="Catalogue"
               />
-              <MetricCard
-                icon={TrendingDown}
-                iconBg="bg-red-100 text-red-600"
-                label="Out of Stock"
-                value={products.filter(p => !p.in_stock).length}
-              />
-              <MetricCard
-                icon={FileText}
-                iconBg="bg-blue-100 text-blue-600"
-                label="Categories"
-                value={categories.length}
-              />
-              <MetricCard
-                icon={BarChart3}
-                iconBg="bg-violet-100 text-violet-600"
+              <StatCard label="Categories" value={formatNumber(categories.length)} icon={Tag} hint="Catalogue" />
+              <StatCard
                 label="Delivered"
-                value={filteredOrders.filter(o => o.order_status === 'delivered').length}
+                value={formatNumber(statusCounts.delivered)}
+                icon={CheckCircle2}
+                hint={`All orders, ${periodNoun}`}
               />
-              <MetricCard
+              <StatCard
+                label="Open orders"
+                value={formatNumber(statusCounts.open)}
                 icon={Clock}
-                iconBg="bg-amber-100 text-amber-600"
-                label="Pending"
-                value={filteredOrders.filter(o => o.order_status === 'placed').length}
+                hint={`Awaiting delivery, ${periodNoun}`}
               />
-              <MetricCard
-                icon={XCircle}
-                iconBg="bg-pink-100 text-pink-600"
+              <StatCard
                 label="Cancelled"
-                value={filteredOrders.filter(o => o.order_status === 'cancelled').length}
+                value={formatNumber(statusCounts.cancelled)}
+                icon={XCircle}
+                hint={`All orders, ${periodNoun}`}
               />
-            </div>
-
-            {/* Info Banner */}
-            <div className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl p-6 text-white">
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-                    <Eye className="w-7 h-7" />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold">Data refreshes automatically</h3>
-                    <p className="text-white/80 mt-1">All analytics are calculated from your actual store data in real-time</p>
-                  </div>
-                </div>
-              </div>
-            </div>
+            </StatGrid>
           </>
         )}
       </div>
-    </AdminLayout>
+    </>
   );
 };
 

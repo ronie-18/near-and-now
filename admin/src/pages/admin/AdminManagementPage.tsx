@@ -1,126 +1,77 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Users,
   Plus,
-  Edit,
+  Pencil,
   Trash2,
-  Shield,
   ShieldCheck,
-  ShieldAlert,
-  Eye,
+  ShieldOff,
   RefreshCw,
-  Search,
-  X,
+  UserCheck,
+  UserX,
   AlertCircle,
-  Check,
-  Clock,
-  Ban
 } from 'lucide-react';
 import { getAdmins, deleteAdmin, Admin, getRoleDisplayName, hasPermission, hasRole } from '../../services/adminAuthService';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import {
+  PageHeader,
+  Button,
+  LinkButton,
+  IconButton,
+  Tooltip,
+  Alert,
+  Badge,
+  Card,
+  CardBody,
+  FilterBar,
+  SearchInput,
+  StatCard,
+  StatGrid,
+  StatusBadge,
+  TableContainer,
+  Table,
+  THead,
+  TBody,
+  Tr,
+  Th,
+  Td,
+  TableEmptyRow,
+  TableSkeletonRows,
+  EmptyState,
+  useConfirm,
+} from '../../components/ui';
+import { useToast } from '../../context/ToastContext';
+import { formatDate } from '../../utils/format';
 
-// Stat Card
-interface StatCardProps {
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-  label: string;
-  value: number | string;
+const TABLE_COLUMNS = 6;
+
+/** Navigation state CreateAdminPage / EditAdminPage send back to this route. */
+interface AdminsLocationState {
+  success?: string;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ icon: Icon, gradient, label, value }) => (
-  <div className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1`}>
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="relative z-10">
-      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
-        <Icon className="w-6 h-6" />
-      </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-    </div>
-  </div>
-);
-
-// Error Alert
-const ErrorAlert = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
-  <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-    <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-      <AlertCircle className="w-5 h-5" />
-    </div>
-    <span className="flex-1 font-medium">{message}</span>
-    <button onClick={onDismiss} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
-      <X size={18} />
-    </button>
-  </div>
-);
-
-// Success Alert
-const SuccessAlert = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
-  <div className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-5 py-4 rounded-xl mb-6 flex items-center shadow-lg">
-    <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-      <Check className="w-5 h-5" />
-    </div>
-    <span className="flex-1 font-medium">{message}</span>
-    <button onClick={onDismiss} className="ml-4 p-2 hover:bg-white/20 rounded-lg transition-colors">
-      <X size={18} />
-    </button>
-  </div>
-);
-
-// Loading Spinner
-const LoadingSpinner = () => (
-  <div className="p-16 flex flex-col items-center justify-center">
-    <div className="relative">
-      <div className="w-16 h-16 border-4 border-violet-200 rounded-full" />
-      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-    </div>
-    <p className="mt-4 text-gray-500 font-medium">Loading admins...</p>
-  </div>
-);
-
-// Role Badge
-const getRoleIcon = (role: Admin['role']) => {
-  switch (role) {
-    case 'super_admin': return <ShieldCheck className="w-4 h-4" />;
-    case 'admin': return <Shield className="w-4 h-4" />;
-    case 'manager': return <ShieldAlert className="w-4 h-4" />;
-    case 'viewer': return <Eye className="w-4 h-4" />;
-  }
-};
-
-const getRoleStyle = (role: Admin['role']) => {
-  switch (role) {
-    case 'super_admin': return 'bg-gradient-to-r from-purple-100 to-violet-100 text-purple-700';
-    case 'admin': return 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700';
-    case 'manager': return 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700';
-    case 'viewer': return 'bg-gradient-to-r from-gray-100 to-slate-100 text-gray-700';
-  }
-};
-
-const getStatusStyle = (status: Admin['status']) => {
-  switch (status) {
-    case 'active': return 'bg-emerald-100 text-emerald-700';
-    case 'inactive': return 'bg-gray-100 text-gray-700';
-    case 'suspended': return 'bg-red-100 text-red-700';
-  }
-};
-
-const getStatusIcon = (status: Admin['status']) => {
-  switch (status) {
-    case 'active': return <Check className="w-3 h-3" />;
-    case 'inactive': return <Clock className="w-3 h-3" />;
-    case 'suspended': return <Ban className="w-3 h-3" />;
-  }
-};
-
 const AdminManagementPage = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const confirm = useConfirm();
+  const { showToast } = useToast();
+
   const [admins, setAdmins] = useState<Admin[]>([]);
+  // `loading` covers the first load only; `refreshing` is true for any fetch
+  // in flight so a refresh keeps the current roster visible.
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
+
+  // Monotonic request id so a slow earlier getAdmins() response can never
+  // overwrite a newer one (the Refresh button is also disabled mid-fetch).
+  const requestIdRef = useRef(0);
+  // location.key whose success message has already been shown, so React
+  // StrictMode's double effect run cannot toast the same message twice.
+  const consumedStateKeyRef = useRef<string | null>(null);
 
   const currentAdmin: Admin | null = getCurrentAdmin();
   // Admin management has no 'admins.*' entry in ROLE_PERMISSIONS for any role
@@ -131,276 +82,327 @@ const AdminManagementPage = () => {
   // checks below ever ran. Gate the page itself, not just its buttons.
   const isSuperAdmin = Boolean(currentAdmin && hasRole(currentAdmin, 'super_admin'));
 
-  const fetchAdmins = async () => {
+  const fetchAdmins = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    setRefreshing(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
       const data = await getAdmins();
+      if (requestId !== requestIdRef.current) return;
       setAdmins(data);
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setError('Failed to load admins. Please try again.');
       console.error('Error fetching admins:', err);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (isSuperAdmin) {
-      fetchAdmins();
+      void fetchAdmins();
     } else {
       setLoading(false);
     }
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, fetchAdmins]);
 
-  const handleDeleteAdmin = async (id: string, name: string) => {
+  // CreateAdminPage and EditAdminPage navigate back here with
+  // state.success. This page never read it before, so the "created" /
+  // "updated" confirmation was silently lost. Show it once, then strip it
+  // from history so a reload or back navigation does not repeat it.
+  useEffect(() => {
+    const message = (location.state as AdminsLocationState | null)?.success;
+    if (!message || consumedStateKeyRef.current === location.key) return;
+    consumedStateKeyRef.current = location.key;
+    showToast(message, 'success');
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
+  }, [location, navigate, showToast]);
+
+  const handleDeleteAdmin = async (admin: Admin) => {
+    // Defense-in-depth: only super_admin reaches this page and super_admin
+    // holds '*', so these guards cannot fail in practice. Keep them anyway;
+    // the backend enforces the same two rules.
     if (!currentAdmin || !hasPermission(currentAdmin, 'admins.delete')) {
-      setError('You do not have permission to delete admins.');
+      showToast('You do not have permission to delete admins.', 'error');
       return;
     }
 
-    if (currentAdmin.id === id) {
-      setError('You cannot delete your own account.');
+    if (currentAdmin.id === admin.id) {
+      showToast('You cannot delete your own account.', 'error');
       return;
     }
 
-    if (confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) {
-      try {
-        setDeleteLoading(id);
-        setError(null);
-        const deleted = await deleteAdmin(id);
+    // One delete at a time: ignore clicks while a previous one is in flight.
+    if (deleteLoading) return;
 
-        if (deleted) {
-          setAdmins(prev => prev.filter(admin => admin.id !== id));
-          setSuccess(`"${name}" has been deleted successfully.`);
-          setTimeout(() => setSuccess(null), 3000);
-        } else {
-          setError('Failed to delete admin. Please try again.');
-        }
-      } catch (err) {
-        setError('An error occurred while deleting the admin.');
-        console.error('Error deleting admin:', err);
-      } finally {
-        setDeleteLoading(null);
+    const confirmed = await confirm({
+      title: 'Delete admin?',
+      message: (
+        <>
+          <span className="font-medium text-gray-900">{admin.full_name}</span> ({admin.email}) will lose access to
+          the admin console immediately. This action cannot be undone.
+        </>
+      ),
+      confirmLabel: 'Delete admin',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      setDeleteLoading(admin.id);
+      setError(null);
+      // deleteAdmin() resolves `false` on HTTP errors instead of throwing,
+      // so both the false branch and the catch below are required.
+      const deleted = await deleteAdmin(admin.id);
+
+      if (deleted) {
+        setAdmins(prev => prev.filter(a => a.id !== admin.id));
+        showToast(`"${admin.full_name}" has been deleted.`, 'success');
+      } else {
+        showToast('Failed to delete admin. Please try again.', 'error');
       }
+    } catch (err) {
+      showToast('An error occurred while deleting the admin.', 'error');
+      console.error('Error deleting admin:', err);
+    } finally {
+      setDeleteLoading(null);
     }
   };
 
-  const filteredAdmins = admins.filter(admin => {
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      admin.full_name.toLowerCase().includes(searchLower) ||
-      admin.email.toLowerCase().includes(searchLower) ||
-      admin.role.toLowerCase().includes(searchLower)
-    );
-  });
+  const searchLower = searchTerm.toLowerCase();
+  // Match the visible role label ("super admin") and status as well as the
+  // raw role key, since both are what the table actually shows.
+  const filteredAdmins = admins.filter(admin =>
+    admin.full_name.toLowerCase().includes(searchLower) ||
+    admin.email.toLowerCase().includes(searchLower) ||
+    admin.role.toLowerCase().includes(searchLower) ||
+    getRoleDisplayName(admin.role).toLowerCase().includes(searchLower) ||
+    admin.status.toLowerCase().includes(searchLower)
+  );
 
+  // Stats are computed from the full roster, never from the filtered list.
   const stats = {
     total: admins.length,
     superAdmins: admins.filter(a => a.role === 'super_admin').length,
     active: admins.filter(a => a.status === 'active').length,
-    inactive: admins.filter(a => a.status !== 'active').length
+    inactive: admins.filter(a => a.status === 'inactive').length,
+    suspended: admins.filter(a => a.status === 'suspended').length,
   };
 
-  const canCreateAdmin = currentAdmin && hasPermission(currentAdmin, 'admins.create');
-  const canEditAdmin = currentAdmin && hasPermission(currentAdmin, 'admins.edit');
-  const canDeleteAdmin = currentAdmin && hasPermission(currentAdmin, 'admins.delete');
+  // Redundant inside the super_admin gate, kept as defense-in-depth that
+  // tracks ROLE_PERMISSIONS. No UI exists for their false branches.
+  const canCreateAdmin = Boolean(currentAdmin && hasPermission(currentAdmin, 'admins.create'));
+  const canEditAdmin = Boolean(currentAdmin && hasPermission(currentAdmin, 'admins.edit'));
+  const canDeleteAdmin = Boolean(currentAdmin && hasPermission(currentAdmin, 'admins.delete'));
 
   if (!isSuperAdmin) {
     return (
-      <AdminLayout>
-        <div className="p-16 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mb-4">
-            <Ban className="w-8 h-8 text-red-500" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">Access Denied</h1>
-          <p className="text-gray-500 mt-2 max-w-md">
-            Admin Management is restricted to super admins. You don't have permission to view the admin roster.
-          </p>
-        </div>
-      </AdminLayout>
+      <div className="space-y-6">
+        <PageHeader title="Admin users" description="Manage administrator accounts and permissions." />
+        <Card>
+          <EmptyState
+            icon={ShieldOff}
+            title="Access denied"
+            description="Admin management is restricted to super admins. You don't have permission to view the admin roster."
+          />
+        </Card>
+      </div>
     );
   }
 
+  const showSkeleton = loading && admins.length === 0;
+  // A failed first load must not fall through to the "create your first
+  // admin" empty state.
+  const showLoadError = !loading && error !== null && admins.length === 0;
+  const adminNoun = admins.length === 1 ? 'admin' : 'admins';
+
+  const retryButton = (
+    <Button variant="secondary" size="sm" onClick={() => void fetchAdmins()} loading={refreshing}>
+      Retry
+    </Button>
+  );
+
   return (
-    <AdminLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Admin Management</h1>
-            <p className="text-gray-500 mt-1">Manage administrator accounts and permissions</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={fetchAdmins}
-              className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
-              title="Refresh"
-            >
-              <RefreshCw size={20} />
-            </button>
-            {canCreateAdmin && (
-              <Link
-                to="/admins/create"
-                className="inline-flex items-center px-5 py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-xl hover:from-violet-600 hover:to-purple-600 transition-all shadow-lg hover:shadow-xl font-semibold"
+    <div className="space-y-6">
+      <PageHeader
+        title="Admin users"
+        description="Manage administrator accounts and permissions."
+        actions={
+          canCreateAdmin ? (
+            <LinkButton to="/admins/create" leftIcon={<Plus />}>
+              Create admin
+            </LinkButton>
+          ) : undefined
+        }
+      />
+
+      {error && (
+        <Alert tone="danger" title="Could not load admins" actions={retryButton} onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+
+      <StatGrid>
+        <StatCard label="Total admins" value={stats.total} icon={Users} loading={showSkeleton} />
+        <StatCard label="Super admins" value={stats.superAdmins} icon={ShieldCheck} loading={showSkeleton} />
+        <StatCard label="Active" value={stats.active} icon={UserCheck} loading={showSkeleton} />
+        <StatCard
+          label="Inactive or suspended"
+          value={stats.inactive + stats.suspended}
+          hint={`${stats.inactive} inactive, ${stats.suspended} suspended`}
+          icon={UserX}
+          loading={showSkeleton}
+        />
+      </StatGrid>
+
+      <Card>
+        <CardBody padding="none">
+          <FilterBar
+            actions={
+              <Button
+                variant="secondary"
+                leftIcon={<RefreshCw />}
+                onClick={() => void fetchAdmins()}
+                loading={refreshing}
               >
-                <Plus size={18} className="mr-2" />
-                Create Admin
-              </Link>
-            )}
-          </div>
-        </div>
-
-        {/* Alerts */}
-        {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
-        {success && <SuccessAlert message={success} onDismiss={() => setSuccess(null)} />}
-
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-          <StatCard
-            icon={Users}
-            gradient="bg-gradient-to-br from-violet-500 to-purple-600"
-            label="Total Admins"
-            value={stats.total}
-          />
-          <StatCard
-            icon={ShieldCheck}
-            gradient="bg-gradient-to-br from-purple-500 to-pink-600"
-            label="Super Admins"
-            value={stats.superAdmins}
-          />
-          <StatCard
-            icon={Check}
-            gradient="bg-gradient-to-br from-emerald-500 to-teal-600"
-            label="Active"
-            value={stats.active}
-          />
-          <StatCard
-            icon={Ban}
-            gradient="bg-gradient-to-br from-gray-500 to-slate-600"
-            label="Inactive"
-            value={stats.inactive}
-          />
-        </div>
-
-        {/* Search */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-          <div className="relative">
-            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by name, email, or role..."
+                Refresh
+              </Button>
+            }
+          >
+            <SearchInput
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-violet-500 focus:ring-0 transition-colors text-gray-800"
+              onChange={setSearchTerm}
+              placeholder="Search by name, email, role or status"
+              aria-label="Search admins"
+              containerClassName="w-full sm:w-80"
             />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                <X size={18} />
-              </button>
+            {!showSkeleton && !showLoadError && (
+              <span className="text-sm text-gray-500 tabular-nums">
+                {searchTerm
+                  ? `${filteredAdmins.length} of ${admins.length} ${adminNoun}`
+                  : `${admins.length} ${adminNoun}`}
+              </span>
             )}
-          </div>
-        </div>
+          </FilterBar>
 
-        {/* Admins Table */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {loading ? (
-            <LoadingSpinner />
-          ) : filteredAdmins.length === 0 ? (
-            <div className="p-16 text-center">
-              <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
-                <Users className="w-12 h-12 text-gray-400" />
-              </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-2">No admins found</h3>
-              <p className="text-gray-500">
-                {searchTerm ? 'Try a different search term.' : 'Create your first admin to get started.'}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-                  <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-                    <th className="px-6 py-4">Admin</th>
-                    <th className="px-6 py-4">Role</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4">Last Login</th>
-                    <th className="px-6 py-4">Created</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredAdmins.map((admin) => (
-                    <tr key={admin.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
-                      <td className="px-6 py-4">
-                        <div>
-                          <p className="font-semibold text-gray-800">{admin.full_name}</p>
-                          <p className="text-sm text-gray-500">{admin.email}</p>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${getRoleStyle(admin.role)}`}>
-                          {getRoleIcon(admin.role)}
-                          {getRoleDisplayName(admin.role)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${getStatusStyle(admin.status)}`}>
-                          {getStatusIcon(admin.status)}
-                          {admin.status.charAt(0).toUpperCase() + admin.status.slice(1)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600">
-                          {admin.last_login_at
-                            ? new Date(admin.last_login_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-                            : 'Never'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600">
-                          {new Date(admin.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {canEditAdmin && (
-                            <Link
-                              to={`/admins/edit/${admin.id}`}
-                              className="p-2.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-all"
-                              title="Edit"
-                            >
-                              <Edit size={18} />
-                            </Link>
-                          )}
-                          {canDeleteAdmin && admin.id !== currentAdmin?.id && (
-                            <button
-                              onClick={() => handleDeleteAdmin(admin.id, admin.full_name)}
-                              disabled={deleteLoading === admin.id}
-                              className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
-                              title="Delete"
-                            >
-                              {deleteLoading === admin.id ? (
-                                <RefreshCw size={18} className="animate-spin" />
-                              ) : (
-                                <Trash2 size={18} />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    </AdminLayout>
+          <TableContainer className="border-0 rounded-none" aria-busy={refreshing || undefined}>
+            <Table>
+              <THead>
+                <Tr>
+                  <Th>Admin</Th>
+                  <Th>Role</Th>
+                  <Th>Status</Th>
+                  <Th>Last login</Th>
+                  <Th>Created</Th>
+                  <Th align="right">Actions</Th>
+                </Tr>
+              </THead>
+              <TBody>
+                {showSkeleton ? (
+                  <TableSkeletonRows rows={5} cols={TABLE_COLUMNS} />
+                ) : showLoadError ? (
+                  <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                    <EmptyState
+                      compact
+                      icon={AlertCircle}
+                      title="Admins could not be loaded"
+                      description="Use Retry above to load the roster again."
+                    />
+                  </TableEmptyRow>
+                ) : filteredAdmins.length === 0 ? (
+                  <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                    <EmptyState
+                      compact
+                      icon={Users}
+                      title="No admins found"
+                      description={searchTerm ? 'Try a different search term.' : 'Create your first admin to get started.'}
+                      action={
+                        searchTerm ? (
+                          <Button variant="secondary" size="sm" onClick={() => setSearchTerm('')}>
+                            Clear search
+                          </Button>
+                        ) : canCreateAdmin ? (
+                          <LinkButton to="/admins/create" size="sm" leftIcon={<Plus />}>
+                            Create admin
+                          </LinkButton>
+                        ) : undefined
+                      }
+                    />
+                  </TableEmptyRow>
+                ) : (
+                  filteredAdmins.map((admin) => {
+                    const isSelf = admin.id === currentAdmin?.id;
+                    return (
+                      <Tr key={admin.id}>
+                        <Td>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-900">{admin.full_name}</span>
+                            {isSelf && <Badge size="sm">You</Badge>}
+                          </div>
+                          <p className="text-xs text-gray-500">{admin.email}</p>
+                        </Td>
+                        <Td>
+                          <StatusBadge kind="role" value={admin.role} />
+                        </Td>
+                        <Td>
+                          <StatusBadge kind="generic" value={admin.status} />
+                        </Td>
+                        <Td muted nowrap className="tabular-nums">
+                          {admin.last_login_at ? formatDate(admin.last_login_at) : 'Never'}
+                        </Td>
+                        <Td muted nowrap className="tabular-nums">
+                          {formatDate(admin.created_at)}
+                        </Td>
+                        <Td align="right" nowrap>
+                          <div className="flex items-center justify-end gap-1">
+                            {canEditAdmin && (
+                              <Tooltip content="Edit">
+                                {/* A real link (not a button + navigate) so the edit page keeps
+                                    href / middle-click / link semantics, as in the original.
+                                    `!px-0`: the sm button's px-3 would otherwise win over px-0. */}
+                                <LinkButton
+                                  to={`/admins/edit/${admin.id}`}
+                                  variant="ghost"
+                                  size="sm"
+                                  aria-label={`Edit ${admin.full_name}`}
+                                  className="w-8 !px-0"
+                                >
+                                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                                </LinkButton>
+                              </Tooltip>
+                            )}
+                            {/* Self-delete is blocked in the handler too; the
+                                UI must simply never offer it. */}
+                            {canDeleteAdmin && !isSelf && (
+                              <Tooltip content="Delete">
+                                <IconButton
+                                  aria-label={`Delete ${admin.full_name}`}
+                                  size="sm"
+                                  className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                                  onClick={() => void handleDeleteAdmin(admin)}
+                                  loading={deleteLoading === admin.id}
+                                  disabled={deleteLoading !== null}
+                                >
+                                  <Trash2 aria-hidden="true" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </div>
+                        </Td>
+                      </Tr>
+                    );
+                  })
+                )}
+              </TBody>
+            </Table>
+          </TableContainer>
+        </CardBody>
+      </Card>
+    </div>
   );
 };
 

@@ -1,28 +1,67 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { Save, Shield, ShieldCheck, ShieldAlert, ShieldOff, Eye, EyeOff } from 'lucide-react';
 import {
-  ArrowLeft,
-  Save,
-  AlertCircle,
-  Shield,
-  ShieldCheck,
-  ShieldAlert,
-  Eye,
-  Mail,
-  User,
-  Lock,
-  Info
-} from 'lucide-react';
-import { createAdmin, Admin, getRoleDisplayName, getRoleDescription, getDefaultPermissions, hasPermission } from '../../services/adminAuthService';
+  createAdmin,
+  type Admin,
+  getRoleDisplayName,
+  getRoleDescription,
+  getDefaultPermissions,
+  hasPermission
+} from '../../services/adminAuthService';
 import { CreateAdminSchema } from '../../schemas/admin.schema';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  FormField,
+  IconButton,
+  Input,
+  LinkButton,
+  PageHeader
+} from '../../components/ui';
+import { cn } from '../../utils/cn';
+import { humanize } from '../../utils/format';
+
+type FieldName = 'full_name' | 'email' | 'password' | 'confirmPassword';
+type FieldErrors = Partial<Record<FieldName, string>>;
+
+// Visual order of the fields; each Input's id equals its FieldName so the
+// first invalid control can be focused after a failed submit.
+const FIELD_ORDER: FieldName[] = ['full_name', 'email', 'password', 'confirmPassword'];
+
+// Kept in sync with Admin['role'] (4 values); labels/descriptions/permissions
+// come from the service so they cannot drift from ROLE_PERMISSIONS.
+const ROLES: Array<{ value: Admin['role']; icon: React.ComponentType<{ className?: string }> }> = [
+  { value: 'super_admin', icon: ShieldCheck },
+  { value: 'admin', icon: Shield },
+  { value: 'manager', icon: ShieldAlert },
+  { value: 'viewer', icon: Eye }
+];
+
+// super_admin's permission list is the single wildcard '*', which used to
+// render as a bare "*" chip. "products.*" style entries read as
+// "Products: all"; the raw key stays in the chip's title.
+function formatPermission(perm: string): string {
+  if (perm === '*') return 'All permissions';
+  const [resource, action] = perm.split('.');
+  if (!action) return humanize(perm);
+  return `${humanize(resource)}: ${action === '*' ? 'all' : action.replace(/_/g, ' ')}`;
+}
 
 const CreateAdminPage = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [showPassword, setShowPassword] = useState(false);
+
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -31,34 +70,64 @@ const CreateAdminPage = () => {
     role: 'admin' as Admin['role']
   });
 
-  const currentAdmin: Admin | null = getCurrentAdmin();
+  // Read the session once instead of JSON.parsing storage on every render.
+  const currentAdmin = useMemo<Admin | null>(() => getCurrentAdmin(), []);
 
-  // Check permission
+  // Check permission (all hooks above this early return so hook order is stable)
   if (!currentAdmin || !hasPermission(currentAdmin, 'admins.create')) {
     return (
-      <AdminLayout>
-        <div className="max-w-2xl mx-auto py-12">
-          <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-xl flex items-center">
-            <AlertCircle className="w-6 h-6 mr-3" />
-            <span className="font-medium">You do not have permission to create admins.</span>
-          </div>
-        </div>
-      </AdminLayout>
+      <div className="max-w-3xl space-y-6">
+        <PageHeader title="Create admin" description="Add a new administrator account." backTo="/admins" backLabel="Admin users" />
+        <Card>
+          <EmptyState
+            icon={ShieldOff}
+            title="Access denied"
+            description="You do not have permission to create admins. Only super admins can create administrator accounts."
+            action={
+              <LinkButton to="/admins" variant="secondary">
+                Back to admin users
+              </LinkButton>
+            }
+          />
+        </Card>
+      </div>
     );
   }
 
+  const updateField = (field: FieldName, value: string) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
+    }
+  };
+
+  // Show inline errors and move focus to the first invalid field so keyboard
+  // and screen-reader users land on the problem instead of staying on Submit.
+  const failValidation = (errors: FieldErrors) => {
+    setFieldErrors(errors);
+    const first = FIELD_ORDER.find((field) => errors[field]);
+    if (first) document.getElementById(first)?.focus();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
     setError(null);
+    setFieldErrors({});
 
-    // Validation
-    if (!formData.email || !formData.password || !formData.full_name) {
-      setError('Please fill in all required fields.');
+    // Validation (order: required fields -> passwords match -> strength -> name/email -> submit)
+    const required: FieldErrors = {};
+    if (!formData.full_name.trim()) required.full_name = 'Full name is required.';
+    if (!formData.email.trim()) required.email = 'Email address is required.';
+    if (!formData.password) required.password = 'Password is required.';
+    if (!formData.confirmPassword) required.confirmPassword = 'Please confirm the password.';
+    if (Object.keys(required).length > 0) {
+      failValidation(required);
       return;
     }
 
     if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match.');
+      failValidation({ confirmPassword: 'Passwords do not match.' });
       return;
     }
 
@@ -67,233 +136,251 @@ const CreateAdminPage = () => {
     // password like "aaaaaaaa" was accepted for an admin account.
     const passwordCheck = CreateAdminSchema.shape.password.safeParse(formData.password);
     if (!passwordCheck.success) {
-      setError(passwordCheck.error.issues[0]?.message || 'Password does not meet the strength requirements.');
+      failValidation({
+        password: passwordCheck.error.issues[0]?.message || 'Password does not meet the strength requirements.'
+      });
+      return;
+    }
+
+    // Name and email previously relied on HTML `required`/type=email only, so
+    // schema violations surfaced as raw server errors (if at all).
+    const nameCheck = CreateAdminSchema.shape.full_name.safeParse(formData.full_name.trim());
+    const emailCheck = CreateAdminSchema.shape.email.safeParse(formData.email.trim());
+    if (!nameCheck.success || !emailCheck.success) {
+      failValidation({
+        full_name: nameCheck.success ? undefined : nameCheck.error.issues[0]?.message || 'Invalid name.',
+        email: emailCheck.success ? undefined : emailCheck.error.issues[0]?.message || 'Invalid email address.'
+      });
       return;
     }
 
     try {
       setLoading(true);
 
+      // The service lowercases/trims the email and the backend derives
+      // created_by from the Bearer token, so neither is set here.
       await createAdmin({
         email: formData.email,
         password: formData.password,
-        full_name: formData.full_name,
-        role: formData.role,
-        created_by: currentAdmin.id
+        full_name: formData.full_name.trim(),
+        role: formData.role
       });
 
-      navigate('/admins', { 
-        state: { success: `Admin "${formData.full_name}" created successfully!` } 
+      // AdminManagementPage reads state.success once and shows it as a toast.
+      navigate('/admins', {
+        state: { success: `Admin "${formData.full_name.trim()}" created successfully.` }
       });
     } catch (err: any) {
       console.error('Error creating admin:', err);
-      if (err.message?.includes('duplicate key')) {
+      // The backend answers 409 "An admin with this email already exists";
+      // the raw Postgres "duplicate key" text is matched too in case it leaks through.
+      if (/already exists|duplicate/i.test(err?.message || '')) {
         setError('An admin with this email already exists.');
       } else {
-        setError(err.message || 'Failed to create admin. Please try again.');
+        setError(err?.message || 'Failed to create admin. Please try again.');
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const roles: Array<{ value: Admin['role']; icon: React.ComponentType<{ className?: string }> }> = [
-    { value: 'super_admin', icon: ShieldCheck },
-    { value: 'admin', icon: Shield },
-    { value: 'manager', icon: ShieldAlert },
-    { value: 'viewer', icon: Eye }
-  ];
+  // Roving-tabindex radiogroup: arrow keys move selection between role cards.
+  const handleRoleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, current: Admin['role']) => {
+    const order = ROLES.map((r) => r.value);
+    const idx = order.indexOf(current);
+    let next: Admin['role'] | undefined;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = order[(idx + 1) % order.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = order[(idx - 1 + order.length) % order.length];
+    if (!next) return;
+    e.preventDefault();
+    setFormData((prev) => ({ ...prev, role: next as Admin['role'] }));
+    document.getElementById(`role-${next}`)?.focus();
+  };
+
+  const permissions = getDefaultPermissions(formData.role);
 
   return (
-    <AdminLayout>
-      <div className="max-w-3xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/admins')}
-            className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Create New Admin</h1>
-            <p className="text-gray-500 mt-1">Add a new administrator to the system</p>
-          </div>
-        </div>
+    <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title="Create admin"
+        description="Add a new administrator account and choose the role that sets its default permissions."
+        backTo="/admins"
+        backLabel="Admin users"
+      />
 
-        {/* Error Alert */}
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl flex items-center">
-            <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-            <span className="font-medium">{error}</span>
-          </div>
-        )}
+      {error && (
+        <Alert tone="danger" title="Could not create admin" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 space-y-6">
-          {/* Full Name */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Full Name <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="text"
-                value={formData.full_name}
-                onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="John Doe"
+      <form onSubmit={handleSubmit} noValidate className="space-y-6">
+        <Card>
+          <CardHeader title="Account details" description="Sign-in credentials for the new administrator." />
+          <CardBody>
+            <div className="grid gap-5 md:grid-cols-2">
+              <FormField label="Full name" htmlFor="full_name" required error={fieldErrors.full_name}>
+                <Input
+                  id="full_name"
+                  name="full_name"
+                  type="text"
+                  value={formData.full_name}
+                  onChange={(e) => updateField('full_name', e.target.value)}
+                  placeholder="Administrator's full name"
+                  autoComplete="off"
+                  maxLength={100}
+                  required
+                  disabled={loading}
+                  invalid={!!fieldErrors.full_name}
+                />
+              </FormField>
+
+              <FormField label="Email address" htmlFor="email" required error={fieldErrors.email}>
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => updateField('email', e.target.value)}
+                  placeholder="admin@example.com"
+                  autoComplete="off"
+                  maxLength={254}
+                  required
+                  disabled={loading}
+                  invalid={!!fieldErrors.email}
+                />
+              </FormField>
+
+              <FormField
+                label="Password"
+                htmlFor="password"
                 required
-              />
-            </div>
-          </div>
+                hint="At least 8 characters, with an uppercase letter, a lowercase letter, a number and a special character."
+                error={fieldErrors.password}
+              >
+                <Input
+                  id="password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={(e) => updateField('password', e.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                  maxLength={100}
+                  required
+                  disabled={loading}
+                  invalid={!!fieldErrors.password}
+                  className="pr-11"
+                  rightElement={
+                    <IconButton
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                      onClick={() => setShowPassword((v) => !v)}
+                      disabled={loading}
+                    >
+                      {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                    </IconButton>
+                  }
+                />
+              </FormField>
 
-          {/* Email */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Email Address <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="admin@example.com"
-                required
-              />
+              <FormField label="Confirm password" htmlFor="confirmPassword" required error={fieldErrors.confirmPassword}>
+                <Input
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.confirmPassword}
+                  onChange={(e) => updateField('confirmPassword', e.target.value)}
+                  autoComplete="new-password"
+                  maxLength={100}
+                  required
+                  disabled={loading}
+                  invalid={!!fieldErrors.confirmPassword}
+                />
+              </FormField>
             </div>
-          </div>
+          </CardBody>
+        </Card>
 
-          {/* Password */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Password <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="••••••••"
-                minLength={8}
-                required
-              />
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Min. 8 characters, with at least one uppercase, lowercase, number, and special character.
-            </p>
-          </div>
-
-          {/* Confirm Password */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Confirm Password <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="password"
-                value={formData.confirmPassword}
-                onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-violet-500 focus:ring-0 transition-colors"
-                placeholder="••••••••"
-                required
-              />
-            </div>
-          </div>
-
-          {/* Role Selection */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              Role <span className="text-red-500">*</span>
-            </label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {roles.map(({ value, icon: Icon }) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setFormData({ ...formData, role: value })}
-                  className={`p-4 rounded-xl border-2 transition-all text-left ${
-                    formData.role === value
-                      ? 'border-violet-500 bg-violet-50'
-                      : 'border-gray-200 hover:border-gray-300 bg-white'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                      formData.role === value ? 'bg-violet-100 text-violet-600' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <div className="flex-1">
-                      <p className={`font-semibold ${formData.role === value ? 'text-violet-700' : 'text-gray-800'}`}>
-                        {getRoleDisplayName(value)}
-                      </p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        {getRoleDescription(value)}
-                      </p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Permissions Info */}
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-            <div className="flex items-start gap-3">
-              <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-blue-900 mb-1">Default Permissions</p>
-                <p className="text-xs text-blue-700">
-                  The selected role will have the following permissions:
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {getDefaultPermissions(formData.role).map((perm, idx) => (
-                    <span key={idx} className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-md font-medium">
-                      {perm}
-                    </span>
-                  ))}
-                </div>
+        <Card>
+          <CardHeader title="Role and permissions" description="The role decides which pages and actions the new admin can use." />
+          <CardBody className="space-y-5">
+            <div className="space-y-1.5">
+              <span id="role-label" className="block text-sm font-medium text-gray-700">
+                Role
+                <span className="ml-0.5 text-red-600" aria-hidden="true">
+                  *
+                </span>
+              </span>
+              <div role="radiogroup" aria-labelledby="role-label" aria-required="true" className="grid gap-4 sm:grid-cols-2">
+                {ROLES.map(({ value, icon: Icon }) => {
+                  const selected = formData.role === value;
+                  return (
+                    <button
+                      key={value}
+                      id={`role-${value}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      tabIndex={selected ? 0 : -1}
+                      disabled={loading}
+                      onClick={() => setFormData((prev) => ({ ...prev, role: value }))}
+                      onKeyDown={(e) => handleRoleKeyDown(e, value)}
+                      className={cn(
+                        'flex items-start gap-3 rounded-md border p-4 text-left transition-colors',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2',
+                        'disabled:cursor-not-allowed disabled:opacity-50',
+                        selected ? 'border-brand-500 bg-brand-50' : 'border-gray-200 bg-white hover:border-gray-300'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'flex h-9 w-9 shrink-0 items-center justify-center rounded-md',
+                          selected ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-600'
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className={cn('block text-sm font-medium', selected ? 'text-brand-800' : 'text-gray-900')}>
+                          {getRoleDisplayName(value)}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-gray-500">{getRoleDescription(value)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          </div>
 
-          {/* Actions */}
-          <div className="flex items-center gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => navigate('/admins')}
-              className="px-6 py-3 border-2 border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors font-semibold"
-            >
+            <div className="rounded-md border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm font-medium text-gray-900">Default permissions</p>
+              <p className="mt-0.5 text-xs text-gray-500">
+                {getRoleDisplayName(formData.role)} accounts start with the following permissions:
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {permissions.map((perm) => (
+                  <Badge key={perm} tone={perm === '*' ? 'brand' : 'neutral'} title={perm}>
+                    {formatPermission(perm)}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </CardBody>
+          <CardFooter className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => navigate('/admins')} disabled={loading}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 inline-flex items-center justify-center px-6 py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-xl hover:from-violet-600 hover:to-purple-600 transition-all shadow-lg hover:shadow-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                  Creating...
-                </>
-              ) : (
-                <>
-                  <Save size={20} className="mr-2" />
-                  Create Admin
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </AdminLayout>
+            </Button>
+            <Button type="submit" loading={loading} leftIcon={<Save />}>
+              {loading ? 'Creating…' : 'Create admin'}
+            </Button>
+          </CardFooter>
+        </Card>
+      </form>
+    </div>
   );
 };
 

@@ -1,7 +1,9 @@
 import { useState, useEffect, Suspense, lazy } from 'react';
-import { Route, Routes, Navigate } from 'react-router-dom';
+import { Route, Routes, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { isAdminAuthenticated } from '../services/secureAdminAuth';
 import PageLoadingFallback from '../components/PageLoadingFallback';
+import AdminLayout from '../components/admin/layout/AdminLayout';
+import { PageLoader } from '../components/ui';
 // AdminDashboardPage stays a static import — mounted at "/", the most
 // common landing page after login, so it renders with no Suspense flash.
 // Every other page is lazy: previously all 30 admin pages were bundled into
@@ -40,299 +42,119 @@ const SupportMessagesPage = lazy(() => import('../pages/admin/SupportMessagesPag
 const RiderPayoutsPage = lazy(() => import('../pages/admin/RiderPayoutsPage'));
 const SecurityLogPage = lazy(() => import('../pages/admin/SecurityLogPage'));
 
-// Secure admin authentication guard using JWT tokens
+/**
+ * Secure admin authentication guard.
+ *
+ * Mounted ONCE on the persistent layout route below, so the session check
+ * runs once per shell mount instead of on every navigation (that per-route
+ * remount was the "Verifying authentication…" flash). isAdminAuthenticated()
+ * keeps its fail-open semantics on transient errors; the check is re-run
+ * cheaply when the tab becomes visible again so a session that expired or
+ * was logged out elsewhere still bounces to /login without a reload — and
+ * without flashing the loader (isAuth is never reset to null).
+ */
 const AdminAuthGuard = ({ children }: { children: React.ReactNode }) => {
+  const location = useLocation();
   const [isAuth, setIsAuth] = useState<boolean | null>(null);
 
   useEffect(() => {
-    isAdminAuthenticated().then(setIsAuth);
+    let cancelled = false;
+
+    const check = () => {
+      isAdminAuthenticated().then((ok) => {
+        if (!cancelled) setIsAuth(ok);
+      });
+    };
+
+    check();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') check();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   if (isAuth === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Verifying authentication...</p>
-        </div>
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <PageLoader label="Checking your session…" />
       </div>
     );
   }
 
   if (!isAuth) {
-    return <Navigate to="/login" replace />;
+    // Remember where the admin was heading so AdminLoginPage can return
+    // them there (it reads `state.from`) instead of always landing on "/".
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
   }
 
   return <>{children}</>;
 };
 
+/**
+ * One persistent layout route: the guard, the shell (sidebar + header) and
+ * the Suspense boundary all live here and stay mounted while page chunks
+ * load and routes change. Pages render into <Outlet/> and no longer wrap
+ * themselves in <AdminLayout>.
+ */
+const AdminShell = () => (
+  <AdminAuthGuard>
+    <AdminLayout>
+      <Suspense fallback={<PageLoadingFallback />}>
+        <Outlet />
+      </Suspense>
+    </AdminLayout>
+  </AdminAuthGuard>
+);
+
 const AdminRoutes = () => {
   return (
-    <Suspense fallback={<PageLoadingFallback />}>
     <Routes>
-      <Route
-        path="/"
-        element={
-          <AdminAuthGuard>
-            <AdminDashboardPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/products"
-        element={
-          <AdminAuthGuard>
-            <ProductsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/products/add"
-        element={
-          <AdminAuthGuard>
-            <AddProductPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/products/edit/:id"
-        element={
-          <AdminAuthGuard>
-            <EditProductPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/products/submissions"
-        element={
-          <AdminAuthGuard>
-            <ProductSubmissionsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/products/reviews"
-        element={
-          <AdminAuthGuard>
-            <ReviewsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/orders"
-        element={
-          <AdminAuthGuard>
-            <OrdersPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/orders/:id"
-        element={
-          <AdminAuthGuard>
-            <OrderDetailPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/customers"
-        element={
-          <AdminAuthGuard>
-            <CustomersPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/customers/:id"
-        element={
-          <AdminAuthGuard>
-            <CustomerDetailPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/categories"
-        element={
-          <AdminAuthGuard>
-            <CategoriesPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/categories/add"
-        element={
-          <AdminAuthGuard>
-            <AddCategoryPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/categories/edit/:id"
-        element={
-          <AdminAuthGuard>
-            <EditCategoryPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/reports"
-        element={
-          <AdminAuthGuard>
-            <ReportsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/admins"
-        element={
-          <AdminAuthGuard>
-            <AdminManagementPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/admins/create"
-        element={
-          <AdminAuthGuard>
-            <CreateAdminPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/admins/edit/:id"
-        element={
-          <AdminAuthGuard>
-            <EditAdminPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/delivery"
-        element={
-          <AdminAuthGuard>
-            <DeliveryPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/offers"
-        element={
-          <AdminAuthGuard>
-            <OffersPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
-          <AdminAuthGuard>
-            <SettingsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/profile"
-        element={
-          <AdminAuthGuard>
-            <ProfilePage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/help"
-        element={
-          <AdminAuthGuard>
-            <HelpPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/notifications"
-        element={
-          <AdminAuthGuard>
-            <NotificationsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/stores"
-        element={
-          <AdminAuthGuard>
-            <StoresPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/stores/products"
-        element={
-          <AdminAuthGuard>
-            <StoreProductsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/stores/:storeId/products"
-        element={
-          <AdminAuthGuard>
-            <StoreProductsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/stores/profile-change-requests"
-        element={
-          <AdminAuthGuard>
-            <StoreProfileChangeRequestsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/delivery/profile-change-requests"
-        element={
-          <AdminAuthGuard>
-            <RiderProfileChangeRequestsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/activity-log"
-        element={
-          <AdminAuthGuard>
-            <ActivityLogPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/support-messages/:id?"
-        element={
-          <AdminAuthGuard>
-            <SupportMessagesPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/rider-payouts"
-        element={
-          <AdminAuthGuard>
-            <RiderPayoutsPage />
-          </AdminAuthGuard>
-        }
-      />
-      <Route
-        path="/security-log"
-        element={
-          <AdminAuthGuard>
-            <SecurityLogPage />
-          </AdminAuthGuard>
-        }
-      />
-      {/* Unmatched path (typo, stale bookmark, removed route) — previously
-          rendered nothing at all, not even the AdminLayout shell. Redirect
-          to the dashboard; AdminAuthGuard there still handles an
-          unauthenticated admin by bouncing to /login. */}
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route element={<AdminShell />}>
+        <Route path="/" element={<AdminDashboardPage />} />
+        <Route path="/products" element={<ProductsPage />} />
+        <Route path="/products/add" element={<AddProductPage />} />
+        <Route path="/products/edit/:id" element={<EditProductPage />} />
+        <Route path="/products/submissions" element={<ProductSubmissionsPage />} />
+        <Route path="/products/reviews" element={<ReviewsPage />} />
+        <Route path="/orders" element={<OrdersPage />} />
+        <Route path="/orders/:id" element={<OrderDetailPage />} />
+        <Route path="/customers" element={<CustomersPage />} />
+        <Route path="/customers/:id" element={<CustomerDetailPage />} />
+        <Route path="/categories" element={<CategoriesPage />} />
+        <Route path="/categories/add" element={<AddCategoryPage />} />
+        <Route path="/categories/edit/:id" element={<EditCategoryPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/admins" element={<AdminManagementPage />} />
+        <Route path="/admins/create" element={<CreateAdminPage />} />
+        <Route path="/admins/edit/:id" element={<EditAdminPage />} />
+        <Route path="/delivery" element={<DeliveryPage />} />
+        <Route path="/offers" element={<OffersPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/help" element={<HelpPage />} />
+        <Route path="/notifications" element={<NotificationsPage />} />
+        <Route path="/stores" element={<StoresPage />} />
+        <Route path="/stores/products" element={<StoreProductsPage />} />
+        <Route path="/stores/:storeId/products" element={<StoreProductsPage />} />
+        <Route path="/stores/profile-change-requests" element={<StoreProfileChangeRequestsPage />} />
+        <Route path="/delivery/profile-change-requests" element={<RiderProfileChangeRequestsPage />} />
+        <Route path="/activity-log" element={<ActivityLogPage />} />
+        <Route path="/support-messages/:id?" element={<SupportMessagesPage />} />
+        <Route path="/rider-payouts" element={<RiderPayoutsPage />} />
+        <Route path="/security-log" element={<SecurityLogPage />} />
+        {/* Unmatched path (typo, stale bookmark, removed route) — previously
+            rendered nothing at all, not even the AdminLayout shell. Redirect
+            to the dashboard; AdminAuthGuard on this layout route still
+            handles an unauthenticated admin by bouncing to /login. */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
     </Routes>
-    </Suspense>
   );
 };
 

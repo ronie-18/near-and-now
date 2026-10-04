@@ -28,6 +28,14 @@ if (!resend) {
 // already knows this, since it just queried the token from here.
 type StaleTokenTarget = { table: 'app_users' | 'stores' | 'delivery_partners'; idColumn: string; idValue: string };
 
+/** Expo's documented maximum number of messages per push request. */
+export const EXPO_PUSH_CHUNK_SIZE = 100;
+/** Cap on distinct error reasons kept in a batch result (the log has every ticket). */
+const EXPO_PUSH_MAX_ERRORS = 10;
+
+export type BatchPushRecipient = { token: string; staleTokenTarget?: StaleTokenTarget };
+export type BatchPushResult = { sent: number; failed: number; errors: string[] };
+
 export class NotificationService {
 
   // Expo's push API returns HTTP 200 even when an individual ticket failed —
@@ -76,8 +84,10 @@ export class NotificationService {
   // Same stale-token detection as sendExpoPush, batched — used by the two
   // driver-broadcast dispatch call sites (delivery.controller.ts,
   // shopkeeper.controller.ts) that push to many drivers at once instead of a
-  // single known recipient. Expo's batch response returns one ticket per
-  // input message, in the same order, so ticket[i] maps to partners[i].
+  // single known recipient. Fire-and-forget like sendExpoPush: never throws.
+  // Now a thin wrapper over sendExpoPushBatch, which also chunks by Expo's
+  // 100-messages-per-request limit (this used to send every partner in one
+  // request, which Expo rejects outright past 100 recipients).
   async sendExpoPushBatchToDrivers(
     partners: { user_id: string; expo_push_token: string }[],
     title: string,
@@ -86,33 +96,120 @@ export class NotificationService {
   ) {
     if (!partners.length) return;
     try {
-      const { json } = await fetchJsonWithTimeout<any>('Expo push', EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(partners.map((p) => ({
-          to: p.expo_push_token, sound: 'default', title, body, data, channelId: ORDER_ALERT_CHANNEL_ID,
-        }))),
-      }, UPSTREAM_TIMEOUTS_MS.expoPush);
-      const tickets = Array.isArray(json?.data) ? json.data : [];
-      const staleIds: string[] = [];
-      tickets.forEach((ticket: any, i: number) => {
-        if (ticket?.status === 'error') {
-          console.error('Expo push ticket error:', ticket.message, ticket.details);
-          if (ticket.details?.error === 'DeviceNotRegistered' && partners[i]) {
-            staleIds.push(partners[i].user_id);
-          }
-        }
-      });
-      if (staleIds.length) {
-        const { error } = await supabaseAdmin
-          .from('delivery_partners')
-          .update({ expo_push_token: null })
-          .in('user_id', staleIds);
-        if (error) console.error('Failed to clear stale expo_push_token(s):', error);
-      }
+      await this.sendExpoPushBatch(
+        partners.map((p) => ({
+          token: p.expo_push_token,
+          staleTokenTarget: { table: 'delivery_partners', idColumn: 'user_id', idValue: p.user_id },
+        })),
+        title,
+        body,
+        data
+      );
     } catch (err) {
       console.error('Expo push batch send failed:', err);
     }
+  }
+
+  /**
+   * Push one message to many devices. Expo accepts at most EXPO_PUSH_CHUNK_SIZE
+   * messages per request, so recipients are sent in chunks; each chunk's
+   * response is one ticket per message (same order), and a ticket with
+   * status 'error' means that device was NOT reached even though the HTTP
+   * status was 200. DeviceNotRegistered tokens are nulled out in their source
+   * table (grouped per table into one UPDATE each) so the next broadcast
+   * doesn't pay for them again.
+   *
+   * Returns real delivery counts for the caller to report: `sent` = tickets
+   * with status 'ok', `failed` = error tickets + any message Expo did not
+   * answer for, `errors` = distinct reasons (first EXPO_PUSH_MAX_ERRORS). A
+   * transport failure (timeout, non-JSON body, request-level `errors`) stops
+   * the remaining chunks — if Expo is down, waiting out a timeout per chunk
+   * helps nobody — and counts every unsent message as failed.
+   */
+  async sendExpoPushBatch(
+    recipients: BatchPushRecipient[],
+    title: string,
+    body: string,
+    data: object = {},
+    sound: string = 'default'
+  ): Promise<BatchPushResult> {
+    const result: BatchPushResult = { sent: 0, failed: 0, errors: [] };
+    if (!recipients.length) return result;
+
+    const errorSet = new Set<string>();
+    const noteError = (message: string) => {
+      if (errorSet.size < EXPO_PUSH_MAX_ERRORS && !errorSet.has(message)) errorSet.add(message);
+    };
+    // table -> idColumn -> idValues, so each source table gets one UPDATE ... IN (...)
+    const stale = new Map<StaleTokenTarget['table'], Map<string, Set<string>>>();
+
+    for (let start = 0; start < recipients.length; start += EXPO_PUSH_CHUNK_SIZE) {
+      const chunk = recipients.slice(start, start + EXPO_PUSH_CHUNK_SIZE);
+      let tickets: any[];
+      try {
+        const { response, json } = await fetchJsonWithTimeout<any>('Expo push', EXPO_PUSH_URL, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Accept-encoding': 'gzip, deflate',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chunk.map((r) => ({
+            to: r.token, sound, title, body, data, channelId: ORDER_ALERT_CHANNEL_ID,
+          }))),
+        }, UPSTREAM_TIMEOUTS_MS.expoPush);
+        // Request-level failure (bad payload, Expo-side 4xx/5xx): no tickets at all.
+        const requestErrors = Array.isArray(json?.errors) ? json.errors : [];
+        if (!response.ok || requestErrors.length) {
+          const reason = requestErrors[0]?.message || `Push service returned HTTP ${response.status}`;
+          throw new Error(reason);
+        }
+        tickets = Array.isArray(json?.data) ? json.data : [];
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : 'Push service request failed';
+        console.error('Expo push batch chunk failed:', reason);
+        noteError(reason);
+        result.failed += recipients.length - start;
+        break;
+      }
+
+      chunk.forEach((recipient, i) => {
+        const ticket = tickets[i];
+        if (ticket?.status === 'ok') {
+          result.sent += 1;
+          return;
+        }
+        result.failed += 1;
+        if (!ticket) {
+          noteError('No delivery ticket returned for a message');
+          return;
+        }
+        const code: string | undefined = ticket.details?.error;
+        console.error('Expo push ticket error:', ticket.message, ticket.details);
+        noteError(code || ticket.message || 'Unknown push error');
+        if (code === 'DeviceNotRegistered' && recipient.staleTokenTarget) {
+          const { table, idColumn, idValue } = recipient.staleTokenTarget;
+          const byColumn = stale.get(table) ?? new Map<string, Set<string>>();
+          const ids = byColumn.get(idColumn) ?? new Set<string>();
+          ids.add(idValue);
+          byColumn.set(idColumn, ids);
+          stale.set(table, byColumn);
+        }
+      });
+    }
+
+    for (const [table, byColumn] of stale) {
+      for (const [idColumn, ids] of byColumn) {
+        const { error } = await supabaseAdmin
+          .from(table)
+          .update({ expo_push_token: null })
+          .in(idColumn, [...ids]);
+        if (error) console.error(`Failed to clear stale expo_push_token(s) on ${table}:`, error);
+      }
+    }
+
+    result.errors = [...errorSet];
+    return result;
   }
 
   // Real preference enforcement for rider push notifications — unlike the

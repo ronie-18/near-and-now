@@ -1,7 +1,19 @@
 import { Request, Response } from 'express';
+import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from '../services/database.service.js';
-import { notificationService } from '../services/notification.service.js';
+import { notificationService, type BatchPushRecipient } from '../services/notification.service.js';
 import { sendError } from '../utils/httpError.js';
+
+export const BROADCAST_TARGETS = ['all', 'drivers', 'stores', 'customers'] as const;
+export type BroadcastTarget = (typeof BROADCAST_TARGETS)[number];
+
+/** Validated body of POST /api/notifications/broadcast (see notifications.routes.ts). */
+export interface BroadcastPushBody {
+  target: BroadcastTarget;
+  title: string;
+  message: string;
+  data?: Record<string, unknown>;
+}
 
 export class NotificationsController {
   // Get user notifications
@@ -60,6 +72,94 @@ export class NotificationsController {
       res.json({ success: true, message: 'Notification sent successfully' });
     } catch (error) {
       return sendError(res, 'NotificationsController.sendOrderNotification', 'Could not send notification', error);
+    }
+  }
+
+  /**
+   * Admin broadcast to every registered device of the chosen apps.
+   *
+   * The admin panel used to do this from the browser: three token RPCs, then
+   * POST https://exp.host directly, judging success by the HTTP status alone
+   * (Expo answers 200 even when every ticket is an error) and with no chunking
+   * past Expo's 100-messages-per-request limit. Moved here so it reuses
+   * sendExpoPushBatch — chunking, the outbound deadline, DeviceNotRegistered
+   * token clearing, server logging — and reports what was actually delivered.
+   * Same tables/filters as the admin_get_*_push_tokens RPCs the page called.
+   */
+  async broadcastPush(req: Request, res: Response) {
+    const where = 'NotificationsController.broadcastPush';
+    try {
+      const { target, title, message, data } = req.body as BroadcastPushBody;
+
+      const wants = (t: Exclude<BroadcastTarget, 'all'>) => target === 'all' || target === t;
+      const [drivers, stores, customers] = await Promise.all([
+        wants('drivers')
+          ? supabaseAdmin.from('delivery_partners').select('user_id, expo_push_token').not('expo_push_token', 'is', null)
+          : Promise.resolve({ data: [] as any[], error: null as any }),
+        wants('stores')
+          ? supabaseAdmin.from('stores').select('id, expo_push_token').not('expo_push_token', 'is', null)
+          : Promise.resolve({ data: [] as any[], error: null as any }),
+        wants('customers')
+          ? supabaseAdmin.from('app_users').select('id, expo_push_token').eq('role', 'customer').not('expo_push_token', 'is', null)
+          : Promise.resolve({ data: [] as any[], error: null as any }),
+      ]);
+      for (const [label, result] of [['driver', drivers], ['store', stores], ['customer', customers]] as const) {
+        if (result.error) {
+          return sendError(res, where, `Could not load ${label} push tokens`, result.error);
+        }
+      }
+
+      // One message per distinct token — the same device can be registered
+      // under more than one row (or app), and must not be pinged twice.
+      const seen = new Set<string>();
+      const recipients: BatchPushRecipient[] = [];
+      const add = (token: unknown, staleTokenTarget: BatchPushRecipient['staleTokenTarget']) => {
+        if (typeof token !== 'string' || !token || seen.has(token)) return;
+        seen.add(token);
+        recipients.push({ token, staleTokenTarget });
+      };
+      for (const r of drivers.data ?? []) add(r.expo_push_token, { table: 'delivery_partners', idColumn: 'user_id', idValue: r.user_id });
+      for (const r of stores.data ?? []) add(r.expo_push_token, { table: 'stores', idColumn: 'id', idValue: r.id });
+      for (const r of customers.data ?? []) add(r.expo_push_token, { table: 'app_users', idColumn: 'id', idValue: r.id });
+
+      if (recipients.length === 0) {
+        return res.json({ success: true, target, tokens: 0, sent: 0, failed: 0, errors: [] });
+      }
+
+      const result = await notificationService.sendExpoPushBatch(
+        recipients,
+        title,
+        message,
+        { ...(data ?? {}), type: 'admin_broadcast' }
+      );
+
+      // Log the broadcast in the admin inbox (the page used to insert this row
+      // itself). Only when something was actually delivered — a broadcast that
+      // reached nobody is an error to the admin, not an event. Non-fatal: the
+      // pushes are already out, so a failed log row must not read as "not sent".
+      if (result.sent > 0) {
+        const { data: actor } = await supabaseAdmin.from('admins').select('role').eq('id', req.adminId).maybeSingle();
+        const { error: logError } = await supabaseAdmin.from('admin_notifications').insert({
+          type: 'system',
+          title,
+          message,
+          data: {
+            target,
+            tokens_count: recipients.length,
+            delivered_count: result.sent,
+            failed_count: result.failed,
+            broadcast: true,
+          },
+          actor_id: req.adminId,
+          actor_role: actor?.role ?? null,
+        });
+        if (logError) console.error('Failed to log admin broadcast in admin_notifications:', logError);
+      }
+
+      console.log(`📣 Admin broadcast to ${target}: ${result.sent} sent, ${result.failed} failed of ${recipients.length} device(s)`);
+      res.json({ success: true, target, tokens: recipients.length, sent: result.sent, failed: result.failed, errors: result.errors });
+    } catch (error) {
+      return sendError(res, where, 'Could not send the broadcast', error);
     }
   }
 

@@ -1,7 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { getAdminToken } from '../../services/adminSession';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Search,
   Trash2,
   MapPin,
   Phone,
@@ -9,7 +7,6 @@ import {
   CheckCircle,
   RefreshCw,
   AlertCircle,
-  X,
   Truck,
   Wifi,
   WifiOff,
@@ -17,13 +14,46 @@ import {
   CreditCard,
   Download,
   CheckSquare,
+  FileSearch,
 } from 'lucide-react';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
+import { getAdminToken } from '../../services/adminSession';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { hasPermission } from '../../services/adminAuthService';
 import { notifyAdminAction } from '../../services/adminService';
 import { exportToCsv } from '../../utils/csvExport';
+import { apiUrl } from '../../utils/apiBase';
+import { formatDate, formatDateTime } from '../../utils/format';
+import { useToast } from '../../context/ToastContext';
+import IdCell from '../../components/admin/IdCell';
+import {
+  PageHeader,
+  StatCard,
+  StatGrid,
+  Card,
+  CardBody,
+  FilterBar,
+  SearchInput,
+  Button,
+  IconButton,
+  Tooltip,
+  Badge,
+  StatusBadge,
+  Alert,
+  EmptyState,
+  Checkbox,
+  Toggle,
+  TableContainer,
+  Table,
+  THead,
+  TBody,
+  Tr,
+  Th,
+  Td,
+  TableEmptyRow,
+  TableSkeletonRows,
+  useConfirm,
+} from '../../components/ui';
 import { DeliveryDocumentReviewModal, DOC_LABELS } from './DeliveryDocumentReviewModal';
 
 // Mirrors the backend's isVehicleRegistrationRequired (deliveryPartnerVerificationDocuments.ts)
@@ -54,7 +84,18 @@ interface PartnerData {
 
 type StatFilter = 'all' | 'online' | 'offline' | 'pending' | 'approved' | 'deleted';
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+interface DocStatus {
+  doc_type: string;
+  status: string | null;
+}
+
+interface ApprovalReadiness {
+  ready: boolean;
+  /** Full explanation (document names) for toasts and the button title. */
+  reason?: string;
+  /** Short form ("2 documents missing") that fits in a tooltip. */
+  summary?: string;
+}
 
 function adminAuthHeaders(): Record<string, string> {
   const token = getAdminToken() || '';
@@ -68,51 +109,72 @@ const VEHICLE_LABELS: Record<string, string> = {
   cycle: 'Bicycle',
 };
 
-// ─── Stat Card (clickable — doubles as a filter button) ────────────────────
-const StatCard = ({
-  icon: Icon, gradient, label, value, active, onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-  label: string;
-  value: number;
-  active: boolean;
-  onClick: () => void;
-}) => (
-  <button
-    onClick={onClick}
-    className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 text-left ${
-      active ? 'ring-4 ring-white ring-offset-2 ring-offset-orange-100' : ''
-    }`}
-  >
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="relative z-10">
-      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
-        <Icon className="w-6 h-6" />
-      </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-    </div>
-  </button>
-);
+// Checkbox, Name, Contact, Address, UPI, Vehicle type, Vehicle number,
+// Status, Verification, Approved on, Updated on, Joined, Actions.
+const TABLE_COLUMNS = 13;
+
+const pluralDocs = (n: number) => `${n} document${n === 1 ? '' : 's'}`;
+
+// A rider can only be approved once every document required for their
+// vehicle type has actually been reviewed and approved by an admin —
+// otherwise "Approve" was previously a no-op check against documents at
+// all, letting a rider go live with zero or rejected documents.
+// Pure so the page can memoise one result per rider instead of recomputing
+// it twice per row on every render.
+function computeApprovalReadiness(partner: PartnerData, docs: DocStatus[]): ApprovalReadiness {
+  const requiredTypes = Object.keys(DOC_LABELS).filter(
+    (t) => t !== 'vehicle_registration' || isVehicleRegistrationRequired(partner.vehicle_type)
+  );
+  const missing = requiredTypes.filter((t) => !docs.some((d) => d.doc_type === t));
+  if (missing.length > 0) {
+    return {
+      ready: false,
+      reason: `Missing document(s): ${missing.map((t) => DOC_LABELS[t]).join(', ')}`,
+      summary: `${pluralDocs(missing.length)} missing`,
+    };
+  }
+  const notApproved = docs.filter((d) => requiredTypes.includes(d.doc_type) && d.status !== 'approved');
+  if (notApproved.length > 0) {
+    return {
+      ready: false,
+      reason: `Not yet approved: ${notApproved.map((d) => DOC_LABELS[d.doc_type] || d.doc_type).join(', ')}`,
+      summary: `${pluralDocs(notApproved.length)} not yet approved`,
+    };
+  }
+  return { ready: true };
+}
 
 const DeliveryPage = () => {
+  const { showToast } = useToast();
+  const confirm = useConfirm();
+
   const [partners, setPartners] = useState<PartnerData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [liveUpdatesDown, setLiveUpdatesDown] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [togglingOnlineId, setTogglingOnlineId] = useState<string | null>(null);
   const [reviewingPartner, setReviewingPartner] = useState<PartnerData | null>(null);
   const [docsUpdatedAt, setDocsUpdatedAt] = useState<Record<string, string>>({});
-  const [docStatusByPartner, setDocStatusByPartner] = useState<Record<string, { doc_type: string; status: string | null }[]>>({});
+  const [docStatusByPartner, setDocStatusByPartner] = useState<Record<string, DocStatus[]>>({});
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [pendingUpiByRider, setPendingUpiByRider] = useState<Record<string, string>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
+
+  // Set once the roster has loaded successfully. Later fetches (manual
+  // Refresh, poll, focus) keep the table on screen and only flag
+  // `refreshing` instead of blanking the page with a loading state.
+  const loadedOnceRef = useRef(false);
+  // Monotonic id for roster fetches: Refresh, the poll and the visibility
+  // handler can overlap, and an older response must not overwrite a newer
+  // roster (or an optimistic row patch made in between).
+  const rosterRequestRef = useRef(0);
+  const selectAllRef = useRef<HTMLInputElement>(null);
 
   // Clear the selection whenever the visible list changes shape — otherwise
   // a row selected under one filter stays "selected" (just invisible) after
@@ -134,10 +196,13 @@ const DeliveryPage = () => {
   // getAdminClient() directly. Non-fatal if it fails or the admin lacks the
   // separate profile_change_requests.view permission (list access alone is
   // gated on delivery_partners.view).
+  // Note: the poll/visibility handlers below call this through the mount
+  // effect's closure, so they see the permission as of first render — fine
+  // today because the admin session does not change in-page.
   const refreshPendingUpi = async () => {
     if (!canViewChangeRequests) return;
     try {
-      const res = await fetch(`${API_BASE}/api/delivery/partners/profile-change-requests?status=pending`, {
+      const res = await fetch(apiUrl('/api/delivery/partners/profile-change-requests?status=pending'), {
         headers: adminAuthHeaders(),
       });
       if (!res.ok) throw new Error('Failed to fetch pending change requests');
@@ -164,7 +229,7 @@ const DeliveryPage = () => {
         .select('partner_id, updated_at, doc_type, status');
       if (docsError) throw docsError;
       const latest: Record<string, string> = {};
-      const byPartner: Record<string, { doc_type: string; status: string | null }[]> = {};
+      const byPartner: Record<string, DocStatus[]> = {};
       for (const row of docRows || []) {
         if (!latest[row.partner_id] || row.updated_at > latest[row.partner_id]) {
           latest[row.partner_id] = row.updated_at;
@@ -176,29 +241,6 @@ const DeliveryPage = () => {
     } catch (docsErr) {
       console.error('Error fetching verification-document timestamps:', docsErr);
     }
-  };
-
-  // A rider can only be approved once every document required for their
-  // vehicle type has actually been reviewed and approved by an admin —
-  // otherwise "Approve" was previously a no-op check against documents at
-  // all, letting a rider go live with zero or rejected documents.
-  const approvalReadiness = (partner: PartnerData): { ready: boolean; reason?: string } => {
-    const docs = docStatusByPartner[partner.user_id] || [];
-    const requiredTypes = Object.keys(DOC_LABELS).filter(
-      (t) => t !== 'vehicle_registration' || isVehicleRegistrationRequired(partner.vehicle_type)
-    );
-    const missing = requiredTypes.filter((t) => !docs.some((d) => d.doc_type === t));
-    if (missing.length > 0) {
-      return { ready: false, reason: `Missing document(s): ${missing.map((t) => DOC_LABELS[t]).join(', ')}` };
-    }
-    const notApproved = docs.filter((d) => requiredTypes.includes(d.doc_type) && d.status !== 'approved');
-    if (notApproved.length > 0) {
-      return {
-        ready: false,
-        reason: `Not yet approved: ${notApproved.map((d) => DOC_LABELS[d.doc_type] || d.doc_type).join(', ')}`,
-      };
-    }
-    return { ready: true };
   };
 
   const refreshApproverNames = async (partnerList: PartnerData[]) => {
@@ -221,6 +263,7 @@ const DeliveryPage = () => {
   };
 
   const refreshAll = async () => {
+    const requestId = ++rosterRequestRef.current;
     // session_token/expo_push_token are deliberately excluded: neither is
     // used on this page, and both are no longer anon/authenticated-readable
     // at all (see 20260930290000 migration) — a plain select('*') would fail
@@ -231,16 +274,32 @@ const DeliveryPage = () => {
       .from('delivery_partners')
       .select('user_id, name, email, phone, address, upi_id, vehicle_type, vehicle_number, is_online, status, is_approved, created_at, updated_at, approved_at, approved_by, deleted_at')
       .order('created_at', { ascending: false });
+    // A newer roster fetch started while this one was in flight — let it win,
+    // whether this one succeeded or failed. The staleness check must come
+    // before the throw: a superseded request that errored would otherwise
+    // raise a "Failed to load" alert over data the newer request is about to
+    // show (and stop the Refresh spinner early with a misleading error).
+    if (requestId !== rosterRequestRef.current) return;
     if (sbError) throw sbError;
     setPartners(data || []);
-    await refreshDocsUpdatedAt();
-    await refreshApproverNames(data || []);
-    await refreshPendingUpi();
+    // A successful poll/focus/Realtime-triggered refresh supersedes an earlier
+    // failed manual refresh, so its "please try again" alert would now be
+    // stale — clear it rather than leaving it until the admin dismisses it.
+    setError(null);
+    loadedOnceRef.current = true;
+    // Three independent reads — run them together instead of serially.
+    await Promise.all([
+      refreshDocsUpdatedAt(),
+      refreshApproverNames(data || []),
+      refreshPendingUpi(),
+    ]);
   };
 
   const fetchPartners = async () => {
+    const initial = !loadedOnceRef.current;
     try {
-      setLoading(true);
+      if (initial) setLoading(true);
+      else setRefreshing(true);
       setError(null);
       await refreshAll();
     } catch (err) {
@@ -248,11 +307,12 @@ const DeliveryPage = () => {
       setError('Failed to load delivery partners. Please try again.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
-    fetchPartners();
+    void fetchPartners();
 
     const client = getAdminClient();
     const channel = client
@@ -261,6 +321,20 @@ const DeliveryPage = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'delivery_partner_verification_documents' },
         () => {
+          void refreshDocsUpdatedAt();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'delivery_partners' },
+        (payload) => {
+          // Newly registered riders used to wait for the 3-minute poll even
+          // though the Pending Approval count is the main reason to watch
+          // this page.
+          const inserted = payload.new as PartnerData;
+          setPartners((prev) =>
+            prev.some((p) => p.user_id === inserted.user_id) ? prev : [inserted, ...prev]
+          );
           void refreshDocsUpdatedAt();
         }
       )
@@ -275,7 +349,18 @@ const DeliveryPage = () => {
           if (updated.approved_by) void refreshApproverNames([updated]);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Without a status callback CHANNEL_ERROR/TIMED_OUT were swallowed:
+        // the poll still refreshes, but the admin should know that the
+        // list is no longer live.
+        const s = String(status);
+        if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') {
+          console.error('Delivery partners realtime channel unavailable:', s);
+          setLiveUpdatesDown(true);
+        } else if (s === 'SUBSCRIBED') {
+          setLiveUpdatesDown(false);
+        }
+      });
 
     // Safety net, not the primary update path (Realtime above handles that)
     // — a 20s cadence meant every open Delivery tab did 2 full-table scans
@@ -309,6 +394,7 @@ const DeliveryPage = () => {
       stopPoll();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // "Total"/online/offline/pending/approved all deliberately exclude deleted
@@ -358,10 +444,49 @@ const DeliveryPage = () => {
       });
   }, [partners, searchTerm, statFilter, docsUpdatedAt]);
 
+  const readinessById = useMemo(() => {
+    const map: Record<string, ApprovalReadiness> = {};
+    for (const p of partners) {
+      map[p.user_id] = computeApprovalReadiness(p, docStatusByPartner[p.user_id] || []);
+    }
+    return map;
+  }, [partners, docStatusByPartner]);
+
+  const approvalReadiness = (partner: PartnerData): ApprovalReadiness =>
+    readinessById[partner.user_id] ??
+    computeApprovalReadiness(partner, docStatusByPartner[partner.user_id] || []);
+
+  // Only live rows can be selected: bulk approve must never touch a
+  // soft-deleted rider (the backend sets offboarded/is_approved false on
+  // delete, and approving from the Deleted tab would contradict that).
+  const selectablePartners = useMemo(
+    () => filteredPartners.filter((p) => !p.deleted_at),
+    [filteredPartners]
+  );
+  const allVisibleSelected =
+    selectablePartners.length > 0 && selectablePartners.every((p) => selectedIds.has(p.user_id));
+  const someVisibleSelected = selectablePartners.some((p) => selectedIds.has(p.user_id));
+
+  // Prune ids that left the visible list (e.g. a rider soft-deleted from
+  // another tab via Realtime) so "N selected" and select-all stay truthful.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(selectablePartners.map((p) => p.user_id));
+      const next = new Set(Array.from(prev).filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [selectablePartners]);
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someVisibleSelected && !allVisibleSelected;
+    }
+  }, [someVisibleSelected, allVisibleSelected]);
+
   const toggleOnline = async (partner: PartnerData) => {
     if (!partner.is_approved && !partner.is_online) {
-      setError('Only approved partners can be set online.');
-      setTimeout(() => setError(null), 4000);
+      showToast('Only approved partners can be set online.', 'error');
       return;
     }
     setTogglingOnlineId(partner.user_id);
@@ -390,9 +515,9 @@ const DeliveryPage = () => {
         { rider_id: partner.user_id, rider_name: partner.name, is_online: nextOnline },
         'rider_status_changed'
       );
+      showToast(`${partner.name} is now ${nextOnline ? 'online' : 'offline'}.`, 'success');
     } catch (err: any) {
-      setError(`Failed to update online status: ${err.message}`);
-      setTimeout(() => setError(null), 4000);
+      showToast(`Failed to update online status: ${err.message}`, 'error');
     } finally {
       setTogglingOnlineId(null);
     }
@@ -401,15 +526,16 @@ const DeliveryPage = () => {
   // Mirrors StoresPage.toggleApproval — is_approved + approved_at/by are the
   // approval gate. Also syncs status so the rider app can go online after
   // approve (DriverApp requires status === 'active').
-  const toggleApproval = async (partner: PartnerData) => {
+  // Returns true on success so bulk approve can count what it changed.
+  const toggleApproval = async (partner: PartnerData, options: { silent?: boolean } = {}): Promise<boolean> => {
     const nextApproved = !partner.is_approved;
     // Only gate the approve direction — revoking must always be allowed
     // regardless of document status.
     if (nextApproved) {
       const readiness = approvalReadiness(partner);
       if (!readiness.ready) {
-        setError(`Cannot approve "${partner.name}": ${readiness.reason}. Review documents first.`);
-        return;
+        showToast(`Cannot approve "${partner.name}": ${readiness.reason}. Review documents first.`, 'error', 6000);
+        return false;
       }
     }
     setApprovingId(partner.user_id);
@@ -456,7 +582,7 @@ const DeliveryPage = () => {
       // next time the app happens to poll. Never blocks/fails the approval
       // itself — the Supabase write above already succeeded.
       if (nextApproved) {
-        fetch(`${API_BASE}/api/delivery/partners/${partner.user_id}/notify-approved`, {
+        fetch(apiUrl(`/api/delivery/partners/${partner.user_id}/notify-approved`), {
           method: 'POST',
           headers: adminAuthHeaders(),
         }).catch(() => {});
@@ -471,8 +597,16 @@ const DeliveryPage = () => {
         { rider_id: partner.user_id, rider_name: partner.name, is_approved: nextApproved },
         'admin_review_action'
       );
+      if (!options.silent) {
+        showToast(
+          nextApproved ? `Approved ${partner.name}.` : `Revoked approval for ${partner.name}.`,
+          'success'
+        );
+      }
+      return true;
     } catch (err: any) {
-      setError(`Failed to update approval: ${err.message}`);
+      showToast(`Failed to update approval: ${err.message}`, 'error');
+      return false;
     } finally {
       setApprovingId(null);
     }
@@ -480,24 +614,37 @@ const DeliveryPage = () => {
 
   // Mirrors StoresPage.bulkApproveSelected — reuses toggleApproval per row
   // (same readiness gate, same notification, same error handling) instead of
-  // a separate bulk endpoint. Skips already-approved or not-yet-ready riders
-  // in the selection rather than erroring the whole batch.
+  // a separate bulk endpoint. Skips already-approved, soft-deleted or
+  // not-yet-ready riders in the selection rather than erroring the whole batch.
   const bulkApproveSelected = async () => {
     const targets = filteredPartners.filter(
-      (p) => selectedIds.has(p.user_id) && !p.is_approved && approvalReadiness(p).ready
+      (p) => selectedIds.has(p.user_id) && !p.deleted_at && !p.is_approved && approvalReadiness(p).ready
     );
     if (targets.length === 0) {
-      setError('None of the selected riders are eligible — they may already be approved or still need document review.');
+      showToast(
+        'None of the selected riders are eligible — they may already be approved or still need document review.',
+        'error',
+        5000
+      );
       return;
     }
+    const skipped = selectedIds.size - targets.length;
     setBulkApproving(true);
+    let approved = 0;
     try {
       for (const partner of targets) {
-        await toggleApproval(partner);
+        if (await toggleApproval(partner, { silent: true })) approved += 1;
       }
     } finally {
       setBulkApproving(false);
       setSelectedIds(new Set());
+    }
+    if (approved > 0) {
+      showToast(
+        `Approved ${approved} rider${approved === 1 ? '' : 's'}.${skipped > 0 ? ` ${skipped} skipped (already approved or not ready).` : ''}`,
+        'success',
+        skipped > 0 ? 5000 : 3000
+      );
     }
   };
 
@@ -511,9 +658,12 @@ const DeliveryPage = () => {
   };
 
   const toggleSelectAll = () => {
-    setSelectedIds((prev) =>
-      prev.size === filteredPartners.length ? new Set() : new Set(filteredPartners.map((p) => p.user_id))
-    );
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(selectablePartners.map((p) => p.user_id)));
+  };
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setStatFilter('all');
   };
 
   const exportCsv = () => {
@@ -539,10 +689,16 @@ const DeliveryPage = () => {
   // deleted_at, never a real row delete) — order/payout/document history for
   // this rider is fully preserved, just hidden from the default roster.
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Remove "${name}"? Their order and payout history is kept — this can be undone from the Deleted tab.`)) return;
+    const ok = await confirm({
+      title: `Remove ${name}?`,
+      message: 'Their order and payout history is kept — this can be undone from the Deleted tab.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       setDeleteLoading(id);
-      const res = await fetch(`${API_BASE}/api/delivery/partners/${id}`, {
+      const res = await fetch(apiUrl(`/api/delivery/partners/${id}`), {
         method: 'DELETE',
         headers: adminAuthHeaders(),
       });
@@ -551,11 +707,9 @@ const DeliveryPage = () => {
         p.user_id === id ? { ...p, status: 'offboarded', is_online: false, is_approved: false, deleted_at: new Date().toISOString() } : p
       )));
       await notifyAdminAction(`removed rider`, name, { rider_id: id, rider_name: name }, 'admin_review_action');
-      setSuccess(`"${name}" has been removed.`);
-      setTimeout(() => setSuccess(null), 3000);
+      showToast(`"${name}" has been removed.`, 'success');
     } catch {
-      setError('Failed to delete delivery partner.');
-      setTimeout(() => setError(null), 4000);
+      showToast('Failed to delete delivery partner.', 'error');
     } finally {
       setDeleteLoading(null);
     }
@@ -564,7 +718,7 @@ const DeliveryPage = () => {
   const handleRestore = async (id: string, name: string) => {
     try {
       setDeleteLoading(id);
-      const res = await fetch(`${API_BASE}/api/delivery/partners/${id}/restore`, {
+      const res = await fetch(apiUrl(`/api/delivery/partners/${id}/restore`), {
         method: 'POST',
         headers: adminAuthHeaders(),
       });
@@ -573,427 +727,434 @@ const DeliveryPage = () => {
         p.user_id === id ? { ...p, status: 'pending_verification', deleted_at: null } : p
       )));
       await notifyAdminAction(`restored rider`, name, { rider_id: id, rider_name: name }, 'admin_review_action');
-      setSuccess(`"${name}" has been restored — they'll need re-approval before going online.`);
-      setTimeout(() => setSuccess(null), 4000);
+      showToast(`"${name}" has been restored — they'll need re-approval before going online.`, 'success', 4000);
     } catch {
-      setError('Failed to restore delivery partner.');
-      setTimeout(() => setError(null), 4000);
+      showToast('Failed to restore delivery partner.', 'error');
     } finally {
       setDeleteLoading(null);
     }
   };
 
+  const isFiltered = Boolean(searchTerm) || statFilter !== 'all';
+  // The footer total must agree with the stat cards: live counts exclude
+  // soft-deleted riders, and the Deleted tab counts only them.
+  const showingTotal = statFilter === 'deleted' ? stats.deleted : stats.total;
+  const showLoadError = Boolean(error) && partners.length === 0 && !loading;
+
   return (
-    <AdminLayout>
-      <div className="space-y-6">
-        {/* Header — refresh only (no Add Partner), same as Stores */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Delivery Partners</h1>
-            <p className="text-gray-500 mt-1">Manage, approve and track all delivery partners</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={exportCsv}
-              disabled={filteredPartners.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200 disabled:opacity-50"
-              title="Export the currently filtered list as CSV"
-            >
-              <Download size={18} />
-              <span className="text-sm font-semibold">Export CSV</span>
-            </button>
-            <button
-              onClick={fetchPartners}
-              className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
-              title="Refresh"
-            >
-              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
-        </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Delivery partners"
+        description="Manage, approve and track all delivery partners."
+      />
 
-        {/* Alerts */}
-        {error && (
-          <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl flex items-center shadow-lg">
-            <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-            <span className="flex-1 font-medium text-sm">{error}</span>
-            <button onClick={() => setError(null)} className="ml-3 p-1 hover:bg-white/20 rounded-lg"><X size={16} /></button>
-          </div>
-        )}
-        {success && (
-          <div className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-5 py-4 rounded-xl flex items-center shadow-lg">
-            <CheckCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-            <span className="flex-1 font-medium text-sm">{success}</span>
-            <button onClick={() => setSuccess(null)} className="ml-3 p-1 hover:bg-white/20 rounded-lg"><X size={16} /></button>
-          </div>
-        )}
+      {error && partners.length > 0 && (
+        <Alert
+          tone="danger"
+          onDismiss={() => setError(null)}
+          actions={
+            <Button variant="secondary" size="sm" onClick={() => void fetchPartners()}>
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
+      )}
 
-        {/* Stats — clickable filters */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard icon={Truck} gradient="bg-gradient-to-br from-orange-500 to-rose-600" label="Total Partners" value={stats.total} active={statFilter === 'all'} onClick={() => setStatFilter('all')} />
-          <StatCard icon={Wifi} gradient="bg-gradient-to-br from-emerald-500 to-teal-600" label="Online" value={stats.online} active={statFilter === 'online'} onClick={() => setStatFilter('online')} />
-          <StatCard icon={WifiOff} gradient="bg-gradient-to-br from-gray-500 to-gray-600" label="Offline" value={stats.offline} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
-          <StatCard icon={AlertCircle} gradient="bg-gradient-to-br from-amber-500 to-orange-600" label="Pending Approval" value={stats.pending} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
-          <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-sky-500 to-blue-600" label="Approved" value={stats.approved} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
-          <StatCard icon={Trash2} gradient="bg-gradient-to-br from-slate-500 to-gray-600" label="Deleted" value={stats.deleted} active={statFilter === 'deleted'} onClick={() => setStatFilter('deleted')} />
-        </div>
+      {/* Stats — clickable filters. When the roster itself failed to load the
+          counts are unknown, not zero, so show a dash instead of contradicting
+          the "Could not load" state in the table below. */}
+      <StatGrid columns={6}>
+        <StatCard label="Total partners" value={showLoadError ? '—' : stats.total} icon={Truck} loading={loading} active={statFilter === 'all'} onClick={() => setStatFilter('all')} />
+        <StatCard label="Online" value={showLoadError ? '—' : stats.online} icon={Wifi} loading={loading} active={statFilter === 'online'} onClick={() => setStatFilter('online')} />
+        <StatCard label="Offline" value={showLoadError ? '—' : stats.offline} icon={WifiOff} loading={loading} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
+        <StatCard label="Pending approval" value={showLoadError ? '—' : stats.pending} icon={AlertCircle} loading={loading} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
+        <StatCard label="Approved" value={showLoadError ? '—' : stats.approved} icon={CheckCircle} loading={loading} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
+        <StatCard label="Deleted" value={showLoadError ? '—' : stats.deleted} icon={Trash2} loading={loading} active={statFilter === 'deleted'} onClick={() => setStatFilter('deleted')} />
+      </StatGrid>
 
-        {/* Search */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-          <div className="relative">
-            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by name, phone, email, address, vehicle type, or number..."
+      <Card>
+        <CardBody padding="none">
+          <FilterBar
+            actions={
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<Download />}
+                  onClick={exportCsv}
+                  disabled={filteredPartners.length === 0}
+                  title="Export the currently filtered list as CSV"
+                >
+                  Export CSV
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<RefreshCw />}
+                  onClick={() => void fetchPartners()}
+                  loading={refreshing}
+                  disabled={loading}
+                >
+                  Refresh
+                </Button>
+              </>
+            }
+          >
+            <SearchInput
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-orange-400 focus:ring-0 transition-colors text-gray-800"
+              onChange={setSearchTerm}
+              placeholder="Search name, phone, email or vehicle"
+              aria-label="Search delivery partners by name, phone, email, address or vehicle"
+              containerClassName="w-full sm:w-80"
             />
-            {searchTerm && (
-              <button onClick={() => setSearchTerm('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <X size={18} />
-              </button>
+            {isFiltered && (
+              <Button variant="link" size="sm" onClick={clearFilters}>
+                Clear filters
+              </Button>
             )}
-          </div>
-        </div>
+          </FilterBar>
 
-        {/* Bulk action bar — only shown once at least one row is selected */}
-        {selectedIds.size > 0 && (
-          <div className="bg-orange-50 border border-orange-200 rounded-xl px-5 py-3 flex items-center justify-between">
-            <span className="text-sm font-semibold text-orange-800">{selectedIds.size} selected</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={bulkApproveSelected}
-                disabled={bulkApproving}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg text-sm font-semibold hover:bg-orange-700 disabled:opacity-50"
-              >
-                <CheckSquare size={16} />
-                {bulkApproving ? 'Approving…' : 'Approve Selected'}
-              </button>
-              <button
-                onClick={() => setSelectedIds(new Set())}
-                className="px-4 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100 rounded-lg"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Partners Table */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {loading ? (
-            <div className="p-16 flex flex-col items-center justify-center">
-              <div className="relative">
-                <div className="w-16 h-16 border-4 border-orange-200 rounded-full" />
-                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full animate-spin border-t-transparent" />
+          {/* Bulk action bar — only shown once at least one row is selected */}
+          {selectedIds.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-200 bg-brand-50 px-4 py-2.5">
+              <span className="text-sm font-medium text-brand-800 tabular-nums">{selectedIds.size} selected</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  leftIcon={<CheckSquare />}
+                  onClick={() => void bulkApproveSelected()}
+                  loading={bulkApproving}
+                >
+                  Approve selected
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} disabled={bulkApproving}>
+                  Clear
+                </Button>
               </div>
-              <p className="mt-4 text-gray-500 font-medium">Loading delivery partners...</p>
-            </div>
-          ) : filteredPartners.length === 0 ? (
-            <div className="p-16 text-center">
-              <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6">
-                <Truck className="w-12 h-12 text-gray-400" />
-              </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-2">No partners found</h3>
-              <p className="text-gray-500">
-                {searchTerm || statFilter !== 'all' ? 'Try a different search or filter.' : 'No delivery partners have registered yet.'}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-                  <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-                    <th className="px-6 py-4 w-8">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.size > 0 && selectedIds.size === filteredPartners.length}
-                        onChange={toggleSelectAll}
-                        className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-                        aria-label="Select all riders"
-                      />
-                    </th>
-                    <th className="px-6 py-4">Name</th>
-                    <th className="px-6 py-4">Contact</th>
-                    <th className="px-6 py-4">Address</th>
-                    <th className="px-6 py-4">UPI ID</th>
-                    <th className="px-6 py-4">Vehicle Type</th>
-                    <th className="px-6 py-4">Vehicle Number</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4">Verification</th>
-                    <th className="px-6 py-4">Approved On</th>
-                    <th className="px-6 py-4">Updated On</th>
-                    <th className="px-6 py-4">Joined</th>
-                    <th className="px-6 py-4 text-right">Delete</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredPartners.map((partner) => (
-                    <tr
-                      key={partner.user_id}
-                      className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-orange-50/30 transition-all duration-200"
-                    >
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(partner.user_id)}
-                          onChange={() => toggleSelected(partner.user_id)}
-                          className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-                          aria-label={`Select ${partner.name}`}
-                        />
-                      </td>
-                      {/* Name — no avatar; full ID under name */}
-                      <td className="px-6 py-4">
-                        <p className="font-semibold text-gray-800">{partner.name}</p>
-                        <p className="text-xs font-mono text-gray-400 mt-0.5 break-all">{partner.user_id}</p>
-                      </td>
-
-                      {/* Contact — phone + email */}
-                      <td className="px-6 py-4">
-                        <div className="space-y-1">
-                          {partner.phone ? (
-                            <div className="flex items-center gap-1.5 text-sm text-gray-700">
-                              <Phone size={13} className="text-gray-400 flex-shrink-0" />
-                              {partner.phone}
-                            </div>
-                          ) : null}
-                          {partner.email ? (
-                            <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                              <Mail size={12} className="text-gray-400 flex-shrink-0" />
-                              <span className="break-all">{partner.email}</span>
-                            </div>
-                          ) : null}
-                          {!partner.phone && !partner.email && (
-                            <span className="text-gray-400 text-sm">—</span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Address — full text, no truncation */}
-                      <td className="px-6 py-4">
-                        {partner.address ? (
-                          <div className="flex items-start gap-2 text-sm text-gray-600 min-w-[14rem] max-w-sm">
-                            <MapPin size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
-                            <span className="whitespace-normal break-words">{partner.address}</span>
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-
-                      {/* UPI ID */}
-                      <td className="px-6 py-4">
-                        {partner.upi_id ? (
-                          <div className="flex items-center gap-1.5 text-sm text-gray-700">
-                            <CreditCard size={13} className="text-gray-400 flex-shrink-0" />
-                            <span className="break-all">{partner.upi_id}</span>
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                        {pendingUpiByRider[partner.user_id] && (
-                          <button
-                            onClick={() => setReviewingPartner(partner)}
-                            className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
-                            title={`Pending review: ${pendingUpiByRider[partner.user_id]}`}
-                          >
-                            <AlertCircle size={10} />
-                            Pending review
-                          </button>
-                        )}
-                      </td>
-
-                      {/* Vehicle Type */}
-                      <td className="px-6 py-4">
-                        {partner.vehicle_type ? (
-                          <span className="text-sm font-medium text-gray-800">
-                            {VEHICLE_LABELS[partner.vehicle_type] || partner.vehicle_type}
-                          </span>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-
-                      {/* Vehicle Number */}
-                      <td className="px-6 py-4">
-                        {partner.vehicle_number ? (
-                          <span className="text-sm font-mono font-semibold text-gray-800 tracking-wide whitespace-nowrap">
-                            {partner.vehicle_number}
-                          </span>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-
-                      {/* Status — online / offline toggle */}
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => toggleOnline(partner)}
-                          disabled={togglingOnlineId === partner.user_id || (!partner.is_approved && !partner.is_online)}
-                          title={
-                            !partner.is_approved && !partner.is_online
-                              ? 'Approve partner before setting online'
-                              : partner.is_online
-                                ? 'Set offline'
-                                : 'Set online'
-                          }
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
-                            partner.is_online
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                        >
-                          {togglingOnlineId === partner.user_id ? (
-                            <RefreshCw size={12} className="animate-spin" />
-                          ) : partner.is_online ? (
-                            <Wifi size={12} />
-                          ) : (
-                            <WifiOff size={12} />
-                          )}
-                          {partner.is_online ? 'Online' : 'Offline'}
-                        </button>
-                      </td>
-
-                      {/* Verification — same pattern as Stores Approval column */}
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {partner.is_approved ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                              <CheckCircle size={11} />
-                              Approved
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                              <AlertCircle size={11} />
-                              Pending
-                            </span>
-                          )}
-                          <button
-                            onClick={() => toggleApproval(partner)}
-                            disabled={approvingId === partner.user_id || (!partner.is_approved && !approvalReadiness(partner).ready)}
-                            title={!partner.is_approved ? approvalReadiness(partner).reason : undefined}
-                            className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-                              partner.is_approved
-                                ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200'
-                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
-                            } disabled:opacity-50`}
-                          >
-                            {approvingId === partner.user_id ? '...' : partner.is_approved ? 'Revoke' : 'Approve'}
-                          </button>
-                          <button
-                            onClick={() => setReviewingPartner(partner)}
-                            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200 transition-colors"
-                          >
-                            Review Documents
-                          </button>
-                        </div>
-                      </td>
-
-                      {/* Approved On */}
-                      <td className="px-6 py-4">
-                        {partner.approved_at ? (
-                          <>
-                            <span className="text-sm text-gray-600">
-                              {new Date(partner.approved_at).toLocaleString('en-IN', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                            <p className="text-xs text-gray-400 mt-0.5">
-                              {(partner.approved_by && approverNames[partner.approved_by]) || 'admin'}
-                            </p>
-                          </>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-
-                      {/* Updated On — last verification-document activity */}
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600">
-                          {docsUpdatedAt[partner.user_id]
-                            ? new Date(docsUpdatedAt[partner.user_id]).toLocaleString('en-IN', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : '—'}
-                        </span>
-                      </td>
-
-                      {/* Joined */}
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600">
-                          {partner.created_at
-                            ? new Date(partner.created_at).toLocaleDateString('en-IN', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                              })
-                            : '—'}
-                        </span>
-                      </td>
-
-                      {/* Delete / Restore */}
-                      <td className="px-6 py-4 text-right">
-                        {partner.deleted_at ? (
-                          <button
-                            onClick={() => handleRestore(partner.user_id, partner.name)}
-                            disabled={deleteLoading === partner.user_id}
-                            className="p-2.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all disabled:opacity-50"
-                            title="Restore"
-                          >
-                            {deleteLoading === partner.user_id
-                              ? <RefreshCw size={16} className="animate-spin" />
-                              : <RotateCcw size={16} />}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleDelete(partner.user_id, partner.name)}
-                            disabled={deleteLoading === partner.user_id}
-                            className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
-                            title="Delete"
-                          >
-                            {deleteLoading === partner.user_id
-                              ? <RefreshCw size={16} className="animate-spin" />
-                              : <Trash2 size={16} />}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           )}
+
+          <TableContainer className="border-0 rounded-none">
+            <Table>
+              <THead>
+                <Tr>
+                  <Th className="w-10">
+                    <Checkbox
+                      ref={selectAllRef}
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      disabled={selectablePartners.length === 0}
+                      aria-label="Select all riders"
+                    />
+                  </Th>
+                  <Th>Name</Th>
+                  <Th>Contact</Th>
+                  <Th>Address</Th>
+                  <Th>UPI ID</Th>
+                  <Th>Vehicle type</Th>
+                  <Th>Vehicle number</Th>
+                  <Th>Status</Th>
+                  <Th>Verification</Th>
+                  <Th>Approved on</Th>
+                  <Th>Updated on</Th>
+                  <Th>Joined</Th>
+                  <Th align="right">Actions</Th>
+                </Tr>
+              </THead>
+              <TBody>
+                {loading ? (
+                  <TableSkeletonRows rows={6} cols={TABLE_COLUMNS} />
+                ) : showLoadError ? (
+                  <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                    <EmptyState
+                      compact
+                      icon={AlertCircle}
+                      title="Could not load delivery partners"
+                      description={error ?? undefined}
+                      action={
+                        <Button variant="secondary" size="sm" onClick={() => void fetchPartners()}>
+                          Retry
+                        </Button>
+                      }
+                    />
+                  </TableEmptyRow>
+                ) : filteredPartners.length === 0 ? (
+                  <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                    <EmptyState
+                      compact
+                      icon={Truck}
+                      title="No partners found"
+                      description={isFiltered ? 'Try a different search or filter.' : 'No delivery partners have registered yet.'}
+                      action={
+                        isFiltered ? (
+                          <Button variant="secondary" size="sm" onClick={clearFilters}>
+                            Clear filters
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  </TableEmptyRow>
+                ) : (
+                  filteredPartners.map((partner) => {
+                    const isDeleted = Boolean(partner.deleted_at);
+                    const isSelected = selectedIds.has(partner.user_id);
+                    const readiness = approvalReadiness(partner);
+                    const canSetOnline = partner.is_approved || partner.is_online;
+                    const isToggling = togglingOnlineId === partner.user_id;
+                    const isApproving = approvingId === partner.user_id;
+                    const isDeleting = deleteLoading === partner.user_id;
+                    const pendingUpi = pendingUpiByRider[partner.user_id];
+                    const approveBlocked = !partner.is_approved && !readiness.ready;
+
+                    return (
+                      <Tr key={partner.user_id} selected={isSelected}>
+                        <Td>
+                          {/* Soft-deleted riders cannot be selected: bulk approve must not touch them. */}
+                          {!isDeleted && (
+                            <Checkbox
+                              checked={isSelected}
+                              onChange={() => toggleSelected(partner.user_id)}
+                              aria-label={`Select ${partner.name}`}
+                            />
+                          )}
+                        </Td>
+
+                        {/* Name — full ID under the name */}
+                        <Td>
+                          <p className="font-medium text-gray-900">{partner.name}</p>
+                          <div className="mt-1">
+                            <IdCell id={partner.user_id} />
+                          </div>
+                        </Td>
+
+                        {/* Contact — phone + email */}
+                        <Td>
+                          {partner.phone || partner.email ? (
+                            <div className="space-y-1">
+                              {partner.phone && (
+                                <div className="flex items-center gap-1.5 whitespace-nowrap text-gray-700">
+                                  <Phone size={14} className="shrink-0 text-gray-400" aria-hidden="true" />
+                                  {partner.phone}
+                                </div>
+                              )}
+                              {partner.email && (
+                                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                                  <Mail size={14} className="shrink-0 text-gray-400" aria-hidden="true" />
+                                  <span className="break-all">{partner.email}</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </Td>
+
+                        {/* Address — full text, no truncation */}
+                        <Td>
+                          {partner.address ? (
+                            <div className="flex min-w-[14rem] max-w-sm items-start gap-1.5 text-gray-600">
+                              <MapPin size={14} className="mt-0.5 shrink-0 text-gray-400" aria-hidden="true" />
+                              <span className="whitespace-normal break-words">{partner.address}</span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </Td>
+
+                        {/* UPI ID (+ pending change request, which opens the same review modal) */}
+                        <Td>
+                          {partner.upi_id ? (
+                            <div className="flex items-center gap-1.5 text-gray-700">
+                              <CreditCard size={14} className="shrink-0 text-gray-400" aria-hidden="true" />
+                              <span className="break-all">{partner.upi_id}</span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                          {pendingUpi && (
+                            <button
+                              type="button"
+                              onClick={() => setReviewingPartner(partner)}
+                              title={`Pending review: ${pendingUpi}`}
+                              className="mt-1 inline-flex rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                            >
+                              <Badge tone="warning" dot>Pending UPI review</Badge>
+                            </button>
+                          )}
+                        </Td>
+
+                        {/* Vehicle type */}
+                        <Td nowrap>
+                          {partner.vehicle_type ? (
+                            <span className="font-medium text-gray-900">
+                              {VEHICLE_LABELS[partner.vehicle_type] || partner.vehicle_type}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </Td>
+
+                        {/* Vehicle number */}
+                        <Td nowrap>
+                          {partner.vehicle_number ? (
+                            <span className="font-mono font-medium text-gray-900">{partner.vehicle_number}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </Td>
+
+                        {/* Status — online / offline switch; deleted riders only show their state */}
+                        <Td nowrap>
+                          {isDeleted ? (
+                            <StatusBadge kind="verification" value="deleted" />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <Tooltip
+                                content={
+                                  !canSetOnline
+                                    ? 'Approve partner before setting online'
+                                    : partner.is_online
+                                      ? 'Set offline'
+                                      : 'Set online'
+                                }
+                              >
+                                <Toggle
+                                  size="sm"
+                                  checked={partner.is_online}
+                                  onChange={() => void toggleOnline(partner)}
+                                  disabled={isToggling || !canSetOnline}
+                                  aria-label={`Set ${partner.name} ${partner.is_online ? 'offline' : 'online'}`}
+                                />
+                              </Tooltip>
+                              <StatusBadge kind="generic" value={partner.is_online ? 'online' : 'offline'} />
+                            </div>
+                          )}
+                        </Td>
+
+                        {/* Verification — same pattern as Stores Approval column */}
+                        <Td nowrap>
+                          {isDeleted ? (
+                            <span className="text-gray-400">—</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <StatusBadge kind="verification" value={partner.is_approved ? 'approved' : 'pending'} />
+                              {/* Disabled buttons do not fire hover events in Firefox/Safari, so the
+                                  readiness reason lives on a Tooltip around the button, not only on title. */}
+                              <Tooltip content={approveBlocked && readiness.summary ? `Review documents first: ${readiness.summary}` : ''}>
+                                <Button
+                                  size="sm"
+                                  variant={partner.is_approved ? 'dangerOutline' : 'secondary'}
+                                  onClick={() => void toggleApproval(partner)}
+                                  disabled={approveBlocked}
+                                  loading={isApproving}
+                                  title={approveBlocked ? readiness.reason : undefined}
+                                >
+                                  {partner.is_approved ? 'Revoke' : 'Approve'}
+                                </Button>
+                              </Tooltip>
+                            </div>
+                          )}
+                        </Td>
+
+                        {/* Approved on */}
+                        <Td nowrap>
+                          {partner.approved_at ? (
+                            <>
+                              <span className="text-gray-700">{formatDateTime(partner.approved_at)}</span>
+                              <p className="mt-0.5 text-xs text-gray-500">
+                                {(partner.approved_by && approverNames[partner.approved_by]) || 'admin'}
+                              </p>
+                            </>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </Td>
+
+                        {/* Updated on — last verification-document activity */}
+                        <Td nowrap muted>
+                          {docsUpdatedAt[partner.user_id] ? formatDateTime(docsUpdatedAt[partner.user_id]) : '—'}
+                        </Td>
+
+                        {/* Joined */}
+                        <Td nowrap muted>
+                          {partner.created_at ? formatDate(partner.created_at) : '—'}
+                        </Td>
+
+                        {/* Actions — review documents, remove / restore */}
+                        <Td align="right" nowrap>
+                          <div className="inline-flex items-center justify-end gap-1">
+                            {!isDeleted && (
+                              <Tooltip content="Review documents" side="left">
+                                <IconButton
+                                  size="sm"
+                                  aria-label={`Review documents for ${partner.name}`}
+                                  onClick={() => setReviewingPartner(partner)}
+                                >
+                                  <FileSearch />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                            {isDeleted ? (
+                              <Tooltip content="Restore" side="left">
+                                <IconButton
+                                  size="sm"
+                                  aria-label={`Restore ${partner.name}`}
+                                  onClick={() => void handleRestore(partner.user_id, partner.name)}
+                                  loading={isDeleting}
+                                >
+                                  <RotateCcw />
+                                </IconButton>
+                              </Tooltip>
+                            ) : (
+                              <Tooltip content="Remove" side="left">
+                                <IconButton
+                                  size="sm"
+                                  aria-label={`Remove ${partner.name}`}
+                                  onClick={() => void handleDelete(partner.user_id, partner.name)}
+                                  loading={isDeleting}
+                                  className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                                >
+                                  <Trash2 />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </div>
+                        </Td>
+                      </Tr>
+                    );
+                  })
+                )}
+              </TBody>
+            </Table>
+          </TableContainer>
 
           {/* Footer summary */}
           {!loading && filteredPartners.length > 0 && (
-            <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-              <p className="text-sm text-gray-500">
-                Showing <span className="font-semibold text-gray-700">{filteredPartners.length}</span> of{' '}
-                <span className="font-semibold text-gray-700">{partners.length}</span> partners
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-4 py-3 text-sm text-gray-600">
+              <p>
+                Showing <span className="font-medium text-gray-900 tabular-nums">{filteredPartners.length}</span> of{' '}
+                <span className="font-medium text-gray-900 tabular-nums">{showingTotal}</span>{' '}
+                {statFilter === 'deleted' ? 'deleted partners' : 'partners'}
               </p>
-              <div className="flex items-center gap-4 text-xs text-gray-500">
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  {stats.online} online now
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  {stats.pending} pending
-                </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {liveUpdatesDown && (
+                  <Badge tone="warning" dot title="Live updates are unavailable; the list still refreshes every 3 minutes.">
+                    Live updates unavailable
+                  </Badge>
+                )}
+                <Badge tone="success" dot>
+                  <span className="tabular-nums">{stats.online}</span> online now
+                </Badge>
+                <Badge tone="warning" dot>
+                  <span className="tabular-nums">{stats.pending}</span> pending
+                </Badge>
               </div>
             </div>
           )}
-        </div>
-      </div>
+        </CardBody>
+      </Card>
 
       {reviewingPartner && (
         <DeliveryDocumentReviewModal
@@ -1003,8 +1164,9 @@ const DeliveryPage = () => {
             setDocsUpdatedAt((prev) => ({ ...prev, [partnerId]: updatedAt }));
             // Keep the Approve-button readiness gate's own data fresh
             // locally too — otherwise it can show a stale "Not yet
-            // approved" reason for up to 20s until the next poll/Realtime
-            // event, even though docsUpdatedAt above already updated.
+            // approved" reason for up to 3 minutes until the next
+            // poll/Realtime event, even though docsUpdatedAt above already
+            // updated.
             setDocStatusByPartner((prev) => {
               const docs = prev[partnerId] || [];
               const exists = docs.some((d) => d.doc_type === docType);
@@ -1014,9 +1176,23 @@ const DeliveryPage = () => {
               return { ...prev, [partnerId]: nextDocs };
             });
           }}
+          onRiderSuspended={(partnerId) => {
+            // Mirrors suspendRiderIfApprovedAndGetName
+            // (backend deliveryPartner.controller.ts): the rejection of an
+            // identity document revokes approval and takes the rider
+            // offline; status is left untouched. Patch the row now rather
+            // than waiting for the Realtime UPDATE / 3-minute poll.
+            setPartners((prev) =>
+              prev.map((p) =>
+                p.user_id === partnerId
+                  ? { ...p, is_approved: false, is_online: false, approved_at: null, approved_by: null }
+                  : p
+              )
+            );
+          }}
         />
       )}
-    </AdminLayout>
+    </div>
   );
 };
 

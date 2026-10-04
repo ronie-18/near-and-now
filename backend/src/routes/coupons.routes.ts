@@ -11,18 +11,24 @@ const couponsController = new CouponsController();
 
 const couponTypeEnum = z.enum(['flat', 'percent', 'first_order_discount']);
 
+// The four optional limits are `.nullable()` so an admin can CLEAR one on
+// edit: PUT /:couponId goes through `couponBaseSchema.partial()`, and
+// JSON.stringify drops `undefined`, so "omit the key" cannot express "remove
+// the cap / expiry / usage limit" — the old column value silently survived
+// while the admin saw "Coupon updated". `null` is written straight through
+// (databaseService.updateCoupon spreads the body), which clears the column.
 const couponBaseSchema = z.object({
   code: z.string().min(1, 'Code is required'),
   description: z.string().optional(),
   coupon_type: couponTypeEnum,
   discount_value: z.number().positive('Discount value must be positive'),
-  max_discount_amount: z.number().positive().optional(),
+  max_discount_amount: z.number().positive().nullable().optional(),
   min_order_value: z.number().nonnegative().optional(),
-  applies_to_first_n_orders: z.number().int().positive().optional(),
-  usage_limit: z.number().int().positive().optional(),
+  applies_to_first_n_orders: z.number().int().positive().nullable().optional(),
+  usage_limit: z.number().int().positive().nullable().optional(),
   per_user_limit: z.number().int().positive().optional(),
   valid_from: z.string().min(1, 'valid_from is required'),
-  valid_until: z.string().optional(),
+  valid_until: z.string().nullable().optional(),
   is_active: z.boolean().optional()
 });
 
@@ -31,7 +37,8 @@ const couponBaseSchema = z.object({
 // (database.service.ts) already independently enforces both bounds at
 // redemption time, so such a coupon was never actually exploitable — just
 // silently dead-on-arrival, a confusing trap for whoever published it.
-const dateOrderCheck = (data: { valid_from?: string; valid_until?: string }) =>
+// A null valid_until ("no expiry") is treated like an absent one.
+const dateOrderCheck = (data: { valid_from?: string; valid_until?: string | null }) =>
   !data.valid_until || !data.valid_from || new Date(data.valid_until) >= new Date(data.valid_from);
 const dateOrderIssue = { message: 'valid_until must be on or after valid_from', path: ['valid_until'] as (string | number)[] };
 
@@ -44,12 +51,13 @@ const percentCheck = (data: { coupon_type?: string; discount_value?: number }) =
   data.discount_value <= 100;
 const percentIssue = { message: 'Percentage discount cannot exceed 100', path: ['discount_value'] as (string | number)[] };
 
-const createCouponSchema = couponBaseSchema.refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
+// Exported for the schema regression test (coupons.schema.test.ts).
+export const createCouponSchema = couponBaseSchema.refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
 // Only cross-validated when *both* dates are present in the same request —
 // a partial update touching just one side can't be checked here without
 // fetching the coupon's existing other value first, which this validation
 // middleware layer doesn't do.
-const updateCouponSchema = couponBaseSchema.partial().refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
+export const updateCouponSchema = couponBaseSchema.partial().refine(dateOrderCheck, dateOrderIssue).refine(percentCheck, percentIssue);
 
 // This was the only auth-gated write/lookup endpoint in the codebase with no
 // throttle at all — a scripted loop from any authenticated customer session

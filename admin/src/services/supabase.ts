@@ -70,12 +70,13 @@ export interface Product {
   description?: string;
   image?: string;
   image_url?: string;
-  images?: string[]; // Array of additional image URLs
+  // No `images`, `size` or `weight`: master_products has a single image_url,
+  // the pack size lives in `unit` (NOT NULL), and product_images is unused by
+  // every app (see AddProductPage/EditProductPage). Those former fields were
+  // never persisted and only let pages promise data that was dropped.
   category: string;
   in_stock: boolean;
   rating?: number;
-  size?: string;
-  weight?: string;
   created_at?: string;
   updated_at?: string;
   isLoose?: boolean;

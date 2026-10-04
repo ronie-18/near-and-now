@@ -20,6 +20,14 @@ function passwordStrengthError(password: string): string | null {
   return null;
 }
 
+/** The session token of the current request — same header precedence as requireAdmin. */
+function currentAdminToken(req: Request): string | undefined {
+  return (
+    (req.headers['x-admin-token'] as string | undefined)?.trim() ||
+    (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7).trim() : undefined)
+  );
+}
+
 export class AdminController {
   // POST /api/admin/login
   // Body: { email, password }
@@ -348,6 +356,24 @@ export class AdminController {
       if (error) {
         const code = (error as any).code === '23505' ? 409 : 500;
         return res.status(code).json({ error: code === 409 ? 'An admin with this email already exists' : error.message });
+      }
+
+      // A self-service password change ends every OTHER session of this admin
+      // (the one making the change stays signed in). Previously other devices
+      // kept their tokens for the full session TTL, so changing a password
+      // after a suspected leak did nothing to the leaked session. Non-fatal:
+      // the password is already changed above, and requireAdmin already
+      // honours logged_out_at.
+      if (password !== undefined && id === req.adminId) {
+        const currentToken = currentAdminToken(req);
+        let revoke = supabaseAdmin
+          .from('admin_sessions')
+          .update({ logged_out_at: new Date().toISOString() })
+          .eq('admin_id', id)
+          .is('logged_out_at', null);
+        if (currentToken) revoke = revoke.neq('session_token', currentToken);
+        const { error: revokeError } = await revoke;
+        if (revokeError) console.error('Failed to end other admin sessions after password change:', revokeError);
       }
 
       res.json({ admin: data });

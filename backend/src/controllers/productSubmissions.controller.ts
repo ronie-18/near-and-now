@@ -240,12 +240,15 @@ export async function editProductSubmission(req: Request, res: Response) {
       taxFields.sgst = body.sgst === null ? null : Number(body.sgst);
     }
 
+    // Same `stores(name)` embed + store_name mapping as listProductSubmissions,
+    // so the returned row is shaped like a list row and the page can replace
+    // its card with it (it used to come back bare and show "Unknown store").
     const { data, error } = await supabaseAdmin
       .from('product_submissions')
       .update({ ...validated.fields, ...taxFields })
       .eq('id', id)
       .eq('status', 'pending')
-      .select()
+      .select('*, stores(name)')
       .maybeSingle();
 
     if (error) {
@@ -266,7 +269,8 @@ export async function editProductSubmission(req: Request, res: Response) {
       return res.status(404).json({ success: false, error: 'Submission not found' });
     }
 
-    res.json({ success: true, submission: data });
+    const { stores, ...row } = data as any;
+    res.json({ success: true, submission: { ...row, store_name: stores?.name ?? null } });
   } catch (error) {
     return sendError(res, 'productSubmissions.editProductSubmission', 'Could not update the submission', error, undefined, { success: false });
   }

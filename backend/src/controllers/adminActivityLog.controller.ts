@@ -21,6 +21,16 @@ type ActivityRow = {
   reviewed_at: string;
 };
 
+/** Valid values for the optional `?source=` query param (one per aggregated table). */
+export const ACTIVITY_SOURCES = [
+  'store_profile_change',
+  'rider_profile_change',
+  'product_submission',
+  'store_verification_doc',
+  'rider_verification_doc',
+  'store_image',
+] as const;
+
 /**
  * Unified admin activity log — aggregates every review action across the
  * six places an admin approves/rejects something (store & rider profile
@@ -60,43 +70,91 @@ export async function listActivityLog(req: Request, res: Response) {
     // the final merged/sorted list is truncated to the same limit again below.
     const limit = Math.min(Number(req.query.limit) || 100, 500);
 
+    // Optional ?source=<one of the six> runs only that source's query, so the
+    // per-source cap applies to the category the admin is actually looking
+    // at — without it the page filters client-side over the merged, capped
+    // list and a quiet category can look empty while older rows exist.
+    const sourceParam = typeof req.query.source === 'string' ? req.query.source : undefined;
+    if (sourceParam !== undefined && !(ACTIVITY_SOURCES as readonly string[]).includes(sourceParam)) {
+      return res.status(400).json({
+        success: false,
+        error: `Unknown activity source "${sourceParam}". Expected one of: ${ACTIVITY_SOURCES.join(', ')}.`,
+      });
+    }
+    const wants = (source: ActivityRow['source']) => sourceParam === undefined || sourceParam === source;
+    // Stand-in for a source the caller did not ask for — same { data, error }
+    // shape as a real PostgREST response so the merge below needs no branches.
+    const skipped = Promise.resolve({ data: [] as any[], error: null as any });
+
+    // Only rows an admin actually reviewed belong in the log. Every review
+    // path sets reviewed_by and reviewed_at together, but rows can legitimately
+    // have both NULL while carrying a reviewed-looking status: the store_images
+    // review gate (20260926000000) backfilled every pre-existing photo as
+    // status='approved' with reviewed_by/reviewed_at NULL. Postgres sorts DESC
+    // NULLS FIRST, so those legacy rows filled the store_images slice ahead of
+    // real reviews and rendered as "1 Jan 1970 — Unknown" in the admin log,
+    // crowding real actions out once there were >= limit of them.
     const [storeChanges, riderChanges, productSubs, storeDocs, riderDocs, storeImages] = await Promise.all([
-      supabaseAdmin
-        .from('store_profile_change_requests')
-        .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
-        .neq('status', 'pending')
-        .order('reviewed_at', { ascending: false })
-        .limit(limit),
-      supabaseAdmin
-        .from('rider_profile_change_requests')
-        .select('id, rider_id, status, rejection_reason, reviewed_by, reviewed_at, created_at')
-        .neq('status', 'pending')
-        .order('reviewed_at', { ascending: false })
-        .limit(limit),
-      supabaseAdmin
-        .from('product_submissions')
-        .select('id, name, status, rejection_reason, reviewed_by, reviewed_at, created_at')
-        .neq('status', 'pending')
-        .order('reviewed_at', { ascending: false })
-        .limit(limit),
-      supabaseAdmin
-        .from('store_verification_documents')
-        .select('id, store_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at, stores(name)')
-        .in('status', ['approved', 'rejected'])
-        .order('reviewed_at', { ascending: false })
-        .limit(limit),
-      supabaseAdmin
-        .from('delivery_partner_verification_documents')
-        .select('id, partner_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at')
-        .in('status', ['approved', 'rejected'])
-        .order('reviewed_at', { ascending: false })
-        .limit(limit),
-      supabaseAdmin
-        .from('store_images')
-        .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
-        .in('status', ['approved', 'rejected'])
-        .order('reviewed_at', { ascending: false })
-        .limit(limit),
+      wants('store_profile_change')
+        ? supabaseAdmin
+            .from('store_profile_change_requests')
+            .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
+            .neq('status', 'pending')
+            .not('reviewed_at', 'is', null)
+            .not('reviewed_by', 'is', null)
+            .order('reviewed_at', { ascending: false })
+            .limit(limit)
+        : skipped,
+      wants('rider_profile_change')
+        ? supabaseAdmin
+            .from('rider_profile_change_requests')
+            .select('id, rider_id, status, rejection_reason, reviewed_by, reviewed_at, created_at')
+            .neq('status', 'pending')
+            .not('reviewed_at', 'is', null)
+            .not('reviewed_by', 'is', null)
+            .order('reviewed_at', { ascending: false })
+            .limit(limit)
+        : skipped,
+      wants('product_submission')
+        ? supabaseAdmin
+            .from('product_submissions')
+            .select('id, name, status, rejection_reason, reviewed_by, reviewed_at, created_at')
+            .neq('status', 'pending')
+            .not('reviewed_at', 'is', null)
+            .not('reviewed_by', 'is', null)
+            .order('reviewed_at', { ascending: false })
+            .limit(limit)
+        : skipped,
+      wants('store_verification_doc')
+        ? supabaseAdmin
+            .from('store_verification_documents')
+            .select('id, store_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at, stores(name)')
+            .in('status', ['approved', 'rejected'])
+            .not('reviewed_at', 'is', null)
+            .not('reviewed_by', 'is', null)
+            .order('reviewed_at', { ascending: false })
+            .limit(limit)
+        : skipped,
+      wants('rider_verification_doc')
+        ? supabaseAdmin
+            .from('delivery_partner_verification_documents')
+            .select('id, partner_id, doc_type, status, rejection_reason, reviewed_by, reviewed_at, uploaded_at')
+            .in('status', ['approved', 'rejected'])
+            .not('reviewed_at', 'is', null)
+            .not('reviewed_by', 'is', null)
+            .order('reviewed_at', { ascending: false })
+            .limit(limit)
+        : skipped,
+      wants('store_image')
+        ? supabaseAdmin
+            .from('store_images')
+            .select('id, store_id, status, rejection_reason, reviewed_by, reviewed_at, created_at, stores(name)')
+            .in('status', ['approved', 'rejected'])
+            .not('reviewed_at', 'is', null)
+            .not('reviewed_by', 'is', null)
+            .order('reviewed_at', { ascending: false })
+            .limit(limit)
+        : skipped,
     ]);
 
     for (const [label, result] of [

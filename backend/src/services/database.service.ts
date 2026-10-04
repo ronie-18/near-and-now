@@ -1385,13 +1385,13 @@ export class DatabaseService {
     description?: string;
     coupon_type: 'flat' | 'percent' | 'first_order_discount';
     discount_value: number;
-    max_discount_amount?: number;
+    max_discount_amount?: number | null;
     min_order_value?: number;
-    applies_to_first_n_orders?: number;
-    usage_limit?: number;
+    applies_to_first_n_orders?: number | null;
+    usage_limit?: number | null;
     per_user_limit?: number;
     valid_from: string;
-    valid_until?: string;
+    valid_until?: string | null;
     is_active?: boolean;
   }) {
     const { data: coupon, error } = await supabaseAdmin
@@ -1417,18 +1417,21 @@ export class DatabaseService {
     return coupon;
   }
 
+  // The four nullable limits accept `null` so an edit can clear them (the
+  // route schema is `.nullable()` for exactly these — see coupons.routes.ts);
+  // the body is spread straight into the UPDATE, so null clears the column.
   async updateCoupon(couponId: string, data: Partial<{
     code: string;
     description: string;
     coupon_type: 'flat' | 'percent' | 'first_order_discount';
     discount_value: number;
-    max_discount_amount: number;
+    max_discount_amount: number | null;
     min_order_value: number;
-    applies_to_first_n_orders: number;
-    usage_limit: number;
+    applies_to_first_n_orders: number | null;
+    usage_limit: number | null;
     per_user_limit: number;
     valid_from: string;
-    valid_until: string;
+    valid_until: string | null;
     is_active: boolean;
   }>) {
     const update: any = { ...data, updated_at: new Date().toISOString() };

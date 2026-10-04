@@ -1,56 +1,53 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, Menu, User, Settings, HelpCircle, LogOut, ChevronRight, Package, ShoppingBag, CheckCheck, FileText, ShieldCheck, Truck, Image, Wifi, MessageCircle } from 'lucide-react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { secureAdminLogout, getCurrentAdmin } from '../../../services/secureAdminAuth';
-import { clearAdminSession } from '../../../services/adminSession';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentType } from 'react';
+import {
+  Bell,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  HelpCircle,
+  Image,
+  LogOut,
+  MessageCircle,
+  Package,
+  PanelLeft,
+  Settings,
+  ShieldCheck,
+  ShoppingBag,
+  Truck,
+  User,
+  Wifi,
+} from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAdminClient } from '../../../services/supabase';
+import { getAdminToken } from '../../../services/adminSession';
 import { getNotificationLink } from '../../../utils/notificationLink';
+import { timeAgo } from '../../../utils/format';
+import { cn } from '../../../utils/cn';
+import { useToast } from '../../../context/ToastContext';
+import { useCurrentAdmin, useLogout } from '../../../hooks/useCurrentAdmin';
+import { resolveRoute } from '../../../routes/routeMeta';
+import {
+  Avatar,
+  Badge,
+  Button,
+  DropdownItem,
+  DropdownMenu,
+  DropdownSeparator,
+  EmptyState,
+  IconButton,
+  Skeleton,
+  notificationTypeMeta,
+  roleMeta,
+  type BadgeTone,
+} from '../../ui';
 
 interface AdminHeaderProps {
-  toggleSidebar: () => void;
-  isSidebarOpen: boolean;
+  onToggleSidebar: () => void;
+  /** Whether the sidebar is currently expanded (desktop) / open (mobile). */
+  sidebarExpanded: boolean;
+  /** DOM id of the <aside>, for aria-controls on the toggle. */
+  sidebarId: string;
 }
-
-const routeTitles: Record<string, string> = {
-  '/': 'Dashboard',
-  '/products': 'Products',
-  '/products/add': 'Add Product',
-  '/categories': 'Categories',
-  '/categories/add': 'Add Category',
-  '/orders': 'Orders',
-  '/customers': 'Customers',
-  '/reports': 'Reports',
-  '/delivery': 'Delivery',
-  '/offers': 'Offers',
-  '/admins': 'Admin Users',
-  '/admins/create': 'Create Admin',
-  '/settings': 'Settings',
-  '/profile': 'My Profile',
-  '/help': 'Help & Support',
-  '/notifications': 'Notifications',
-  '/stores': 'Stores',
-};
-
-const getBreadcrumbs = (pathname: string) => {
-  const crumbs: { label: string; path: string }[] = [{ label: 'Admin', path: '/' }];
-
-  if (pathname === '/') return crumbs;
-
-  const segments = pathname.replace('/', '').split('/');
-  let currentPath = '';
-
-  segments.forEach((seg) => {
-    currentPath += `/${seg}`;
-    const label = routeTitles[currentPath];
-    if (label && label !== 'Dashboard') {
-      crumbs.push({ label, path: currentPath });
-    } else if (!label) {
-      crumbs.push({ label: seg.charAt(0).toUpperCase() + seg.slice(1), path: currentPath });
-    }
-  });
-
-  return crumbs;
-};
 
 interface DbNotification {
   id: string;
@@ -62,68 +59,110 @@ interface DbNotification {
   created_at: string;
 }
 
-function notifStyle(type: string): { iconBg: string; Icon: React.ElementType } {
+type NotifIcon = ComponentType<{ size?: number | string; className?: string }>;
+
+function notifIcon(type: string): NotifIcon {
   switch (type) {
-    case 'new_order': return { iconBg: 'bg-blue-100 text-blue-600', Icon: ShoppingBag };
-    case 'new_user': return { iconBg: 'bg-emerald-100 text-emerald-600', Icon: User };
-    case 'document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: FileText };
-    case 'document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: FileText };
-    case 'verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: ShieldCheck };
-    case 'store_added': return { iconBg: 'bg-teal-100 text-teal-600', Icon: Package };
-    case 'rider_document_uploaded': return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: Truck };
-    case 'rider_document_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: Truck };
-    case 'rider_verification_submitted': return { iconBg: 'bg-teal-100 text-teal-600', Icon: Truck };
+    case 'new_order':
+    case 'order_delivered':
+    case 'order_cancelled':
+    case 'refund_required':
+      return ShoppingBag;
+    case 'new_user':
+      return User;
+    case 'document_uploaded':
+    case 'document_removed':
+      return FileText;
+    case 'verification_submitted':
+      return ShieldCheck;
+    case 'store_added':
+      return Package;
+    case 'rider_document_uploaded':
+    case 'rider_document_removed':
+    case 'rider_verification_submitted':
+      return Truck;
     case 'owner_photo_updated':
     case 'store_image_added':
+    case 'store_image_removed':
     case 'rider_profile_photo_updated':
     case 'rider_vehicle_photo_updated':
-      return { iconBg: 'bg-indigo-100 text-indigo-600', Icon: Image };
-    case 'store_image_removed': return { iconBg: 'bg-gray-100 text-gray-600', Icon: Image };
+      return Image;
     case 'store_status_changed':
     case 'rider_status_changed':
-      return { iconBg: 'bg-emerald-100 text-emerald-600', Icon: Wifi };
+      return Wifi;
     case 'support_message':
-      return { iconBg: 'bg-blue-100 text-blue-600', Icon: MessageCircle };
-    default: return { iconBg: 'bg-violet-100 text-violet-600', Icon: Package };
+      return MessageCircle;
+    default:
+      return Package;
   }
 }
 
-function timeAgo(dateStr: string) {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+// Icon chip colours come from notificationTypeMeta's tone, limited to
+// brand / gray / blue / green — warning and danger tones render gray here;
+// the bell is a feed, not an alert surface.
+const CHIP_TONE: Record<BadgeTone, string> = {
+  brand: 'bg-brand-50 text-brand-700',
+  info: 'bg-blue-50 text-blue-700',
+  success: 'bg-green-50 text-green-700',
+  neutral: 'bg-gray-100 text-gray-600',
+  warning: 'bg-gray-100 text-gray-600',
+  danger: 'bg-gray-100 text-gray-600',
+};
 
-const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
+const AdminHeader = ({ onToggleSidebar, sidebarExpanded, sidebarId }: AdminHeaderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [showUserMenu, setShowUserMenu] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
-  const [notifications, setNotifications] = useState<DbNotification[]>([]);
-  const userMenuRef = useRef<HTMLDivElement>(null);
-  const notificationRef = useRef<HTMLDivElement>(null);
+  const { showToast } = useToast();
+  const currentAdmin = useCurrentAdmin();
+  const logout = useLogout();
+  const adminId = currentAdmin?.id ?? null;
 
-  useEffect(() => {
-    const admin = getCurrentAdmin();
-    setCurrentAdmin(admin);
-  }, []);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifications, setNotifications] = useState<DbNotification[]>([]);
+  const [serverUnread, setServerUnread] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+  const notifPanelId = useId();
+
+  const { crumbs } = useMemo(() => resolveRoute(location.pathname), [location.pathname]);
 
   const fetchNotifications = useCallback(async () => {
-    const { data } = await getAdminClient()
-      .from('admin_notifications')
-      .select('id, type, title, message, data, read_by, created_at')
-      .order('created_at', { ascending: false })
-      .limit(8);
-    if (data) setNotifications(data);
-  }, []);
+    // The shell is persistent now, so this callback is recreated (and the
+    // effect below re-runs) when `adminId` flips to null — which is exactly
+    // what clearAdminSession() does during logout and when the auth guard's
+    // visibility re-check finds a dead session. Calling getAdminClient() with
+    // no token would hard-redirect via window.location (a full reload racing
+    // the SPA navigate('/login')), so bail out first.
+    if (!getAdminToken()) return;
+    try {
+      const client = getAdminClient();
+      const listQuery = client
+        .from('admin_notifications')
+        .select('id, type, title, message, data, read_by, created_at')
+        .order('created_at', { ascending: false })
+        .limit(8);
+      // The list is capped at 8, so counting unread rows in it undercounts
+      // (and the badge could even vanish while unread items exist). An exact
+      // head-only count alongside — same filter as NotificationsPage.
+      const countQuery = adminId
+        ? client
+            .from('admin_notifications')
+            .select('id', { count: 'exact', head: true })
+            .not('read_by', 'cs', `{${adminId}}`)
+        : null;
+
+      const [listRes, countRes] = await Promise.all([listQuery, countQuery]);
+      if (listRes.data) setNotifications(listRes.data as DbNotification[]);
+      if (countRes && !countRes.error && countRes.count != null) setServerUnread(countRes.count);
+    } catch (err) {
+      console.error('Failed to load notifications:', err);
+    } finally {
+      setLoaded(true);
+    }
+  }, [adminId]);
 
   useEffect(() => {
-    fetchNotifications();
+    void fetchNotifications();
 
     // Polled, not Realtime: admin_notifications' RLS policy (is_admin_authenticated())
     // reads PostgREST's request.headers GUC, which Realtime's postgres_changes feed
@@ -134,73 +173,69 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
     // runs its own identical 15s poll against the same table, so an admin
     // viewing it was previously getting hit twice on independent,
     // unsynchronized timers for no benefit. The header still does its
-    // initial fetch above on every mount/navigation, so the bell badge is
-    // never stale — only the redundant *second* interval is skipped.
+    // initial fetch above on every navigation (this effect re-runs on
+    // pathname), so the bell badge is never stale — only the redundant
+    // *second* interval is skipped.
     if (location.pathname === '/notifications') return;
-    const intervalId = setInterval(fetchNotifications, 15_000);
+    const intervalId = setInterval(() => {
+      void fetchNotifications();
+    }, 15_000);
     return () => clearInterval(intervalId);
   }, [fetchNotifications, location.pathname]);
 
+  // Outside click / Escape close the notifications panel.
+  useEffect(() => {
+    if (!notifOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) setNotifOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNotifOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [notifOpen]);
+
+  // read_by is per-admin; with no admin id every row counts as unread.
+  const isUnread = useCallback((n: DbNotification) => !adminId || !n.read_by.includes(adminId), [adminId]);
+  const unreadCount = serverUnread ?? notifications.filter(isUnread).length;
+  const unreadLabel = unreadCount > 9 ? '9+' : String(unreadCount);
+
   const markAllRead = async () => {
-    if (!currentAdmin?.id) return;
+    if (!adminId) return;
     try {
       // read_by is per-admin (mark_all_admin_notifications_read RPC, migration
       // 20260827000001) — this admin marking read must never hide anything
       // from any other admin's bell.
       const { error } = await getAdminClient().rpc('mark_all_admin_notifications_read');
       if (error) throw error;
-      setNotifications(prev => prev.map(n => (
-        n.read_by.includes(currentAdmin.id) ? n : { ...n, read_by: [...n.read_by, currentAdmin.id] }
-      )));
-    } catch (err: any) {
-      alert(err?.message || 'Failed to mark notifications as read');
+      setNotifications((prev) =>
+        prev.map((n) => (n.read_by.includes(adminId) ? n : { ...n, read_by: [...n.read_by, adminId] })),
+      );
+      setServerUnread(0);
+    } catch (err) {
+      const message = (err as { message?: string } | null)?.message;
+      showToast(message || 'Failed to mark notifications as read', 'error');
     }
   };
-
-  const handleLogout = async () => {
-    try {
-      await secureAdminLogout();
-      navigate('/login');
-    } catch {
-      clearAdminSession();
-      navigate('/login');
-    }
-  };
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setShowUserMenu(false);
-      }
-      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
-        setShowNotifications(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const pageTitle = routeTitles[location.pathname] || 'Admin';
-  const breadcrumbs = getBreadcrumbs(location.pathname);
-  const adminInitials = currentAdmin?.full_name
-    ? currentAdmin.full_name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
-    : 'AD';
-
-  const isUnread = (n: DbNotification) => !currentAdmin?.id || !n.read_by.includes(currentAdmin.id);
-  const unreadCount = notifications.filter(isUnread).length;
 
   const handleNotifClick = async (notif: DbNotification) => {
-    setShowNotifications(false);
+    setNotifOpen(false);
     // Awaited + error-checked, matching NotificationsPage.tsx's markOneRead —
     // this was previously void'd with no await/.catch, so local "read" state
     // updated unconditionally even if the RPC was silently blocked (stale
     // session, RLS denial), leaving this dropdown out of sync with
     // NotificationsPage.tsx on next load.
-    if (currentAdmin?.id && isUnread(notif)) {
+    if (adminId && isUnread(notif)) {
       try {
         const { error } = await getAdminClient().rpc('mark_admin_notification_read', { p_notification_id: notif.id });
         if (error) throw error;
-        setNotifications(prev => prev.map(n => (n.id === notif.id ? { ...n, read_by: [...n.read_by, currentAdmin.id] } : n)));
+        setNotifications((prev) => prev.map((n) => (n.id === notif.id ? { ...n, read_by: [...n.read_by, adminId] } : n)));
+        setServerUnread((prev) => (prev == null ? prev : Math.max(0, prev - 1)));
       } catch (err) {
         console.error('Failed to mark notification as read:', err);
       }
@@ -209,201 +244,179 @@ const AdminHeader = ({ toggleSidebar }: AdminHeaderProps) => {
     if (link) navigate(link);
   };
 
+  const displayName = currentAdmin?.full_name?.trim() || 'Admin';
+  const roleLabel = currentAdmin?.role ? roleMeta(currentAdmin.role).label : 'Administrator';
+  const email = currentAdmin?.email ?? '';
+
   return (
-    <header className="bg-white border-b border-gray-200 z-30 flex-shrink-0">
-      <div className="flex items-center h-16 px-4 gap-3">
-        {/* Sidebar Toggle */}
-        <button
-          onClick={toggleSidebar}
-          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
-          aria-label="Toggle sidebar"
-        >
-          <Menu size={20} />
-        </button>
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-gray-200 bg-white px-4">
+      {/* Sidebar toggle */}
+      <IconButton
+        aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+        aria-expanded={sidebarExpanded}
+        aria-controls={sidebarId}
+        onClick={onToggleSidebar}
+        className="shrink-0"
+      >
+        <PanelLeft />
+      </IconButton>
 
-        {/* Breadcrumbs / Page Title */}
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          {breadcrumbs.length > 1 ? (
-            <nav className="flex items-center gap-1 text-sm min-w-0">
-              {breadcrumbs.map((crumb, idx) => (
-                <span key={crumb.path} className="flex items-center gap-1 min-w-0">
-                  {idx > 0 && <ChevronRight size={13} className="text-gray-400 flex-shrink-0" />}
-                  {idx === breadcrumbs.length - 1 ? (
-                    <span className="font-semibold text-gray-800 truncate">{crumb.label}</span>
-                  ) : (
-                    <Link to={crumb.path} className="text-gray-500 hover:text-gray-700 transition-colors truncate">
-                      {crumb.label}
-                    </Link>
-                  )}
-                </span>
-              ))}
-            </nav>
-          ) : (
-            <h1 className="text-base font-bold text-gray-800 truncate">{pageTitle}</h1>
-          )}
-        </div>
-
-        {/* Search - Desktop */}
-        <div className="hidden lg:block">
-          <div className="relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search..."
-              className="pl-9 pr-4 py-2 text-sm w-56 rounded-lg border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 transition-all placeholder-gray-400"
-            />
-          </div>
-        </div>
-
-        {/* Right Actions */}
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {/* Notifications */}
-          <div className="relative" ref={notificationRef}>
-            <button
-              onClick={() => setShowNotifications(!showNotifications)}
-              className="relative p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-              aria-label="Notifications"
-            >
-              <Bell size={19} />
-              {unreadCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full ring-2 ring-white" />
-              )}
-            </button>
-
-            {showNotifications && (
-              <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden z-50">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                  <h3 className="text-sm font-bold text-gray-800">Notifications</h3>
-                  <div className="flex items-center gap-2">
-                    {unreadCount > 0 && (
-                      <>
-                        <span className="text-xs font-semibold bg-red-100 text-red-600 px-2 py-0.5 rounded-full">
-                          {unreadCount} new
-                        </span>
-                        <button
-                          onClick={markAllRead}
-                          className="text-gray-400 hover:text-emerald-600 transition-colors"
-                          title="Mark all read"
-                        >
-                          <CheckCheck size={14} />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
-                  {notifications.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-8 text-gray-400">
-                      <Bell size={24} className="mb-2 opacity-30" />
-                      <p className="text-xs">No notifications yet</p>
-                    </div>
-                  ) : (
-                    notifications.map(notif => {
-                      const { iconBg, Icon } = notifStyle(notif.type);
-                      const unread = isUnread(notif);
-                      return (
-                        <div
-                          key={notif.id}
-                          onClick={() => handleNotifClick(notif)}
-                          className={`flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer ${unread ? 'bg-blue-50/40' : ''}`}
-                        >
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 ${iconBg}`}>
-                            <Icon size={14} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-sm leading-tight ${unread ? 'font-semibold text-gray-800' : 'font-medium text-gray-700'}`}>
-                              {notif.title}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-0.5 truncate">{notif.message}</p>
-                            <p className="text-[10px] text-gray-400 mt-1">{timeAgo(notif.created_at)}</p>
-                          </div>
-                          {unread && <span className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2" />}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50">
-                  <Link
-                    to="/notifications"
-                    onClick={() => setShowNotifications(false)}
-                    className="text-xs text-emerald-600 font-semibold hover:text-emerald-700 flex items-center justify-center gap-1"
-                  >
-                    View all notifications
-                    <ChevronRight size={12} />
+      {/* Breadcrumbs */}
+      <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
+        <ol className="flex items-center gap-1.5 text-sm">
+          {crumbs.map((crumb, index) => {
+            const isLast = index === crumbs.length - 1;
+            return (
+              <li key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1.5">
+                {index > 0 ? <ChevronRight size={14} className="shrink-0 text-gray-400" aria-hidden="true" /> : null}
+                {crumb.to && !isLast ? (
+                  <Link to={crumb.to} className="truncate text-gray-500 transition-colors hover:text-gray-700">
+                    {crumb.label}
                   </Link>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* User Menu */}
-          <div className="relative" ref={userMenuRef}>
-            <button
-              onClick={() => setShowUserMenu(!showUserMenu)}
-              className="flex items-center gap-2 pl-1 pr-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center flex-shrink-0">
-                <span className="text-white text-xs font-bold">{adminInitials}</span>
-              </div>
-              <div className="hidden md:block text-left">
-                <p className="text-sm font-semibold text-gray-800 leading-tight max-w-[120px] truncate">
-                  {currentAdmin?.full_name || 'Admin'}
-                </p>
-                <p className="text-[10px] text-gray-500 leading-tight capitalize">
-                  {currentAdmin?.role?.replace('_', ' ') || 'Administrator'}
-                </p>
-              </div>
-            </button>
-
-            {showUserMenu && (
-              <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden z-50">
-                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-                  <p className="text-sm font-bold text-gray-800 truncate">{currentAdmin?.full_name || 'Admin User'}</p>
-                  <p className="text-xs text-gray-500 truncate mt-0.5">{currentAdmin?.email || ''}</p>
-                  <span className="inline-block mt-1.5 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full capitalize">
-                    {currentAdmin?.role?.replace('_', ' ') || 'admin'}
+                ) : (
+                  <span aria-current={isLast ? 'page' : undefined} className={cn('truncate', isLast ? 'font-semibold text-gray-900' : 'text-gray-500')}>
+                    {crumb.label}
                   </span>
-                </div>
-                <div className="py-1">
-                  <Link
-                    to="/profile"
-                    onClick={() => setShowUserMenu(false)}
-                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    <User size={15} className="text-gray-400" />
-                    My Profile
-                  </Link>
-                  <Link
-                    to="/settings"
-                    onClick={() => setShowUserMenu(false)}
-                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    <Settings size={15} className="text-gray-400" />
-                    Settings
-                  </Link>
-                  <Link
-                    to="/help"
-                    onClick={() => setShowUserMenu(false)}
-                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    <HelpCircle size={15} className="text-gray-400" />
-                    Help & Support
-                  </Link>
-                </div>
-                <div className="border-t border-gray-100 py-1">
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                  >
-                    <LogOut size={15} />
-                    Sign Out
-                  </button>
-                </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      {/* Right actions */}
+      <div className="flex shrink-0 items-center gap-1">
+        {/* Notifications */}
+        <div ref={notifRef} className="relative">
+          <IconButton
+            aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+            aria-haspopup="dialog"
+            aria-expanded={notifOpen}
+            aria-controls={notifOpen ? notifPanelId : undefined}
+            onClick={() => setNotifOpen((open) => !open)}
+            className="relative"
+          >
+            <Bell />
+            {unreadCount > 0 ? (
+              <Badge tone="brand" size="sm" className="pointer-events-none absolute -right-1.5 -top-1.5 tabular-nums">
+                {unreadLabel}
+              </Badge>
+            ) : null}
+          </IconButton>
+
+          {notifOpen ? (
+            <div
+              id={notifPanelId}
+              role="dialog"
+              aria-label="Notifications"
+              className="absolute right-0 top-full z-40 mt-1 w-80 rounded-lg border border-gray-200 bg-white shadow-popover"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
+                <h2 className="text-sm font-semibold text-gray-900">Notifications</h2>
+                {unreadCount > 0 && adminId ? (
+                  <Button variant="link" size="sm" onClick={markAllRead}>
+                    Mark all read
+                  </Button>
+                ) : null}
               </div>
-            )}
-          </div>
+
+              <div className="max-h-80 divide-y divide-gray-100 overflow-y-auto">
+                {!loaded ? (
+                  <div className="space-y-3 px-4 py-3">
+                    {[0, 1, 2].map((i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <Skeleton className="h-8 w-8 shrink-0" />
+                        <div className="flex-1 space-y-2">
+                          <Skeleton className="h-3.5 w-2/3" />
+                          <Skeleton className="h-3 w-full" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : notifications.length === 0 ? (
+                  <EmptyState compact icon={Bell} title="No notifications yet" />
+                ) : (
+                  notifications.map((notif) => {
+                    const Icon = notifIcon(notif.type);
+                    const tone = notificationTypeMeta(notif.type).tone;
+                    const unread = isUnread(notif);
+                    return (
+                      <button
+                        key={notif.id}
+                        type="button"
+                        onClick={() => void handleNotifClick(notif)}
+                        className={cn(
+                          'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50 focus:outline-none focus-visible:bg-gray-50',
+                          unread && 'bg-brand-50/60',
+                        )}
+                      >
+                        <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md', CHIP_TONE[tone])}>
+                          <Icon size={16} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className={cn('block truncate text-sm leading-tight text-gray-900', unread ? 'font-semibold' : 'font-medium')}>
+                            {notif.title}
+                          </span>
+                          <span className="mt-0.5 block truncate text-xs text-gray-500">{notif.message}</span>
+                          <span className="mt-1 block text-xs text-gray-400">{timeAgo(notif.created_at)}</span>
+                        </span>
+                        {unread ? <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-600" /> : null}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="rounded-b-lg border-t border-gray-200 bg-gray-50 px-4 py-2.5 text-center">
+                <Link
+                  to="/notifications"
+                  onClick={() => setNotifOpen(false)}
+                  className="text-sm font-medium text-brand-700 hover:underline"
+                >
+                  View all notifications
+                </Link>
+              </div>
+            </div>
+          ) : null}
         </div>
+
+        {/* User menu */}
+        <DropdownMenu
+          align="right"
+          menuClassName="w-56"
+          trigger={
+            <button
+              type="button"
+              aria-label="Account menu"
+              className="flex items-center gap-2 rounded-md py-1 pl-1 pr-2 text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            >
+              <Avatar name={displayName} size="sm" />
+              <span className="hidden min-w-0 md:block">
+                <span className="block max-w-[140px] truncate text-sm font-medium leading-tight text-gray-900">{displayName}</span>
+                <span className="block text-xs leading-tight text-gray-500">{roleLabel}</span>
+              </span>
+              <ChevronDown size={16} className="hidden shrink-0 text-gray-400 md:block" aria-hidden="true" />
+            </button>
+          }
+        >
+          <div className="border-b border-gray-200 px-3 py-2">
+            <p className="truncate text-sm font-medium text-gray-900">{displayName}</p>
+            {email ? <p className="truncate text-xs text-gray-500">{email}</p> : null}
+          </div>
+          <DropdownItem onSelect={() => navigate('/profile')} icon={<User />}>
+            My profile
+          </DropdownItem>
+          <DropdownItem onSelect={() => navigate('/settings')} icon={<Settings />}>
+            Settings
+          </DropdownItem>
+          <DropdownItem onSelect={() => navigate('/help')} icon={<HelpCircle />}>
+            Help
+          </DropdownItem>
+          <DropdownSeparator />
+          <DropdownItem tone="danger" onSelect={() => void logout()} icon={<LogOut />}>
+            Sign out
+          </DropdownItem>
+        </DropdownMenu>
       </div>
     </header>
   );

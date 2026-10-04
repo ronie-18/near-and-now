@@ -384,18 +384,63 @@ export async function listProfileChangeRequests(req: Request, res: Response) {
       (reviewers ?? []).forEach((a: any) => reviewerById.set(a.id, { full_name: a.full_name, role: a.role }));
     }
 
-    const requests = (data ?? []).map((row: any) => ({
-      ...row,
-      store_name: row.stores?.name ?? null,
-      stores: undefined,
-      reviewed_by_name: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.full_name ?? null : null,
-      reviewed_by_role: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.role ?? null : null,
-    }));
+    // A bank_passbook_storage_path change carries only a private-bucket path
+    // (meaningless to render, and the only viewer was GET /stores/:id/billing-info,
+    // which signs the store's *latest* pending request — not necessarily this
+    // row). Sign the requested (and current) photo here, per row, in one bulk
+    // storage call, so the review page can show the payout document it is
+    // approving. Same short TTL as every other signed document URL.
+    const passbookPaths = new Set<string>();
+    for (const row of data ?? []) {
+      const diff = (row as any).changes?.bank_passbook_storage_path as { old?: string | null; new?: string | null } | undefined;
+      if (diff?.new) passbookPaths.add(diff.new);
+      if (diff?.old) passbookPaths.add(diff.old);
+    }
+    const signedUrlByPath = await signStoragePaths([...passbookPaths]);
+
+    const requests = (data ?? []).map((row: any) => {
+      const diff = row.changes?.bank_passbook_storage_path as { old?: string | null; new?: string | null } | undefined;
+      return {
+        ...row,
+        store_name: row.stores?.name ?? null,
+        stores: undefined,
+        reviewed_by_name: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.full_name ?? null : null,
+        reviewed_by_role: row.reviewed_by ? reviewerById.get(row.reviewed_by)?.role ?? null : null,
+        pending_passbook_url: diff?.new ? signedUrlByPath.get(diff.new) ?? null : null,
+        current_passbook_url: diff?.old ? signedUrlByPath.get(diff.old) ?? null : null,
+      };
+    });
 
     res.json({ success: true, requests });
   } catch (error) {
     return sendError(res, 'adminStores.listProfileChangeRequests', 'Could not load the change requests', error, undefined, { success: false });
   }
+}
+
+/**
+ * Signed URLs for several private-bucket paths in one storage round trip.
+ * Best-effort: a path that fails to sign is simply absent from the map (the
+ * caller renders "photo unavailable"), never a thrown error that would take
+ * the whole list down with it.
+ */
+async function signStoragePaths(paths: string[]): Promise<Map<string, string>> {
+  const byPath = new Map<string, string>();
+  if (!paths.length) return byPath;
+  try {
+    const { data, error } = await supabaseAdmin.storage
+      .from(VERIFICATION_DOCS_BUCKET)
+      .createSignedUrls(paths, SIGNED_URL_TTL_SECONDS);
+    if (error) {
+      console.error('createSignedUrls failed:', error);
+      return byPath;
+    }
+    for (const entry of data ?? []) {
+      if (entry.path && entry.signedUrl && !entry.error) byPath.set(entry.path, entry.signedUrl);
+    }
+  } catch (err) {
+    console.error('createSignedUrls threw:', err);
+  }
+  return byPath;
 }
 
 /**
@@ -451,7 +496,10 @@ export async function reviewProfileChangeRequest(req: Request, res: Response) {
       .notifyProfileChangeReviewed(updated.store_id, status === 'approved', status === 'rejected' ? reason : null)
       .catch((err) => console.error('notifyProfileChangeReviewed failed:', err));
 
-    const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', updated.store_id).maybeSingle();
+    const [{ data: store }, { data: reviewer }] = await Promise.all([
+      supabaseAdmin.from('stores').select('name').eq('id', updated.store_id).maybeSingle(),
+      supabaseAdmin.from('admins').select('full_name, role').eq('id', req.adminId).maybeSingle(),
+    ]);
     notificationService
       .notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
@@ -462,7 +510,17 @@ export async function reviewProfileChangeRequest(req: Request, res: Response) {
       })
       .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
 
-    res.json({ success: true, request: updated });
+    // Shaped like a list row (store_name + reviewer name/role) so the client
+    // can use the returned row verbatim instead of patching it from the session.
+    res.json({
+      success: true,
+      request: {
+        ...updated,
+        store_name: store?.name ?? null,
+        reviewed_by_name: reviewer?.full_name ?? null,
+        reviewed_by_role: reviewer?.role ?? null,
+      },
+    });
   } catch (error) {
     return sendError(res, 'adminStores.reviewProfileChangeRequest', 'Could not review change request', error, undefined, { success: false });
   }

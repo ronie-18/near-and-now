@@ -168,10 +168,15 @@ app.use('/api/reviews', reviewsRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/gstin', gstinRoutes);
 
-app.get('/health', (_req, res) => {
+const healthHandler = (_req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json({ status: 'ok', timestamp: new Date().toISOString(), uptimeSeconds: Math.round(process.uptime()) });
-});
+};
+app.get('/health', healthHandler);
+// Same probe under /api so the admin SPA can reach it through the Vite dev
+// proxy (which only forwards /api) and a same-origin deployment (where /health
+// would be answered by index.html, a false positive).
+app.get('/api/health', healthHandler);
 
 // 404 as JSON (Express's default is an HTML "Cannot GET /x" page that the SPA cannot parse).
 app.use((req: Request, res: Response) => {

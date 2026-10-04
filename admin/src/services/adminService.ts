@@ -8,7 +8,14 @@ const STORAGE_BUCKET = 'product-images';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-function adminAuthHeaders(): Record<string, string> {
+// Full UUID (any version). Decides when a free-text search term may be matched
+// against a uuid column: Postgres has no ILIKE for uuid and no implicit
+// uuid->text cast, so `id.ilike.%term%` fails with 42883 — only an exact
+// `id.eq.<uuid>` is valid.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Exported so pages can import it instead of carrying their own copy.
+export function adminAuthHeaders(): Record<string, string> {
   const token = getAdminToken() || '';
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -113,15 +120,33 @@ export async function deleteProductImage(imageUrl: string): Promise<boolean> {
 }
 
 // Admin Types
+// Mirrors public.categories (migration 20260813000000 lines 328-336): id, name,
+// description, image_url, display_order, created_at, updated_at. No migration
+// defines a `color` column, so the former `color?` field only made the category
+// forms send a key PostgREST rejects (PGRST204) — it is gone. The optional
+// columns are nullable in the DB and typed `| null` so a caller can send an
+// explicit null to clear one (undefined = leave unchanged).
 export interface Category {
   id: string;
   name: string;
-  description?: string;
-  image_url?: string;
-  color?: string;
-  display_order?: number;
+  description?: string | null;
+  image_url?: string | null;
+  display_order?: number | null;
   created_at?: string;
   updated_at?: string;
+}
+
+/** One order_items row as emitted by the order transforms below. */
+export interface OrderItem {
+  /** order_items.id — stable key for rendering line items. */
+  id?: string;
+  /** public.products(id), the store inventory row — NOT master_products(id). */
+  product_id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  image: string | null;
+  unit: string | null;
 }
 
 export interface Order {
@@ -143,9 +168,18 @@ export interface Order {
   order_total: number;
   subtotal?: number;
   delivery_fee?: number;
+  /** customer_orders.discount_amount — already deducted from order_total. */
+  discount_amount?: number;
+  /**
+   * customer_orders.coupon_id. The coupon code itself is not joined: the
+   * coupons table only grants SELECT to service_role (20260718000002), so a
+   * `coupons:coupon_id(code)` embed from the admin (anon-key) client would
+   * fail the whole order query.
+   */
+  coupon_id?: string | null;
   handling_charge?: number;
   gst_amount?: number;
-  items?: any[];
+  items?: OrderItem[];
   items_count?: number; // Computed field for backward compatibility
   created_at: string;
   updated_at?: string;
@@ -174,10 +208,11 @@ export interface Customer {
   email?: string;
   phone?: string;
   status: 'Active' | 'Inactive';
+  /** Orders excluding cancelled ones (status <> order_cancelled). */
   orders_count: number;
+  /** Sum of total_amount over the same non-cancelled orders. */
   total_spent: number;
   created_at: string;
-  location?: string;
 }
 
 // Products Management
@@ -280,8 +315,10 @@ export async function getAdminProductsPaginated(options: {
       // is dropped: `id` is a uuid column, and ILIKE-ing it server-side
       // would need a text cast Postgrest's filter syntax doesn't expose
       // cleanly, for a search pattern (searching by partial product id) an
-      // admin would rarely use in practice.
-      query = query.or(`name.ilike.%${term}%,description.ilike.%${term}%`);
+      // admin would rarely use in practice. A full UUID pasted from elsewhere
+      // in the admin is matched exactly (`eq` is valid on uuid columns).
+      const idFilter = UUID_RE.test(term) ? `,id.eq.${term}` : '';
+      query = query.or(`name.ilike.%${term}%,description.ilike.%${term}%${idFilter}`);
     }
 
     const sortColumn = PRODUCT_SORT_COLUMN[sortField] ?? 'name';
@@ -352,11 +389,15 @@ function toMasterProduct(product: Partial<Product>): Record<string, unknown> {
     image_url: p.image_url || p.image || null,
     base_price: p.base_price ?? p.original_price ?? p.price ?? 0,
     discounted_price: p.discounted_price ?? p.price ?? 0,
+    // Create path only (updateProduct never defaults unit): the column is NOT
+    // NULL, so a blank unit on a brand-new product falls back to 'piece'.
     unit: p.unit || 'piece',
     is_loose: p.is_loose ?? p.isLoose ?? false,
     min_quantity: p.min_quantity ?? 1,
     max_quantity: p.max_quantity ?? 100,
-    rating: p.rating ?? 4,
+    // A new product has no reviews: 0, not the fabricated 4 the column default
+    // still carries (the storefront hides the stars when rating is 0).
+    rating: p.rating ?? 0,
     rating_count: p.rating_count ?? 0,
     gst_rate: p.gst_rate ?? null,
     hsn_code: p.hsn_code || null,
@@ -399,7 +440,17 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
   }
 }
 
-export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product | null> {
+/**
+ * Input for updateProduct: every Product field optional AND nullable.
+ * `undefined` = leave the column unchanged; `null` = clear it (brand,
+ * description, image/image_url, gst_rate, cgst, sgst, hsn_code,
+ * hsn_description are nullable in master_products). The Product read model
+ * types those as `string | undefined`, which forced the edit page to cast in
+ * order to send nulls.
+ */
+export type ProductUpdate = { [K in keyof Product]?: Product[K] | null };
+
+export async function updateProduct(id: string, updates: ProductUpdate): Promise<Product | null> {
   try {
     const row: Record<string, unknown> = {};
     const u = updates as any;
@@ -410,7 +461,10 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     if (u.image_url !== undefined || u.image !== undefined) row.image_url = u.image_url ?? u.image;
     if (u.base_price !== undefined || u.original_price !== undefined) row.base_price = u.base_price ?? u.original_price;
     if (u.discounted_price !== undefined || u.price !== undefined) row.discounted_price = u.discounted_price ?? u.price;
-    if (u.unit !== undefined) row.unit = u.unit;
+    // unit is NOT NULL and is never defaulted on update: an earlier version
+    // wrote 'piece' whenever the edit form left it blank, overwriting real
+    // pack sizes. A blank/null unit is simply not written.
+    if (typeof u.unit === 'string' && u.unit.trim()) row.unit = u.unit.trim();
     if (u.is_loose !== undefined || u.isLoose !== undefined) row.is_loose = u.is_loose ?? u.isLoose;
     if (u.is_active !== undefined || u.in_stock !== undefined) row.is_active = u.is_active ?? u.in_stock;
     if (u.min_quantity !== undefined) row.min_quantity = u.min_quantity;
@@ -490,14 +544,18 @@ export async function getCategoryById(id: string): Promise<Category | null> {
       .single();
 
     if (error) {
+      // PGRST116 = .single() matched no row: a genuine "not found". Anything
+      // else (network, RLS, 5xx) is a failure the caller must not mistake for
+      // a missing category, so it is thrown (EditCategoryPage shows a Retry).
+      if (error.code === 'PGRST116') return null;
       console.error('Error fetching category by ID:', error);
-      return null;
+      throw error;
     }
 
     return data;
   } catch (error) {
     console.error('Error in getCategoryById:', error);
-    return null;
+    throw error;
   }
 }
 
@@ -516,13 +574,16 @@ export async function createCategory(category: Omit<Category, 'id'>): Promise<Ca
 
     return data;
   } catch (error) {
-    console.error('Error in createCategory:', error);
+    // Logged once above (the inner branch); the catch only rethrows.
     throw error;
   }
 }
 
 export async function updateCategory(id: string, updates: Partial<Category>): Promise<Category | null> {
   try {
+    // `undefined` keys are dropped by JSON serialisation (= unchanged); an
+    // explicit `null` is sent and clears the nullable column. Callers that
+    // want to clear description/image_url/display_order must pass null.
     const { data, error } = await getAdminClient()
       .from('categories')
       .update(updates)
@@ -543,22 +604,20 @@ export async function updateCategory(id: string, updates: Partial<Category>): Pr
 }
 
 export async function deleteCategory(id: string): Promise<boolean> {
-  try {
-    const { error } = await getAdminClient()
-      .from('categories')
-      .delete()
-      .eq('id', id);
+  // Throws on failure (previously returned false and only logged) so the page
+  // can show the real reason — e.g. an FK violation once
+  // master_products_category_fkey is changed to ON DELETE RESTRICT.
+  const { error } = await getAdminClient()
+    .from('categories')
+    .delete()
+    .eq('id', id);
 
-    if (error) {
-      console.error('Error deleting category:', error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Error in deleteCategory:', error);
-    return false;
+  if (error) {
+    console.error('Error deleting category:', error);
+    throw error;
   }
+
+  return true;
 }
 
 // Get product counts for each category
@@ -582,14 +641,38 @@ export async function getProductCountsByCategory(): Promise<Record<string, numbe
 
     return counts;
   } catch (error) {
+    // Rethrown, not swallowed into `{}`: an empty map is indistinguishable
+    // from "no products anywhere", and CategoriesPage's delete guard (the FK
+    // master_products.category -> categories.name is ON DELETE CASCADE) must
+    // be able to tell "counts unknown" from "category is empty".
     console.error('Error in getProductCountsByCategory:', error);
-    return {};
+    throw error;
   }
+}
+
+// Live count for one category (head:true — no rows transferred). Used by
+// CategoriesPage immediately before a delete so a product added since the
+// page loaded still blocks the cascade. Throws on failure.
+export async function getProductCountForCategory(categoryName: string): Promise<number> {
+  const { count, error } = await getAdminClient()
+    .from('master_products')
+    .select('id', { count: 'exact', head: true })
+    .eq('category', categoryName);
+  if (error) {
+    console.error('Error counting products for category:', error);
+    throw error;
+  }
+  return count ?? 0;
 }
 
 // Helper function to map database status to frontend status
 function mapDbStatusToFrontend(dbStatus: string): Order['order_status'] {
-  if (dbStatus === 'pending_at_store' || dbStatus === 'store_accepted') return 'placed';
+  if (dbStatus === 'pending_at_store') return 'placed';
+  // store_accepted used to collapse into 'placed', which made 'confirmed' a
+  // dead status everywhere: the filter matched nothing, the KPI was a
+  // hard-coded 0, and setting Confirmed from a dropdown snapped back to
+  // Placed on re-read. It now round-trips 1:1 with updateOrderStatus.
+  if (dbStatus === 'store_accepted') return 'confirmed';
   if (dbStatus === 'preparing_order') return 'preparing';
   if (dbStatus === 'ready_for_pickup') return 'ready';
   if (dbStatus === 'delivery_partner_assigned') return 'assigned';
@@ -602,15 +685,14 @@ function mapDbStatusToFrontend(dbStatus: string): Order['order_status'] {
 }
 
 // Reverse of mapDbStatusToFrontend above — kept as an explicit map (not a
-// naive inverse function) since the forward mapping is many-to-one
-// ('pending_at_store' and 'store_accepted' both collapse to 'placed'), so a
-// frontend status filter needs `.in('status', [...])`, not a single `.eq()`.
-// 'confirmed' is in OrdersPage's own ORDER_STATUSES list but is never
-// actually produced by mapDbStatusToFrontend — matches zero rows here too,
-// same as it already effectively does today via the unfiltered full fetch.
+// naive inverse function) so a frontend status filter can use
+// `.in('status', [...])` even if a frontend status ever covers several DB
+// values again. Every entry must stay 1:1 with mapDbStatusToFrontend and
+// with updateOrderStatus's statusMap, otherwise a filter/KPI/dropdown drifts
+// (as 'confirmed' did when store_accepted was folded into 'placed').
 const FRONTEND_TO_DB_STATUSES: Record<string, string[]> = {
-  placed: ['pending_at_store', 'store_accepted'],
-  confirmed: [],
+  placed: ['pending_at_store'],
+  confirmed: ['store_accepted'],
   preparing: ['preparing_order'],
   ready: ['ready_for_pickup'],
   assigned: ['delivery_partner_assigned'],
@@ -636,6 +718,8 @@ type CustomerOrderRow = {
   total_amount: number | null;
   subtotal_amount: number | null;
   delivery_fee: number | null;
+  discount_amount: number | null;
+  coupon_id: string | null;
   delivery_address: string | null;
   placed_at: string | null;
   created_at: string | null;
@@ -680,6 +764,20 @@ const ORDER_SELECT = `
     )
   )
 `;
+
+// Shared order_items -> OrderItem mapping for every order read (list, scoped
+// and single), so the item shape cannot drift between them.
+function toOrderItems(rows: CustomerOrderRow['store_orders'][number]['order_items']): OrderItem[] {
+  return rows.map((item) => ({
+    id: item.id,
+    product_id: item.product_id,
+    name: item.product_name,
+    price: Number(item.unit_price) || 0,
+    quantity: Number(item.quantity) || 0,
+    image: item.image_url ?? null,
+    unit: item.unit ?? null,
+  }));
+}
 
 async function transformCustomerOrderRows(customerOrders: CustomerOrderRow[]): Promise<Order[]> {
     if (!customerOrders || customerOrders.length === 0) {
@@ -760,14 +858,9 @@ async function transformCustomerOrderRows(customerOrders: CustomerOrderRow[]): P
         order_total: Math.round(Number(co.total_amount) || 0),
         subtotal: Math.round(Number(co.subtotal_amount) || 0),
         delivery_fee: Math.round(Number(co.delivery_fee || 0)),
-        items: allItems.map(item => ({
-          product_id: item.product_id,
-          name: item.product_name,
-          price: item.unit_price,
-          quantity: item.quantity,
-          image: item.image_url,
-          unit: item.unit
-        })),
+        discount_amount: Math.round(Number(co.discount_amount) || 0),
+        coupon_id: co.coupon_id ?? null,
+        items: toOrderItems(allItems),
         items_count: itemsCount,
         shipping_address: {
           address: co.delivery_address || '',
@@ -896,7 +989,13 @@ export async function getOrdersPaginated(options: {
     }
     if (search?.trim()) {
       const term = search.trim();
-      const idFilter = `order_code.ilike.%${term}%,id.ilike.%${term}%`;
+      // order_code is text, so ilike is fine; id is uuid and is only matched
+      // when the whole term is a UUID — `id.ilike.%term%` raised 42883
+      // ("operator does not exist: uuid ~~* unknown") and made every
+      // non-empty search fail.
+      const idFilter = UUID_RE.test(term)
+        ? `order_code.ilike.%${term}%,id.eq.${term}`
+        : `order_code.ilike.%${term}%`;
       const orFilter = matchingCustomerIds?.length
         ? `${idFilter},customer_id.in.(${matchingCustomerIds.join(',')})`
         : idFilter;
@@ -932,45 +1031,35 @@ export async function getOrderStatusCounts(): Promise<Record<string, number>> {
       getAdminClient().from('customer_orders').select('*', { count: 'exact', head: true }).in('status', FRONTEND_TO_DB_STATUSES[s])
     ),
   ]);
-  const counts: Record<string, number> = { total: totalRes.count ?? 0, confirmed: 0 };
+  // Every frontend status (including 'confirmed', now that store_accepted maps
+  // to it) is counted the same way: one head:true count over its DB statuses.
+  const counts: Record<string, number> = { total: totalRes.count ?? 0 };
   frontendStatuses.forEach((s, i) => { counts[s] = statusRes[i].count ?? 0; });
-  // OrdersPage's "shipped" stat previously included assigned/picking_up/picked_up
-  // combined — mirror that here so the stats bar's numbers don't change shape.
-  counts.shipped = (counts.assigned ?? 0) + (counts.picking_up ?? 0) + (counts.picked_up ?? 0) + (counts.shipped ?? 0);
+  // Each key above is 1:1 with the status filter (`shipped` = in_transit
+  // only). OrdersPage's "In delivery" KPI gets its own aggregate key instead
+  // of overwriting `shipped`, so the KPI and the filter can never disagree.
+  counts.in_delivery = (counts.assigned ?? 0) + (counts.picking_up ?? 0) + (counts.picked_up ?? 0) + (counts.shipped ?? 0);
   counts.totalRevenue = Math.round((revenueRes.data ?? []).reduce((sum: number, o: any) => sum + (Number(o.total_amount) || 0), 0));
   return counts;
 }
 
+// Resolves to null only when the order does not exist (PGRST116 from
+// .single()). Any other failure is thrown so callers can tell "not found"
+// from "could not load" — previously both came back as null, so a network
+// blip rendered "Order not found" and updateOrderStatus reported a failure
+// after a successful PATCH.
 export async function getOrderById(id: string): Promise<Order | null> {
   try {
     const { data: customerOrder, error } = await getAdminClient()
       .from('customer_orders')
-      .select(`
-        *,
-        store_orders (
-          id,
-          store_id,
-          status,
-          subtotal_amount,
-          delivery_fee,
-          delivery_partner_id,
-          order_items (
-            id,
-            product_id,
-            product_name,
-            unit,
-            image_url,
-            unit_price,
-            quantity
-          )
-        )
-      `)
+      .select(ORDER_SELECT)
       .eq('id', id)
       .single();
 
     if (error) {
+      if (error.code === 'PGRST116') return null;
       console.error('Error fetching order by ID:', error);
-      return null;
+      throw error;
     }
 
     if (!customerOrder) return null;
@@ -1020,14 +1109,9 @@ export async function getOrderById(id: string): Promise<Order | null> {
       order_total: Math.round(Number(customerOrder.total_amount) || 0),
       subtotal: Math.round(Number(customerOrder.subtotal_amount) || 0),
       delivery_fee: Math.round(Number(customerOrder.delivery_fee || 0)),
-      items: allItems.map(item => ({
-        product_id: item.product_id,
-        name: item.product_name,
-        price: item.unit_price,
-        quantity: item.quantity,
-        image: item.image_url,
-        unit: item.unit
-      })),
+      discount_amount: Math.round(Number(customerOrder.discount_amount) || 0),
+      coupon_id: customerOrder.coupon_id ?? null,
+      items: toOrderItems(allItems),
       items_count: itemsCount,
       shipping_address: {
         address: customerOrder.delivery_address || '',
@@ -1048,11 +1132,29 @@ export async function getOrderById(id: string): Promise<Order | null> {
     };
   } catch (error) {
     console.error('Error in getOrderById:', error);
-    return null;
+    throw error;
   }
 }
 
-export async function updateOrderStatus(id: string, status: Order['order_status']): Promise<Order | null> {
+/**
+ * Thrown by updateOrderStatus when the PATCH succeeded but the follow-up read
+ * of the full order failed. The status DID change: pages must treat this as
+ * "updated, refresh failed" (refetch) rather than as a failed update.
+ * `order_status` is the new status as confirmed by the PATCH response.
+ */
+export class OrderStatusRefreshError extends Error {
+  readonly orderId: string;
+  readonly order_status: Order['order_status'];
+  constructor(orderId: string, orderStatus: Order['order_status'], cause?: unknown) {
+    super('Order status was updated, but the order could not be re-read.');
+    this.name = 'OrderStatusRefreshError';
+    this.orderId = orderId;
+    this.order_status = orderStatus;
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
+  }
+}
+
+export async function updateOrderStatus(id: string, status: Order['order_status']): Promise<Order> {
   try {
     console.log(`Updating order ${id} to status: ${status}`);
 
@@ -1091,8 +1193,23 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 
     console.log('Order status updated successfully:', json.order);
 
-    // Return full order data
-    return await getOrderById(id);
+    // The PATCH response carries the raw customer_orders row (status,
+    // payment_status, totals) but none of the joins the pages render
+    // (customer, items, stores, rider — and cancelling changes the last two),
+    // so the full Order is re-read. If that re-read fails the update still
+    // happened: signal it distinctly instead of returning null (which the
+    // pages used to report as "Failed to update order status").
+    const patchedStatus: Order['order_status'] =
+      typeof json?.order?.status === 'string' ? mapDbStatusToFrontend(json.order.status) : status;
+    let refreshed: Order | null = null;
+    let refreshError: unknown;
+    try {
+      refreshed = await getOrderById(id);
+    } catch (err) {
+      refreshError = err;
+    }
+    if (refreshed) return refreshed;
+    throw new OrderStatusRefreshError(id, patchedStatus, refreshError);
   } catch (error: any) {
     console.error('Error in updateOrderStatus:', error);
     throw error;
@@ -1101,6 +1218,12 @@ export async function updateOrderStatus(id: string, status: Order['order_status'
 
 // Customers Management
 // Use app_users table and aggregate order data
+//
+// Per-customer orders_count/total_spent (and the customers-page revenue KPI)
+// exclude cancelled orders: the previous unfiltered sums over-counted every
+// customer with a cancellation/refund. The DB status vocabulary is the one
+// mapDbStatusToFrontend reads (public.order_status enum).
+const CANCELLED_DB_STATUS = 'order_cancelled';
 // Server-side paginated + filtered customer fetch for CustomersPage, which
 // previously called getCustomers() (fetching every customer AND every
 // customer_order platform-wide, to aggregate order counts/totals in JS) on
@@ -1146,10 +1269,17 @@ export async function getCustomersPaginated(options: {
     const ids = (users ?? []).map((u) => u.id);
     const orderStats = new Map<string, { count: number; total: number }>();
     if (ids.length > 0) {
-      const { data: orders } = await getAdminClient()
+      // Cancelled orders are excluded so orders_count/total_spent are what the
+      // customer actually bought, not gross order value (see CUSTOMER_ORDERS_COUNTED).
+      const { data: orders, error: ordersError } = await getAdminClient()
         .from('customer_orders')
         .select('customer_id, total_amount')
-        .in('customer_id', ids);
+        .in('customer_id', ids)
+        .neq('status', CANCELLED_DB_STATUS);
+      if (ordersError) {
+        console.error('Error fetching order stats for customers:', ordersError);
+        throw ordersError;
+      }
       (orders ?? []).forEach((order: any) => {
         const stats = orderStats.get(order.customer_id) ?? { count: 0, total: 0 };
         stats.count += 1;
@@ -1169,7 +1299,6 @@ export async function getCustomersPaginated(options: {
         orders_count: stats.count,
         total_spent: Math.round(stats.total),
         created_at: user.created_at || '',
-        location: ''
       };
     });
 
@@ -1183,12 +1312,14 @@ export async function getCustomersPaginated(options: {
 // Lightweight stats for CustomersPage's stat cards — count queries return
 // only a row count (or, for revenue, a single narrow column across all
 // orders) rather than fetching every customer/order row to reduce over.
+// totalOrders counts every order placed (incl. cancelled); totalRevenue
+// excludes cancelled orders, matching the per-customer total_spent.
 export async function getCustomerStats(): Promise<{ total: number; active: number; totalOrders: number; totalRevenue: number }> {
   const [totalRes, activeRes, ordersCountRes, revenueRes] = await Promise.all([
     getAdminClient().from('app_users').select('*', { count: 'exact', head: true }).eq('role', 'customer'),
     getAdminClient().from('app_users').select('*', { count: 'exact', head: true }).eq('role', 'customer').eq('is_suspended', false),
     getAdminClient().from('customer_orders').select('*', { count: 'exact', head: true }),
-    getAdminClient().from('customer_orders').select('total_amount'),
+    getAdminClient().from('customer_orders').select('total_amount').neq('status', CANCELLED_DB_STATUS),
   ]);
   return {
     total: totalRes.count ?? 0,
@@ -1213,10 +1344,11 @@ export async function getCustomers(): Promise<Customer[]> {
       throw usersError;
     }
 
-    // Fetch all customer_orders to aggregate order counts and totals
+    // Fetch all non-cancelled customer_orders to aggregate order counts and totals
     const { data: orders, error: ordersError } = await getAdminClient()
       .from('customer_orders')
       .select('customer_id, total_amount, placed_at')
+      .neq('status', CANCELLED_DB_STATUS)
       .order('placed_at', { ascending: false });
 
     if (ordersError) {
@@ -1248,7 +1380,6 @@ export async function getCustomers(): Promise<Customer[]> {
         orders_count: stats.count,
         total_spent: Math.round(stats.total),
         created_at: user.created_at || '',
-        location: ''
       };
     });
 
@@ -1259,6 +1390,10 @@ export async function getCustomers(): Promise<Customer[]> {
   }
 }
 
+// Resolves to null only when no such customer exists (PGRST116 from
+// .single()). Query failures — including the orders aggregation — are thrown
+// so CustomerDetailPage can show "could not load" + Retry instead of a
+// misleading "Customer not found" with zeroed stats.
 export async function getCustomerById(id: string): Promise<Customer | null> {
   try {
     // Fetch user from app_users, scoped to role = customer (see getCustomers)
@@ -1269,21 +1404,24 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
       .eq('role', 'customer')
       .single();
 
-    if (userError || !user) {
+    if (userError) {
+      if (userError.code === 'PGRST116') return null;
       console.error('Error fetching customer:', userError);
-      return null;
+      throw userError;
     }
+    if (!user) return null;
 
-    // Fetch customer orders
+    // Non-cancelled orders only — see CANCELLED_DB_STATUS.
     const { data: orders, error: ordersError } = await getAdminClient()
       .from('customer_orders')
       .select('total_amount, placed_at')
       .eq('customer_id', id)
+      .neq('status', CANCELLED_DB_STATUS)
       .order('placed_at', { ascending: false });
 
     if (ordersError) {
       console.error('Error fetching customer orders:', ordersError);
-      // Still return user data even if orders fail
+      throw ordersError;
     }
 
     return {
@@ -1295,11 +1433,10 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
       orders_count: orders?.length || 0,
       total_spent: Math.round(orders?.reduce((sum, order) => sum + Number(order.total_amount || 0), 0) || 0),
       created_at: user.created_at || '',
-      location: ''
     };
   } catch (error) {
     console.error('Error in getCustomerById:', error);
-    return null;
+    throw error;
   }
 }
 
@@ -1333,12 +1470,14 @@ export async function getDashboardStats() {
       .select('id', { count: 'exact', head: true });
     if (totalProductsError) throw totalProductsError;
 
-    // totalCategories means "categories that actually have products", matching
-    // CategoriesPage's own definition — reuses the shared getProductCountsByCategory()
-    // instead of re-deriving a separate unique-category Set from a second full
-    // product-table scan (still one paginated fetch, but only one, not two).
-    const productCounts = await getProductCountsByCategory();
-    const totalCategories = Object.keys(productCounts).length;
+    // totalCategories = every row in `categories`, the same number CategoriesPage
+    // shows (it lists all categories, including ones with no products yet).
+    // Previously derived from getProductCountsByCategory(), which only knows
+    // categories that have at least one product, so the two pages disagreed.
+    const { count: totalCategories, error: totalCategoriesError } = await getAdminClient()
+      .from('categories')
+      .select('id', { count: 'exact', head: true });
+    if (totalCategoriesError) throw totalCategoriesError;
 
     // Store + delivery partner counts (head:true — count only, no rows fetched)
     const { count: totalStores, error: totalStoresError } = await getAdminClient()

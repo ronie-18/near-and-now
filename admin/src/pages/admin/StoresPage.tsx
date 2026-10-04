@@ -1,16 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAdminToken } from '../../services/adminSession';
 import {
   Store,
-  Search,
   RefreshCw,
   MapPin,
   Phone,
   AlertCircle,
-  X,
   CheckCircle,
-  XCircle,
   Wifi,
   WifiOff,
   FileText,
@@ -21,8 +18,45 @@ import {
   Download,
   CheckSquare,
 } from 'lucide-react';
-import AdminLayout from '../../components/admin/layout/AdminLayout';
 import IdCell from '../../components/admin/IdCell';
+import {
+  Alert,
+  Avatar,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  Checkbox,
+  DescriptionList,
+  EmptyState,
+  FilterBar,
+  FormField,
+  IconButton,
+  Modal,
+  PageHeader,
+  SearchInput,
+  Spinner,
+  StatCard,
+  StatGrid,
+  StatusBadge,
+  Table,
+  TableContainer,
+  TableEmptyRow,
+  TableSkeletonRows,
+  TBody,
+  Td,
+  Textarea,
+  Th,
+  THead,
+  Toggle,
+  Tooltip,
+  Tr,
+  useConfirm,
+} from '../../components/ui';
+import { useToast } from '../../context/ToastContext';
+import { formatDate, formatDateTime } from '../../utils/format';
+import { docTypeLabel } from '../../utils/docLabels';
 import { getAdminClient } from '../../services/supabase';
 import { getCurrentAdmin } from '../../services/secureAdminAuth';
 import { exportToCsv } from '../../utils/csvExport';
@@ -53,21 +87,26 @@ function adminAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-const DOC_LABELS: Record<string, string> = {
-  aadhaar_front: 'Aadhaar Card (Front)',
-  aadhaar_back: 'Aadhaar Card (Back)',
-  pan_front: 'PAN Card (Front)',
-  pan_back: 'PAN Card (Back)',
-  trade: 'Trade License',
-  gst: 'GST Certificate',
-  fssai: 'FSSAI License',
-};
+// Reads an admin API response body. A non-JSON body (proxy error page, empty
+// 502) used to surface as a raw "Unexpected token <" SyntaxError; now it
+// becomes a readable message with the HTTP status. Resolves only on
+// `success: true`, so callers can rely on the shape they index into.
+async function readAdminJson(res: Response, fallback: string): Promise<any> {
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) {
+    throw new Error(json?.error || `${fallback} (HTTP ${res.status})`);
+  }
+  return json;
+}
 
 // Only these gate first-time approval — Trade License/GST/FSSAI are optional
 // and collected later from the shopkeeper's post-approval profile screen, so
 // approvalReadiness() below no longer requires them. Mirrors
 // ONBOARDING_REQUIRED_DOC_TYPES in backend/src/utils/verificationDocuments.ts.
 const ONBOARDING_REQUIRED_DOC_TYPES = ['aadhaar_front', 'aadhaar_back', 'pan_front', 'pan_back'];
+
+// Header columns in the roster table — keeps the skeleton/empty rows in sync.
+const TABLE_COLUMNS = 10;
 
 interface VerificationDoc {
   doc_type: string;
@@ -110,6 +149,35 @@ interface StoreBillingInfo {
   pendingPassbookUrl: string | null;
 }
 
+// ─── Document thumbnail (image, PDF link, or "not uploaded" placeholder) ───
+const DocThumbnail = ({ url, alt }: { url: string | null; alt: string }) => {
+  if (!url) {
+    return (
+      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50">
+        <FileCheck className="h-5 w-5 text-gray-300" aria-hidden="true" />
+      </div>
+    );
+  }
+  if (url.toLowerCase().includes('.pdf')) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={`Open ${alt} (PDF)`}
+        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-500 transition-colors hover:bg-gray-100"
+      >
+        <FileText className="h-6 w-6" aria-hidden="true" />
+      </a>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="shrink-0">
+      <img src={url} alt={alt} className="h-16 w-16 rounded-md border border-gray-200 object-cover" />
+    </a>
+  );
+};
+
 // ─── Document Review Modal ─────────────────────────────────────────────────
 const DocumentReviewModal = ({
   store,
@@ -121,6 +189,7 @@ const DocumentReviewModal = ({
   onDocumentUpdated: (storeId: string, updatedAt: string, docType: string, status: string) => void;
 }) => {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [documents, setDocuments] = useState<VerificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -147,9 +216,10 @@ const DocumentReviewModal = ({
       const res = await fetch(`${API_BASE}/api/admin/stores/${store.id}/verification-documents`, {
         headers: adminAuthHeaders(),
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load documents');
-      setDocuments(json.documents);
+      const json = await readAdminJson(res, 'Failed to load documents');
+      // Default to [] so a body without `documents` renders the empty
+      // message instead of crashing on `.length`/`.map`.
+      setDocuments(Array.isArray(json.documents) ? json.documents : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load documents');
     } finally {
@@ -164,9 +234,8 @@ const DocumentReviewModal = ({
       const res = await fetch(`${API_BASE}/api/admin/stores/${store.id}/images`, {
         headers: adminAuthHeaders(),
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load images');
-      setImages(json.images);
+      const json = await readAdminJson(res, 'Failed to load images');
+      setImages(Array.isArray(json.images) ? json.images : []);
     } catch (err: any) {
       setImagesError(err.message || 'Failed to load images');
     } finally {
@@ -181,9 +250,8 @@ const DocumentReviewModal = ({
       const res = await fetch(`${API_BASE}/api/admin/stores/${store.id}/billing-info`, {
         headers: adminAuthHeaders(),
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to load billing info');
-      setBillingInfo(json.billingInfo);
+      const json = await readAdminJson(res, 'Failed to load billing info');
+      setBillingInfo(json.billingInfo ?? null);
     } catch (err: any) {
       setBillingError(err.message || 'Failed to load billing info');
     } finally {
@@ -200,6 +268,11 @@ const DocumentReviewModal = ({
 
   // Resolve reviewed_by/approved_by (both admins.id) to display names —
   // shared between documents and images, both key off the same admins table.
+  // Only ids not already resolved are queried, so approving/rejecting a
+  // document (which re-renders with the same reviewer ids) no longer re-hits
+  // the admins table every time.
+  const reviewerNamesRef = useRef(reviewerNames);
+  reviewerNamesRef.current = reviewerNames;
   useEffect(() => {
     const ids = Array.from(
       new Set(
@@ -208,10 +281,14 @@ const DocumentReviewModal = ({
           ...images.map((img) => img.reviewed_by),
         ].filter((id): id is string => !!id)
       )
-    );
+    ).filter((id) => !reviewerNamesRef.current[id]);
     if (ids.length === 0) return;
     (async () => {
-      const { data } = await getAdminClient().from('admins').select('id, full_name').in('id', ids);
+      const { data, error: namesError } = await getAdminClient().from('admins').select('id, full_name').in('id', ids);
+      if (namesError) {
+        console.error('Error fetching reviewer names:', namesError);
+        return;
+      }
       if (data) {
         const map: Record<string, string> = {};
         for (const row of data) map[row.id] = row.full_name;
@@ -219,6 +296,8 @@ const DocumentReviewModal = ({
       }
     })();
   }, [documents, images]);
+
+  const reviewerName = (id: string | null) => (id && reviewerNames[id]) || 'Unknown admin';
 
   const review = async (docType: string, status: 'approved' | 'rejected', rejectionReason?: string) => {
     setActingType(docType);
@@ -232,8 +311,7 @@ const DocumentReviewModal = ({
           body: JSON.stringify({ status, rejection_reason: rejectionReason }),
         }
       );
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to update document');
+      const json = await readAdminJson(res, 'Failed to update document');
       // json.document is the raw updated DB row — it has storage_path but no
       // signed `url` (that's only computed by the GET endpoint). Merge
       // instead of replacing, so the existing preview/thumbnail (and the
@@ -247,6 +325,7 @@ const DocumentReviewModal = ({
       }
       setRejectingType(null);
       setReason('');
+      showToast(`${docTypeLabel(docType)} ${status}`, 'success');
     } catch (err: any) {
       setError(err.message || 'Failed to update document');
     } finally {
@@ -266,14 +345,14 @@ const DocumentReviewModal = ({
           body: JSON.stringify({ status, rejection_reason: rejectionReason }),
         }
       );
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to update image');
+      const json = await readAdminJson(res, 'Failed to update image');
       setImages((prev) => prev.map((img) => (img.id === imageId ? { ...img, ...json.image } : img)));
       if (json.image?.reviewed_at) {
         onDocumentUpdated(store.id, json.image.reviewed_at, 'store_image', json.image.status ?? status);
       }
       setRejectingImageId(null);
       setImageReason('');
+      showToast(`Storefront photo ${status}`, 'success');
     } catch (err: any) {
       setImagesError(err.message || 'Failed to update image');
     } finally {
@@ -281,465 +360,419 @@ const DocumentReviewModal = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-6 py-5 flex-shrink-0">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-white font-bold text-lg">Verification Documents</h2>
-              <p className="text-white/80 text-sm mt-0.5">{store.name}</p>
-            </div>
-            <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors text-white">
-              <X size={18} />
-            </button>
-          </div>
-        </div>
+  const hasBillingData =
+    !!billingInfo && (
+      !!billingInfo.bankAccountNumber || !!billingInfo.bankIfscCode || !!billingInfo.passbookUrl ||
+      !!billingInfo.pendingBankAccountNumber || !!billingInfo.pendingBankIfscCode ||
+      !!billingInfo.pendingBankBranchName || !!billingInfo.pendingPassbookUrl
+    );
+  const hasPendingBilling =
+    !!billingInfo && (
+      !!billingInfo.pendingBankAccountNumber || !!billingInfo.pendingBankIfscCode ||
+      !!billingInfo.pendingBankBranchName || !!billingInfo.pendingPassbookUrl
+    );
 
-        <div className="p-6 overflow-y-auto space-y-4">
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Verification documents"
+      description={store.name}
+      size="lg"
+      // Don't let a stray backdrop click throw away a half-typed rejection reason.
+      closeOnOverlay={!rejectingType && !rejectingImageId}
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      <div className="space-y-6">
+        {/* Identity / licence documents */}
+        <section className="space-y-3">
+          <h3 className="text-sm font-semibold text-gray-900">Documents</h3>
+
           {error && (
-            <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium">
+            <Alert
+              tone="danger"
+              onDismiss={() => setError(null)}
+              actions={
+                !loading && documents.length === 0 ? (
+                  <Button variant="secondary" size="sm" onClick={load}>
+                    Retry
+                  </Button>
+                ) : undefined
+              }
+            >
               {error}
-            </div>
+            </Alert>
           )}
 
           {loading ? (
-            <div className="py-12 flex justify-center">
-              <div className="relative w-10 h-10">
-                <div className="w-10 h-10 border-4 border-violet-200 rounded-full" />
-                <div className="absolute top-0 left-0 w-10 h-10 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-              </div>
+            <div className="flex justify-center py-8">
+              <Spinner label="Loading documents" />
             </div>
+          ) : documents.length === 0 ? (
+            !error && <p className="text-sm text-gray-500">No documents uploaded yet.</p>
           ) : (
-            documents.map((doc) => (
-              <div key={doc.doc_type} className="border border-gray-200 rounded-2xl p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-3 min-w-0">
-                    {doc.url ? (
-                      doc.url.toLowerCase().includes('.pdf') ? (
-                        <a
-                          href={doc.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0"
-                        >
-                          <FileText className="w-7 h-7 text-gray-500" />
-                        </a>
-                      ) : (
-                        <a href={doc.url} target="_blank" rel="noreferrer" className="flex-shrink-0">
-                          <img src={doc.url} alt={DOC_LABELS[doc.doc_type]} className="w-16 h-16 rounded-xl object-cover border border-gray-200" />
-                        </a>
-                      )
-                    ) : (
-                      <div className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
-                        <FileCheck className="w-6 h-6 text-gray-300" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="font-semibold text-gray-800">{DOC_LABELS[doc.doc_type] || doc.doc_type}</p>
-                      <p className="text-sm text-gray-500 truncate">
-                        {(doc.doc_type.endsWith('_back')
-                          ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
-                          : doc.number) || 'No number provided'}
-                      </p>
-                      {/* A GSTIN that fails the check character can't be
-                          approved (the backend refuses it too) — 2026-10-02. */}
-                      {doc.doc_type === 'gst' && doc.number && !isValidGstin(doc.number) && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                          <AlertCircle size={11} /> GSTIN check failed — {gstinHint(doc.number)}
-                        </span>
-                      )}
-                      {doc.file_size && (
-                        <p className="text-xs text-gray-400 mt-0.5">{doc.file_size}</p>
-                      )}
-                      {doc.status === 'approved' && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                          <CheckCircle size={11} /> Approved
-                        </span>
-                      )}
-                      {doc.status === 'rejected' && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                          <XCircle size={11} /> Rejected
-                        </span>
-                      )}
-                      {doc.status === 'pending' && doc.url && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                          <AlertCircle size={11} /> Pending review
-                        </span>
-                      )}
-                      {doc.status === 'rejected' && doc.rejection_reason && (
-                        <p className="text-xs text-red-600 mt-1">Reason: {doc.rejection_reason}</p>
-                      )}
-                      {doc.status === 'rejected' && doc.reviewed_at && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          Reviewed by {reviewerNames[doc.reviewed_by || ''] || 'admin'} on{' '}
-                          {new Date(doc.reviewed_at).toLocaleString('en-IN', {
-                            day: '2-digit',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+            documents.map((doc) => {
+              const label = docTypeLabel(doc.doc_type);
+              const gstInvalid = doc.doc_type === 'gst' && !!doc.number && !isValidGstin(doc.number);
+              const acting = actingType === doc.doc_type;
+              return (
+                <div key={doc.doc_type} className="rounded-md border border-gray-200 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <DocThumbnail url={doc.url} alt={label} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900">{label}</p>
+                        <p className="truncate text-sm text-gray-500">
+                          {(doc.doc_type.endsWith('_back')
+                            ? documents.find((d) => d.doc_type === doc.doc_type.replace(/_back$/, '_front'))?.number
+                            : doc.number) || 'No number provided'}
                         </p>
-                      )}
-                      {doc.approved_at && (
-                        <p className="text-xs text-emerald-600 mt-1">
-                          Approved by {reviewerNames[doc.approved_by || ''] || 'admin'} on{' '}
-                          {new Date(doc.approved_at).toLocaleString('en-IN', {
-                            day: '2-digit',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                          {doc.status !== 'approved' && ' (since re-uploaded)'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {doc.url && (
-                    <div className="flex gap-2 flex-shrink-0">
-                      <button
-                        onClick={() => review(doc.doc_type, 'approved')}
-                        disabled={
-                          actingType === doc.doc_type ||
-                          doc.status === 'approved' ||
-                          (doc.doc_type === 'gst' && !!doc.number && !isValidGstin(doc.number))
-                        }
-                        title={doc.doc_type === 'gst' && doc.number && !isValidGstin(doc.number) ? 'This GSTIN fails the GSTIN check — reject it so the shopkeeper re-enters it' : undefined}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 disabled:opacity-50"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => {
-                          setRejectingType(doc.doc_type);
-                          setReason('');
-                        }}
-                        disabled={actingType === doc.doc_type}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 disabled:opacity-50"
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {rejectingType === doc.doc_type && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <textarea
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="Reason for rejecting this document (shown to the shopkeeper)"
-                      className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-red-400 focus:ring-0 text-sm"
-                      rows={2}
-                    />
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => {
-                          setRejectingType(null);
-                          setReason('');
-                        }}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => review(doc.doc_type, 'rejected', reason.trim())}
-                        disabled={!reason.trim() || actingType === doc.doc_type}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-                      >
-                        Confirm Rejection
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-
-          <div className="pt-2 border-t border-gray-100">
-            <h3 className="font-semibold text-gray-800 mb-3">Storefront Photos</h3>
-
-            {imagesError && (
-              <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-3">
-                {imagesError}
-              </div>
-            )}
-
-            {imagesLoading ? (
-              <div className="py-8 flex justify-center">
-                <div className="relative w-8 h-8">
-                  <div className="w-8 h-8 border-4 border-violet-200 rounded-full" />
-                  <div className="absolute top-0 left-0 w-8 h-8 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-                </div>
-              </div>
-            ) : images.length === 0 ? (
-              <p className="text-sm text-gray-400">No storefront photos uploaded yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {images.map((img) => (
-                  <div key={img.id} className="border border-gray-200 rounded-2xl p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <a href={img.url} target="_blank" rel="noreferrer" className="flex-shrink-0">
-                          <img src={img.url} alt="Storefront" className="w-16 h-16 rounded-xl object-cover border border-gray-200" />
-                        </a>
-                        <div className="min-w-0">
-                          {img.status === 'approved' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                              <CheckCircle size={11} /> Approved
-                            </span>
-                          )}
-                          {img.status === 'rejected' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                              <XCircle size={11} /> Rejected
-                            </span>
-                          )}
-                          {img.status === 'pending' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                              <AlertCircle size={11} /> Pending review
-                            </span>
-                          )}
-                          {img.status === 'rejected' && img.rejection_reason && (
-                            <p className="text-xs text-red-600 mt-1">Reason: {img.rejection_reason}</p>
-                          )}
-                          {img.reviewed_at && (
-                            <p className="text-xs text-gray-400 mt-1">
-                              Reviewed by {reviewerNames[img.reviewed_by || ''] || 'admin'} on{' '}
-                              {new Date(img.reviewed_at).toLocaleString('en-IN', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2 flex-shrink-0">
-                        <button
-                          onClick={() => reviewImage(img.id, 'approved')}
-                          disabled={actingImageId === img.id || img.status === 'approved'}
-                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 disabled:opacity-50"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => {
-                            setRejectingImageId(img.id);
-                            setImageReason('');
-                          }}
-                          disabled={actingImageId === img.id || img.status === 'rejected'}
-                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 disabled:opacity-50"
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    </div>
-
-                    {rejectingImageId === img.id && (
-                      <div className="mt-3 pt-3 border-t border-gray-100">
-                        <textarea
-                          value={imageReason}
-                          onChange={(e) => setImageReason(e.target.value)}
-                          placeholder="Reason for rejecting this photo (shown to the shopkeeper)"
-                          className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-red-400 focus:ring-0 text-sm"
-                          rows={2}
-                        />
-                        <div className="flex gap-2 mt-2">
-                          <button
-                            onClick={() => {
-                              setRejectingImageId(null);
-                              setImageReason('');
-                            }}
-                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={() => reviewImage(img.id, 'rejected', imageReason.trim())}
-                            disabled={!imageReason.trim() || actingImageId === img.id}
-                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-                          >
-                            Confirm Rejection
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="pt-2 border-t border-gray-100">
-            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-              <Landmark size={16} className="text-gray-500" />
-              Billing Info
-            </h3>
-
-            {billingError && (
-              <div className="bg-red-50 text-red-700 border border-red-200 px-4 py-3 rounded-xl text-sm font-medium mb-3">
-                {billingError}
-              </div>
-            )}
-
-            {billingLoading ? (
-              <div className="py-8 flex justify-center">
-                <div className="relative w-8 h-8">
-                  <div className="w-8 h-8 border-4 border-violet-200 rounded-full" />
-                  <div className="absolute top-0 left-0 w-8 h-8 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-                </div>
-              </div>
-            ) : !billingInfo || (
-                !billingInfo.bankAccountNumber && !billingInfo.bankIfscCode && !billingInfo.passbookUrl &&
-                !billingInfo.pendingBankAccountNumber && !billingInfo.pendingBankIfscCode &&
-                !billingInfo.pendingBankBranchName && !billingInfo.pendingPassbookUrl
-              ) ? (
-              <p className="text-sm text-gray-400">No billing info submitted yet.</p>
-            ) : (
-              <div className="border border-gray-200 rounded-2xl p-4">
-                <div className="flex items-start gap-3">
-                  {billingInfo.ownerImageUrl ? (
-                    <img
-                      src={billingInfo.ownerImageUrl}
-                      alt={billingInfo.ownerName || 'Owner'}
-                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
-                      <Landmark className="w-6 h-6 text-gray-300" />
-                    </div>
-                  )}
-                  <div className="min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 flex-1">
-                    <div>
-                      <p className="text-xs text-gray-400">Owner name</p>
-                      <p className="text-sm font-medium text-gray-800">{billingInfo.ownerName || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400">Bank account number</p>
-                      <p className="text-sm font-medium text-gray-800">{billingInfo.bankAccountNumber || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400">IFSC code</p>
-                      <p className="text-sm font-medium text-gray-800">{billingInfo.bankIfscCode || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400">Branch name</p>
-                      <p className="text-sm font-medium text-gray-800">{billingInfo.bankBranchName || '—'}</p>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <p className="text-xs text-gray-400 mb-1">Passbook / cheque photo</p>
-                      {billingInfo.passbookUrl ? (
-                        <a href={billingInfo.passbookUrl} target="_blank" rel="noreferrer">
-                          <img
-                            src={billingInfo.passbookUrl}
-                            alt="Passbook / cheque"
-                            className="w-24 h-24 rounded-xl object-cover border border-gray-200"
+                        {/* A GSTIN that fails the check character can't be
+                            approved (the backend refuses it too) — 2026-10-02. */}
+                        {gstInvalid && (
+                          <div className="mt-1">
+                            <Badge tone="danger">
+                              <AlertCircle className="h-3 w-3" aria-hidden="true" />
+                              GSTIN check failed — {gstinHint(doc.number as string)}
+                            </Badge>
+                            <p className="mt-1 text-xs text-gray-500">Reject it so the shopkeeper can re-enter the number.</p>
+                          </div>
+                        )}
+                        {doc.file_size && <p className="mt-0.5 text-xs text-gray-500">{doc.file_size}</p>}
+                        <div className="mt-1.5">
+                          <StatusBadge
+                            kind="document"
+                            value={doc.url || doc.status !== 'pending' ? doc.status : null}
                           />
-                        </a>
-                      ) : (
-                        <p className="text-sm text-gray-400">Not uploaded</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                {(billingInfo.pendingBankAccountNumber || billingInfo.pendingBankIfscCode ||
-                  billingInfo.pendingBankBranchName || billingInfo.pendingPassbookUrl) && (
-                  <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                      <div className="text-xs text-amber-800">
-                        <p className="font-semibold mb-1">Pending review:</p>
-                        {billingInfo.pendingBankAccountNumber && (
-                          <p>Account number: {billingInfo.pendingBankAccountNumber}</p>
-                        )}
-                        {billingInfo.pendingBankIfscCode && <p>IFSC: {billingInfo.pendingBankIfscCode}</p>}
-                        {billingInfo.pendingBankBranchName && (
-                          <p>Branch: {billingInfo.pendingBankBranchName}</p>
-                        )}
-                        {billingInfo.pendingPassbookUrl && (
-                          <p>
-                            <a href={billingInfo.pendingPassbookUrl} target="_blank" rel="noreferrer" className="underline">
-                              View pending passbook photo
-                            </a>
+                        </div>
+                        {doc.status === 'rejected' && doc.rejection_reason && (
+                          <p className="mt-1 text-xs text-gray-700">
+                            <span className="font-medium">Reason:</span> {doc.rejection_reason}
                           </p>
                         )}
-                        <p className="mt-1">
-                          Review in{' '}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onClose();
-                              navigate('/stores/profile-change-requests');
-                            }}
-                            className="underline font-medium"
-                          >
-                            Store Profile Change Requests
-                          </button>
-                          {' '}to approve or reject.
-                        </p>
+                        {doc.status === 'rejected' && doc.reviewed_at && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            Reviewed by {reviewerName(doc.reviewed_by)} on {formatDateTime(doc.reviewed_at)}
+                          </p>
+                        )}
+                        {doc.approved_at && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            Approved by {reviewerName(doc.approved_by)} on {formatDateTime(doc.approved_at)}
+                            {doc.status !== 'approved' && ' (since re-uploaded)'}
+                          </p>
+                        )}
                       </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
 
-        <div className="px-6 pb-6 pt-2 flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="w-full px-4 py-2.5 text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors font-semibold text-sm"
-          >
-            Close
-          </button>
-        </div>
+                    {doc.url && (
+                      <div className="flex shrink-0 gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => review(doc.doc_type, 'approved')}
+                          disabled={acting || doc.status === 'approved' || gstInvalid}
+                          loading={acting && rejectingType !== doc.doc_type}
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="dangerOutline"
+                          onClick={() => {
+                            setRejectingType(doc.doc_type);
+                            setReason('');
+                          }}
+                          disabled={acting || rejectingType === doc.doc_type}
+                        >
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {rejectingType === doc.doc_type && (
+                    <div className="mt-3 border-t border-gray-200 pt-3">
+                      <FormField
+                        label="Reason for rejection"
+                        htmlFor={`reject-doc-${doc.doc_type}`}
+                        hint="Shown to the shopkeeper."
+                      >
+                        <Textarea
+                          id={`reject-doc-${doc.doc_type}`}
+                          value={reason}
+                          onChange={(e) => setReason(e.target.value)}
+                          placeholder="Why is this document being rejected?"
+                          rows={2}
+                        />
+                      </FormField>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setRejectingType(null);
+                            setReason('');
+                          }}
+                          disabled={acting}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => review(doc.doc_type, 'rejected', reason.trim())}
+                          disabled={!reason.trim()}
+                          loading={acting}
+                        >
+                          Confirm rejection
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </section>
+
+        {/* Storefront photos */}
+        <section className="space-y-3 border-t border-gray-200 pt-5">
+          <h3 className="text-sm font-semibold text-gray-900">Storefront photos</h3>
+
+          {imagesError && (
+            <Alert
+              tone="danger"
+              onDismiss={() => setImagesError(null)}
+              actions={
+                !imagesLoading && images.length === 0 ? (
+                  <Button variant="secondary" size="sm" onClick={loadImages}>
+                    Retry
+                  </Button>
+                ) : undefined
+              }
+            >
+              {imagesError}
+            </Alert>
+          )}
+
+          {imagesLoading ? (
+            <div className="flex justify-center py-8">
+              <Spinner label="Loading photos" />
+            </div>
+          ) : images.length === 0 ? (
+            !imagesError && <p className="text-sm text-gray-500">No storefront photos uploaded yet.</p>
+          ) : (
+            images.map((img) => {
+              const acting = actingImageId === img.id;
+              return (
+                <div key={img.id} className="rounded-md border border-gray-200 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <a href={img.url} target="_blank" rel="noreferrer" className="shrink-0">
+                        <img src={img.url} alt="Storefront" className="h-16 w-16 rounded-md border border-gray-200 object-cover" />
+                      </a>
+                      <div className="min-w-0">
+                        <StatusBadge kind="document" value={img.status} />
+                        {img.status === 'rejected' && img.rejection_reason && (
+                          <p className="mt-1 text-xs text-gray-700">
+                            <span className="font-medium">Reason:</span> {img.rejection_reason}
+                          </p>
+                        )}
+                        {img.reviewed_at && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            Reviewed by {reviewerName(img.reviewed_by)} on {formatDateTime(img.reviewed_at)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => reviewImage(img.id, 'approved')}
+                        disabled={acting || img.status === 'approved'}
+                        loading={acting && rejectingImageId !== img.id}
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="dangerOutline"
+                        onClick={() => {
+                          setRejectingImageId(img.id);
+                          setImageReason('');
+                        }}
+                        disabled={acting || img.status === 'rejected' || rejectingImageId === img.id}
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+
+                  {rejectingImageId === img.id && (
+                    <div className="mt-3 border-t border-gray-200 pt-3">
+                      <FormField
+                        label="Reason for rejection"
+                        htmlFor={`reject-image-${img.id}`}
+                        hint="Shown to the shopkeeper."
+                      >
+                        <Textarea
+                          id={`reject-image-${img.id}`}
+                          value={imageReason}
+                          onChange={(e) => setImageReason(e.target.value)}
+                          placeholder="Why is this photo being rejected?"
+                          rows={2}
+                        />
+                      </FormField>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setRejectingImageId(null);
+                            setImageReason('');
+                          }}
+                          disabled={acting}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => reviewImage(img.id, 'rejected', imageReason.trim())}
+                          disabled={!imageReason.trim()}
+                          loading={acting}
+                        >
+                          Confirm rejection
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </section>
+
+        {/* Billing info */}
+        <section className="space-y-3 border-t border-gray-200 pt-5">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+            <Landmark className="h-4 w-4 text-gray-500" aria-hidden="true" />
+            Billing info
+          </h3>
+
+          {billingError && (
+            <Alert
+              tone="danger"
+              onDismiss={() => setBillingError(null)}
+              actions={
+                !billingLoading && !billingInfo ? (
+                  <Button variant="secondary" size="sm" onClick={loadBilling}>
+                    Retry
+                  </Button>
+                ) : undefined
+              }
+            >
+              {billingError}
+            </Alert>
+          )}
+
+          {billingLoading ? (
+            <div className="flex justify-center py-8">
+              <Spinner label="Loading billing info" />
+            </div>
+          ) : !billingInfo || !hasBillingData ? (
+            !billingError && <p className="text-sm text-gray-500">No billing info submitted yet.</p>
+          ) : (
+            <div className="rounded-md border border-gray-200 p-4">
+              <div className="flex items-start gap-4">
+                <Avatar name={billingInfo.ownerName} src={billingInfo.ownerImageUrl} size="lg" />
+                <div className="min-w-0 flex-1">
+                  <DescriptionList
+                    columns={2}
+                    items={[
+                      { label: 'Owner name', value: billingInfo.ownerName },
+                      {
+                        label: 'Bank account number',
+                        value: billingInfo.bankAccountNumber ? (
+                          <span className="tabular-nums">{billingInfo.bankAccountNumber}</span>
+                        ) : null,
+                      },
+                      { label: 'IFSC code', value: billingInfo.bankIfscCode },
+                      { label: 'Branch name', value: billingInfo.bankBranchName },
+                      {
+                        label: 'Passbook / cheque photo',
+                        fullWidth: true,
+                        value: billingInfo.passbookUrl ? (
+                          <a href={billingInfo.passbookUrl} target="_blank" rel="noreferrer" className="inline-block">
+                            <img
+                              src={billingInfo.passbookUrl}
+                              alt="Passbook / cheque"
+                              className="h-24 w-24 rounded-md border border-gray-200 object-cover"
+                            />
+                          </a>
+                        ) : (
+                          <span className="text-gray-500">Not uploaded</span>
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              {hasPendingBilling && (
+                <Alert tone="warning" title="Pending review" className="mt-4">
+                  <ul className="space-y-0.5">
+                    {billingInfo.pendingBankAccountNumber && (
+                      <li>Account number: <span className="tabular-nums">{billingInfo.pendingBankAccountNumber}</span></li>
+                    )}
+                    {billingInfo.pendingBankIfscCode && <li>IFSC: {billingInfo.pendingBankIfscCode}</li>}
+                    {billingInfo.pendingBankBranchName && <li>Branch: {billingInfo.pendingBankBranchName}</li>}
+                    {billingInfo.pendingPassbookUrl && (
+                      <li>
+                        <a href={billingInfo.pendingPassbookUrl} target="_blank" rel="noreferrer" className="font-medium underline">
+                          View pending passbook photo
+                        </a>
+                      </li>
+                    )}
+                  </ul>
+                  <p className="mt-2">
+                    Review in{' '}
+                    <Button
+                      variant="link"
+                      onClick={() => {
+                        onClose();
+                        navigate('/stores/profile-change-requests');
+                      }}
+                    >
+                      Store change requests
+                    </Button>{' '}
+                    to approve or reject.
+                  </p>
+                </Alert>
+              )}
+            </div>
+          )}
+        </section>
       </div>
-    </div>
+    </Modal>
   );
 };
 
-// ─── Stat Card (clickable — doubles as a filter button) ────────────────────
-const StatCard = ({
-  icon: Icon, gradient, label, value, active, onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-  label: string;
-  value: number;
-  active: boolean;
-  onClick: () => void;
-}) => (
-  <button
-    onClick={onClick}
-    className={`relative overflow-hidden rounded-2xl ${gradient} p-5 text-white shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 text-left ${
-      active ? 'ring-4 ring-white ring-offset-2 ring-offset-violet-100' : ''
-    }`}
-  >
-    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-    <div className="relative z-10">
-      <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center mb-3">
-        <Icon className="w-6 h-6" />
-      </div>
-      <p className="text-white/80 text-sm font-medium">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-    </div>
-  </button>
-);
-
 const StoresPage = () => {
+  const confirm = useConfirm();
+  const { showToast } = useToast();
   const [stores, setStores] = useState<StoreData[]>([]);
+  // `loading` is the first load (nothing to show yet → skeleton rows);
+  // `refreshing` is a manual Refresh with data already on screen — the table
+  // stays mounted (scroll position and selection survive) and only the
+  // Refresh button spins.
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statFilter, setStatFilter] = useState<StatFilter>('all');
   const [approvingId, setApprovingId] = useState<string | null>(null);
@@ -751,6 +784,7 @@ const StoresPage = () => {
   const [approverNames, setApproverNames] = useState<Record<string, string>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
 
   // Clear the selection whenever the visible list changes shape — otherwise
   // a row selected under one filter stays "selected" (just invisible) after
@@ -799,11 +833,19 @@ const StoresPage = () => {
     }
 
     try {
+      // Both the upload time and the admin review time count as activity —
+      // reading only created_at made "Updated On" (and the sort) jump back
+      // to the older upload time on the next poll/Realtime event right after
+      // a photo was approved/rejected (reviewed_at is set by the review
+      // endpoint; column added in migration 20260926000000).
       const { data: imageRows, error: imagesError } = await getAdminClient()
         .from('store_images')
-        .select('store_id, created_at');
+        .select('store_id, created_at, reviewed_at');
       if (imagesError) throw imagesError;
-      mergeLatest((imageRows || []).map((row) => ({ store_id: row.store_id, at: row.created_at })));
+      mergeLatest((imageRows || []).flatMap((row) => [
+        { store_id: row.store_id, at: row.created_at },
+        { store_id: row.store_id, at: row.reviewed_at },
+      ]));
     } catch (imagesErr) {
       console.error('Error fetching store image timestamps:', imagesErr);
     }
@@ -836,13 +878,13 @@ const StoresPage = () => {
     const requiredTypes = ONBOARDING_REQUIRED_DOC_TYPES;
     const missing = requiredTypes.filter((t) => !docs.some((d) => d.doc_type === t));
     if (missing.length > 0) {
-      return { ready: false, reason: `Missing document(s): ${missing.map((t) => DOC_LABELS[t]).join(', ')}` };
+      return { ready: false, reason: `Missing document(s): ${missing.map(docTypeLabel).join(', ')}` };
     }
     const notApproved = docs.filter((d) => requiredTypes.includes(d.doc_type) && d.status !== 'approved');
     if (notApproved.length > 0) {
       return {
         ready: false,
-        reason: `Not yet approved: ${notApproved.map((d) => DOC_LABELS[d.doc_type] || d.doc_type).join(', ')}`,
+        reason: `Not yet approved: ${notApproved.map((d) => docTypeLabel(d.doc_type)).join(', ')}`,
       };
     }
     return { ready: true };
@@ -874,9 +916,10 @@ const StoresPage = () => {
     // column is no longer anon-readable at all (see 20260830000000 migration) — a
     // plain select('*') would fail outright since Postgres denies SELECT * when any
     // column is inaccessible, rather than silently omitting it.
+    // The list is exactly the StoreData fields — nothing this page doesn't render.
     const { data, error: sbError } = await getAdminClient()
       .from('stores')
-      .select('id, owner_id, name, phone, address, latitude, longitude, is_active, created_at, updated_at, image_url, owner_image_url, is_approved, approved_at, approved_by, verification_submitted_at, deleted_at')
+      .select('id, owner_id, name, phone, address, is_active, created_at, updated_at, is_approved, approved_at, approved_by, deleted_at')
       .order('created_at', { ascending: false });
     if (sbError) throw sbError;
     setStores(data || []);
@@ -885,15 +928,18 @@ const StoresPage = () => {
   };
 
   const fetchStores = async () => {
+    const firstLoad = stores.length === 0;
+    if (firstLoad) setLoading(true);
+    else setRefreshing(true);
+    setLoadError(null);
     try {
-      setLoading(true);
-      setError(null);
       await refreshAll();
     } catch (err: any) {
       console.error('Error fetching stores:', err);
-      setError('Failed to load stores. Please try again.');
+      setLoadError('Failed to load stores. Please try again.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -981,6 +1027,7 @@ const StoresPage = () => {
       stopPoll();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // "Total"/online/offline/pending/approved all deliberately exclude deleted
@@ -1001,10 +1048,12 @@ const StoresPage = () => {
     return stores
       .filter(store => {
         const q = searchTerm.toLowerCase();
+        // The ID is shown in every row (IdCell) and exported, so it is searchable too.
         const matchesSearch = !q || (
           store.name?.toLowerCase().includes(q) ||
           store.address?.toLowerCase().includes(q) ||
-          store.phone?.includes(q)
+          store.phone?.includes(q) ||
+          store.id.toLowerCase().includes(q)
         );
         const matchesStat =
           statFilter === 'deleted' ? !!store.deleted_at :
@@ -1029,15 +1078,35 @@ const StoresPage = () => {
       });
   }, [stores, searchTerm, statFilter, docsUpdatedAt]);
 
-  const toggleApproval = async (store: StoreData) => {
+  // Soft-deleted rows are read-only until restored, so they are never part
+  // of a selection (and therefore never bulk-approved).
+  const selectableStores = useMemo(() => filteredStores.filter((s) => !s.deleted_at), [filteredStores]);
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < selectableStores.length;
+    }
+  }, [selectedIds, selectableStores]);
+
+  // Returns true when the write succeeded. `silent` suppresses the per-row
+  // toasts so bulkApproveSelected can report a single summary instead.
+  const toggleApproval = async (store: StoreData, options: { silent?: boolean } = {}): Promise<boolean> => {
+    // A soft-deleted store must be restored first — approving it would leave
+    // a store that is deleted and approved (and could then be set online).
+    if (store.deleted_at) {
+      if (!options.silent) showToast(`Restore "${store.name}" before changing its approval.`, 'warning');
+      return false;
+    }
     const nextApproved = !store.is_approved;
     // Only gate the approve direction — revoking must always be allowed
     // regardless of document status.
     if (nextApproved) {
       const readiness = approvalReadiness(store.id);
       if (!readiness.ready) {
-        setError(`Cannot approve "${store.name}": ${readiness.reason}. Review documents first.`);
-        return;
+        if (!options.silent) {
+          showToast(`Cannot approve "${store.name}": ${readiness.reason}. Review documents first.`, 'error', 6000);
+        }
+        return false;
       }
     }
     setApprovingId(store.id);
@@ -1085,8 +1154,13 @@ const StoresPage = () => {
         { store_id: store.id, store_name: store.name, is_approved: nextApproved },
         'admin_review_action'
       );
+      if (!options.silent) {
+        showToast(`${nextApproved ? 'Approved' : 'Revoked approval for'} "${store.name}"`, 'success');
+      }
+      return true;
     } catch (err: any) {
-      setError(`Failed to update approval: ${err.message}`);
+      if (!options.silent) showToast(`Failed to update approval: ${err.message}`, 'error', 6000);
+      return false;
     } finally {
       setApprovingId(null);
     }
@@ -1098,24 +1172,32 @@ const StoresPage = () => {
   // idempotency/atomic-guard discipline instead of duplicating it. Only
   // acts on selected stores that are actually pending and ready to approve;
   // already-approved or not-yet-document-ready stores in the selection are
-  // silently skipped rather than erroring the whole batch.
+  // skipped (and counted in the summary) rather than erroring the whole batch.
   const bulkApproveSelected = async () => {
     const targets = filteredStores.filter(
-      (s) => selectedIds.has(s.id) && !s.is_approved && approvalReadiness(s.id).ready
+      (s) => selectedIds.has(s.id) && !s.deleted_at && !s.is_approved && approvalReadiness(s.id).ready
     );
     if (targets.length === 0) {
-      setError('None of the selected stores are eligible — they may already be approved or still need document review.');
+      showToast('None of the selected stores are eligible — they may already be approved or still need document review.', 'warning', 6000);
       return;
     }
+    const skipped = selectedIds.size - targets.length;
+    const failed: string[] = [];
+    let approved = 0;
     setBulkApproving(true);
     try {
       for (const store of targets) {
-        await toggleApproval(store);
+        if (await toggleApproval(store, { silent: true })) approved += 1;
+        else failed.push(store.name);
       }
     } finally {
       setBulkApproving(false);
       setSelectedIds(new Set());
     }
+    const parts = [`Approved ${approved} store${approved === 1 ? '' : 's'}`];
+    if (skipped > 0) parts.push(`skipped ${skipped} (already approved or not ready)`);
+    if (failed.length > 0) parts.push(`failed ${failed.length}: ${failed.join(', ')}`);
+    showToast(parts.join(', '), failed.length > 0 ? 'error' : 'success', failed.length > 0 ? 8000 : 4000);
   };
 
   const toggleSelected = (id: string) => {
@@ -1129,7 +1211,7 @@ const StoresPage = () => {
 
   const toggleSelectAll = () => {
     setSelectedIds((prev) =>
-      prev.size === filteredStores.length ? new Set() : new Set(filteredStores.map((s) => s.id))
+      prev.size === selectableStores.length ? new Set() : new Set(selectableStores.map((s) => s.id))
     );
   };
 
@@ -1156,6 +1238,12 @@ const StoresPage = () => {
   // through the shopkeeper app itself. Broadcasts to admin_notifications so
   // other admins see who took a store offline/online and when.
   const toggleStoreActive = async (store: StoreData) => {
+    // Soft-deleted stores stay offline until restored (the row hides the
+    // toggle for them too).
+    if (store.deleted_at) {
+      showToast(`Restore "${store.name}" before changing its online status.`, 'warning');
+      return;
+    }
     const nextActive = !store.is_active;
     setTogglingActiveId(store.id);
     try {
@@ -1175,8 +1263,9 @@ const StoresPage = () => {
         { store_id: store.id, store_name: store.name, is_active: nextActive },
         'store_status_changed'
       );
+      showToast(`"${store.name}" is now ${nextActive ? 'online' : 'offline'}`, 'success');
     } catch (err: any) {
-      setError(`Failed to update online status: ${err.message}`);
+      showToast(`Failed to update online status: ${err.message}`, 'error', 6000);
     } finally {
       setTogglingActiveId(null);
     }
@@ -1189,9 +1278,14 @@ const StoresPage = () => {
   // hidden from the default roster — same pattern as the rider "Delete"
   // above, which had the identical constraint and is fixed the same way.
   const handleDeleteStore = async (store: StoreData) => {
-    if (!confirm(`Remove "${store.name}"? Its order and payout history is kept — this can be undone from the Deleted tab.`)) return;
+    const ok = await confirm({
+      title: 'Remove store?',
+      message: `Remove "${store.name}"? Its order and payout history is kept — this can be undone from the Deleted view.`,
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setDeleteLoading(store.id);
-    setError(null);
     try {
       const patch = { is_active: false, is_approved: false, deleted_at: new Date().toISOString() };
       const { data, error: sbError } = await getAdminClient()
@@ -1205,8 +1299,9 @@ const StoresPage = () => {
       }
       setStores(prev => prev.map(s => (s.id === store.id ? { ...s, ...patch } : s)));
       await notifyAdminAction('removed store', store.name, { store_id: store.id, store_name: store.name }, 'admin_review_action');
+      showToast(`"${store.name}" removed`, 'success');
     } catch (err: any) {
-      setError(`Failed to delete store: ${err.message}`);
+      showToast(`Failed to delete store: ${err.message}`, 'error', 6000);
     } finally {
       setDeleteLoading(null);
     }
@@ -1214,7 +1309,6 @@ const StoresPage = () => {
 
   const handleRestoreStore = async (store: StoreData) => {
     setDeleteLoading(store.id);
-    setError(null);
     try {
       const { data, error: sbError } = await getAdminClient()
         .from('stores')
@@ -1227,343 +1321,326 @@ const StoresPage = () => {
       }
       setStores(prev => prev.map(s => (s.id === store.id ? { ...s, deleted_at: null } : s)));
       await notifyAdminAction('restored store', store.name, { store_id: store.id, store_name: store.name }, 'admin_review_action');
+      showToast(`"${store.name}" restored`, 'success');
     } catch (err: any) {
-      setError(`Failed to restore store: ${err.message}`);
+      showToast(`Failed to restore store: ${err.message}`, 'error', 6000);
     } finally {
       setDeleteLoading(null);
     }
   };
 
+  const isFiltered = searchTerm.trim() !== '' || statFilter !== 'all';
+  const universeCount = statFilter === 'deleted' ? stats.deleted : stats.total;
+  // First load failed and nothing is on screen: the counts are unknown, not
+  // zero, so the stat cards show '—' (mirrors DeliveryPage) and the error
+  // alert stays until Retry succeeds — dismissing it would reveal the
+  // "No stores have registered yet" empty state, which is not true.
+  const showLoadError = !!loadError && stores.length === 0;
+  const allSelected = selectableStores.length > 0 && selectedIds.size === selectableStores.length;
+
+  const retryButton = (
+    <Button variant="secondary" size="sm" onClick={fetchStores} loading={refreshing}>
+      Retry
+    </Button>
+  );
+
   return (
-    <AdminLayout>
+    <>
+      <PageHeader title="Stores" description="Manage, approve and track all store partners." />
+
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Stores</h1>
-            <p className="text-gray-500 mt-1">Manage, approve and track all store partners</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={exportCsv}
-              disabled={filteredStores.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200 disabled:opacity-50"
-              title="Export the currently filtered list as CSV"
-            >
-              <Download size={18} />
-              <span className="text-sm font-semibold">Export CSV</span>
-            </button>
-            <button
-              onClick={fetchStores}
-              className="p-3 text-gray-600 bg-white rounded-xl hover:bg-gray-50 transition-colors shadow-sm border border-gray-200"
-              title="Refresh"
-            >
-              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
-        </div>
-
-        {/* Error */}
-        {error && (
-          <div className="bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-4 rounded-xl flex items-center shadow-lg">
-            <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-            <span className="flex-1 font-medium">{error}</span>
-            <button onClick={() => setError(null)} className="ml-4 p-1 hover:bg-white/20 rounded-lg">
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
         {/* Stats — clickable filters */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard icon={Store} gradient="bg-gradient-to-br from-violet-500 to-purple-600" label="Total Stores" value={stats.total} active={statFilter === 'all'} onClick={() => setStatFilter('all')} />
-          <StatCard icon={Wifi} gradient="bg-gradient-to-br from-emerald-500 to-teal-600" label="Online" value={stats.online} active={statFilter === 'online'} onClick={() => setStatFilter('online')} />
-          <StatCard icon={WifiOff} gradient="bg-gradient-to-br from-gray-500 to-gray-600" label="Offline" value={stats.offline} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} />
-          <StatCard icon={AlertCircle} gradient="bg-gradient-to-br from-amber-500 to-orange-500" label="Pending Approval" value={stats.pending} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} />
-          <StatCard icon={CheckCircle} gradient="bg-gradient-to-br from-sky-500 to-blue-600" label="Approved" value={stats.approved} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} />
-          <StatCard icon={Trash2} gradient="bg-gradient-to-br from-slate-500 to-gray-600" label="Deleted" value={stats.deleted} active={statFilter === 'deleted'} onClick={() => setStatFilter('deleted')} />
-        </div>
+        <StatGrid columns={6}>
+          <StatCard label="Total stores" value={showLoadError ? '—' : stats.total} icon={Store} active={statFilter === 'all'} onClick={() => setStatFilter('all')} loading={loading} />
+          <StatCard label="Online" value={showLoadError ? '—' : stats.online} icon={Wifi} active={statFilter === 'online'} onClick={() => setStatFilter('online')} loading={loading} />
+          <StatCard label="Offline" value={showLoadError ? '—' : stats.offline} icon={WifiOff} active={statFilter === 'offline'} onClick={() => setStatFilter('offline')} loading={loading} />
+          <StatCard label="Pending approval" value={showLoadError ? '—' : stats.pending} icon={AlertCircle} active={statFilter === 'pending'} onClick={() => setStatFilter('pending')} loading={loading} />
+          <StatCard label="Approved" value={showLoadError ? '—' : stats.approved} icon={CheckCircle} active={statFilter === 'approved'} onClick={() => setStatFilter('approved')} loading={loading} />
+          <StatCard label="Deleted" value={showLoadError ? '—' : stats.deleted} icon={Trash2} active={statFilter === 'deleted'} onClick={() => setStatFilter('deleted')} loading={loading} />
+        </StatGrid>
 
-        {/* Search */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-          <div className="relative">
-            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by store name, address, or phone..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-12 py-3 rounded-xl border-2 border-gray-200 focus:border-violet-500 focus:ring-0 transition-colors text-gray-800"
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                <X size={18} />
-              </button>
+        {/* Stores list */}
+        <Card>
+          <CardBody padding="none">
+            <FilterBar
+              actions={
+                <>
+                  <Button
+                    variant="secondary"
+                    leftIcon={<Download />}
+                    onClick={exportCsv}
+                    disabled={filteredStores.length === 0}
+                    title="Export the currently filtered list as CSV"
+                  >
+                    Export CSV
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    leftIcon={<RefreshCw />}
+                    onClick={fetchStores}
+                    loading={refreshing}
+                    disabled={loading}
+                  >
+                    Refresh
+                  </Button>
+                </>
+              }
+            >
+              <SearchInput
+                value={searchTerm}
+                onChange={setSearchTerm}
+                placeholder="Search by name, address, phone or ID"
+                containerClassName="w-full sm:w-80"
+                aria-label="Search stores"
+              />
+            </FilterBar>
+
+            {/* Bulk action bar — only shown once at least one row is selected */}
+            {selectedIds.size > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-100 bg-brand-50 px-4 py-2.5">
+                <span className="text-sm font-medium text-brand-800 tabular-nums">{selectedIds.size} selected</span>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" leftIcon={<CheckSquare />} onClick={bulkApproveSelected} loading={bulkApproving}>
+                    Approve selected
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} disabled={bulkApproving}>
+                    Clear
+                  </Button>
+                </div>
+              </div>
             )}
-          </div>
-        </div>
 
-        {/* Bulk action bar — only shown once at least one row is selected */}
-        {selectedIds.size > 0 && (
-          <div className="bg-violet-50 border border-violet-200 rounded-xl px-5 py-3 flex items-center justify-between">
-            <span className="text-sm font-semibold text-violet-800">{selectedIds.size} selected</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={bulkApproveSelected}
-                disabled={bulkApproving}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 disabled:opacity-50"
-              >
-                <CheckSquare size={16} />
-                {bulkApproving ? 'Approving…' : 'Approve Selected'}
-              </button>
-              <button
-                onClick={() => setSelectedIds(new Set())}
-                className="px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 rounded-lg"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-        )}
+            {loadError && (
+              <div className={stores.length > 0 ? 'border-b border-gray-200 p-4' : 'p-4'}>
+                <Alert
+                  tone="danger"
+                  title="Could not load stores"
+                  actions={retryButton}
+                  onDismiss={showLoadError ? undefined : () => setLoadError(null)}
+                >
+                  {loadError}
+                </Alert>
+              </div>
+            )}
 
-        {/* Stores List */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {loading ? (
-            <div className="p-16 flex flex-col items-center justify-center">
-              <div className="relative">
-                <div className="w-16 h-16 border-4 border-violet-200 rounded-full" />
-                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-violet-500 rounded-full animate-spin border-t-transparent" />
-              </div>
-              <p className="mt-4 text-gray-500 font-medium">Loading stores...</p>
-            </div>
-          ) : filteredStores.length === 0 ? (
-            <div className="p-16 text-center">
-              <div className="w-24 h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl flex items-center justify-center mx-auto mb-6">
-                <Store className="w-12 h-12 text-gray-400" />
-              </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-2">No stores found</h3>
-              <p className="text-gray-500">
-                {searchTerm || statFilter !== 'all' ? 'Try a different search or filter.' : 'No stores have registered yet.'}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-                  <tr className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-                    <th className="px-6 py-4 w-8">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.size > 0 && selectedIds.size === filteredStores.length}
-                        onChange={toggleSelectAll}
-                        className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
-                        aria-label="Select all stores"
-                      />
-                    </th>
-                    <th className="px-6 py-4">Store</th>
-                    <th className="px-6 py-4">Contact</th>
-                    <th className="px-6 py-4">Address</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4">Approval</th>
-                    <th className="px-6 py-4">Approved On</th>
-                    <th className="px-6 py-4">Updated On</th>
-                    <th className="px-6 py-4">Joined</th>
-                    <th className="px-6 py-4 text-right">Delete</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredStores.map((store) => (
-                    <tr key={store.id} className="group hover:bg-gradient-to-r hover:from-gray-50 hover:to-violet-50/30 transition-all duration-200">
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(store.id)}
-                          onChange={() => toggleSelected(store.id)}
-                          className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
-                          aria-label={`Select ${store.name}`}
+            {/* A failed first load shows only the alert above — never an "empty" message. */}
+            {(!loadError || stores.length > 0) && (
+              <TableContainer className="border-0 rounded-none">
+                <Table>
+                  <THead>
+                    <Tr>
+                      <Th className="w-10">
+                        <Checkbox
+                          ref={selectAllRef}
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          disabled={selectableStores.length === 0}
+                          aria-label="Select all stores"
                         />
-                      </td>
-                      <td className="px-6 py-4">
-                        <p className="font-semibold text-gray-800">{store.name}</p>
-                        <div className="mt-1"><IdCell id={store.id} /></div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {store.phone ? (
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Phone size={14} className="text-gray-400" />
-                            {store.phone}
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        {store.address ? (
-                          <div className="flex items-start gap-2 text-sm text-gray-600 max-w-xs">
-                            <MapPin size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
-                            <span>{store.address}</span>
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-                      {/* Status — online / offline toggle, mirrors DeliveryPage's rider toggle */}
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => toggleStoreActive(store)}
-                          disabled={togglingActiveId === store.id || (!store.is_approved && !store.is_active)}
-                          title={
-                            !store.is_approved && !store.is_active
-                              ? 'Approve store before setting online'
-                              : store.is_active
-                                ? 'Set offline'
-                                : 'Set online'
+                      </Th>
+                      <Th>Store</Th>
+                      <Th>Contact</Th>
+                      <Th>Address</Th>
+                      <Th>Status</Th>
+                      <Th>Approval</Th>
+                      <Th>Approved on</Th>
+                      <Th>Updated on</Th>
+                      <Th>Joined</Th>
+                      <Th align="right">Actions</Th>
+                    </Tr>
+                  </THead>
+                  <TBody>
+                    {loading ? (
+                      <TableSkeletonRows rows={6} cols={TABLE_COLUMNS} />
+                    ) : filteredStores.length === 0 ? (
+                      <TableEmptyRow colSpan={TABLE_COLUMNS}>
+                        <EmptyState
+                          compact
+                          icon={Store}
+                          title="No stores found"
+                          description={isFiltered ? 'Try a different search or filter.' : 'No stores have registered yet.'}
+                          action={
+                            isFiltered ? (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                  setSearchTerm('');
+                                  setStatFilter('all');
+                                }}
+                              >
+                                Clear filters
+                              </Button>
+                            ) : undefined
                           }
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
-                            store.is_active
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                        >
-                          {togglingActiveId === store.id ? (
-                            <RefreshCw size={12} className="animate-spin" />
-                          ) : store.is_active ? (
-                            <Wifi size={12} />
-                          ) : (
-                            <WifiOff size={12} />
-                          )}
-                          {store.is_active ? 'Online' : 'Offline'}
-                        </button>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          {store.is_approved ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-                              <CheckCircle size={11} />
-                              Approved
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                              <AlertCircle size={11} />
-                              Pending
-                            </span>
-                          )}
-                          <button
-                            onClick={() => toggleApproval(store)}
-                            disabled={approvingId === store.id || (!store.is_approved && !approvalReadiness(store.id).ready)}
-                            title={!store.is_approved ? approvalReadiness(store.id).reason : undefined}
-                            className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-                              store.is_approved
-                                ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200'
-                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
-                            } disabled:opacity-50`}
-                          >
-                            {approvingId === store.id ? '...' : store.is_approved ? 'Revoke' : 'Approve'}
-                          </button>
-                          <button
-                            onClick={() => setReviewingStore(store)}
-                            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200 transition-colors"
-                          >
-                            Review Documents
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {store.approved_at ? (
-                          <>
-                            <span className="text-sm text-gray-600">
-                              {new Date(store.approved_at).toLocaleString('en-IN', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                            <p className="text-xs text-gray-400 mt-0.5">
-                              {(store.approved_by && approverNames[store.approved_by]) || 'admin'}
-                            </p>
-                          </>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600">
-                          {docsUpdatedAt[store.id]
-                            ? new Date(docsUpdatedAt[store.id]).toLocaleString('en-IN', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : '—'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-sm text-gray-600">
-                          {store.created_at
-                            ? new Date(store.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-                            : '—'}
-                        </span>
-                      </td>
-                      {/* Delete / Restore */}
-                      <td className="px-6 py-4 text-right">
-                        {store.deleted_at ? (
-                          <button
-                            onClick={() => handleRestoreStore(store)}
-                            disabled={deleteLoading === store.id}
-                            className="p-2.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all disabled:opacity-50"
-                            title="Restore"
-                          >
-                            {deleteLoading === store.id
-                              ? <RefreshCw size={16} className="animate-spin" />
-                              : <RotateCcw size={16} />}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleDeleteStore(store)}
-                            disabled={deleteLoading === store.id}
-                            className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all disabled:opacity-50"
-                            title="Delete"
-                          >
-                            {deleteLoading === store.id
-                              ? <RefreshCw size={16} className="animate-spin" />
-                              : <Trash2 size={16} />}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                        />
+                      </TableEmptyRow>
+                    ) : (
+                      filteredStores.map((store) => {
+                        const isDeleted = !!store.deleted_at;
+                        const selected = selectedIds.has(store.id);
+                        const readiness = isDeleted || store.is_approved ? null : approvalReadiness(store.id);
+                        const rowBusy = deleteLoading === store.id;
+                        // Pending AND offline stores cannot be set online.
+                        const toggleBlocked = !store.is_approved && !store.is_active;
+                        return (
+                          <Tr key={store.id} selected={selected} className={selected ? undefined : 'hover:bg-gray-50'}>
+                            <Td>
+                              <Checkbox
+                                checked={selected}
+                                onChange={() => toggleSelected(store.id)}
+                                disabled={isDeleted}
+                                aria-label={`Select ${store.name}`}
+                              />
+                            </Td>
+                            <Td>
+                              <p className="font-medium text-gray-900">{store.name}</p>
+                              <div className="mt-1">
+                                <IdCell id={store.id} />
+                              </div>
+                            </Td>
+                            <Td nowrap>
+                              {store.phone ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <Phone className="h-4 w-4 text-gray-400" aria-hidden="true" />
+                                  {store.phone}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </Td>
+                            <Td>
+                              {store.address ? (
+                                <span className="flex max-w-xs items-start gap-1.5">
+                                  <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden="true" />
+                                  <span>{store.address}</span>
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </Td>
+                            {/* Status — online / offline toggle, mirrors DeliveryPage's rider toggle */}
+                            <Td nowrap>
+                              {isDeleted ? (
+                                <StatusBadge kind="generic" value="deleted" />
+                              ) : (
+                                <div className="flex items-center gap-3">
+                                  <Tooltip content={toggleBlocked ? 'Approve store before setting online' : ''}>
+                                    <Toggle
+                                      size="sm"
+                                      checked={store.is_active}
+                                      onChange={() => toggleStoreActive(store)}
+                                      disabled={togglingActiveId === store.id || toggleBlocked}
+                                      aria-label={`${store.is_active ? 'Set offline' : 'Set online'}: ${store.name}`}
+                                    />
+                                  </Tooltip>
+                                  <StatusBadge kind="generic" value={store.is_active ? 'online' : 'offline'} />
+                                </div>
+                              )}
+                            </Td>
+                            <Td>
+                              <div className="flex items-center gap-2">
+                                <StatusBadge kind="verification" value={store.is_approved ? 'approved' : 'pending'} />
+                                {!isDeleted && (
+                                  <Button
+                                    size="sm"
+                                    variant={store.is_approved ? 'dangerOutline' : 'primary'}
+                                    onClick={() => toggleApproval(store)}
+                                    loading={approvingId === store.id}
+                                    disabled={bulkApproving || (readiness ? !readiness.ready : false)}
+                                  >
+                                    {store.is_approved ? 'Revoke' : 'Approve'}
+                                  </Button>
+                                )}
+                              </div>
+                              {/* Why Approve is disabled — shown inline rather than only
+                                  in a title on a disabled button, which some browsers
+                                  never surface. */}
+                              {readiness && !readiness.ready && (
+                                <p className="mt-1 max-w-[16rem] text-xs text-gray-500">{readiness.reason}</p>
+                              )}
+                            </Td>
+                            <Td nowrap>
+                              {store.approved_at ? (
+                                <>
+                                  <span className="block tabular-nums">{formatDateTime(store.approved_at)}</span>
+                                  <span className="mt-0.5 block text-xs text-gray-500">
+                                    {(store.approved_by && approverNames[store.approved_by]) || 'Unknown admin'}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </Td>
+                            <Td nowrap muted className="tabular-nums">
+                              {formatDateTime(docsUpdatedAt[store.id])}
+                            </Td>
+                            <Td nowrap muted className="tabular-nums">
+                              {formatDate(store.created_at)}
+                            </Td>
+                            {/* Review documents / Delete / Restore */}
+                            <Td align="right" nowrap>
+                              <div className="inline-flex items-center gap-1">
+                                {isDeleted ? (
+                                  <Tooltip content="Restore store">
+                                    <IconButton
+                                      aria-label={`Restore ${store.name}`}
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleRestoreStore(store)}
+                                      loading={rowBusy}
+                                    >
+                                      <RotateCcw aria-hidden="true" />
+                                    </IconButton>
+                                  </Tooltip>
+                                ) : (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      leftIcon={<FileText />}
+                                      onClick={() => setReviewingStore(store)}
+                                    >
+                                      Documents
+                                    </Button>
+                                    <Tooltip content="Remove store">
+                                      <IconButton
+                                        aria-label={`Remove ${store.name}`}
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                                        onClick={() => handleDeleteStore(store)}
+                                        loading={rowBusy}
+                                      >
+                                        <Trash2 aria-hidden="true" />
+                                      </IconButton>
+                                    </Tooltip>
+                                  </>
+                                )}
+                              </div>
+                            </Td>
+                          </Tr>
+                        );
+                      })
+                    )}
+                  </TBody>
+                </Table>
+              </TableContainer>
+            )}
 
-          {/* Footer summary */}
-          {!loading && filteredStores.length > 0 && (
-            <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-              <p className="text-sm text-gray-500">
-                Showing <span className="font-semibold text-gray-700">{filteredStores.length}</span> of{' '}
-                <span className="font-semibold text-gray-700">{stores.length}</span> stores
-              </p>
-              <div className="flex items-center gap-4 text-xs text-gray-500">
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  {stats.online} online now
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  {stats.pending} pending
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
+            {/* Footer summary — the denominator is the current view's universe
+                (live stores, or deleted stores in the Deleted view), matching
+                the stat cards instead of counting both together. */}
+            {!loading && filteredStores.length > 0 && (
+              <CardFooter>
+                <p className="text-sm text-gray-500">
+                  Showing <span className="font-medium text-gray-900 tabular-nums">{filteredStores.length}</span> of{' '}
+                  <span className="font-medium text-gray-900 tabular-nums">{universeCount}</span> stores
+                </p>
+              </CardFooter>
+            )}
+          </CardBody>
+        </Card>
       </div>
 
       {reviewingStore && (
@@ -1587,7 +1664,7 @@ const StoresPage = () => {
           }}
         />
       )}
-    </AdminLayout>
+    </>
   );
 };
 
