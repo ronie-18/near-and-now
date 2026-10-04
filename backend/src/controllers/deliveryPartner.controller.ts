@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
-import { dispatchReadyOrdersToDriver } from './shopkeeper.controller.js';
+import { dispatchReadyOrdersToDriver, broadcastToNearbyDrivers } from './shopkeeper.controller.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
@@ -378,6 +378,7 @@ export async function payRiderForDeliveredOrder(orderId: string, riderId: string
       .from('order_store_allocations')
       .select('store_id')
       .eq('order_id', orderId)
+      .in('status', ['accepted', 'picked_up']) // not a store that declined
       .order('sequence_number', { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -653,11 +654,13 @@ export class DeliveryPartnerController {
         : null;
       const offset = Math.max(0, Number(req.query.offset) || 0);
 
-      // Get all store_orders for this rider
+      // Get all store_orders for this rider (a store that declined its part
+      // has its row closed as 'order_cancelled' and is not a stop).
       const { data: storeOrders } = await supabaseAdmin
         .from('store_orders')
         .select('customer_order_id, store_id')
-        .eq('delivery_partner_id', req.riderId!);
+        .eq('delivery_partner_id', req.riderId!)
+        .neq('status', 'order_cancelled');
 
       if (!storeOrders?.length) {
         return res.json({ success: true, orders: [] });
@@ -706,7 +709,8 @@ export class DeliveryPartnerController {
       const { data: items } = await supabaseAdmin
         .from('order_items')
         .select('customer_order_id, product_name, quantity, unit')
-        .in('customer_order_id', orders.map((o: any) => o.id));
+        .in('customer_order_id', orders.map((o: any) => o.id))
+        .neq('item_status', 'unavailable'); // dropped items are not picked up
 
       const itemsByOrder: Record<string, any[]> = {};
       (items || []).forEach((item: any) => {
@@ -770,13 +774,20 @@ export class DeliveryPartnerController {
     try {
       const { orderId } = req.params;
 
-      // Verify this order belongs to this rider
-      const { data: storeOrder } = await supabaseAdmin
+      // Verify this order belongs to this rider. A multi-store order has one
+      // store_orders row per store, so `.maybeSingle()` here errored on every
+      // such order and the rider got a 404 for a job assigned to them. Take
+      // the first fulfilling store (the full stop list is getPickupSequence).
+      // (2026-10-04 audit)
+      const { data: storeOrderRows } = await supabaseAdmin
         .from('store_orders')
         .select('store_id')
         .eq('customer_order_id', orderId)
         .eq('delivery_partner_id', req.riderId!)
-        .maybeSingle();
+        .neq('status', 'order_cancelled')
+        .order('created_at', { ascending: true })
+        .limit(1);
+      const storeOrder = (storeOrderRows as Array<{ store_id: string }> | null)?.[0];
 
       if (!storeOrder) {
         return res.status(404).json({ error: 'Order not found' });
@@ -834,48 +845,46 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'Go online to accept orders.' });
       }
 
-      // Atomically claim only if no rider is already assigned AND the order isn't
-      // already cancelled/delivered — without the status guard, cancelOrder
-      // (database.service.ts) can race this: it cancels order_store_allocations/
-      // store_orders/customer_orders in separate, non-atomic steps, so a claim
-      // landing between those steps previously found delivery_partner_id still
-      // null and succeeded anyway, on an order that's actually being cancelled.
-      // Found 2026-10-01 during an order-state-machine race audit (backlog item 7).
-      const { data: claimed, error: claimError } = await supabaseAdmin
-        .from('store_orders')
-        .update({ status: 'delivery_partner_assigned', delivery_partner_id: riderId })
-        .eq('customer_order_id', orderId)
-        .is('delivery_partner_id', null)
-        .not('status', 'in', '(order_cancelled,order_delivered)')
-        .select('id');
-
-      if (claimError) throw claimError;
-      if (!claimed || claimed.length === 0) {
-        return res.status(409).json({ error: 'Order not found, already assigned to another rider, or no longer available.' });
-      }
-
-      // Second guard on the same narrow window, one level up: cancelOrder's own
-      // atomic customer_orders update (its one truly atomic step) could still win
-      // a race that lands after the store_orders claim above but before this
-      // update. Roll back the claim rather than leave the rider holding a
-      // "delivery_partner_assigned" store_order for an order that's actually
-      // cancelled — same reset shape rejectOrder already uses for a released claim.
-      const { data: orderUpdated, error } = await supabaseAdmin
+      // Legacy direct-claim path (the offer-based acceptOffer below is the
+      // normal one). Claim the ORDER row first, atomically, and only while it
+      // is genuinely up for grabs: 'ready_for_pickup' with no rider. Before
+      // 2026-10-04 this let any approved rider claim any order by id — before
+      // a single store had accepted, or one already assigned to someone else
+      // via an offer — because the guard only excluded cancelled/delivered.
+      const { data: orderClaimed, error: claimError } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'delivery_partner_assigned', assigned_driver_id: riderId, updated_at: new Date().toISOString() })
         .eq('id', orderId)
-        .not('status', 'in', '(order_cancelled,order_delivered)')
+        .eq('status', 'ready_for_pickup')
+        .is('assigned_driver_id', null)
         .select('id');
 
-      if (error) throw error;
-      if (!orderUpdated || orderUpdated.length === 0) {
-        await supabaseAdmin
-          .from('store_orders')
-          .update({ status: 'ready_for_pickup', delivery_partner_id: null })
-          .eq('customer_order_id', orderId)
-          .eq('delivery_partner_id', riderId);
-        return res.status(409).json({ error: 'This order was cancelled or completed before your acceptance could be confirmed.' });
+      if (claimError) throw claimError;
+      if (!orderClaimed || orderClaimed.length === 0) {
+        return res.status(409).json({ error: 'Order is not available for pickup (not ready yet, already assigned, or no longer active).' });
       }
+
+      // Stops only (a declined store's row is 'order_cancelled').
+      const { error: storeOrdersErr } = await supabaseAdmin
+        .from('store_orders')
+        .update({ status: 'delivery_partner_assigned', delivery_partner_id: riderId, assigned_at: new Date().toISOString() })
+        .eq('customer_order_id', orderId)
+        .neq('status', 'order_cancelled');
+      if (storeOrdersErr) console.error('acceptOrder: failed to assign store_orders:', storeOrdersErr, { orderId, riderId });
+
+      // Nobody else may take it now — same as accept_driver_offer().
+      await supabaseAdmin
+        .from('driver_order_offers')
+        .update({ status: 'expired', responded_at: new Date().toISOString() })
+        .eq('order_id', orderId)
+        .eq('status', 'pending')
+        .neq('driver_id', riderId);
+      await supabaseAdmin
+        .from('driver_order_offers')
+        .update({ status: 'accepted', responded_at: new Date().toISOString() })
+        .eq('order_id', orderId)
+        .eq('driver_id', riderId)
+        .eq('status', 'pending');
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
@@ -900,31 +909,57 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
 
-      // Clear delivery partner assignment and reset to ready_for_pickup so it can be reassigned.
-      // Ownership-filtered: only the rider actually assigned to this order can reject it.
+      // Release the order back to the pool — but only while nothing has been
+      // collected yet. Without a status guard this could "un-deliver" a
+      // delivered order (re-opening it for a second payout) or release an
+      // order whose goods the rider already holds. Ownership-filtered: only
+      // the assigned rider can release it. The order row is the atomic gate;
+      // store_orders follow. (2026-10-04 audit)
       const { data: released, error } = await supabaseAdmin
-        .from('store_orders')
-        .update({ delivery_partner_id: null, status: 'ready_for_pickup' })
-        .eq('customer_order_id', orderId)
-        .eq('delivery_partner_id', riderId)
+        .from('customer_orders')
+        .update({ status: 'ready_for_pickup', assigned_driver_id: null, updated_at: new Date().toISOString() })
+        .eq('id', orderId)
+        .eq('assigned_driver_id', riderId)
+        .eq('status', 'delivery_partner_assigned')
         .select('id');
 
       if (error) throw error;
       if (!released || released.length === 0) {
-        return res.status(403).json({ error: 'This order is not assigned to you.' });
+        const { data: current } = await supabaseAdmin
+          .from('customer_orders')
+          .select('status, assigned_driver_id')
+          .eq('id', orderId)
+          .maybeSingle();
+        if (!current || (current as any).assigned_driver_id !== riderId) {
+          return res.status(403).json({ error: 'This order is not assigned to you.' });
+        }
+        return res.status(409).json({ error: 'This order cannot be released once pickup has started — contact support.' });
       }
 
+      const { error: storeOrdersErr } = await supabaseAdmin
+        .from('store_orders')
+        .update({ delivery_partner_id: null, status: 'ready_for_pickup' })
+        .eq('customer_order_id', orderId)
+        .eq('delivery_partner_id', riderId)
+        .neq('status', 'order_cancelled');
+      if (storeOrdersErr) console.error('rejectOrder: failed to release store_orders:', storeOrdersErr, { orderId, riderId });
+
+      // This rider said no; don't offer it to them again, and re-offer it to
+      // everyone else right away (their earlier offers expired when this rider
+      // won — broadcastToNearbyDrivers re-opens those).
       await supabaseAdmin
-        .from('customer_orders')
-        .update({ status: 'ready_for_pickup', assigned_driver_id: null, updated_at: new Date().toISOString() })
-        .eq('id', orderId)
-        .eq('assigned_driver_id', riderId);
+        .from('driver_order_offers')
+        .update({ status: 'rejected', responded_at: new Date().toISOString() })
+        .eq('order_id', orderId)
+        .eq('driver_id', riderId);
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,
         status: 'ready_for_pickup',
-        notes: 'Rider rejected order, awaiting reassignment',
+        notes: 'Rider released the order, awaiting reassignment',
       });
+
+      broadcastToNearbyDrivers(orderId).catch((err) => console.error('rejectOrder: re-broadcast failed:', err));
 
       res.json({ success: true });
     } catch (err) {
@@ -941,17 +976,30 @@ export class DeliveryPartnerController {
         return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
       }
 
-      // Ownership-filtered: only the rider assigned to this order can mark it picked up.
+      // Ownership-filtered: only the rider assigned to this order can mark it
+      // picked up — and only from the assigned/picking stage, so this legacy
+      // endpoint can no longer resurrect a cancelled or delivered order
+      // (which re-enabled markDelivered and a second payout). (2026-10-04)
       const { data: updated, error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status: 'order_picked_up', updated_at: new Date().toISOString() })
         .eq('id', orderId)
         .eq('assigned_driver_id', riderId)
+        .in('status', ['delivery_partner_assigned', 'picking_up'])
         .select('id');
 
       if (error) throw error;
       if (!updated || updated.length === 0) {
-        return res.status(403).json({ error: 'This order is not assigned to you.' });
+        const { data: current } = await supabaseAdmin
+          .from('customer_orders')
+          .select('status, assigned_driver_id')
+          .eq('id', orderId)
+          .maybeSingle();
+        if (!current || (current as any).assigned_driver_id !== riderId) {
+          return res.status(403).json({ error: 'This order is not assigned to you.' });
+        }
+        if ((current as any).status === 'order_picked_up') return res.json({ success: true, already_done: true });
+        return res.status(409).json({ error: `Order cannot be marked picked up while it is '${(current as any).status}'.` });
       }
 
       // Mirror writes — customer_orders (checked above) is the source of
@@ -2035,6 +2083,12 @@ export class DeliveryPartnerController {
         const orderId = offer?.order_id;
 
         if (orderId) {
+          // accept_driver_offer() writes no order_status_history row, so the
+          // customer's timeline was missing "rider assigned" on the main path.
+          supabaseAdmin
+            .from('order_status_history')
+            .insert({ customer_order_id: orderId, status: 'delivery_partner_assigned', notes: 'Delivery partner assigned' })
+            .then(({ error: historyErr }) => { if (historyErr) console.error('acceptOffer: history insert failed:', historyErr, { orderId }); });
           notificationService.sendOrderNotification(orderId, 'rider_assigned').catch(console.error);
         }
 
@@ -2231,7 +2285,7 @@ export class DeliveryPartnerController {
         const nextStoreId = (remaining[0] as any).store_id;
         const [{ data: nextStore }, { data: allAllocs }] = await Promise.all([
           supabaseAdmin.from('stores').select('name').eq('id', nextStoreId).maybeSingle(),
-          supabaseAdmin.from('order_store_allocations').select('id').eq('order_id', orderId),
+          supabaseAdmin.from('order_store_allocations').select('id').eq('order_id', orderId).not('status', 'in', '(rejected,cancelled)'),
         ]);
         const totalStores = allAllocs?.length ?? 0;
         const doneCount = totalStores - remaining.length;

@@ -674,23 +674,36 @@ const OrderTrackingPage = () => {
           {showItems && (
             <div className="border-t border-gray-100">
               <div className="divide-y divide-gray-100">
-                {order.items.map((item: any, idx: number) => (
-                  <div key={idx} className="flex items-center gap-3 px-5 py-3">
-                    {item.image_url ? (
-                      <img src={item.image_url} alt={item.product_name} className="w-12 h-12 rounded-xl object-cover bg-gray-100 flex-shrink-0" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
-                        <Package className="w-5 h-5 text-gray-400" />
+                {order.items.map((item: any, idx: number) => {
+                  // A store could not supply it and no nearby store had it:
+                  // the backend marks it 'unavailable' (and, for cash on
+                  // delivery, already took it off total_amount).
+                  const unavailable = item.item_status === 'unavailable';
+                  return (
+                    <div key={idx} className={`flex items-center gap-3 px-5 py-3 ${unavailable ? 'opacity-60' : ''}`}>
+                      {item.image_url ? (
+                        <img src={item.image_url} alt={item.product_name} className="w-12 h-12 rounded-xl object-cover bg-gray-100 flex-shrink-0" />
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
+                          <Package className="w-5 h-5 text-gray-400" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className={`font-medium text-sm truncate ${unavailable ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{item.product_name}</p>
+                        <p className="text-xs text-gray-500">
+                          {unavailable ? <span className="font-semibold text-red-500">Unavailable — removed from your order</span> : <>Qty: {item.quantity} {item.unit || ''}</>}
+                        </p>
                       </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 text-sm truncate">{item.product_name}</p>
-                      <p className="text-xs text-gray-500">Qty: {item.quantity} {item.unit || ''}</p>
+                      <p className={`font-bold text-sm ${unavailable ? 'text-gray-400 line-through' : 'text-gray-900'}`}>₹{Math.round(item.unit_price * item.quantity)}</p>
                     </div>
-                    <p className="font-bold text-gray-900 text-sm">₹{Math.round(item.unit_price * item.quantity)}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+              {order.items.some((item: any) => item.item_status === 'unavailable') && order.payment_method?.toLowerCase() !== 'cod' && (
+                <p className="px-5 py-2 text-xs text-gray-500 bg-amber-50 border-t border-amber-100">
+                  Unavailable items are refunded to your original payment method; the total below still shows what you paid.
+                </p>
+              )}
               <div className="px-5 py-4 bg-gray-50 flex items-center justify-between border-t border-gray-200">
                 <span className="font-bold text-gray-700">Total</span>
                 <span className="font-black text-xl text-primary">₹{Math.round(order.total_amount)}</span>
@@ -783,7 +796,8 @@ const OrderTrackingPage = () => {
               <HeadphonesIcon className="w-6 h-6 text-gray-500 group-hover:text-primary" />
               <span className="text-xs font-bold text-gray-600 group-hover:text-primary">Get Help</span>
             </Link>
-            {orderId && !['order_delivered', 'order_cancelled', 'delivery_partner_assigned', 'order_picked_up', 'in_transit'].includes(order.status) && (
+            {/* No self-service cancel once a rider holds the order (the backend refuses it too); 'picking_up' was missing from this list. */}
+            {orderId && !['order_delivered', 'order_cancelled', 'delivery_partner_assigned', 'picking_up', 'order_picked_up', 'in_transit'].includes(order.status) && (
               <button
                 type="button"
                 disabled={cancelling}

@@ -224,10 +224,11 @@ const humaniseStatus = (status: string) =>
 const OrderStatusBadge = ({ status }: { status: string }) => {
   const tone = STATUS_LABELS[status]?.tone ?? status;
   const cfg = statusConfig[tone] || { bg: '#f9fafb', color: '#6b7280', dot: '#9ca3af' };
+  const label = STATUS_LABELS[status]?.label ?? humaniseStatus(status);
   return (
     <span className="op-badge" style={{ background: cfg.bg, color: cfg.color }}>
       <span className="op-badge-dot" style={{ background: cfg.dot }} />
-      {status}
+      {label}
     </span>
   );
 };

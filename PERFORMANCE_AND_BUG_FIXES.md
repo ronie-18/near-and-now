@@ -1821,3 +1821,70 @@ the format only.
   on an invoice. Fixing it needs a migration.
 - No automated tests cover the checkout screens.
 - The cache and rate limit are kept per server instance.
+
+## 20. 2026-10-04 — store allocation and order-flow hardening
+
+Scope: the store-allocation algorithm, shopkeeper accept/reject/reallocation, the finalize gate, rider dispatch and release, cancellation/refund money paths, and the web clients that read allocation state. Driven by a seven-lens audit of the order flow with two adversarial verifiers per finding (placement, accept/reject/reallocation concurrency, downstream consumers, state machine, API abuse, add-ons/payments, web/admin clients).
+
+### 20.1 The allocator
+
+| Before | Now |
+| --- | --- |
+| `getNearbyStoreIdsExpanding` tried 1→2→3→4 km and **stopped at the first ring with any store**; a 0.8 km store with one of four items hid a 1.5 km store with all four and the checkout failed as "not available", while the catalogue (4 km) had shown every item. | `fetchCandidateStores` returns every live store within the full **4 km** (`storeAllocation.service.ts`). |
+| Greedy "store with most items" with ties broken by whatever row order the RPC returned; no "one store has everything" rule. | `planAllocation` (`allocationPlanner.ts`): **fewest stores** (a single store that stocks everything takes the order — the nearest such store), then **shortest total distance**, then a store-id tiebreak. Exact search up to 3 stores, greedy beyond. Stops are farthest-first → `sequence_number`. |
+| Reallocation compared `products.master_product_id` to `order_items.product_id`, which is the **store-scoped** `products.id` → never matched → every declined item went straight to the refund queue. Its `store_orders` upsert used `ON CONFLICT (customer_order_id, store_id)`, a constraint that does not exist → every attempt errored and left an **orphan `pending_acceptance` allocation** with no items. | Items are resolved to their master product; the same planner runs over live stores within 8 km (excluding every store already on the order); each stop is written by `reallocate_items_to_store()` in one transaction with the order row locked (next `sequence_number`, `store_orders` row, items repointed **including `product_id`**, subtotals recomputed). The new store is notified. |
+| Two concurrent reallocations (double reject, reject vs. stale expiry) raced: duplicate `sequence_number`s, unchecked insert errors, double `refund_required` notifications. | Per-order lock in-process + the locked database function; items re-read before any write-off; `ITEMS_NOT_REALLOCATABLE` means "someone else placed it", not an error. |
+
+### 20.2 Accept / reject / finalize
+
+- `accepted_item_ids` was written through verbatim: a shopkeeper could confirm **other stores'/orders' items**, and an all-foreign list produced an `accepted` allocation with nothing in it that finalize dispatched to riders. Now intersected with the store's own items; none valid → 400.
+- Unticked items go back to "waiting for a store" (`item_status 'pending'`, no store) instead of `'unavailable'`; only what no store within 8 km stocks is written off.
+- `rejectAllocation` is status-guarded like accept, so accept-vs-reject races lose cleanly (409). Both refuse once the order is no longer at the store stage.
+- A declined store's `store_orders` row is closed as `order_cancelled` **for that store only** (`releaseStoreFromOrder`); `accept_driver_offer()` (migration `20261004020000`), `assignDeliveryAgent`, rider list/detail, the admin blanket status write and the pickup progress note all skip such rows. Per-store subtotals follow the items (`recompute_store_order_subtotals()`).
+- `finalize_order_if_ready()` v3 (migration `20261004010000`) also requires **no item waiting for a store** and at least one accepted allocation **with accepted items** — closing the window where an order was dispatched with unassigned items.
+- All-rejected / nothing-reallocatable orders used to sit at `pending_at_store` forever; they are now **cancelled automatically** through `databaseService.cancelOrder` (refund, coupon release, notifications, history row).
+- COD orders: written-off lines are taken off `total_amount`/`subtotal_amount` (compare-and-swap) so the rider collects what the customer receives; refunds for online orders give back the **discounted** line value (coupon share), not the list price. The customer is notified which items were dropped.
+- The 5-minute "store never answered" clock starts when the store could **see** the order (payment time for online orders), not at checkout.
+- `sweepStuckOrders` runs every 60 s from `server.ts`: expires stale allocations, re-homes orphaned waiting items, and retries finalize for orders whose stores all answered. Nothing depends on the customer keeping the tracking screen open any more.
+
+### 20.3 Payments, cancellation, riders, admin
+
+- **Stores and payment state.** `partially_refunded` (one dropped item refunded by an admin) was treated as *unpaid* by every shopkeeper gate — the order's remaining allocations became invisible, un-acceptable and un-expirable: stuck forever. Now paid-like. Stores are pushed "New Order" when an online order becomes **paid** (`notifyStoresOrderPayable`, Razorpay verify/webhook and wallet), not at checkout when they cannot see it.
+- **Cancellation refunds.** `cancelOrder` refunded `total_amount` against the main payment alone, so a **split cash/UPI** order (payment captured the UPI share only) or an order with **paid add-ons** (separate payments) made Razorpay reject the refund and the customer got nothing. Refunds now go leg by leg, each capped at what that payment captured; the history row is written; the refund reason is passed through.
+- **Money after cancel.** `updateOrderPaymentStatus('paid')` on a cancelled order no longer resurrects it: payment id recorded, full-amount `refund_required` raised. `pay_order_with_wallet()` refuses a cancelled/delivered order (migration `20261004050000`).
+- **Refund double-booking.** API-initiated refunds carry `notes.recorded_by_api`; the `refund.processed` webhook skips them (they were counted at issue time), so `refunded_amount` is no longer doubled.
+- `resolveItemRefund` claims the notification with a JSON filter **before** moving money; the second of two concurrent admin clicks gets 409. The admin status override `order_cancelled` now runs the real cancellation; `ready_for_pickup` now broadcasts to riders.
+- **Riders.** `rejectOrder` works only while `delivery_partner_assigned` (it could un-deliver an order and enable a second payout), marks the rider's offer `rejected` and re-broadcasts; `broadcastToNearbyDrivers`/`dispatchReadyOrdersToDriver` **re-open expired offers**, so a released order can be offered to the original riders again. The legacy direct-claim endpoint only claims a `ready_for_pickup`, unassigned order; legacy `/picked-up` only from the assigned/collecting stage; riders cannot cancel via tracking updates. `GET /delivery-partner/orders/:id` no longer 404s on multi-store orders (`.maybeSingle()` on several `store_orders` rows). Payouts attach to a fulfilling store, not a declined one.
+- **Add-ons.** Taken only for paid/COD orders still at the store stage and only for stores still part of it; `apply_order_addition_request()` v2 (migration `20261004040000`) appends items to an already-accepted store's `accepted_item_ids` (the rider's stop list filtered them out before) and refuses when the store/order moved on, in which case the add-on payment is refunded and the request closed.
+- **Placement extras.** The 30-second duplicate check excludes cancelled orders and also matches the subtotal; product references must be UUIDs (400, not 500); delisted master products and soft-deleted store products are unorderable; the legacy `/api/orders/create` enforces the 4 km radius and maps the payment method like `/place`; a split-payment order keeps the customer's delivery note inside the `notes` JSON (`note`).
+- **Web clients.** Catalogue: a known location with no store in range shows an empty catalogue instead of every store platform-wide (carts that could never check out). Tracking page marks unavailable items and explains the refund; orders page badge shows the label, not the status key; shopkeeper web app shows cancelled orders in history.
+
+### 20.4 Database changes (apply before deploying the backend)
+
+| Migration | What |
+| --- | --- |
+| `20261004000000_reallocate_items_to_store_rpc.sql` | `reallocate_items_to_store()` + `recompute_store_order_subtotals()`. **Required**: reallocation calls it. |
+| `20261004010000_finalize_order_if_ready_require_items_placed.sql` | finalize v3 (no waiting items, accepted items non-empty). |
+| `20261004020000_accept_driver_offer_skip_cancelled_store_orders.sql` | rider assignment skips a declined store's row. |
+| `20261004030000_store_orders_unique_per_store_per_order.sql` | unique index on `store_orders(customer_order_id, store_id)`; **fails loudly if duplicates exist** (dedupe query in the header). Nothing else depends on it. |
+| `20261004040000_apply_order_addition_request_respects_allocation_state.sql` | add-ons respect allocation/order state. **Required** for the add-on refund path. |
+| `20261004050000_pay_order_with_wallet_refuse_cancelled.sql` | wallet cannot pay a cancelled order. |
+
+### 20.5 Verified but deliberately not changed (product decisions / separate work)
+
+- Reallocation never offers an item to a **sibling store already accepted** on the same order even if it stocks it (`UNIQUE(order_id, store_id)`; would need "add items to an accepted allocation" with confirmation).
+- Invoices are generated once at payment time and not regenerated after items are dropped or added (tax-document semantics).
+- No timeout/reassignment when an assigned rider goes dark; the customer cannot cancel once a rider is assigned.
+- `accept_driver_offer()` and the admin broadcast still allow dispatch on non-`ready_for_pickup` statuses (admin escape hatch).
+- Split-payment amounts live in `customer_orders.notes` as JSON (dedicated columns would be the proper fix); the rider app shows that JSON raw.
+- Store-owner product delete is a hard delete and fails for any product ever ordered (`ON DELETE RESTRICT`).
+- Admin panel does not show allocation/item state; web checkout does not preview the per-store split.
+- The legacy rider `POST /orders/:id/picked-up` is now status-guarded but still skips per-store pickup-code verification (kept for older rider-app builds; the code-verified path is `verify-code`).
+- `cancelIfPaymentAbandoned` reads payment state and then calls `cancel_customer_order()`, which does not re-check it; a payment landing in that gap is no longer lost (it is flagged for refund and never marks the order paid), but the race itself would need a payment-status check inside the database function.
+- `customer_orders.total_amount` is still the client's `order_total`, accepted when it is at or above the server-computed floor (a client can only overpay, never underpay); coupon/total-mismatch failures still surface as 500s and an order number is consumed before validation.
+
+### 20.6 Verification
+
+- Backend: `npx tsc --noEmit` clean; `vitest` 17 files / 264 tests (new: `allocationPlanner.test.ts`, `storeAllocation.flow.test.ts`, `orderFlow.hardening.test.ts`). `src/test/setup.ts` now uses a JWT-shaped service-role placeholder so the fake-Supabase tests run on a machine without `backend/.env`.
+- Frontend (`frontend/`): `tsc` clean, 64 tests.
+- Audit: 7 finder lenses, 76 distinct findings, 2 adversarial verifiers each (159 agents in total); 34 confirmed, 18 contested, 18 refuted (most refutations observed the fixes already in the working tree), 19 low-severity unverified. Every confirmed and contested finding is either fixed above or listed in 20.5.

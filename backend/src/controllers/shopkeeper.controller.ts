@@ -5,6 +5,8 @@ import { haversineKm, boundingBox } from '../utils/geo.js';
 import { KeyedThrottle } from '../utils/keyedThrottle.js';
 import { notificationService } from '../services/notification.service.js';
 import { databaseService } from '../services/database.service.js';
+import { planAllocation } from '../services/allocationPlanner.js';
+import { fetchCandidateStores, fetchStoreStock, REALLOCATION_MAX_RADIUS_KM, withOrderLock } from '../services/storeAllocation.service.js';
 import { sendError } from '../utils/httpError.js';
 
 declare module 'express' {
@@ -139,13 +141,16 @@ export class ShopkeeperController {
       const storeIds = req.shopkeeperStoreIds!;
       const { active, history } = req.query as { active?: string; history?: string };
 
+      // 'cancelled' (the whole order was cancelled) belongs in history: without
+      // it an accepted order the customer then cancelled simply vanished from
+      // every tab of the shopkeeper's app. (2026-10-04 audit)
       let statuses: string[];
       if (active === 'true') {
         statuses = ['pending_acceptance', 'accepted'];
       } else if (history === 'true') {
-        statuses = ['picked_up', 'rejected'];
+        statuses = ['picked_up', 'rejected', 'cancelled'];
       } else {
-        statuses = ['pending_acceptance', 'accepted', 'picked_up', 'rejected'];
+        statuses = ['pending_acceptance', 'accepted', 'picked_up', 'rejected', 'cancelled'];
       }
 
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -198,7 +203,7 @@ export class ShopkeeperController {
       // them from the shopkeeper's incoming list until payment_status is
       // 'paid', so a store never preps/accepts an order that turns out to be
       // abandoned. COD has no payment-gateway step, so it's unaffected.
-      const isPaymentReady = (order: any) => order.payment_method === 'cod' || order.payment_status === 'paid';
+      const isPaymentReady = (order: any) => isOrderPaymentReady(order);
 
       const result = allocations
         .filter((alloc: any) => isPaymentReady(orderMap[alloc.order_id] || {}))
@@ -283,22 +288,41 @@ export class ShopkeeperController {
       // their list, or hit the endpoint directly.
       const { data: parentOrder } = await supabaseAdmin
         .from('customer_orders')
-        .select('payment_status, payment_method, delivery_otp')
+        .select('status, payment_status, payment_method, delivery_otp')
         .eq('id', alloc.order_id)
         .maybeSingle();
-      if (parentOrder && parentOrder.payment_method !== 'cod' && parentOrder.payment_status !== 'paid') {
+      if (parentOrder && !isOrderPaymentReady(parentOrder)) {
         return res.status(409).json({ error: 'Payment has not been completed for this order yet.' });
+      }
+      // The order itself must still be at the store stage. An allocation can
+      // outlive its order when the order was cancelled by a path that does not
+      // touch allocations (admin override before 2026-10-04) — accepting it
+      // would have a store preparing a cancelled order.
+      if (parentOrder && !REALLOCATABLE_ORDER_STATUSES.has(String((parentOrder as any).status))) {
+        return res.status(409).json({ error: 'This order is no longer active.' });
       }
 
       // Get all items assigned to this store for this order
-      const { data: allItems } = await supabaseAdmin
+      const { data: allItems, error: allItemsErr } = await supabaseAdmin
         .from('order_items')
         .select('id')
         .eq('customer_order_id', alloc.order_id)
         .eq('assigned_store_id', alloc.store_id);
+      if (allItemsErr) throw allItemsErr;
 
-      const allItemIds = (allItems || []).map((i: any) => i.id);
-      const unavailableIds = allItemIds.filter((id: string) => !accepted_item_ids.includes(id));
+      // Only ids that are actually THIS store's items on THIS order count.
+      // Previously accepted_item_ids was written straight through: a request
+      // naming another store's (or another order's) item ids marked those
+      // 'confirmed', and a request naming only foreign ids produced an
+      // 'accepted' allocation with nothing in it — which finalize then
+      // dispatched to riders as a real stop. (2026-10-04)
+      const allItemIds = (allItems || []).map((i: any) => i.id as string);
+      const requested = new Set(accepted_item_ids.filter((id): id is string => typeof id === 'string'));
+      const acceptedIds = allItemIds.filter((id) => requested.has(id));
+      if (acceptedIds.length === 0) {
+        return res.status(400).json({ error: 'None of the selected items belong to this order' });
+      }
+      const unavailableIds = allItemIds.filter((id) => !requested.has(id));
 
       // Regenerate on collision with the order's delivery_otp OR any sibling
       // store's already-accepted pickup_code (multi-store orders can have
@@ -339,7 +363,7 @@ export class ShopkeeperController {
       const { data: updatedAlloc, error: acceptUpdateError } = await supabaseAdmin
         .from('order_store_allocations')
         .update({
-          status: 'accepted', pickup_code: code, accepted_item_ids, accepted_at: new Date().toISOString(),
+          status: 'accepted', pickup_code: code, accepted_item_ids: acceptedIds, accepted_at: new Date().toISOString(),
         })
         .eq('id', allocationId)
         .eq('status', 'pending_acceptance')
@@ -366,7 +390,8 @@ export class ShopkeeperController {
         .from('store_orders')
         .update({ status: 'store_accepted' })
         .eq('customer_order_id', alloc.order_id)
-        .eq('store_id', alloc.store_id);
+        .eq('store_id', alloc.store_id)
+        .neq('status', 'order_cancelled'); // a cancel landing concurrently must win
       if (storeOrderStatusErr) {
         console.error('acceptAllocation: failed to update store_orders status:', storeOrderStatusErr, { orderId: alloc.order_id, storeId: alloc.store_id });
       }
@@ -376,13 +401,24 @@ export class ShopkeeperController {
       // But a silent failure would leave item_status stale, which
       // getPickupSequence/invoice generation read to decide what's actually
       // being fulfilled.
-      if (accepted_item_ids.length) {
-        const { error: acceptItemsErr } = await supabaseAdmin.from('order_items').update({ item_status: 'confirmed' }).in('id', accepted_item_ids);
-        if (acceptItemsErr) console.error('acceptAllocation: failed to confirm order_items:', acceptItemsErr, { accepted_item_ids });
-      }
+      const { error: acceptItemsErr } = await supabaseAdmin
+        .from('order_items')
+        .update({ item_status: 'confirmed' })
+        .in('id', acceptedIds)
+        .eq('assigned_store_id', alloc.store_id);
+      if (acceptItemsErr) console.error('acceptAllocation: failed to confirm order_items:', acceptItemsErr, { acceptedIds });
       if (unavailableIds.length) {
-        const { error: unavailableItemsErr } = await supabaseAdmin.from('order_items').update({ item_status: 'unavailable', assigned_store_id: null }).in('id', unavailableIds);
-        if (unavailableItemsErr) console.error('acceptAllocation: failed to mark order_items unavailable:', unavailableItemsErr, { unavailableIds });
+        // Unticked items go back to "waiting for a store" (not 'unavailable'
+        // yet): reallocation below either finds them a new store or writes
+        // them off. While they wait, finalize_order_if_ready refuses to
+        // dispatch the order, and the sweep re-homes them if this process
+        // dies before reallocation runs.
+        const { error: unavailableItemsErr } = await supabaseAdmin
+          .from('order_items')
+          .update({ item_status: 'pending', assigned_store_id: null })
+          .in('id', unavailableIds)
+          .eq('assigned_store_id', alloc.store_id);
+        if (unavailableItemsErr) console.error('CRITICAL acceptAllocation: failed to release unticked order_items (they stay listed under this store):', unavailableItemsErr, { unavailableIds });
       }
 
       // Reallocate unavailable items to next nearest store (async, non-blocking)
@@ -411,7 +447,7 @@ export class ShopkeeperController {
         }
       }
 
-      res.json({ success: true, pickup_code: code, accepted: accepted_item_ids.length, unavailable: unavailableIds.length });
+      res.json({ success: true, pickup_code: code, accepted: acceptedIds.length, unavailable: unavailableIds.length });
     } catch (err) {
       return sendError(res, 'ShopkeeperController.acceptAllocation', 'Could not accept the allocation', err);
     }
@@ -432,30 +468,43 @@ export class ShopkeeperController {
       if (!alloc) return res.status(404).json({ error: 'Allocation not found' });
       if (alloc.status !== 'pending_acceptance') return res.status(409).json({ error: 'Already responded' });
 
+      const { data: parentOrder } = await supabaseAdmin
+        .from('customer_orders')
+        .select('status')
+        .eq('id', alloc.order_id)
+        .maybeSingle();
+      if (parentOrder && !REALLOCATABLE_ORDER_STATUSES.has(String((parentOrder as any).status))) {
+        return res.status(409).json({ error: 'This order is no longer active.' });
+      }
+
       // Checked — this IS the action the endpoint promises; a silent failure
       // would tell the shopkeeper "rejected" while the allocation stays
       // pending_acceptance, and the item-unassign/reallocation below would
       // proceed against an allocation that was never actually rejected.
-      const { error: rejectErr } = await supabaseAdmin.from('order_store_allocations').update({ status: 'rejected' }).eq('id', allocationId);
+      // The `.eq('status', 'pending_acceptance')` guard is what makes this
+      // safe against a concurrent accept (two devices on one store account,
+      // or a retry): acceptAllocation has the same guard, so exactly one of
+      // the two writes can match. Without it a late reject overwrote an
+      // accepted allocation — items confirmed under a 'rejected' row, the
+      // order stuck with nothing finalize would count as accepted. (2026-10-04)
+      const { data: rejected, error: rejectErr } = await supabaseAdmin
+        .from('order_store_allocations')
+        .update({ status: 'rejected' })
+        .eq('id', allocationId)
+        .eq('status', 'pending_acceptance')
+        .select('id')
+        .maybeSingle();
       if (rejectErr) {
         console.error('rejectAllocation: failed to update allocation status:', rejectErr, { allocationId });
         return sendError(res, 'ShopkeeperController.rejectAllocation', 'Could not reject allocation', rejectErr);
       }
+      if (!rejected) return res.status(409).json({ error: 'Already responded' });
 
-      // Unassign all items from this store and trigger reallocation
-      const { data: items } = await supabaseAdmin
-        .from('order_items')
-        .select('id')
-        .eq('customer_order_id', alloc.order_id)
-        .eq('assigned_store_id', alloc.store_id);
-
-      const itemIds = (items || []).map((i: any) => i.id);
-      if (itemIds.length) {
-        await supabaseAdmin.from('order_items')
-          .update({ item_status: 'pending', assigned_store_id: null })
-          .in('id', itemIds);
-        reallocateMissingItems(alloc.order_id, itemIds).catch(console.error);
-      }
+      // Release this store's items and close its store_orders row, then
+      // re-home the items (or settle the order if the store held none —
+      // e.g. an allocation left behind by an interrupted reallocation).
+      const itemIds = await releaseStoreFromOrder(alloc.order_id, alloc.store_id);
+      handleStoreDeclined(alloc.order_id, itemIds).catch(console.error);
 
       res.json({ success: true });
     } catch (err) {
@@ -496,76 +545,102 @@ export async function expireStaleAllocations(orderId: string, customerId: string
   // misleading rejection history for stores that were never actually asked.
   const { data: order } = await supabaseAdmin
     .from('customer_orders')
-    .select('customer_id, payment_status, payment_method')
+    .select('customer_id, status, payment_status, payment_method')
     .eq('id', orderId)
     .maybeSingle();
   if (!order || (order as any).customer_id !== customerId) return;
-  if (order && (order as any).payment_method !== 'cod' && (order as any).payment_status !== 'paid') {
-    return;
-  }
+  if (!isOrderPaymentReady(order as any)) return;
+  if (!REALLOCATABLE_ORDER_STATUSES.has((order as any).status)) return;
 
+  await expireStaleAllocationsForOrder(orderId);
+}
+
+// No ownership/payment check here — callers (expireStaleAllocations after its
+// own checks, and the server sweep) have already done that.
+async function expireStaleAllocationsForOrder(orderId: string) {
   const cutoff = new Date(Date.now() - STALE_ALLOCATION_MS).toISOString();
 
   const { data: staleAllocs } = await supabaseAdmin
     .from('order_store_allocations')
-    .select('id, store_id')
+    .select('id, store_id, created_at')
     .eq('order_id', orderId)
     .eq('status', 'pending_acceptance')
     .lt('created_at', cutoff);
 
   if (!staleAllocs?.length) return;
 
-  // The flip-to-rejected guard and the order_items lookup are pure,
-  // mutually-independent I/O per allocation — previously ran as N sequential
-  // round trips per stale allocation. Batched into one query each below.
-  // `reallocateMissingItems` itself stays a sequential per-store loop: it
-  // re-reads order_store_allocations fresh (no row lock) to pick reallocation
-  // targets/sequence numbers, so running two calls for the same order
-  // concurrently could race and hand out colliding sequence numbers —
-  // genuinely needs to stay sequential, not just "for simplicity".
-  const staleAllocIds = staleAllocs.map((a: any) => a.id);
+  // The 5-minute clock must start when the store could first SEE the order.
+  // Allocations are created at checkout, but an online-payment order is
+  // hidden from shopkeepers until payment_status is 'paid' — so a customer
+  // who took four minutes on the Razorpay sheet left the store one minute to
+  // answer before being timed out. Measure from the payment time for such
+  // orders (customer_payments.paid_at mirrors the flip; customer_orders.
+  // updated_at is written by the same flip and is the fallback). COD orders
+  // are visible from creation. (2026-10-04 audit)
+  const { data: order } = await supabaseAdmin
+    .from('customer_orders')
+    .select('payment_method, updated_at')
+    .eq('id', orderId)
+    .maybeSingle();
+  let visibleSinceMs = 0;
+  if (order && (order as any).payment_method !== 'cod') {
+    const { data: payment } = await supabaseAdmin
+      .from('customer_payments')
+      .select('paid_at')
+      .eq('customer_order_id', orderId)
+      .maybeSingle();
+    const paidAt = (payment as any)?.paid_at ?? (order as any).updated_at;
+    const ms = paidAt ? new Date(paidAt).getTime() : NaN;
+    if (Number.isFinite(ms)) visibleSinceMs = ms;
+  }
+  const genuinelyStale = (staleAllocs as any[]).filter((a) => {
+    const since = Math.max(new Date(a.created_at).getTime(), visibleSinceMs);
+    return Date.now() - since >= STALE_ALLOCATION_MS;
+  });
+  if (!genuinelyStale.length) return;
+
+  // Status-guarded flip, so a store answering at the same instant wins and
+  // a second sweeper (another instance) gets 0 rows instead of re-doing this.
   const { data: updated } = await supabaseAdmin
     .from('order_store_allocations')
     .update({ status: 'rejected' })
-    .in('id', staleAllocIds)
+    .in('id', genuinelyStale.map((a: any) => a.id))
     .eq('status', 'pending_acceptance')
     .select('id, store_id');
   if (!updated?.length) return;
 
-  const rejectedStoreIds = updated.map((a: any) => a.store_id);
-  const { data: items } = await supabaseAdmin
-    .from('order_items')
-    .select('id, assigned_store_id')
-    .eq('customer_order_id', orderId)
-    .in('assigned_store_id', rejectedStoreIds);
-
-  const itemIdsByStore = new Map<string, string[]>();
-  for (const item of items || []) {
-    const list = itemIdsByStore.get((item as any).assigned_store_id) ?? [];
-    list.push((item as any).id);
-    itemIdsByStore.set((item as any).assigned_store_id, list);
+  const released: string[] = [];
+  for (const a of updated as any[]) {
+    released.push(...(await releaseStoreFromOrder(orderId, a.store_id)));
   }
-
-  const allItemIds = (items || []).map((i: any) => i.id);
-  if (allItemIds.length) {
-    await supabaseAdmin.from('order_items')
-      .update({ item_status: 'pending', assigned_store_id: null })
-      .in('id', allItemIds);
-  }
-
-  for (const storeId of rejectedStoreIds) {
-    const itemIds = itemIdsByStore.get(storeId);
-    if (itemIds?.length) {
-      await reallocateMissingItems(orderId, itemIds).catch(console.error);
-    }
-  }
+  await handleStoreDeclined(orderId, released);
 }
 
 // ── Internal async helpers ─────────────────────────────────────────────────────
 
-// If nothing on the order is still pending_acceptance, flips it to ready_for_pickup
-// and broadcasts to nearby drivers. Returns whether it actually resolved the order,
-// so callers know whether to fall back to a "still partial" status update instead.
+/** Order statuses in which stores can still be added to or removed from an order. */
+const REALLOCATABLE_ORDER_STATUSES = new Set(['pending_at_store', 'store_accepted', 'preparing_order']);
+
+/**
+ * Payment states in which the customer HAS paid. 'partially_refunded' is set
+ * when an admin refunds one dropped item (payment.controller.ts
+ * resolveItemRefund) — the rest of the order is still paid for. Every
+ * shopkeeper gate used to test `=== 'paid'` only, so one per-item refund hid
+ * the order's remaining pending allocations from their stores, blocked accept,
+ * and disabled the stale-allocation watchdog: the order was stuck for good.
+ * (2026-10-04 audit)
+ */
+const PAID_LIKE_PAYMENT_STATUSES = new Set(['paid', 'partially_refunded']);
+
+/** Online-payment orders are invisible to shopkeepers until paid; COD has no gateway step. */
+function isOrderPaymentReady(order: { payment_method?: string | null; payment_status?: string | null }): boolean {
+  return order.payment_method === 'cod' || PAID_LIKE_PAYMENT_STATUSES.has(String(order.payment_status || ''));
+}
+
+// If nothing on the order is still pending_acceptance (and no item is still
+// waiting for a store), flips it to ready_for_pickup and broadcasts to nearby
+// drivers. Returns whether it actually resolved the order, so callers know
+// whether to fall back to a "still partial" status update instead.
 //
 // The check-then-write is done atomically in Postgres (finalize_order_if_ready, row
 // locks customer_orders FOR UPDATE) rather than here in Node, so that two stores on
@@ -584,205 +659,498 @@ async function finalizeIfAllResolved(orderId: string): Promise<boolean> {
   return !!didFinalize;
 }
 
-// Tries to place `remaining` items with active stores within (minKm, maxKm] of the
-// customer, nearest first, excluding stores already used on this order. Mutates and
-// returns the still-unplaced subset of `remaining`.
-async function assignCandidatesInRadius(
-  orderId: string,
-  remaining: { id: string; product_id: string }[],
-  lat: number, lng: number,
-  minKm: number, maxKm: number,
-  usedStoreIds: Set<string>,
-  seqRef: { value: number }
-): Promise<{ id: string; product_id: string }[]> {
-  if (!remaining.length) return remaining;
+/**
+ * Takes `storeId` off `orderId` after it declined (or never answered): its
+ * items go back to "waiting for a store" (item_status 'pending', no
+ * assigned_store_id — the state finalize_order_if_ready refuses to dispatch
+ * and the sweep knows to re-home), and its store_orders row is closed for
+ * that store only, so the store's order history, per-store revenue and the
+ * check_order_completion trigger stop counting a store that fulfilled
+ * nothing. Shared by rejectAllocation and the stale-allocation expiry.
+ * Returns the released item ids.
+ */
+async function releaseStoreFromOrder(orderId: string, storeId: string): Promise<string[]> {
+  const { data: items, error: itemsErr } = await supabaseAdmin
+    .from('order_items')
+    .select('id')
+    .eq('customer_order_id', orderId)
+    .eq('assigned_store_id', storeId);
+  if (itemsErr) throw itemsErr;
 
-  // is_approved wasn't checked here — only is_active — so a store an admin
-  // had suspended (suspendStoreIfApprovedAndGetName flips is_approved=false
-  // but never touches is_active) kept being assigned brand-new customer
-  // orders indefinitely. Found 2026-08-13 during a full-codebase audit.
-  // Bounding-box pre-filter in the query (backlog item 17): this used to pull
-  // every active+approved store platform-wide and distance-filter in JS. The
-  // box contains the whole maxKm circle, so the exact haversine filter below
-  // still decides; the database just stops sending stores that can't qualify.
-  const box = boundingBox(lat, lng, maxKm);
-  const { data: rawStores } = await supabaseAdmin
-    .from('stores')
-    .select('id, latitude, longitude')
-    .eq('is_active', true)
-    .eq('is_approved', true)
-    .gte('latitude', box.minLat).lte('latitude', box.maxLat)
-    .gte('longitude', box.minLng).lte('longitude', box.maxLng);
-
-  const candidates = (rawStores || [])
-    .map((s: any) => ({ ...s, dist: haversineKm(lat, lng, s.latitude, s.longitude) }))
-    .filter((s: any) => s.dist > minKm && s.dist <= maxKm && !usedStoreIds.has(s.id))
-    .sort((a: any, b: any) => a.dist - b.dist);
-
-  let left = remaining;
-
-  for (const store of candidates) {
-    if (!left.length) break;
-
-    const productIds = left.map((i) => i.product_id);
-    const { data: storeProducts } = await supabaseAdmin
-      .from('products')
-      .select('master_product_id')
-      .eq('store_id', store.id)
-      .eq('is_active', true)
-      .in('master_product_id', productIds);
-
-    const available = new Set((storeProducts || []).map((p: any) => p.master_product_id));
-    const assignable = left.filter((i) => available.has(i.product_id));
-    if (!assignable.length) continue;
-
-    seqRef.value += 1;
-
-    const { data: newAlloc } = await supabaseAdmin
-      .from('order_store_allocations')
-      .insert({ order_id: orderId, store_id: store.id, sequence_number: seqRef.value, pickup_code: randomFourDigit(), status: 'pending_acceptance' })
-      .select('id').single();
-
-    if (newAlloc) {
-      // Upsert must resolve (and be awaited) before the order_items update
-      // below — we need its id to repoint store_order_id, so this can't run
-      // in the same Promise.all as that update the way it used to.
-      const { data: storeOrderRow, error: storeOrderErr } = await supabaseAdmin
-        .from('store_orders')
-        .upsert(
-          { customer_order_id: orderId, store_id: store.id, status: 'pending_at_store', subtotal_amount: 0, delivery_fee: 0 },
-          { onConflict: 'customer_order_id,store_id' }
-        )
-        .select('id')
-        .single();
-      if (storeOrderErr || !storeOrderRow) {
-        console.error('assignCandidatesInRadius: failed to upsert store_orders for reallocation:', storeOrderErr, { orderId, storeId: store.id });
-        continue; // leave these items unplaced at this store; loop tries the next candidate
-      }
-
-      // order_items.store_order_id is an FK set once at order creation and
-      // otherwise never touched — every reallocation before this fix left it
-      // pointing at the OLD (rejected/expired) store's store_orders row.
-      // Customer tracking (getOrderTracking) and invoice generation
-      // (invoice.service.ts) both join through this exact FK, so a stale
-      // value meant: the tracking page kept showing the rejected store as if
-      // still "waiting for confirmation" while the new store's box showed no
-      // items, and an item could get invoiced to the store that REJECTED it
-      // instead of the store that actually fulfilled it. Repointing this
-      // alongside assigned_store_id is the actual fix — the tracking query
-      // filter added separately is just a display-layer backstop.
-      const { error: repointErr } = await supabaseAdmin
-        .from('order_items')
-        .update({ assigned_store_id: store.id, store_order_id: storeOrderRow.id, item_status: 'pending' })
-        .in('id', assignable.map((i) => i.id));
-      if (repointErr) {
-        console.error('assignCandidatesInRadius: failed to repoint order_items to new store:', repointErr, { orderId, storeId: store.id });
-        continue;
-      }
-
-      usedStoreIds.add(store.id);
-      const assignedIds = new Set(assignable.map((i) => i.id));
-      left = left.filter((i) => !assignedIds.has(i.id));
-    }
+  const itemIds = (items || []).map((i: any) => i.id as string);
+  if (itemIds.length) {
+    const { error: unassignErr } = await supabaseAdmin
+      .from('order_items')
+      .update({ item_status: 'pending', assigned_store_id: null })
+      .in('id', itemIds)
+      .eq('assigned_store_id', storeId);
+    if (unassignErr) throw unassignErr;
   }
 
-  return left;
+  // Display/accounting only — logged, not thrown: the allocation is already
+  // marked rejected and the items are already released.
+  const { error: storeOrderErr } = await supabaseAdmin
+    .from('store_orders')
+    .update({ status: 'order_cancelled', cancelled_at: new Date().toISOString() })
+    .eq('customer_order_id', orderId)
+    .eq('store_id', storeId);
+  if (storeOrderErr) {
+    console.error('releaseStoreFromOrder: failed to close store_orders row:', storeOrderErr, { orderId, storeId });
+  }
+  return itemIds;
+}
+
+/** After a store declined: re-home its items, or settle the order if it held none. */
+async function handleStoreDeclined(orderId: string, itemIds: string[]) {
+  if (itemIds.length) {
+    await reallocateMissingItems(orderId, itemIds);
+  } else {
+    await settleOrderAfterReallocation(orderId);
+  }
 }
 
 // Flags items that could not be placed at any nearby store for an admin-approved
 // refund: writes an admin_notifications row with the computed line-item amount and
 // the order's Razorpay payment id, but does NOT touch money itself — an admin must
 // review it and trigger the actual refund via POST /api/payment/resolve-item-refund.
-async function flagUnresolvableItemsForRefund(orderId: string, items: { id: string; product_id: string }[]) {
-  const ids = items.map((i) => i.id);
+// Only items that are STILL waiting for a store are written off: a concurrent
+// reallocation (another process, or the sweep) may have placed some of them since
+// the caller planned.
+async function flagUnresolvableItemsForRefund(orderId: string, itemIds: string[]) {
+  if (!itemIds.length) return;
+
+  const { data: stillWaiting, error: waitingErr } = await supabaseAdmin
+    .from('order_items')
+    .select('id')
+    .in('id', itemIds)
+    .is('assigned_store_id', null)
+    .neq('item_status', 'unavailable');
+  if (waitingErr) {
+    console.error('flagUnresolvableItemsForRefund: could not re-read waiting items (left pending for the sweep):', waitingErr, { orderId });
+    return;
+  }
+  const ids = (stillWaiting || []).map((i: any) => i.id as string);
+  if (!ids.length) return;
+
   console.error(
-    `[reallocateMissingItems] Order ${orderId}: ${ids.length} item(s) could not be reallocated within 8 km — IDs: ${ids.join(', ')}`
+    `[reallocateMissingItems] Order ${orderId}: ${ids.length} item(s) could not be reallocated within ${REALLOCATION_MAX_RADIUS_KM} km — IDs: ${ids.join(', ')}`
   );
 
-  await supabaseAdmin.from('order_items').update({ item_status: 'unavailable' }).in('id', ids);
+  // Guarded on assigned_store_id so a placement that lands between the read
+  // above and this write is never overwritten.
+  const { data: writtenOff, error: markErr } = await supabaseAdmin
+    .from('order_items')
+    .update({ item_status: 'unavailable' })
+    .in('id', ids)
+    .is('assigned_store_id', null)
+    .select('id, product_name, unit_price, quantity');
+  if (markErr) {
+    console.error('flagUnresolvableItemsForRefund: failed to mark items unavailable (left pending for the sweep):', markErr, { orderId, ids });
+    return;
+  }
+  const lineItems = (writtenOff || []) as Array<{ id: string; product_name: string; unit_price: number; quantity: number }>;
+  if (!lineItems.length) return;
 
-  const [{ data: lineItems }, { data: order }] = await Promise.all([
-    supabaseAdmin.from('order_items').select('id, product_name, unit_price, quantity').in('id', ids),
-    supabaseAdmin.from('customer_orders')
-      .select('order_code, razorpay_payment_id, payment_method, payment_status, total_amount, refunded_amount')
-      .eq('id', orderId).single(),
-  ]);
+  // Per-store subtotals exclude written-off items (display/accounting only).
+  const { error: subtotalErr } = await supabaseAdmin.rpc('recompute_store_order_subtotals', { p_order_id: orderId });
+  if (subtotalErr) console.error('recompute_store_order_subtotals failed:', subtotalErr, { orderId });
 
-  const refundAmount = (lineItems || []).reduce((sum: number, li: any) => sum + Number(li.unit_price) * Number(li.quantity), 0);
-  const isOnlinePaid = order?.payment_method !== 'cod' && !!order?.razorpay_payment_id && order?.payment_status === 'paid';
+  const { data: order } = await supabaseAdmin
+    .from('customer_orders')
+    .select('order_code, razorpay_payment_id, payment_method, payment_status, total_amount, subtotal_amount, discount_amount, refunded_amount')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  // What the customer actually paid for these lines. A coupon discount was
+  // applied to the whole bill, so each dropped line gives back its share of
+  // it — refunding the undiscounted line price over-refunds a discounted
+  // order. (2026-10-04 audit) The original subtotal is reconstructed from
+  // the live one plus anything already written off on this order.
+  const grossAmount = lineItems.reduce((sum, li) => sum + Number(li.unit_price) * Number(li.quantity), 0);
+  const discount = Math.max(0, Number((order as any)?.discount_amount) || 0);
+  const subtotalForDiscount = Math.max(0, Number((order as any)?.subtotal_amount) || 0);
+  const discountShare = discount > 0 && subtotalForDiscount > 0 ? Math.min(1, discount / subtotalForDiscount) : 0;
+  const refundAmount = Math.round(grossAmount * (1 - discountShare) * 100) / 100;
+
+  // Cash on delivery: nothing has been paid, so there is nothing to refund —
+  // but the rider collects customer_orders.total_amount at the door, and the
+  // invoice (which already excludes 'unavailable' items) was the only place
+  // the dropped lines came off the bill. Take them off the order total too,
+  // so the customer is asked for what they actually receive. Online-paid
+  // orders keep their total: the admin refund flow below reconciles those via
+  // refunded_amount. Compare-and-swap on the current total so a concurrent
+  // order addition (which adds to total_amount) is never overwritten.
+  let codBillReduced = false;
+  if (order?.payment_method === 'cod' && refundAmount > 0) {
+    for (let attempt = 0; attempt < 3 && !codBillReduced; attempt++) {
+      const { data: current } = attempt === 0
+        ? { data: order }
+        : await supabaseAdmin.from('customer_orders').select('total_amount, subtotal_amount').eq('id', orderId).maybeSingle();
+      if (!current) break;
+      const oldTotal = Number((current as any).total_amount) || 0;
+      const oldSubtotal = Number((current as any).subtotal_amount) || 0;
+      const { data: swapped, error: swapErr } = await supabaseAdmin
+        .from('customer_orders')
+        .update({
+          total_amount: Math.max(0, Math.round((oldTotal - refundAmount) * 100) / 100),
+          subtotal_amount: Math.max(0, Math.round((oldSubtotal - refundAmount) * 100) / 100),
+        })
+        .eq('id', orderId)
+        .eq('total_amount', oldTotal)
+        .select('id');
+      if (swapErr) {
+        console.error('flagUnresolvableItemsForRefund: COD bill adjustment failed:', swapErr, { orderId });
+        break;
+      }
+      codBillReduced = !!swapped?.length;
+    }
+    if (codBillReduced) {
+      const { error: historyErr } = await supabaseAdmin.from('order_status_history').insert({
+        customer_order_id: orderId,
+        status: (await supabaseAdmin.from('customer_orders').select('status').eq('id', orderId).maybeSingle()).data?.status ?? 'pending_at_store',
+        notes: `₹${refundAmount.toFixed(2)} removed from the bill — ${lineItems.length} item(s) unavailable at every nearby store`,
+      });
+      if (historyErr) console.error('flagUnresolvableItemsForRefund: history insert failed:', historyErr, { orderId });
+    } else {
+      console.error('CRITICAL flagUnresolvableItemsForRefund: could not reduce COD bill for dropped items — rider will collect the original total:', { orderId, refundAmount });
+    }
+  }
+
+  const isOnlinePaid = order?.payment_method !== 'cod' && !!order?.razorpay_payment_id && PAID_LIKE_PAYMENT_STATUSES.has(String(order?.payment_status || ''));
   // A wallet-paid order has no razorpay_payment_id at all, so the check
   // above always came back false for it — the admin previously had no way
   // to refund these unavailable items at all (message literally said "no
   // online refund to process"), even though the money is sitting right
   // there in the customer's wallet balance and just needs crediting back.
-  const isWalletPaid = order?.payment_method === 'wallet' && order?.payment_status === 'paid';
+  const isWalletPaid = order?.payment_method === 'wallet' && PAID_LIKE_PAYMENT_STATUSES.has(String(order?.payment_status || ''));
   const isRefundEligible = isOnlinePaid || isWalletPaid;
+  const writtenOffIds = lineItems.map((li) => li.id);
 
-  await supabaseAdmin.from('admin_notifications').insert({
+  const { error: notifErr } = await supabaseAdmin.from('admin_notifications').insert({
     type: 'refund_required',
     title: 'Item unavailable — refund needed',
     message: isRefundEligible
-      ? `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. ₹${refundAmount.toFixed(2)} needs a refund.`
-      : `Order ${order?.order_code || orderId}: ${ids.length} item(s) unavailable at every store within 8km. Order was paid by ${order?.payment_method || 'unknown method'} — no refund to process.`,
+      ? `Order ${order?.order_code || orderId}: ${writtenOffIds.length} item(s) unavailable at every store within ${REALLOCATION_MAX_RADIUS_KM}km. ₹${refundAmount.toFixed(2)} needs a refund.`
+      : order?.payment_method === 'cod'
+        ? `Order ${order?.order_code || orderId}: ${writtenOffIds.length} item(s) unavailable at every store within ${REALLOCATION_MAX_RADIUS_KM}km. Cash on delivery — ${codBillReduced ? `₹${refundAmount.toFixed(2)} was taken off the bill` : `the bill could NOT be reduced automatically; collect ₹${refundAmount.toFixed(2)} less`}.`
+        : `Order ${order?.order_code || orderId}: ${writtenOffIds.length} item(s) unavailable at every store within ${REALLOCATION_MAX_RADIUS_KM}km. Order was paid by ${order?.payment_method || 'unknown method'} — no refund to process.`,
     data: {
       order_id: orderId,
-      item_ids: ids,
-      items: (lineItems || []).map((li: any) => ({ id: li.id, name: li.product_name, unit_price: li.unit_price, quantity: li.quantity })),
+      item_ids: writtenOffIds,
+      items: lineItems.map((li) => ({ id: li.id, name: li.product_name, unit_price: li.unit_price, quantity: li.quantity })),
       refund_amount: refundAmount,
       payment_id: order?.razorpay_payment_id || null,
       refund_method: isWalletPaid ? 'wallet' : 'razorpay',
       refund_eligible: isRefundEligible,
+      cod_bill_reduced: codBillReduced,
       resolved: false,
     },
   });
+  if (notifErr) console.error('flagUnresolvableItemsForRefund: failed to write admin refund notification:', notifErr, { orderId, writtenOffIds });
+
+  // The customer was never told before — their tracking screen just showed
+  // fewer items. Best-effort.
+  notificationService
+    .notifyCustomerItemsUnavailable(orderId, lineItems.map((li) => li.product_name))
+    .catch((err) => console.error('notifyCustomerItemsUnavailable failed:', err));
 }
 
-async function reallocateMissingItems(orderId: string, itemIds: string[]) {
+/**
+ * Re-homes `itemIds` (items a store declined) to the nearest store(s) that stock
+ * them, within REALLOCATION_MAX_RADIUS_KM. Same objective as placement: fewest
+ * stores, then shortest total distance, so a farther store only wins when it
+ * saves the rider a stop. Each store is added by the reallocate_items_to_store
+ * database function (one transaction, order row locked), which also repoints
+ * order_items.product_id to the new store's own product row — the previous
+ * implementation compared master_product_id against that store-scoped id and so
+ * could never find a match. Whatever cannot be placed is written off for an
+ * admin-approved refund, and the order is then finalized (dispatched for what
+ * WAS placed) or, if no store accepted anything, cancelled with a refund.
+ *
+ * Serialised per order within this process; the database function is the real
+ * guard across processes.
+ */
+export async function reallocateMissingItems(orderId: string, itemIds: string[]) {
   if (!itemIds.length) return;
+  await withOrderLock(orderId, () => reallocateMissingItemsLocked(orderId, itemIds));
+}
 
-  const { data: order } = await supabaseAdmin
+async function reallocateMissingItemsLocked(orderId: string, itemIds: string[]) {
+  const { data: order, error: orderErr } = await supabaseAdmin
     .from('customer_orders')
-    .select('delivery_latitude, delivery_longitude')
+    .select('status, order_code, delivery_latitude, delivery_longitude')
     .eq('id', orderId)
-    .single();
+    .maybeSingle();
+  if (orderErr) throw orderErr;
+  if (!order) return;
+  if (!REALLOCATABLE_ORDER_STATUSES.has((order as any).status)) return; // cancelled or dispatched meanwhile
 
-  if (!order?.delivery_latitude) return;
-
-  const { data: items } = await supabaseAdmin
+  // Only items still waiting for a store — a retry or the sweep may overlap
+  // an earlier run that already placed some of them.
+  const { data: waitingRows, error: itemsErr } = await supabaseAdmin
     .from('order_items')
     .select('id, product_id')
     .in('id', itemIds)
-    .is('assigned_store_id', null);
+    .is('assigned_store_id', null)
+    .neq('item_status', 'unavailable');
+  if (itemsErr) throw itemsErr;
+  const waiting = (waitingRows || []) as Array<{ id: string; product_id: string }>;
+  if (!waiting.length) {
+    await settleOrderAfterReallocation(orderId);
+    return;
+  }
 
-  if (!items?.length) return;
-
-  const { data: existingAllocs } = await supabaseAdmin
-    .from('order_store_allocations')
-    .select('store_id, sequence_number')
-    .eq('order_id', orderId);
-
-  const usedStoreIds = new Set((existingAllocs || []).map((a: any) => a.store_id));
-  const seqRef = { value: Math.max(0, ...(existingAllocs || []).map((a: any) => a.sequence_number)) };
-
-  // Try the nearest ring first (0-4km), then widen to 4-8km for whatever's left.
-  // Never wider than 8km.
-  let remaining = await assignCandidatesInRadius(
-    orderId, items, order.delivery_latitude, order.delivery_longitude, 0, 4, usedStoreIds, seqRef
+  // order_items.product_id is the (old) store's products row; resolve each to
+  // its master product, which is what other stores are matched on.
+  const { data: productRows, error: productsErr } = await supabaseAdmin
+    .from('products')
+    .select('id, master_product_id')
+    .in('id', [...new Set(waiting.map((i) => i.product_id))]);
+  if (productsErr) throw productsErr;
+  const masterByProduct = new Map<string, string>(
+    ((productRows || []) as Array<{ id: string; master_product_id: string }>).map((p) => [p.id, p.master_product_id])
   );
-  if (remaining.length) {
-    remaining = await assignCandidatesInRadius(
-      orderId, remaining, order.delivery_latitude, order.delivery_longitude, 4, 8, usedStoreIds, seqRef
-    );
+
+  const planItems: Array<{ key: string; masterProductId: string }> = [];
+  const unresolvable: string[] = [];
+  for (const it of waiting) {
+    const master = masterByProduct.get(it.product_id);
+    if (master) planItems.push({ key: it.id, masterProductId: master });
+    else unresolvable.push(it.id); // product row gone — nothing to match on
   }
 
-  if (remaining.length) {
-    await flagUnresolvableItemsForRefund(orderId, remaining);
+  // Every store that has ever had an allocation on this order is out: a store
+  // that declined is not asked again, and UNIQUE(order_id, store_id) forbids a
+  // second row anyway.
+  const { data: existingAllocs, error: allocsErr } = await supabaseAdmin
+    .from('order_store_allocations')
+    .select('store_id')
+    .eq('order_id', orderId);
+  if (allocsErr) throw allocsErr;
+  const usedStoreIds = new Set<string>((existingAllocs || []).map((a: any) => a.store_id as string));
+
+  let remaining = planItems;
+  const lat = Number((order as any).delivery_latitude);
+  const lng = Number((order as any).delivery_longitude);
+
+  if (remaining.length && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+    const stores = await fetchCandidateStores(lat, lng, 0, REALLOCATION_MAX_RADIUS_KM, usedStoreIds);
+    if (stores.length) {
+      const masterOf = new Map(remaining.map((i) => [i.key, i.masterProductId]));
+      const stock = await fetchStoreStock(stores.map((s) => s.id), [...new Set(remaining.map((i) => i.masterProductId))]);
+      const plan = planAllocation(remaining, stores, stock.stock);
+
+      for (const stop of plan.stops) {
+        const payload = stop.itemKeys.map((itemId) => ({
+          item_id: itemId,
+          product_id: stock.productId(stop.storeId, masterOf.get(itemId)!) ?? null,
+        }));
+        if (payload.some((p) => !p.product_id)) {
+          console.error('reallocateMissingItems: planner chose a store without a product row (skipped):', { orderId, storeId: stop.storeId });
+          continue;
+        }
+
+        const { error: rpcErr } = await supabaseAdmin.rpc('reallocate_items_to_store', {
+          p_order_id: orderId,
+          p_store_id: stop.storeId,
+          p_items: payload,
+        });
+
+        if (rpcErr) {
+          const msg = String(rpcErr.message || '');
+          if (msg.includes('ORDER_NOT_REALLOCATABLE') || msg.includes('ORDER_NOT_FOUND')) {
+            // Cancelled or dispatched while we were planning — nothing more to do here.
+            console.warn(`[reallocateMissingItems] Order ${orderId} moved on during reallocation (${msg}); stopping.`);
+            return;
+          }
+          if (msg.includes('ITEMS_NOT_REALLOCATABLE')) {
+            // Another process placed (or wrote off) some of these items first.
+            // Drop whatever is no longer waiting and carry on with the rest.
+            const { data: stillWaiting } = await supabaseAdmin
+              .from('order_items')
+              .select('id')
+              .in('id', stop.itemKeys)
+              .is('assigned_store_id', null)
+              .neq('item_status', 'unavailable');
+            const stillWaitingIds = new Set(((stillWaiting || []) as Array<{ id: string }>).map((i) => i.id));
+            remaining = remaining.filter((i) => !stop.itemKeys.includes(i.key) || stillWaitingIds.has(i.key));
+            continue;
+          }
+          // STORE_NOT_AVAILABLE / STORE_ALREADY_USED / unexpected: this store is
+          // out; the items stay in `remaining` and are written off below if no
+          // other stop takes them (the sweep retries anything left 'pending').
+          console.error('reallocate_items_to_store failed:', rpcErr, { orderId, storeId: stop.storeId });
+          continue;
+        }
+
+        const placed = new Set(stop.itemKeys);
+        remaining = remaining.filter((i) => !placed.has(i.key));
+
+        // The new store must be told — previously a reallocated store only
+        // found out via its own 10 s poll.
+        notificationService
+          .notifyShopkeeperNewOrder(stop.storeId, orderId, (order as any).order_code || orderId)
+          .catch((err) => console.error('[reallocateMissingItems] shopkeeper notification failed:', err));
+      }
+    }
   }
 
-  // Whatever we couldn't place is now flagged/unavailable rather than pending — the
-  // order should proceed to dispatch for everything that *was* resolved instead of
-  // staying stuck waiting on an item that will never be reallocated.
-  await finalizeIfAllResolved(orderId);
+  const unplaced = [...unresolvable, ...remaining.map((i) => i.key)];
+  if (unplaced.length) {
+    await flagUnresolvableItemsForRefund(orderId, unplaced);
+  }
+
+  await settleOrderAfterReallocation(orderId);
+}
+
+/**
+ * After a decline/reallocation: dispatch the order if every store has answered
+ * and every item has a home or a write-off (finalize_order_if_ready decides).
+ * If instead NO store accepted anything and nothing is pending, nobody can
+ * fulfil any part of this order — cancel it (refund, coupon release and
+ * notifications via databaseService.cancelOrder) instead of leaving it at
+ * 'pending_at_store' forever, which is where such orders used to sit.
+ */
+async function settleOrderAfterReallocation(orderId: string) {
+  if (await finalizeIfAllResolved(orderId)) return;
+
+  const [{ data: allocs, error: allocsErr }, { data: order, error: orderErr }] = await Promise.all([
+    supabaseAdmin.from('order_store_allocations').select('status, accepted_item_ids').eq('order_id', orderId),
+    supabaseAdmin.from('customer_orders').select('status').eq('id', orderId).maybeSingle(),
+  ]);
+  if (allocsErr || orderErr) {
+    console.error('settleOrderAfterReallocation: read failed:', allocsErr || orderErr, { orderId });
+    return;
+  }
+  if (!order || !REALLOCATABLE_ORDER_STATUSES.has((order as any).status)) return;
+
+  const rows = (allocs || []) as Array<{ status: string; accepted_item_ids?: string[] | null }>;
+  const anyPending = rows.some((a) => a.status === 'pending_acceptance');
+  // Any 'accepted' row counts here, even one with an empty accepted list
+  // (finalize_order_if_ready will not dispatch such an order, but a store
+  // that says it is preparing something must never be auto-cancelled; a
+  // stuck order is recoverable by an admin, a wrongly cancelled one is not).
+  const anyAccepted = rows.some((a) => a.status === 'accepted');
+
+  if (anyAccepted) {
+    // Part of the order is confirmed; the rest is still being placed (or was
+    // written off and finalize will pass on the next settle). Same partial
+    // status acceptAllocation writes.
+    await supabaseAdmin
+      .from('customer_orders')
+      .update({ status: 'store_accepted' })
+      .eq('id', orderId)
+      .eq('status', 'pending_at_store');
+    return;
+  }
+  if (anyPending) return; // another store still has to answer
+
+  try {
+    await databaseService.cancelOrder(orderId, { reason: 'Cancelled automatically — no nearby store could fulfil any item' });
+  } catch (err) {
+    // A rider assignment or terminal state landed in between — leave as is.
+    console.error('[settleOrderAfterReallocation] auto-cancel failed (order left as-is):', err, { orderId });
+  }
+}
+
+/**
+ * Server-side sweep, run on an interval from server.ts. The tracking-poll
+ * watchdogs below only run while a customer has the tracking screen open, so a
+ * store that never answered — or items orphaned mid-reallocation by a crash —
+ * used to wait until the customer happened to look. Safe to run from several
+ * instances at once: the flip-to-rejected update is status-guarded and the
+ * reallocation step is a locked database function.
+ */
+const SWEEP_BATCH = 100;
+export async function sweepStuckOrders(): Promise<{ expiredOrders: number; rehomedOrders: number; settledOrders: number }> {
+  const result = { expiredOrders: 0, rehomedOrders: 0, settledOrders: 0 };
+
+  // 1. Stores that never answered, on orders their shopkeeper could actually see.
+  const cutoff = new Date(Date.now() - STALE_ALLOCATION_MS).toISOString();
+  const { data: stale, error: staleErr } = await supabaseAdmin
+    .from('order_store_allocations')
+    .select('order_id')
+    .eq('status', 'pending_acceptance')
+    .lt('created_at', cutoff)
+    .limit(SWEEP_BATCH);
+  if (staleErr) throw staleErr;
+  const staleOrderIds = [...new Set((stale || []).map((a: any) => a.order_id as string))];
+  if (staleOrderIds.length) {
+    const { data: orders } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id, status, payment_status, payment_method')
+      .in('id', staleOrderIds);
+    for (const o of (orders || []) as any[]) {
+      if (!REALLOCATABLE_ORDER_STATUSES.has(o.status) || !isOrderPaymentReady(o)) continue;
+      try {
+        await expireStaleAllocationsForOrder(o.id);
+        result.expiredOrders++;
+      } catch (err) {
+        console.error('[sweepStuckOrders] expire failed:', err, { orderId: o.id });
+      }
+    }
+  }
+
+  // 2. Items left waiting for a store with no allocation in flight to place them.
+  const { data: waiting, error: waitingErr } = await supabaseAdmin
+    .from('order_items')
+    .select('id, customer_order_id')
+    .is('assigned_store_id', null)
+    .eq('item_status', 'pending')
+    .limit(SWEEP_BATCH * 5);
+  if (waitingErr) throw waitingErr;
+  const itemsByOrder = new Map<string, string[]>();
+  for (const it of (waiting || []) as any[]) {
+    if (!it.customer_order_id) continue;
+    const list = itemsByOrder.get(it.customer_order_id) ?? [];
+    list.push(it.id);
+    itemsByOrder.set(it.customer_order_id, list);
+  }
+  if (itemsByOrder.size) {
+    const { data: orders } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id, status')
+      .in('id', [...itemsByOrder.keys()]);
+    for (const o of (orders || []) as any[]) {
+      if (!REALLOCATABLE_ORDER_STATUSES.has(o.status)) continue;
+      try {
+        await reallocateMissingItems(o.id, itemsByOrder.get(o.id)!);
+        result.rehomedOrders++;
+      } catch (err) {
+        console.error('[sweepStuckOrders] re-home failed:', err, { orderId: o.id });
+      }
+    }
+  }
+
+  // 3. Orders whose stores have all answered but that never got finalized —
+  //    a finalize RPC blip or a restart between the last accept and the
+  //    broadcast used to leave these at pending_at_store/store_accepted forever.
+  const { data: accepted, error: acceptedErr } = await supabaseAdmin
+    .from('order_store_allocations')
+    .select('order_id')
+    .eq('status', 'accepted')
+    .lt('accepted_at', new Date(Date.now() - 60_000).toISOString())
+    .limit(SWEEP_BATCH * 5);
+  if (acceptedErr) throw acceptedErr;
+  const acceptedOrderIds = [...new Set((accepted || []).map((a: any) => a.order_id as string))]
+    .filter((id) => !staleOrderIds.includes(id) && !itemsByOrder.has(id));
+  if (acceptedOrderIds.length) {
+    const { data: orders } = await supabaseAdmin
+      .from('customer_orders')
+      .select('id, status')
+      .in('id', acceptedOrderIds)
+      .in('status', [...REALLOCATABLE_ORDER_STATUSES]);
+    for (const o of (orders || []) as any[]) {
+      try {
+        await withOrderLock(o.id, () => settleOrderAfterReallocation(o.id));
+        result.settledOrders++;
+      } catch (err) {
+        console.error('[sweepStuckOrders] settle failed:', err, { orderId: o.id });
+      }
+    }
+  }
+
+  return result;
 }
 
 // Called when a driver comes online — catches any ready_for_pickup orders they missed
@@ -832,20 +1200,34 @@ export async function dispatchReadyOrdersToDriver(driverId: string) {
     const orderIds = nearby.map((o: any) => o.id);
     const { data: existing } = await supabaseAdmin
       .from('driver_order_offers')
-      .select('order_id')
+      .select('order_id, status')
       .eq('driver_id', driverId)
       .in('order_id', orderIds);
 
-    const alreadyHas = new Set((existing || []).map((e: any) => e.order_id));
-    const newOrderIds = nearby.filter((o: any) => !alreadyHas.has(o.id));
-    if (!newOrderIds.length) return;
+    // An 'expired' row means another rider won this order earlier; if the
+    // order is ready_for_pickup again (that rider released it), this driver
+    // may be offered it once more. 'rejected' = this driver declined it.
+    const existingByOrder = new Map((existing || []).map((e: any) => [e.order_id as string, e.status as string]));
+    const newOrderIds = nearby.filter((o: any) => !existingByOrder.has(o.id));
+    const reopenOrderIds = nearby.filter((o: any) => existingByOrder.get(o.id) === 'expired').map((o: any) => o.id);
+    if (!newOrderIds.length && !reopenOrderIds.length) return;
 
-    await supabaseAdmin.from('driver_order_offers').insert(
-      newOrderIds.map((o: any) => ({ order_id: o.id, driver_id: driverId, status: 'pending' }))
-    );
+    if (newOrderIds.length) {
+      await supabaseAdmin.from('driver_order_offers').insert(
+        newOrderIds.map((o: any) => ({ order_id: o.id, driver_id: driverId, status: 'pending' }))
+      );
+    }
+    if (reopenOrderIds.length) {
+      await supabaseAdmin
+        .from('driver_order_offers')
+        .update({ status: 'pending', responded_at: null })
+        .eq('driver_id', driverId)
+        .in('order_id', reopenOrderIds)
+        .eq('status', 'expired');
+    }
 
     notificationService
-      .notifyRiderOrderOffer(driverId, newOrderIds.map((o: any) => o.id))
+      .notifyRiderOrderOffer(driverId, [...newOrderIds.map((o: any) => o.id), ...reopenOrderIds])
       .catch((err) => console.error('notifyRiderOrderOffer failed:', err));
   } catch (err) {
     console.error('dispatchReadyOrdersToDriver error:', err);
@@ -885,7 +1267,7 @@ export async function cancelIfPaymentAbandoned(orderId: string, customerId: stri
   // COD has no payment-gateway step to abandon — payment_status is expected
   // to stay 'pending' until delivery, that's not a stuck order.
   if (o.payment_method === 'cod') return;
-  if (o.payment_status === 'paid') return;
+  if (PAID_LIKE_PAYMENT_STATUSES.has(String(o.payment_status || '')) || o.payment_status === 'refunded') return;
   if (o.status === 'order_delivered' || o.status === 'order_cancelled') return;
 
   const placedAt = new Date(o.placed_at || o.created_at).getTime();
@@ -954,7 +1336,7 @@ export async function reBroadcastIfStuck(orderId: string, customerId: string) {
   await broadcastToNearbyDrivers(orderId);
 }
 
-async function broadcastToNearbyDrivers(orderId: string) {
+export async function broadcastToNearbyDrivers(orderId: string) {
   // Search center should be where the driver actually needs to go first — the
   // pickup store, not the customer's drop-off — otherwise a driver right next
   // to the store but far from the eventual delivery address never gets offered
@@ -1019,6 +1401,17 @@ async function broadcastToNearbyDrivers(orderId: string) {
     partners.map((p) => ({ order_id: orderId, driver_id: p.user_id, status: 'pending' })),
     { onConflict: 'order_id,driver_id', ignoreDuplicates: true }
   );
+  // ignoreDuplicates leaves rows that 'expired' when another rider won
+  // untouched. If that rider has since released the order (rejectOrder puts
+  // it back to ready_for_pickup), nobody from the original broadcast could
+  // ever be offered it again and it sat unassigned. Re-open those rows; a
+  // driver's own 'rejected' answer is respected. (2026-10-04 audit)
+  await supabaseAdmin
+    .from('driver_order_offers')
+    .update({ status: 'pending', responded_at: null })
+    .eq('order_id', orderId)
+    .in('driver_id', partners.map((p) => p.user_id))
+    .eq('status', 'expired');
 
   const partnersWithTokens = partners.filter((p) => p.expo_push_token);
   if (partnersWithTokens.length) {

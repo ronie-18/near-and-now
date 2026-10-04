@@ -240,6 +240,19 @@ export class NotificationService {
     }
   }
 
+  /** A paid add-on landed on this store's part of an order (orderAdditions.controller.ts). */
+  async notifyShopkeeperItemsAdded(storeId: string, orderId: string, orderCode: string, count: number) {
+    const { store, atStore } = await this.storeForShopkeeperNotification(storeId);
+    const title = 'Items Added to Order';
+    const body = `${count} item${count === 1 ? '' : 's'} ${count === 1 ? 'was' : 'were'} added to order #${orderCode}${atStore}. Check the updated list.`;
+
+    await this.persistNotification('store', storeId, 'order_items_added', title, body, { orderId, storeId, count });
+
+    if (store?.expo_push_token && (await this.isShopkeeperNotificationEnabled(store.owner_id, 'newOrders'))) {
+      await this.sendExpoPush(store.expo_push_token, title, body, { orderId, storeId, type: 'order_items_added' }, 'default', { table: 'stores', idColumn: 'id', idValue: storeId });
+    }
+  }
+
   // Customer-initiated cancellation used to leave the shopkeeper with no
   // signal beyond their own order list eventually re-polling — they could
   // keep prepping a cancelled order until that happened to refetch. Mirrors
@@ -604,6 +617,25 @@ export class NotificationService {
 
   private async sendOrderReadyForPickupNotification(orderId: string) {
     await this.notifyCustomerByOrderId(orderId, 'Ready for Pickup', 'Your order is packed and ready — waiting for a delivery partner.', 'ready_for_pickup');
+  }
+
+  /**
+   * Some items could not be fulfilled by any nearby store and were dropped
+   * from the order (shopkeeper.controller.ts flagUnresolvableItemsForRefund).
+   * Previously the customer was never told — their tracking screen just
+   * showed fewer items. Refunds stay with the admin-approved flow.
+   */
+  async notifyCustomerItemsUnavailable(orderId: string, itemNames: string[]) {
+    const names = itemNames.filter(Boolean);
+    if (!names.length) return;
+    const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ` and ${names.length - 3} more` : '');
+    const one = names.length === 1;
+    await this.notifyCustomerByOrderId(
+      orderId,
+      one ? 'An item is unavailable' : 'Some items are unavailable',
+      `${shown} ${one ? 'is' : 'are'} not available from any nearby store and ${one ? 'has' : 'have'} been removed from your order. Any refund due will be processed shortly.`,
+      'items_unavailable'
+    );
   }
 
   private async sendRiderAssignedNotification(orderId: string) {

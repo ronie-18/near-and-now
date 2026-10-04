@@ -1,4 +1,7 @@
 import { supabase, supabaseAdmin, isSupabaseServiceRoleConfigured } from '../config/database.js';
+import { randomInt } from 'crypto';
+import { planAllocation } from './allocationPlanner.js';
+import { fetchCandidateStores, fetchStoreStock, PLACEMENT_RADIUS_KM } from './storeAllocation.service.js';
 import { reverseGeocode, forwardGeocode } from './geocoding.service.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { notificationService } from './notification.service.js';
@@ -261,7 +264,7 @@ export class DatabaseService {
         delivery_fee: 0,
         discount_amount: 0,
         total_amount: 0,
-        delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
+        delivery_otp: String(randomInt(1000, 10000)),
       })
       .select()
       .single();
@@ -383,8 +386,8 @@ export class DatabaseService {
     throw error;
   }
 
-  async cancelOrder(orderId: string) {
-    console.log('Attempting to cancel order:', orderId);
+  async cancelOrder(orderId: string, opts: { reason?: string } = {}) {
+    console.log('Attempting to cancel order:', orderId, opts.reason ? `(${opts.reason})` : '');
 
     // The database state change is one atomic Postgres function now
     // (cancel_customer_order, migration 20261002000000 — backlog item 4). It
@@ -400,73 +403,126 @@ export class DatabaseService {
     // payment_status to 'partially_refunded', not 'paid'; the old check only
     // matched 'paid' so cancelling after a partial refund silently refunded
     // nothing for the remainder).
+    //
+    // The money may sit in more than one Razorpay payment (2026-10-04 audit):
+    //  * the main payment captured only the UPI share of a split cash/UPI
+    //    order, and only total_amount minus any paid add-ons otherwise;
+    //  * each paid add-items request (order_addition_requests) has its own
+    //    payment for just its delta.
+    // Refunding total_amount against the main payment alone made Razorpay
+    // reject the refund outright (amount above what that payment captured), so
+    // the customer got nothing back. Refund each leg up to what it captured.
     const alreadyRefunded = Number(customerOrder?.refunded_amount || 0);
     const remainingToRefund = Number(customerOrder?.total_amount || 0) - alreadyRefunded;
     const hasRefundableBalance =
       remainingToRefund > 0.01 &&
       (customerOrder?.payment_status === 'paid' || customerOrder?.payment_status === 'partially_refunded');
 
-    if (hasRefundableBalance && customerOrder?.razorpay_payment_id) {
-      try {
-        const { paymentService } = await import('./payment.service.js');
-        await paymentService.processRefund({
-          paymentId: customerOrder.razorpay_payment_id,
-          amount: remainingToRefund,
-          reason: 'Order cancelled by customer'
-        });
-        console.log('Refund initiated for payment:', customerOrder.razorpay_payment_id);
-        // Checked but not thrown — the Razorpay refund has already gone
-        // through by this point, so failing the request now would be
-        // misleading (the cancel + refund both actually happened). But a
-        // silent failure here would leave payment_status stuck at 'paid'
-        // with real money already refunded, risking a double-refund if
-        // anyone later acts on that stale status — log it loudly instead.
-        const { error: markRefundedErr } = await supabaseAdmin
-          .from('customer_orders')
-          .update({ payment_status: 'refunded', refunded_amount: alreadyRefunded + remainingToRefund })
-          .eq('id', orderId);
-        if (markRefundedErr) {
-          console.error('CRITICAL: Razorpay refund succeeded but failed to mark order as refunded (double-refund risk):', markRefundedErr, { orderId, paymentId: customerOrder.razorpay_payment_id });
-        }
-      } catch (refundErr) {
-        console.error('Refund failed (order still cancelled):', refundErr);
+    if (hasRefundableBalance) {
+      const { data: paidAdditions } = await supabaseAdmin
+        .from('order_addition_requests')
+        .select('razorpay_payment_id, subtotal_amount')
+        .eq('customer_order_id', orderId)
+        .eq('status', 'paid');
+      const additionLegs = ((paidAdditions || []) as Array<{ razorpay_payment_id: string | null; subtotal_amount: number | string }>)
+        .filter((a) => !!a.razorpay_payment_id)
+        .map((a) => ({ paymentId: a.razorpay_payment_id as string, captured: Number(a.subtotal_amount) || 0 }));
+      const additionsTotal = additionLegs.reduce((sum, l) => sum + l.captured, 0);
+
+      let splitUpi: number | null = null;
+      if (customerOrder?.notes) {
+        try {
+          const parsed = JSON.parse(String(customerOrder.notes));
+          if (parsed && typeof parsed.split_upi_amount === 'number') splitUpi = parsed.split_upi_amount;
+        } catch { /* plain-text delivery note */ }
       }
-    } else if (
-      // A wallet-paid order has no razorpay_payment_id at all — the branch
-      // above silently no-ops for it, which used to mean the customer's
-      // money just vanished on cancellation with no refund anywhere. The
-      // only place that money can go back to is the same wallet it came
-      // from (there's no external gateway payment to reverse).
-      hasRefundableBalance &&
-      customerOrder?.payment_method === 'wallet' &&
-      customerOrder?.customer_id
-    ) {
-      try {
-        const { error: refundRpcErr } = await supabaseAdmin.rpc('credit_wallet', {
-          p_user_id: customerOrder.customer_id,
-          p_amount: remainingToRefund,
-          p_reason: 'refund',
-          p_reference_type: 'order',
-          p_reference_id: orderId,
-          p_razorpay_payment_id: null,
-        });
-        if (refundRpcErr) throw refundRpcErr;
-        console.log('Wallet refund credited for cancelled order:', orderId);
-        // Checked but not thrown — same reasoning as the Razorpay branch
-        // above: the wallet credit already happened, so log loudly on
-        // failure rather than fail a request whose money movement already
-        // succeeded.
+      const mainCaptured = splitUpi != null ? splitUpi : Math.max(0, Number(customerOrder?.total_amount || 0) - additionsTotal);
+      // Earlier partial refunds (resolveItemRefund) went against the main payment.
+      const mainLegCap = Math.max(0, mainCaptured - alreadyRefunded);
+
+      let toRefund = remainingToRefund;
+      let refundedNow = 0;
+      const reason = opts.reason ?? 'Order cancelled by customer';
+      const { paymentService } = await import('./payment.service.js');
+
+      const refundLeg = async (paymentId: string, cap: number) => {
+        const amount = Math.round(Math.min(cap, toRefund) * 100) / 100;
+        if (amount <= 0.01) return;
+        try {
+          await paymentService.processRefund({ paymentId, amount, reason });
+          refundedNow += amount;
+          toRefund -= amount;
+          console.log('Refund initiated', { orderId, paymentId, amount });
+        } catch (refundErr) {
+          console.error('Refund failed (order still cancelled):', refundErr, { orderId, paymentId, amount });
+        }
+      };
+
+      if (customerOrder?.razorpay_payment_id && mainLegCap > 0) {
+        await refundLeg(customerOrder.razorpay_payment_id, mainLegCap);
+      } else if (
+        // A wallet-paid order has no razorpay_payment_id at all — the branch
+        // above silently no-ops for it, which used to mean the customer's
+        // money just vanished on cancellation with no refund anywhere. The
+        // only place that money can go back to is the same wallet it came
+        // from (there's no external gateway payment to reverse).
+        customerOrder?.payment_method === 'wallet' &&
+        customerOrder?.customer_id &&
+        mainLegCap > 0
+      ) {
+        const amount = Math.round(Math.min(mainLegCap, toRefund) * 100) / 100;
+        if (amount > 0.01) {
+          try {
+            const { error: refundRpcErr } = await supabaseAdmin.rpc('credit_wallet', {
+              p_user_id: customerOrder.customer_id,
+              p_amount: amount,
+              p_reason: 'refund',
+              p_reference_type: 'order',
+              p_reference_id: orderId,
+              p_razorpay_payment_id: null,
+            });
+            if (refundRpcErr) throw refundRpcErr;
+            refundedNow += amount;
+            toRefund -= amount;
+            console.log('Wallet refund credited for cancelled order:', orderId);
+          } catch (refundErr) {
+            console.error('Wallet refund failed (order still cancelled):', refundErr);
+          }
+        }
+      }
+      for (const leg of additionLegs) {
+        await refundLeg(leg.paymentId, leg.captured);
+      }
+
+      if (refundedNow > 0) {
+        // Checked but not thrown — the refunds have already gone through by
+        // this point, so failing the request now would be misleading (the
+        // cancel + refund both actually happened). But a silent failure here
+        // would leave payment_status stuck at 'paid' with real money already
+        // refunded, risking a double-refund if anyone later acts on that
+        // stale status — log it loudly instead.
+        const newRefunded = alreadyRefunded + refundedNow;
         const { error: markRefundedErr } = await supabaseAdmin
           .from('customer_orders')
-          .update({ payment_status: 'refunded', refunded_amount: alreadyRefunded + remainingToRefund })
+          .update({
+            payment_status: newRefunded >= Number(customerOrder?.total_amount || 0) - 0.01 ? 'refunded' : 'partially_refunded',
+            refunded_amount: newRefunded,
+          })
           .eq('id', orderId);
         if (markRefundedErr) {
-          console.error('CRITICAL: Wallet refund succeeded but failed to mark order as refunded (double-refund risk):', markRefundedErr, { orderId });
+          console.error('CRITICAL: refund succeeded but failed to mark order as refunded (double-refund risk):', markRefundedErr, { orderId });
         }
-      } catch (refundErr) {
-        console.error('Wallet refund failed (order still cancelled):', refundErr);
       }
     }
+
+    // cancel_customer_order() writes no order_status_history row, so the
+    // customer's timeline was missing the cancellation. (2026-10-04 audit)
+    const { error: historyErr } = await supabaseAdmin.from('order_status_history').insert({
+      customer_order_id: orderId,
+      status: 'order_cancelled',
+      notes: opts.reason ?? 'Order cancelled by customer',
+    });
+    if (historyErr) console.error('cancelOrder: history insert failed (non-fatal):', historyErr, { orderId });
 
     // Restore any coupon usage this order consumed — it was never fulfilled.
     try {
@@ -737,23 +793,6 @@ export class DatabaseService {
     if (error) throw error;
   }
 
-  /** Store coverage radii (km), same as storefront. */
-  private static readonly NEARBY_STORE_RADIUS_STEPS_KM = [1, 2, 3, 4] as const;
-
-  async getNearbyStoreIdsExpanding(lat: number, lng: number): Promise<string[]> {
-    for (const radiusKm of DatabaseService.NEARBY_STORE_RADIUS_STEPS_KM) {
-      const { data: storeIds, error } = await supabaseAdmin.rpc('get_nearby_store_ids', {
-        cust_lat: lat,
-        cust_lng: lng,
-        radius_km: radiusKm
-      });
-      if (!error && Array.isArray(storeIds) && storeIds.length > 0) {
-        return storeIds as string[];
-      }
-    }
-    return [];
-  }
-
   async generateNextOrderNumber(): Promise<string> {
     const today = new Date();
     const year = today.getFullYear();
@@ -854,10 +893,6 @@ export class DatabaseService {
     }
 
     const orderCode = await this.generateNextOrderNumber();
-    const storeIds = await this.getNearbyStoreIdsExpanding(geocoded.lat, geocoded.lng);
-    if (!storeIds.length) {
-      throw new Error('No store available for your delivery address. Please contact support.');
-    }
 
     const masterProductIds = [
       ...new Set(
@@ -867,13 +902,26 @@ export class DatabaseService {
       )
     ];
     if (masterProductIds.length === 0) throw new Error('No valid products in order');
+    // A non-UUID product reference would make the products query itself fail
+    // (a 500 for what is a client mistake) — refuse it as "not available",
+    // which the controller already maps to a 400. (2026-10-04 audit)
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const malformed = items.filter((it) => !UUID_RE.test(String(it.product_id || it.id || '')));
+    if (malformed.length) {
+      throw new Error(`Product(s) not available: ${malformed.map((it) => it.name).join(', ')}`);
+    }
 
-    const { data: productRows } = await supabaseAdmin
-      .from('products')
-      .select('id, store_id, master_product_id')
-      .in('store_id', storeIds)
-      .in('master_product_id', masterProductIds)
-      .eq('is_active', true);
+    // Every live store within the placement radius, nearest first — the same
+    // 4 km ring the storefront catalogue shows, so a customer can never see a
+    // product they cannot order. The previous getNearbyStoreIdsExpanding()
+    // expanded 1→2→3→4 km and stopped at the FIRST ring containing any store,
+    // so a 0.8 km store with one of four items hid a 1.5 km store that had
+    // all four and the order failed as "not available". (2026-10-04)
+    const candidateStores = await fetchCandidateStores(geocoded.lat, geocoded.lng, 0, PLACEMENT_RADIUS_KM);
+    if (!candidateStores.length) {
+      throw new Error('No store available for your delivery address. Please contact support.');
+    }
+    const storeStock = await fetchStoreStock(candidateStores.map((s) => s.id), masterProductIds);
 
     // SECURITY-010: never trust item.price from the request body — a client can set
     // an arbitrary/near-zero price per line item. Overwrite with the real catalog
@@ -887,7 +935,7 @@ export class DatabaseService {
     // GoI-mandated business-level tax, not a per-product one.
     const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
       .from('master_products')
-      .select('id, discounted_price, gst_rate, is_loose, min_quantity, max_quantity')
+      .select('id, discounted_price, gst_rate, is_loose, min_quantity, max_quantity, is_active')
       .in('id', masterProductIds);
 
     if (masterPriceError) {
@@ -898,6 +946,10 @@ export class DatabaseService {
     const boundsByMaster = new Map<string, { min_quantity: number | null; max_quantity: number | null }>();
     const isLooseByMaster = new Map<string, boolean>();
     for (const row of masterPriceRows || []) {
+      // A master product the admin delisted is hidden from the catalogue
+      // (productRowsToProducts drops inactive masters) but was still orderable
+      // from a stale cart. Treat it as unavailable. (2026-10-04 audit)
+      if ((row as any).is_active === false) continue;
       const preTax = Number((row as any).discounted_price) || 0;
       const isLoose = Boolean((row as any).is_loose);
       const rawGstRate = (row as any).gst_rate;
@@ -930,69 +982,30 @@ export class DatabaseService {
       return { ...it, price: trustedPrice, quantity };
     });
 
-    const byMaster = new Map<string, Array<{ store_id: string; product_id: string }>>();
-    for (const row of productRows || []) {
-      const list = byMaster.get(row.master_product_id) || [];
-      list.push({ store_id: row.store_id, product_id: row.id });
-      byMaster.set(row.master_product_id, list);
-    }
+    // Which store fulfils which item (allocationPlanner.ts): a single store
+    // that stocks everything wins — the nearest such store — otherwise the
+    // fewest stores, then the shortest total distance, with deterministic
+    // tiebreaks. The old greedy loop had no "one store has it all" rule and
+    // broke ties on whatever row order the database returned. Stops come
+    // back farthest-first, which becomes the rider's pickup sequence.
+    const plan = planAllocation(
+      items.map((it, idx) => ({ key: idx, masterProductId: (it.product_id || it.id) as string })),
+      candidateStores,
+      storeStock.stock
+    );
 
-    const storeToItems = new Map<string, typeof items>();
-    const assigned = new Set<number>();
-    while (assigned.size < items.length) {
-      let bestStore: string | null = null;
-      let bestCount = 0;
-      for (const storeId of storeIds) {
-        let count = 0;
-        for (let idx = 0; idx < items.length; idx++) {
-          if (assigned.has(idx)) continue;
-          const it = items[idx];
-          const mid = it.product_id || it.id;
-          const options = (mid ? byMaster.get(mid) : undefined) ?? [];
-          if (options.some((o) => o.store_id === storeId)) count++;
-        }
-        if (count > bestCount) {
-          bestCount = count;
-          bestStore = storeId;
-        }
-      }
-      if (!bestStore || bestCount === 0) break;
-      const chunk: typeof items = [];
-      for (let i = 0; i < items.length; i++) {
-        if (assigned.has(i)) continue;
-        const it = items[i];
-        const mid = it.product_id || it.id;
-        const options = (mid ? byMaster.get(mid) : undefined) ?? [];
-        if (options.some((o) => o.store_id === bestStore)) {
-          chunk.push(it);
-          assigned.add(i);
-        }
-      }
-      const existing = storeToItems.get(bestStore) || [];
-      storeToItems.set(bestStore, [...existing, ...chunk]);
-    }
-
-    const unassignedIndices = items.map((_, i) => i).filter((i) => !assigned.has(i));
-    if (unassignedIndices.length > 0) {
-      // These items matched no nearby store at all (byMaster has no entry for
-      // them among storeIds) — previously "fixed" by dumping them onto
-      // storeIds[0] regardless of whether that store actually carries the
-      // product. Since it provably doesn't (that's exactly why the item ended
-      // up here), the later per-store product_id lookup always came up empty
-      // too, and the code fell back to using the master_product_id itself as
-      // order_items.product_id — which FK-references products(id), not
-      // master_products(id), so the insert threw a foreign-key violation
-      // after customer_orders and any earlier stores' store_orders/order_items
-      // were already committed (no transaction wraps this function). Fail
-      // before any writes happen instead, with the same clear message already
-      // used when there's no nearby store at all.
+    if (plan.unplaced.length > 0) {
+      // These items matched no nearby store at all. Fail before any writes
+      // happen, with the same clear message already used when there's no
+      // nearby store at all. (An older version dumped them on storeIds[0],
+      // which then failed a foreign key after earlier rows were committed.)
       throw new Error(
-        `Product(s) not available from any store near you: ${unassignedIndices.map((i) => items[i].name).join(', ')}`
+        `Product(s) not available from any store near you: ${plan.unplaced.map((i) => items[i].name).join(', ')}`
       );
     }
 
-    const storeIdsToUse = Array.from(storeToItems.keys());
-    const itemChunks = storeIdsToUse.map((sid) => storeToItems.get(sid)!);
+    const storeIdsToUse = plan.stops.map((s) => s.storeId);
+    const itemChunks = plan.stops.map((s) => s.itemKeys.map((i) => items[i]));
 
     const pm = orderData.payment_method?.toLowerCase() ?? '';
     // 'wallet' checked first and explicitly — without it, a wallet order's
@@ -1005,7 +1018,7 @@ export class DatabaseService {
     // online payment, please retry" signal anywhere.
     const paymentMethodEnum =
       pm.includes('wallet') ? 'wallet' :
-      pm.includes('split') || pm.includes('online') || pm.includes('upi') ? 'razorpay' : 'cod';
+      pm.includes('split') || pm.includes('online') || pm.includes('upi') || pm.includes('razorpay') || pm.includes('card') ? 'razorpay' : 'cod';
 
     // Trusted subtotal from catalog prices — replaces client-supplied orderData.subtotal.
     const trustedSubtotal = items.reduce((sum, it) => sum + it.price * it.quantity, 0);
@@ -1083,11 +1096,17 @@ export class DatabaseService {
     // equivalent order (same customer, same total, same item count) placed in
     // the last 30 seconds and returns that instead of inserting a new one.
     const dedupeWindowStart = new Date(Date.now() - 30_000).toISOString();
+    // Never hand back a cancelled order as the "duplicate": a customer who
+    // cancelled (or whose abandoned online payment was auto-cancelled) and
+    // immediately re-orders the same cart would otherwise get the dead
+    // order's id back and nothing new would be placed. (2026-10-04 audit)
     const { data: recentDuplicate } = await supabaseAdmin
       .from('customer_orders')
       .select('*')
       .eq('customer_id', orderData.user_id)
       .eq('total_amount', orderData.order_total)
+      .eq('subtotal_amount', trustedSubtotal)
+      .neq('status', 'order_cancelled')
       .gte('created_at', dedupeWindowStart)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -1156,27 +1175,13 @@ export class DatabaseService {
 
       if (chunkMasterIds.length === 0) continue;
 
-      const { data: products, error: productsError } = await supabaseAdmin
-        .from('products')
-        .select('id, master_product_id')
-        .eq('store_id', storeId)
-        .in('master_product_id', chunkMasterIds)
-        .eq('is_active', true);
-
-      if (productsError) {
-        throw new Error('Failed to verify product availability');
-      }
-
-      const masterToProduct = new Map<string, string>();
-      for (const p of products || []) {
-        masterToProduct.set(p.master_product_id, p.id);
-      }
-
       const resolvedItems = chunk.map((item) => {
         const masterId = item.product_id || item.id;
-        // Prefer the store-specific product ID resolved via master_product_id;
-        // fall back to the raw product_id the frontend sent (may already be the store product id).
-        const productId = (masterId ? masterToProduct.get(masterId) : null) ?? masterId ?? null;
+        // order_items.product_id is the fulfilling store's own products row
+        // (FK → products.id). The planner only places an item on a store
+        // that stocks it, so this lookup always resolves; the old fallback
+        // to the raw master id — which is not a products.id — is gone.
+        const productId = masterId ? storeStock.productId(storeId, masterId) : undefined;
         if (!productId) {
           throw new Error(`Product "${item.name}" is not available from the store.`);
         }
@@ -1225,8 +1230,16 @@ export class DatabaseService {
         delivery_address: fullAddress,
         delivery_latitude: geocoded.lat,
         delivery_longitude: geocoded.lng,
+        // Split payments stash their amounts in `notes` (no dedicated columns
+        // yet). The customer's own delivery note used to be dropped in that
+        // case; keep it alongside. Readers that treat `notes` as the delivery
+        // note should display `note` from this JSON when present.
         notes: orderData.split_upi_amount != null
-          ? JSON.stringify({ split_upi_amount: orderData.split_upi_amount, split_cash_amount: orderData.split_cash_amount ?? 0 })
+          ? JSON.stringify({
+              split_upi_amount: orderData.split_upi_amount,
+              split_cash_amount: orderData.split_cash_amount ?? 0,
+              note: orderData.notes || null,
+            })
           : orderData.notes || null,
         gstin: orderData.gstin || null,
         gstin_business_name: orderData.gstin_business_name || null,
@@ -1234,7 +1247,7 @@ export class DatabaseService {
         receiver_phone: orderData.receiver_phone || null,
         receiver_address: orderData.receiver_address || null,
         tip_amount: trustedTipAmount,
-        delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
+        delivery_otp: String(randomInt(1000, 10000)),
       },
       p_store_chunks: storeChunks,
     });
@@ -1257,10 +1270,19 @@ export class DatabaseService {
     // the real checkout path (this function, backing /api/orders/place, which is
     // what both the website and customer app actually call) never notified anyone,
     // so shopkeepers only ever found out about new orders via a 10s foreground poll.
-    for (const chunk of storeChunks) {
-      notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode).catch((err) => {
-        console.error('[order placement] Failed to notify shopkeeper of new order:', err);
-      });
+    // Online-payment orders are hidden from shopkeepers until payment_status
+    // is 'paid' (shopkeeper.controller.ts getIncomingOrders), so pinging the
+    // store now would announce an order it cannot see — and nothing pinged it
+    // again once the payment landed. Those stores are notified from
+    // notifyStoresOrderPayable() when the order becomes paid (Razorpay verify
+    // / webhook via updateOrderPaymentStatus, wallet via payOrderWithWallet).
+    // COD is visible immediately. (2026-10-04 audit)
+    if (paymentMethodEnum === 'cod') {
+      for (const chunk of storeChunks) {
+        notificationService.notifyShopkeeperNewOrder(chunk.store_id, orderId, orderCode).catch((err) => {
+          console.error('[order placement] Failed to notify shopkeeper of new order:', err);
+        });
+      }
     }
 
     // Keep customer_payments in sync from the moment order is created.
@@ -1841,6 +1863,9 @@ export class DatabaseService {
       throw new AppError(`Order can't be assigned while it is '${(exists as { status: string }).status}'`, 409);
     }
 
+    // A store that declined its part of the order has its row closed as
+    // 'order_cancelled' (shopkeeper.controller.ts releaseStoreFromOrder) —
+    // the rider is not going there. Same rule as accept_driver_offer().
     const { data, error } = await supabaseAdmin
       .from('store_orders')
       .update({
@@ -1849,6 +1874,7 @@ export class DatabaseService {
         assigned_at: new Date().toISOString()
       })
       .eq('customer_order_id', orderId)
+      .neq('status', 'order_cancelled')
       .select();
     if (error) throw error;
 
@@ -1930,7 +1956,7 @@ export class DatabaseService {
   private static readonly EMAIL_CODE_TTL_MS = 5 * 60 * 1000;
 
   private generateEmailVerificationCode(): string {
-    return String(Math.floor(1000 + Math.random() * 9000));
+    return String(randomInt(1000, 10000));
   }
 
   /**
@@ -2116,6 +2142,41 @@ export class DatabaseService {
       return { success: true, alreadyPaid: true };
     }
 
+    // Money captured for an order that was cancelled first (e.g. the webhook's
+    // payment.captured arriving after cancelIfPaymentAbandoned, or a very late
+    // verify). Marking it 'paid' would resurrect it in every shopkeeper's
+    // incoming list. Record the payment id so it can be refunded, flag it for
+    // the admin refund flow (same refund_required shape resolveItemRefund
+    // consumes, for the full amount), and leave payment_status alone.
+    // (2026-10-04 audit)
+    if (status === 'paid' && current.status === 'order_cancelled') {
+      console.error('CRITICAL [PAYMENT] payment captured for an already-cancelled order — flagged for refund', { orderId, paymentId, razorpayOrderId });
+      const { error: idErr } = await supabaseAdmin
+        .from('customer_orders')
+        .update({ razorpay_payment_id: paymentId ?? null, razorpay_order_id: razorpayOrderId ?? current.razorpay_order_id ?? null, updated_at: new Date().toISOString() })
+        .eq('id', orderId);
+      if (idErr) console.error('[PAYMENT] could not record payment id on cancelled order:', idErr, { orderId });
+      const amount = Number(current.total_amount || 0);
+      const { error: notifErr } = await supabaseAdmin.from('admin_notifications').insert({
+        type: 'refund_required',
+        title: 'Payment received for a cancelled order',
+        message: `Order ${orderId}: ₹${amount.toFixed(2)} was captured (payment ${paymentId ?? 'unknown'}) after the order had been cancelled. Refund it.`,
+        data: {
+          order_id: orderId,
+          item_ids: [],
+          items: [],
+          refund_amount: amount,
+          payment_id: paymentId ?? null,
+          refund_method: 'razorpay',
+          refund_eligible: !!paymentId,
+          resolved: false,
+          reason: 'payment_after_cancel',
+        },
+      });
+      if (notifErr) console.error('[PAYMENT] could not write refund notification for cancelled order:', notifErr, { orderId });
+      return { success: false, cancelled: true };
+    }
+
     const nextOrderId = razorpayOrderId ?? current.razorpay_order_id ?? null;
     const primary = await supabaseAdmin
       .from('customer_orders')
@@ -2158,7 +2219,35 @@ export class DatabaseService {
     });
     console.log('[PAYMENT] DB update success', { orderId, status, paymentId, razorpayOrderId });
 
+    if (status === 'paid') {
+      // First time this order became visible to its stores — tell them now.
+      // (The idempotent-skip above means a retried verify/webhook can't ping twice.)
+      this.notifyStoresOrderPayable(orderId).catch((err) => console.error('[PAYMENT] notifyStoresOrderPayable failed:', err));
+    }
+
     return { success: true };
+  }
+
+  /**
+   * Pings every store still waiting to answer this order. Used when an
+   * online-payment order becomes 'paid' — the moment it first appears in the
+   * shopkeepers' incoming list — instead of at checkout, when it was hidden.
+   */
+  async notifyStoresOrderPayable(orderId: string): Promise<void> {
+    const [{ data: order }, { data: allocs }] = await Promise.all([
+      supabaseAdmin.from('customer_orders').select('order_code').eq('id', orderId).maybeSingle(),
+      supabaseAdmin.from('order_store_allocations').select('store_id').eq('order_id', orderId).eq('status', 'pending_acceptance'),
+    ]);
+    const storeIds = [...new Set(((allocs || []) as Array<{ store_id: string }>).map((a) => a.store_id))];
+    if (!storeIds.length) return;
+    const { notificationService } = await import('./notification.service.js');
+    await Promise.all(
+      storeIds.map((storeId) =>
+        notificationService
+          .notifyShopkeeperNewOrder(storeId, orderId, (order as any)?.order_code || orderId)
+          .catch((err: unknown) => console.error('[PAYMENT] shopkeeper notification failed:', err, { orderId, storeId }))
+      )
+    );
   }
 
   // Tracking
@@ -2195,7 +2284,7 @@ export class DatabaseService {
   /**
    * Backstop for stale `store_orders` rows: a store that rejected its
    * allocation (or was auto-expired) never gets its `store_orders` row
-   * touched — `assignCandidatesInRadius` repoints the affected items'
+   * touched — reallocation (reallocate_items_to_store) repoints the affected items'
    * `store_order_id` to the newly-assigned store's row (see that function's
    * own comment), but the rejected store's now-empty `store_orders` row
    * still exists and would otherwise still render on the customer's
@@ -2216,7 +2305,7 @@ export class DatabaseService {
    * Also never drops a row that's still actually holding items. rejectAllocation
    * fires reallocateMissingItems() fire-and-forget (not awaited) — there's a
    * real window between a store rejecting and its items' store_order_id
-   * actually getting repointed to the new store (assignCandidatesInRadius).
+   * actually getting repointed to the new store (reallocate_items_to_store).
    * A tracking fetch that lands in that window would otherwise make those
    * items disappear entirely (from this store's box AND the combined "Order
    * Items" total both frontends build via flatMap) until reallocation
@@ -2408,10 +2497,16 @@ export class DatabaseService {
     // zero live callers in either client app today, but it's a registered, reachable
     // endpoint behind nothing but requireRider — found 2026-10-01 during an
     // order-state-machine race audit (backlog item 7).
+    // Cancellation is not a rider action: it bypassed refunds, allocation and
+    // offer cleanup entirely (cancel_customer_order does all of that). Riders
+    // release an order with rejectOrder; customers/admins cancel. (2026-10-04)
+    if (params.status === 'order_cancelled') {
+      throw new AppError('Riders cannot cancel an order — release it instead, or contact support', 403);
+    }
     const currentStatus = (order as { status: OrderStatus }).status;
     const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(currentStatus);
     const nextIndex = ORDER_STATUS_SEQUENCE.indexOf(params.status);
-    if (params.status !== 'order_cancelled' && (currentIndex === -1 || nextIndex === -1 || nextIndex <= currentIndex)) {
+    if (currentIndex === -1 || nextIndex === -1 || nextIndex <= currentIndex) {
       throw new AppError(`Cannot move order from '${currentStatus}' to '${params.status}'`, 409);
     }
     if (params.status === 'order_delivered' && !(order as { delivery_otp_verified_at: string | null }).delivery_otp_verified_at) {

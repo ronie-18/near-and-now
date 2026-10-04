@@ -317,6 +317,23 @@ export class PaymentController {
       const data = (notif.data || {}) as any;
       if (data.resolved) return res.status(409).json({ error: 'Already refunded' });
       const refundMethod: 'wallet' | 'razorpay' = data.refund_method === 'wallet' ? 'wallet' : 'razorpay';
+
+      // Claim the notification BEFORE moving money: two admins clicking at
+      // once both passed the read-check above and both refunded. The JSON
+      // filter makes exactly one of them win. Released again below if the
+      // refund itself fails. (2026-10-04 audit)
+      const { data: claimed, error: claimErr } = await supabaseAdmin
+        .from('admin_notifications')
+        .update({ data: { ...data, resolved: true, resolving: true } })
+        .eq('id', notificationId)
+        .eq('data->>resolved', 'false')
+        .select('id');
+      if (claimErr) throw claimErr;
+      if (!claimed?.length) return res.status(409).json({ error: 'Already refunded' });
+      const releaseClaim = async () => {
+        const { error } = await supabaseAdmin.from('admin_notifications').update({ data: { ...data, resolved: false } }).eq('id', notificationId);
+        if (error) console.error('resolveItemRefund: could not release claim:', error, { notificationId });
+      };
       if (!data.refund_eligible || (refundMethod === 'razorpay' && !data.payment_id)) {
         return res.status(400).json({ error: 'This order has no online payment to refund (COD or unpaid)' });
       }
@@ -327,39 +344,49 @@ export class PaymentController {
         .eq('id', data.order_id)
         .maybeSingle();
 
-      if (!order) return res.status(409).json({ error: 'Order not found' });
+      if (!order) { await releaseClaim(); return res.status(409).json({ error: 'Order not found' }); }
       if (refundMethod === 'razorpay' && order.razorpay_payment_id !== data.payment_id) {
+        await releaseClaim();
         return res.status(409).json({ error: 'Order payment record has changed — refund aborted' });
       }
       if (refundMethod === 'wallet' && order.payment_method !== 'wallet') {
+        await releaseClaim();
         return res.status(409).json({ error: 'Order payment record has changed — refund aborted' });
       }
 
       const amount = Number(data.refund_amount || 0);
       const alreadyRefunded = Number(order.refunded_amount || 0);
-      if (amount <= 0) return res.status(400).json({ error: 'Nothing to refund' });
+      if (amount <= 0) { await releaseClaim(); return res.status(400).json({ error: 'Nothing to refund' }); }
       if (alreadyRefunded + amount > Number(order.total_amount || 0) + 0.01) {
+        await releaseClaim();
         return res.status(409).json({ error: 'Refund would exceed the amount paid for this order' });
       }
 
       let razorpayRefundId: string | null = null;
-      if (refundMethod === 'razorpay') {
-        const refund = await paymentService.processRefund({
-          paymentId: data.payment_id,
-          amount,
-          reason: 'Item unavailable at any nearby store — admin approved',
-        });
-        razorpayRefundId = refund.id;
-      } else {
-        const { error: rpcErr } = await supabaseAdmin.rpc('credit_wallet', {
-          p_user_id: order.customer_id,
-          p_amount: amount,
-          p_reason: 'refund',
-          p_reference_type: 'order',
-          p_reference_id: order.id,
-          p_razorpay_payment_id: null,
-        });
-        if (rpcErr) throw rpcErr;
+      try {
+        if (refundMethod === 'razorpay') {
+          const refund = await paymentService.processRefund({
+            paymentId: data.payment_id,
+            amount,
+            reason: data.reason === 'payment_after_cancel'
+              ? 'Payment received after the order was cancelled'
+              : 'Item unavailable at any nearby store — admin approved',
+          });
+          razorpayRefundId = refund.id;
+        } else {
+          const { error: rpcErr } = await supabaseAdmin.rpc('credit_wallet', {
+            p_user_id: order.customer_id,
+            p_amount: amount,
+            p_reason: 'refund',
+            p_reference_type: 'order',
+            p_reference_id: order.id,
+            p_razorpay_payment_id: null,
+          });
+          if (rpcErr) throw rpcErr;
+        }
+      } catch (moneyErr) {
+        await releaseClaim(); // nothing moved — let the admin retry
+        throw moneyErr;
       }
 
       const newRefundedTotal = alreadyRefunded + amount;

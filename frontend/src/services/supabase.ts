@@ -307,18 +307,26 @@ async function fetchProductRows(storeIds: string[] | null, filters: ProductRowFi
  * the TTL, and concurrent callers share one in-flight request.
  */
 async function fetchProductRowsCached(storeIds: string[] | null, filters: ProductRowFilters = {}): Promise<ProductRow[]> {
-  const storeKey = storeIds && storeIds.length > 0 ? [...storeIds].sort().join(',') : 'all';
+  // null = whole catalogue, [] = location known but no store in range — distinct cache entries.
+  const storeKey = storeIds == null ? 'all' : storeIds.length > 0 ? [...storeIds].sort().join(',') : 'none';
   const key = `products:${storeKey}|cat=${filters.category ?? ''}|q=${(filters.search ?? '').toLowerCase()}|id=${filters.masterProductId ?? ''}`;
   return cached(key, () => fetchProductRows(storeIds, filters), CATALOGUE_TTL_MS);
 }
 
-/** Resolve which stores to query for the current location (null = no location → whole catalogue). */
+/**
+ * Resolve which stores to query for the current location.
+ *  - no location known → null → whole catalogue (browsing before choosing an address);
+ *  - location known → exactly the stores within the service radius, possibly
+ *    none. It used to fall back to the whole catalogue when nothing was nearby,
+ *    so an out-of-area customer could fill a cart from stores that will never
+ *    deliver to them and only find out at checkout ("No store available for
+ *    your delivery address"). An honest empty catalogue is better. (2026-10-04)
+ */
 async function resolveStoreIds(options?: ProductFetchOptions): Promise<string[] | null> {
   const opts = options ?? getLocationFromStorage();
   const { lat, lng } = opts || {};
   if (lat == null || lng == null) return null;
-  const nearby = await getNearbyStoreIdsExpanding(lat, lng);
-  return nearby.length > 0 ? nearby : null;
+  return getNearbyStoreIdsExpanding(lat, lng);
 }
 
 // Dedupe product rows by master_product_id and transform to Product[]

@@ -38,6 +38,7 @@ import reviewsRoutes from './routes/reviews.routes.js';
 import adminReviewsRoutes from './routes/adminReviews.routes.js';
 import wishlistRoutes from './routes/wishlist.routes.js';
 import gstinRoutes from './routes/gstin.routes.js';
+import { sweepStuckOrders } from './controllers/shopkeeper.controller.js';
 
 // Load .env from backend and project root
 dotenv.config();
@@ -238,9 +239,21 @@ if (!process.env.VERCEL) {
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
 
+  // Order-flow sweep (shopkeeper.controller.ts sweepStuckOrders): stores that
+  // never answered an allocation, and items orphaned between stores by a
+  // crash mid-reallocation. The tracking-endpoint watchdogs only run while a
+  // customer has the tracking screen open; this runs regardless. Safe across
+  // several instances (status-guarded writes + a locked database function).
+  const ORDER_SWEEP_INTERVAL_MS = 60_000;
+  const orderSweep = setInterval(() => {
+    sweepStuckOrders().catch((err) => console.error('[sweepStuckOrders] failed:', err));
+  }, ORDER_SWEEP_INTERVAL_MS);
+  orderSweep.unref();
+
   // Graceful shutdown so in-flight requests finish during ECS/App Runner deploys.
   const shutdown = (signal: string) => {
     console.log(`[process] ${signal} received, closing HTTP server`);
+    clearInterval(orderSweep);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 10_000).unref();
   };

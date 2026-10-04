@@ -505,7 +505,9 @@ export class PaymentService {
     reason?: string;
   }) {
     if (!RAZORPAY_KEY_ID) throw new Error('Razorpay credentials not configured');
-    const body: Record<string, any> = { notes: { reason: data.reason || 'Order cancelled' } };
+    // recorded_by_api: the caller books this refund into refunded_amount itself;
+    // the refund.processed webhook skips such refunds so they are not counted twice.
+    const body: Record<string, any> = { notes: { reason: data.reason || 'Order cancelled', recorded_by_api: 'true' } };
     if (data.amount) body.amount = Math.round(data.amount * 100);
     const refund = await razorpayRequest('POST', `/payments/${data.paymentId}/refund`, body) as any;
     return { id: refund.id, status: refund.status, amount: refund.amount / 100 };
@@ -648,6 +650,16 @@ export class PaymentService {
     } else if (eventType === 'refund.processed') {
       const refund = event.payload?.refund?.entity;
       const paymentId = refund?.payment_id;
+      // Refunds this backend initiated (cancelOrder, resolveItemRefund,
+      // add-on reversal) already updated refunded_amount when they were
+      // issued; counting them again here doubled every API refund, so a later
+      // cancel refunded too little and a later admin refund was wrongly
+      // blocked as "exceeds amount paid". Only dashboard-initiated refunds
+      // (no marker) are booked from the webhook. (2026-10-04 audit)
+      if (refund?.notes?.recorded_by_api === 'true') {
+        console.log('[WEBHOOK] refund.processed already booked by the API call that issued it — skipping', { eventId, paymentId, refundId: refund?.id });
+        return;
+      }
       if (paymentId) {
         const { data: order, error: fetchErr } = await supabaseAdmin
           .from('customer_orders')

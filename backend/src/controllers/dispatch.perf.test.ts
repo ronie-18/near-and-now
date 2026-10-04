@@ -77,30 +77,35 @@ describe('Item 17: radius queries are bounded in the database, exact check kept'
     ]);
   });
 
-  it('store reallocation boxes the stores query for each ring (via expireStaleAllocations)', async () => {
+  it('store reallocation boxes the stores query to the reallocation radius (via expireStaleAllocations)', async () => {
+    // Reallocation (2026-10-04) plans over every live store within the single
+    // 8 km reallocation radius in one pass — fewest stores, then shortest
+    // total distance — instead of a 0–4 km ring followed by a 4–8 km ring.
     const fake = installFakeSupabase(supabaseAdmin, (c) => {
-      if (c.table === 'customer_orders' && c.columns?.includes('payment_method')) return ok({ customer_id: 'c1', payment_method: 'cod' });
-      if (c.table === 'customer_orders' && c.columns?.includes('delivery_latitude')) return ok({ delivery_latitude: KOLKATA.lat, delivery_longitude: KOLKATA.lng });
-      if (c.table === 'order_store_allocations' && c.op === 'select' && c.columns === 'id, store_id') return ok([{ id: 'a1', store_id: 's-old' }]);
+      if (c.table === 'customer_orders' && c.columns?.includes('payment_method')) return ok({ customer_id: 'c1', status: 'pending_at_store', payment_method: 'cod' });
+      if (c.table === 'customer_orders' && c.columns?.includes('delivery_latitude')) return ok({ status: 'pending_at_store', order_code: 'NN1', delivery_latitude: KOLKATA.lat, delivery_longitude: KOLKATA.lng });
+      if (c.table === 'customer_orders' && c.columns === 'status') return ok({ status: 'pending_at_store' });
+      if (c.table === 'order_store_allocations' && c.op === 'select' && c.columns === 'id, store_id, created_at') return ok([{ id: 'a1', store_id: 's-old', created_at: new Date(Date.now() - 10 * 60_000).toISOString() }]);
       if (c.table === 'order_store_allocations' && c.op === 'update') return ok([{ id: 'a1', store_id: 's-old' }]);
-      if (c.table === 'order_store_allocations' && c.op === 'select') return ok([{ store_id: 's-old', sequence_number: 1 }]);
-      if (c.table === 'order_items' && c.columns === 'id, assigned_store_id') return ok([{ id: 'i1', assigned_store_id: 's-old' }]);
-      if (c.table === 'order_items' && c.columns === 'id, product_id') return ok([{ id: 'i1', product_id: 'm1' }]);
+      if (c.table === 'order_store_allocations' && c.op === 'select') return ok([{ store_id: 's-old', status: 'rejected', accepted_item_ids: [] }]);
+      if (c.table === 'order_items' && c.op === 'select' && c.columns === 'id') return ok([{ id: 'i1' }]);
+      if (c.table === 'order_items' && c.columns === 'id, product_id') return ok([{ id: 'i1', product_id: 'p-old' }]);
+      if (c.table === 'order_items' && c.op === 'update') return ok([{ id: 'i1', product_name: 'Milk', unit_price: 10, quantity: 1 }]);
+      if (c.table === 'products') return ok([{ id: 'p-old', master_product_id: 'm1' }]);
       if (c.table === 'stores') return ok([]);
       return undefined;
     });
     await expireStaleAllocations('o1', 'c1');
 
     const storeQueries = fake.on('stores', 'select');
-    expect(storeQueries).toHaveLength(2); // 0–4 km ring, then 4–8 km ring
-    for (const q of storeQueries) {
-      expect(hasFilter(q, 'eq', 'is_active', true)).toBe(true);
-      expect(hasFilter(q, 'eq', 'is_approved', true)).toBe(true);
-      expect(boxFilters(q, 'latitude', 'longitude')).toBe(true);
-    }
+    expect(storeQueries).toHaveLength(1);
+    const q = storeQueries[0];
+    expect(hasFilter(q, 'eq', 'is_active', true)).toBe(true);
+    expect(hasFilter(q, 'eq', 'is_approved', true)).toBe(true);
+    expect(hasFilter(q, 'is', 'deleted_at', null)).toBe(true);
+    expect(boxFilters(q, 'latitude', 'longitude')).toBe(true);
     const maxLat = (q: Call) => q.filters.find(([f, col]) => f === 'lte' && col === 'latitude')![2] as number;
-    expect(maxLat(storeQueries[0])).toBeCloseTo(boundingBox(KOLKATA.lat, KOLKATA.lng, 4).maxLat, 6);
-    expect(maxLat(storeQueries[1])).toBeCloseTo(boundingBox(KOLKATA.lat, KOLKATA.lng, 8).maxLat, 6);
+    expect(maxLat(q)).toBeCloseTo(boundingBox(KOLKATA.lat, KOLKATA.lng, 8).maxLat, 6);
   });
 
   it('admin broadcast filters driver locations by freshness and box in the query, not in JS', async () => {

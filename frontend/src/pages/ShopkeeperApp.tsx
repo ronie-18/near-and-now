@@ -37,7 +37,7 @@ interface Allocation {
   allocation_id: string;
   order_id: string;
   order_code: string;
-  alloc_status: 'pending_acceptance' | 'accepted' | 'rejected' | 'picked_up';
+  alloc_status: 'pending_acceptance' | 'accepted' | 'rejected' | 'picked_up' | 'cancelled';
   sequence_number: number;
   pickup_code: string | null;
   accepted_item_ids: string[];
@@ -496,10 +496,11 @@ function HistoryOrderCard({ order }: { order: Allocation }) {
     new Date(s).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
   const isPickedUp = order.alloc_status === 'picked_up';
+  const isCancelled = order.alloc_status === 'cancelled';
 
   return (
     <div className={`bg-white rounded-2xl shadow-sm border-l-4
-      ${isPickedUp ? 'border-blue-400' : 'border-gray-300'}`}>
+      ${isPickedUp ? 'border-blue-400' : isCancelled ? 'border-red-300' : 'border-gray-300'}`}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -512,8 +513,8 @@ function HistoryOrderCard({ order }: { order: Allocation }) {
                 {order.order_code || order.order_id.substring(0, 8).toUpperCase()}
               </span>
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full
-                ${isPickedUp ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
-                {isPickedUp ? '📦 Delivered' : '❌ Rejected'}
+                ${isPickedUp ? 'bg-blue-100 text-blue-700' : isCancelled ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}>
+                {isPickedUp ? '📦 Delivered' : isCancelled ? '🚫 Order cancelled' : '❌ Rejected'}
               </span>
             </div>
             <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
@@ -591,7 +592,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
 
   const pending  = orders.filter((o) => o.alloc_status === 'pending_acceptance');
   const active   = orders.filter((o) => o.alloc_status === 'accepted');
-  const history  = orders.filter((o) => ['picked_up', 'rejected'].includes(o.alloc_status));
+  const history  = orders.filter((o) => ['picked_up', 'rejected', 'cancelled'].includes(o.alloc_status));
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">

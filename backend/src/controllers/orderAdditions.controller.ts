@@ -35,12 +35,24 @@ async function resolveTrustedItems(
   customerOrderId: string,
   submitted: SubmittedItem[]
 ): Promise<{ items: TrustedItem[]; error?: string }> {
-  const { data: storeOrders } = await supabaseAdmin
-    .from('store_orders')
-    .select('id, store_id')
-    .eq('customer_order_id', customerOrderId);
+  const [{ data: storeOrders }, { data: allocations }] = await Promise.all([
+    supabaseAdmin.from('store_orders').select('id, store_id').eq('customer_order_id', customerOrderId),
+    supabaseAdmin.from('order_store_allocations').select('store_id, status').eq('order_id', customerOrderId),
+  ]);
 
-  const storeOrderByStoreId = new Map((storeOrders ?? []).map((so: any) => [so.store_id, so.id]));
+  // Only stores still part of the order can take more items: a store that
+  // declined (or timed out) has its allocation 'rejected' and its row closed,
+  // and must not receive paid add-ons it will never pick. 'accepted' is fine —
+  // apply_order_addition_request() adds the new items to that store's
+  // accepted list so the rider collects them. (2026-10-04 audit)
+  const liveStoreIds = new Set(
+    ((allocations ?? []) as Array<{ store_id: string; status: string }>)
+      .filter((a) => a.status === 'pending_acceptance' || a.status === 'accepted')
+      .map((a) => a.store_id)
+  );
+  const storeOrderByStoreId = new Map(
+    (storeOrders ?? []).filter((so: any) => liveStoreIds.has(so.store_id)).map((so: any) => [so.store_id, so.id])
+  );
   const storeIds = [...storeOrderByStoreId.keys()];
   if (storeIds.length === 0) {
     return { items: [], error: 'This order has no stores to add items to.' };
@@ -157,12 +169,24 @@ export async function createAdditionPayment(req: Request, res: Response) {
 
     const { data: order, error: orderErr } = await supabaseAdmin
       .from('customer_orders')
-      .select('id, customer_id, placed_at')
+      .select('id, customer_id, placed_at, status, payment_method, payment_status')
       .eq('id', orderId)
       .maybeSingle();
 
     if (orderErr || !order || order.customer_id !== req.customerId) {
       return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+    // Items can only join an order its stores are still preparing. Once it is
+    // ready for pickup (or cancelled) the rider's stop list is final.
+    if (!['pending_at_store', 'store_accepted', 'preparing_order'].includes(String((order as any).status))) {
+      return res.status(409).json({ success: false, error: 'This order is no longer accepting additional items.' });
+    }
+    // The main payment must be settled first: an addition applied before the
+    // main /verify grows total_amount, and that verify then compares the
+    // captured amount against the grown total and fails for good.
+    const o = order as any;
+    if (o.payment_method !== 'cod' && !['paid', 'partially_refunded'].includes(String(o.payment_status))) {
+      return res.status(409).json({ success: false, error: 'Complete the payment for this order before adding items.' });
     }
 
     const placedAt = order.placed_at ? new Date(order.placed_at).getTime() : null;
@@ -253,6 +277,57 @@ export async function createAdditionPayment(req: Request, res: Response) {
   }
 }
 
+/** Refunds a captured add-on payment whose items could not be applied, and closes the request. */
+async function refundFailedAddition(
+  res: Response,
+  request: { id: string; subtotal_amount: number | string; customer_order_id: string },
+  razorpayPaymentId: string,
+  reasonCode: string
+) {
+  const amount = Number(request.subtotal_amount) || 0;
+  const { error: failErr } = await supabaseAdmin
+    .from('order_addition_requests')
+    .update({ status: 'failed', razorpay_payment_id: razorpayPaymentId })
+    .eq('id', request.id)
+    .eq('status', 'pending');
+  if (failErr) console.error('[ADD-ITEMS] could not mark request failed:', failErr, { requestId: request.id });
+
+  let refunded = false;
+  if (amount > 0) {
+    try {
+      await paymentService.processRefund({ paymentId: razorpayPaymentId, amount, reason: 'Add-on items could not be added to the order' });
+      refunded = true;
+    } catch (err) {
+      console.error('CRITICAL [ADD-ITEMS] add-on payment captured but refund failed — refund manually:', err, {
+        requestId: request.id, orderId: request.customer_order_id, razorpayPaymentId, amount, reasonCode,
+      });
+    }
+  }
+  return res.status(409).json({
+    success: false,
+    error: refunded
+      ? `The store had already finished with this order, so the extra items could not be added. ₹${amount.toFixed(2)} has been refunded.`
+      : 'The store had already finished with this order, so the extra items could not be added. Our team will refund the payment.',
+  });
+}
+
+async function notifyStoresOfAddedItems(orderId: string, items: TrustedItem[]) {
+  const storeOrderIds = [...new Set(items.map((it) => it.store_order_id).filter(Boolean))];
+  if (!storeOrderIds.length) return;
+  const [{ data: storeOrders }, { data: order }] = await Promise.all([
+    supabaseAdmin.from('store_orders').select('id, store_id').in('id', storeOrderIds),
+    supabaseAdmin.from('customer_orders').select('order_code').eq('id', orderId).maybeSingle(),
+  ]);
+  const countByStoreOrder = new Map<string, number>();
+  for (const it of items) countByStoreOrder.set(it.store_order_id, (countByStoreOrder.get(it.store_order_id) ?? 0) + 1);
+  const { notificationService } = await import('../services/notification.service.js');
+  await Promise.all(
+    ((storeOrders ?? []) as Array<{ id: string; store_id: string }>).map((so) =>
+      notificationService.notifyShopkeeperItemsAdded(so.store_id, orderId, (order as any)?.order_code || orderId, countByStoreOrder.get(so.id) ?? 0)
+    )
+  );
+}
+
 /**
  * POST /api/orders/:orderId/add-items/verify-payment
  * Same signature-verify + strict-amount-check pattern as the main checkout's
@@ -321,10 +396,26 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
 
     const { data: applied, error: applyErr } = await supabaseAdmin
       .rpc('apply_order_addition_request', { p_request_id: request_id, p_razorpay_payment_id: razorpay_payment_id });
-    if (applyErr) throw applyErr;
+    if (applyErr) {
+      const msg = String((applyErr as { message?: string }).message || '');
+      if (msg.includes('ADDITION_ORDER_NOT_OPEN') || msg.includes('ADDITION_STORE_UNAVAILABLE')) {
+        // Between paying and now, the order moved on (dispatched / cancelled)
+        // or the target store dropped out. The money is captured, so refund
+        // it and close the request rather than inserting items nobody will
+        // pick. (2026-10-04 audit)
+        return refundFailedAddition(res, request as any, razorpay_payment_id, msg);
+      }
+      throw applyErr;
+    }
     if (!applied) {
       return res.status(404).json({ success: false, error: 'Addition request not found' });
     }
+
+    // Tell each store its order grew — an already-accepted store otherwise only
+    // sees the new lines on its next poll, with no signal that anything changed.
+    notifyStoresOfAddedItems(orderId, (request as any).items as TrustedItem[]).catch((err) =>
+      console.error('[ADD-ITEMS] store notification failed:', err, { orderId })
+    );
 
     res.json({ success: true });
   } catch (error) {

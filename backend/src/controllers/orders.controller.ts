@@ -1,11 +1,15 @@
 import { Request, Response } from 'express';
+import { randomInt } from 'crypto';
 import { databaseService } from '../services/database.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { payRiderForDeliveredOrder } from './deliveryPartner.controller.js';
+import { broadcastToNearbyDrivers } from './shopkeeper.controller.js';
 import { validateQuantity } from '../utils/quantity.js';
 import { sendError } from '../utils/httpError.js';
 import { gstinRejectionMessage, verifyGstin } from '../services/gstVerification.service.js';
+import { haversineKm } from '../utils/geo.js';
+import { PLACEMENT_RADIUS_KM } from '../services/storeAllocation.service.js';
 
 // Normal forward order-of-progress, excluding order_cancelled (which is a
 // valid transition from any non-terminal status, not a sequence position).
@@ -116,15 +120,32 @@ export class OrdersController {
       // can't be created for a store that's offline or was never approved.
       const { data: productRows, error: productsError } = await supabaseAdmin
         .from('products')
-        .select('id, store_id, master_product_id, stores!inner(is_active, is_approved)')
+        .select('id, store_id, master_product_id, stores!inner(is_active, is_approved, deleted_at, latitude, longitude)')
         .in('id', productIds)
         .eq('is_active', true)
+        .is('deleted_at', null)
         .eq('stores.is_active', true)
-        .eq('stores.is_approved', true);
+        .eq('stores.is_approved', true)
+        .is('stores.deleted_at', null);
       if (productsError) {
         throw new Error('Failed to verify product prices');
       }
       const productById = new Map((productRows || []).map((row: any) => [row.id, row]));
+
+      // This path trusts the client's store choice (unlike /place, which plans
+      // the split server-side), so it must at least enforce the same service
+      // radius: every chosen store has to be within PLACEMENT_RADIUS_KM of the
+      // delivery point. Without this a client could order from any store in
+      // the country. (2026-10-04 audit)
+      for (const row of (productRows || []) as any[]) {
+        const st = row.stores;
+        const km = st?.latitude != null && st?.longitude != null
+          ? haversineKm(Number(delivery_latitude), Number(delivery_longitude), Number(st.latitude), Number(st.longitude))
+          : Infinity;
+        if (!(km <= PLACEMENT_RADIUS_KM)) {
+          return res.status(400).json({ error: 'One of the selected stores does not deliver to this address.' });
+        }
+      }
 
       const masterProductIds = [...new Set((productRows || []).map((row: any) => row.master_product_id))];
       const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
@@ -248,13 +269,21 @@ export class OrdersController {
       // of it, so a mid-request failure on one store could leave others
       // fully committed and visible to those shopkeepers while the customer
       // saw a failure. See bug_fixes_2026-07-23.md for the full writeup.
+      // Same mapping /place applies — the raw client string was cast straight
+      // into the payment_method enum, so anything but an exact enum value
+      // (e.g. "online") failed the whole order with a database error.
+      const pmRaw = String(payment_method || '').toLowerCase();
+      const paymentMethodEnum =
+        pmRaw.includes('wallet') ? 'wallet' :
+        pmRaw.includes('split') || pmRaw.includes('online') || pmRaw.includes('upi') || pmRaw.includes('razorpay') || pmRaw.includes('card') ? 'razorpay' : 'cod';
+
       const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc('place_multi_store_order', {
         p_customer_order: {
           customer_id,
           order_code: orderCode,
           status: 'pending_at_store',
           payment_status: 'pending',
-          payment_method,
+          payment_method: paymentMethodEnum,
           subtotal_amount: totalSubtotal,
           delivery_fee: totalDeliveryFee,
           discount_amount: discountAmount,
@@ -269,7 +298,7 @@ export class OrdersController {
           receiver_phone: null,
           receiver_address: null,
           tip_amount: 0,
-          delivery_otp: String(Math.floor(1000 + Math.random() * 9000)),
+          delivery_otp: String(randomInt(1000, 10000)),
         },
         p_store_chunks: storeChunks,
       });
@@ -425,6 +454,17 @@ export class OrdersController {
         }
       }
 
+      // Cancelling is not a status write: it has to expire offers, close every
+      // allocation, refund, release the coupon and tell the stores — exactly
+      // what cancel_customer_order + databaseService.cancelOrder do. The
+      // blanket status write below used to leave allocations live (a store
+      // could still accept and prepare the order) and refunded nothing.
+      // (2026-10-04 audit)
+      if (status === 'order_cancelled') {
+        const cancelled = await databaseService.cancelOrder(orderId, { reason: notes ? `Cancelled by admin: ${notes}` : 'Cancelled by admin' });
+        return res.json({ success: true, order: cancelled });
+      }
+
       const { data, error } = await supabaseAdmin
         .from('customer_orders')
         .update({ status, updated_at: new Date().toISOString() })
@@ -434,7 +474,16 @@ export class OrdersController {
 
       if (error) throw error;
 
-      await supabaseAdmin.from('store_orders').update({ status }).eq('customer_order_id', orderId);
+      // A store that declined its part has its row closed as 'order_cancelled';
+      // the blanket write must not march it through the later statuses.
+      await supabaseAdmin.from('store_orders').update({ status }).eq('customer_order_id', orderId).neq('status', 'order_cancelled');
+
+      // Forcing 'ready_for_pickup' used to skip the dispatch that
+      // finalize_order_if_ready triggers, so no rider was ever offered the
+      // order. Broadcast the same way (needs at least one accepted store).
+      if (status === 'ready_for_pickup') {
+        broadcastToNearbyDrivers(orderId).catch((err) => console.error('[updateOrderStatus] broadcast failed:', err));
+      }
 
       await supabaseAdmin.from('order_status_history').insert({
         customer_order_id: orderId,

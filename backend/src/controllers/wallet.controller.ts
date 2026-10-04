@@ -194,6 +194,9 @@ export class WalletController {
         if (message.includes('ORDER_NOT_FOUND')) {
           return res.status(404).json({ success: false, error: 'Order not found' });
         }
+        if (message.includes('ORDER_NOT_PAYABLE')) {
+          return res.status(409).json({ success: false, error: 'This order has been cancelled or completed and can no longer be paid.' });
+        }
         if (message.includes('ALREADY_PAID')) {
           return res.status(409).json({ success: false, error: 'This order is already paid.' });
         }
@@ -205,6 +208,12 @@ export class WalletController {
         }
         throw rpcError;
       }
+
+      // The order just became visible to its stores (hidden until paid) —
+      // tell them, same as the Razorpay path does via updateOrderPaymentStatus.
+      import('../services/database.service.js')
+        .then(({ databaseService }) => databaseService.notifyStoresOrderPayable(orderId))
+        .catch((err: unknown) => console.error('[WALLET] notifyStoresOrderPayable failed', { orderId, err }));
 
       // Fire-and-forget invoice generation (idempotent) — same as the
       // Razorpay webhook's payment.captured handler.

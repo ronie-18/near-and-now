@@ -69,17 +69,16 @@ distance = R × c
 
 ---
 
-### 2.2 Nearby Store IDs (Expanding Radius) — `getNearbyStoreIdsExpanding`
+### 2.2 Candidate Stores for Allocation — `fetchCandidateStores`
 
-**File:** `backend/src/services/database.service.ts` ~line 623
+**File:** `backend/src/services/storeAllocation.service.ts`
 
-Radii tried in order: **1 km → 2 km → 3 km → 4 km**
+1. Bounding-box pre-filter in SQL on `stores` (active, approved, `deleted_at IS NULL`, coordinates present).
+2. Exact `haversineKm()`; keep `minKm < distance ≤ maxKm`; drop excluded store ids (stores already on the order).
+3. Sort nearest first, store id as tiebreak.
 
-1. Call Supabase RPC `get_nearby_store_ids(lat, lng, radius_km)` for each radius.
-2. Stop and return immediately at the first radius that yields ≥ 1 result.
-3. Return `[]` if nothing found within 4 km.
-
-- **Used by:** order placement allocation to cap dispatch radius at 4 km
+- **Placement radius:** `PLACEMENT_RADIUS_KM = 4` — the whole ring, matching the storefront catalogue. (The former `getNearbyStoreIdsExpanding` stopped at the first 1/2/3/4 km ring containing any store, hiding better stores further out; removed 2026-10-04.)
+- **Reallocation radius:** `REALLOCATION_MAX_RADIUS_KM = 8`.
 
 ---
 
@@ -208,66 +207,71 @@ Checks in order:
 
 ## 6. Order Allocation
 
-### 6.1 Greedy Multi-Store Allocation (at Order Placement)
+### 6.1 Allocation Planner — `planAllocation` (shared)
 
-**File:** `backend/src/services/database.service.ts` ~line 745  
+**File:** `backend/src/services/allocationPlanner.ts`  
+**Used by:** order placement (§6.2) and reallocation (§7.2)
+
+**Inputs:** items (`key`, `masterProductId`), candidate stores with distance (nearest first), `stock: store → Set<master_product_id>`.
+
+**Objective, in priority order:**
+1. **Fewest stores.** A single store that stocks every item takes the whole order — the nearest such store ("if store Y has all of those items, redirect to store Y").
+2. **Shortest total distance** among plans with the same number of stores.
+3. Deterministic store-id tiebreak.
+
+**Method:** items no candidate stocks are set aside as `unplaced`. Exact search over store combinations of size 1, 2, 3 (nearest 40 candidates); if no plan that small covers everything, greedy max-coverage with nearest-store tiebreak. An item stocked by two chosen stores goes to the nearer one. Stops are returned **farthest-first** (becomes `sequence_number`; the rider works towards the customer).
+
+---
+
+### 6.2 Placement — `placeCheckoutOrder`
+
+**File:** `backend/src/services/database.service.ts`  
 **Trigger:** Customer completes checkout
 
-**Setup:**
-- Run `getNearbyStoreIdsExpanding()` to get candidate stores (capped at 4 km, see §2.2).
-- Query `products` table: filter by `store_id IN candidates`, `master_product_id IN cart_items`, `is_active = true`.
-- Build map: `master_product_id → [store_ids that stock it]`.
-
-**Greedy loop (repeat until no unassigned items):**
-1. For each candidate store, count how many unassigned cart items it can fulfill.
-2. Select the store with the **highest count**.
-3. Assign all matching items to that store; remove from unassigned set.
-4. Increment `sequence_number` for this store (defines pickup order).
-
-**Fallback:** Any items remaining with no matching store are assigned to the first available store.
-
-**Writes:**
-- `order_store_allocations` (one row per store, with `sequence_number`)
-- `store_orders` (one row per store)
-- `order_items.assigned_store_id`
+1. `fetchCandidateStores()` within 4 km (§2.2); none → `No store available…`.
+2. `fetchStoreStock(storeIds, masterIds)` — active, non-deleted `products` rows; also yields the store-scoped `products.id` per (store, master).
+3. Prices/quantities verified from `master_products` (unchanged).
+4. `planAllocation()`; any `unplaced` → throw `Product(s) not available from any store near you: …` **before any write**.
+5. `place_multi_store_order()` writes everything atomically; `order_items.product_id` = fulfilling store's own product row.
 
 ---
 
 ## 7. Shopkeeper Acceptance & Reallocation
 
-### 7.1 Accept / Reject Items — `acceptAllocation`
+### 7.1 Accept / Reject Items — `acceptAllocation` / `rejectAllocation`
 
-**File:** `backend/src/controllers/shopkeeper.controller.ts` ~line 171
+**File:** `backend/src/controllers/shopkeeper.controller.ts`
 
-1. Fetch allocation; must be `status = 'pending_acceptance'`.
-2. Compute `unavailableIds = all_item_ids − accepted_item_ids`.
-3. Generate a random **4-digit pickup code** (1000–9999).
-4. Update allocation: `status → 'accepted'`, `pickup_code`, `accepted_item_ids`, `accepted_at`.
-5. Update `order_items`: accepted → `item_status = 'confirmed'`; unavailable → `item_status = 'unavailable'`, `assigned_store_id = NULL`.
-6. **If other allocations still `pending_acceptance`:** trigger partial reallocation async.
-7. **If all allocations accepted:** mark order `ready_for_pickup` → call `broadcastToNearbyDrivers()` (§8.2).
-8. Return: `{ success, pickup_code, accepted_count, unavailable_count }`.
+1. Fetch allocation (must belong to one of the caller's stores); must be `pending_acceptance`; store must be approved+active; order must be payment-ready.
+2. `acceptedIds = (this store's items on this order) ∩ accepted_item_ids`. Empty → **400**. Foreign ids are ignored (previously they were confirmed verbatim, and an all-foreign request produced an empty `accepted` allocation that was dispatched).
+3. `unavailableIds = this store's items − acceptedIds`.
+4. Random 4-digit pickup code, regenerated on collision with the delivery OTP or a sibling store's code.
+5. Allocation update guarded by `status = 'pending_acceptance'` (double-accept and accept-vs-reject races lose cleanly with 409).
+6. `store_orders` (this store only) → `store_accepted`; accepted items → `confirmed`; unticked items → `pending`, `assigned_store_id NULL` ("waiting for a store").
+7. Unticked items → `reallocateMissingItems()` (async). Otherwise → `finalize_order_if_ready()`; if it returns false, order → `store_accepted`.
+8. **Reject:** guarded flip to `rejected`; `releaseStoreFromOrder()` (items → waiting; that store's `store_orders` row → `order_cancelled`); then reallocation (or settle, if the store held no items).
+
+`finalize_order_if_ready()` (migration `20261004010000`) requires: no `pending_acceptance` allocation, **no item waiting for a store**, and at least one `accepted` allocation with non-empty `accepted_item_ids`.
 
 ---
 
 ### 7.2 Item Reallocation — `reallocateMissingItems`
 
-**File:** `backend/src/controllers/shopkeeper.controller.ts` ~line 348  
-**Trigger:** One or more items marked `unavailable` (§7.1, step 6)
+**File:** `backend/src/controllers/shopkeeper.controller.ts`  
+**Trigger:** items released by accept (unticked), reject, the 5-minute stale expiry, or the server sweep. Serialised per order (`withOrderLock`).
 
-1. Fetch order's `delivery_latitude` / `delivery_longitude`.
-2. Collect items where `assigned_store_id IS NULL`.
-3. Fetch all active stores; compute `haversineKm()` to delivery point.
-4. Filter: `distance ≤ 4 km` AND store not already used in this order.
-5. Sort: ascending by distance (nearest-first).
-6. For each candidate store:
-   - Query available products (`is_active = true`) at this store.
-   - Find overlap with remaining unassigned items.
-   - If match: create new `order_store_allocations` row (`sequence_number = maxSeq + 1`, `status = 'pending_acceptance'`), upsert `store_orders`, assign items.
-   - Remove assigned items from remaining list.
-7. Stop when remaining is empty or no more candidates.
+1. Order must still be `pending_at_store` / `store_accepted` / `preparing_order`.
+2. Re-read items still waiting; resolve `order_items.product_id` → `master_product_id` via `products` (**the old code compared master ids to store-scoped ids and never matched — every declined item was refunded instead of reallocated**).
+3. Candidates: `fetchCandidateStores()` within 8 km, excluding every store that ever had an allocation on this order.
+4. `planAllocation()` over the waiting items.
+5. Per stop: RPC `reallocate_items_to_store(order, store, [{item_id, product_id}])` — one transaction, order row locked: order pre-dispatch, store live and unused, items waiting and product rows valid for that store+master, next `sequence_number`, `store_orders` row create/reuse (no `ON CONFLICT` dependency), items repointed incl. `product_id`, per-store subtotals recomputed. `ITEMS_NOT_REALLOCATABLE` = another process got there first (items re-checked, not written off); `ORDER_NOT_REALLOCATABLE` = order moved on (stop).
+6. New store's shopkeeper notified.
+7. Still-waiting leftovers → `flagUnresolvableItemsForRefund()`: `unavailable` (guarded on still-unassigned), subtotals recomputed, `admin_notifications` `refund_required`, customer notified; **COD:** `total_amount`/`subtotal_amount` reduced by the dropped lines (compare-and-swap).
+8. `settleOrderAfterReallocation()`: finalize; else if some store accepted → `store_accepted`; else if nothing pending and nothing accepted → **auto-cancel** via `databaseService.cancelOrder()` (refund, coupon release, notifications) + history note.
 
-- **Items beyond 4 km with no matching store remain unassigned** (order may be incomplete).
+### 7.3 Server Sweep — `sweepStuckOrders`
+
+Every 60 s (`server.ts`, non-Vercel). (a) Allocations `pending_acceptance` for > 5 min — measured from when the store could *see* the order (payment time for online orders, `customer_payments.paid_at`) — on payment-ready, pre-dispatch orders → status-guarded `rejected` → release → reallocate. (b) Items `pending` with no `assigned_store_id` on pre-dispatch orders → reallocate. (c) Pre-dispatch orders with an allocation accepted > 1 min ago → `settleOrderAfterReallocation()` (finalize retry after an RPC blip or restart). Safe across instances (guarded writes + locked database function).
 
 ---
 
@@ -492,7 +496,7 @@ The customer app appears to use a simplified/older pricing model. This can cause
 | 1.1 | Haversine distance | `database.service.ts:1144` | `calculateDistance` | R = 6371 km |
 | 1.2 | Geocoding | `geocoding.service.ts` | forward / reverse | Returns null on failure |
 | 2.1 | Nearby stores (fixed) | `database.service.ts:261` | `getNearbyStores` | Default 5 km, unordered |
-| 2.2 | Nearby stores (expanding) | `database.service.ts:623` | `getNearbyStoreIdsExpanding` | 1→2→3→4 km, stop at first hit |
+| 2.2 | Candidate stores for allocation | `storeAllocation.service.ts` | `fetchCandidateStores` | Whole 4 km ring (placement) / 8 km (reallocation), nearest first |
 | 3.1 | Tiered delivery fee | `deliveryFees.ts:30` | `deliveryChargeForDistanceKm` | ₹15/20/25/40 |
 | 3.2 | Fee breakdown | `deliveryFees.ts:44` | `calculateFeeBreakdown` | Free delivery ≥ ₹300 |
 | 3.3 | Order totals | `deliveryFees.ts:64` | `getCheckoutOrderTotals` | Default 2 km if no GPS |
@@ -500,9 +504,11 @@ The customer app appears to use a simplified/older pricing model. This can cause
 | 4.2 | Invoice GST | `invoice.service.ts:226` | `buildInvoiceData` | Embedded fee GST reverse-extracted |
 | 4.3 | Frontend GST | `checkoutCalculations.ts:76` | `calculateCheckoutTotals` | Mirrors backend exactly |
 | 5.1 | Coupon validation | `database.service.ts:1065` | `validateCoupon` | Expiry, usage, per-user, first-order |
-| 6.1 | Multi-store allocation | `database.service.ts:745` | (inside `placeCheckoutOrder`) | Greedy best-fit by item count |
-| 7.1 | Accept allocation | `shopkeeper.controller.ts:171` | `acceptAllocation` | 4-digit code; triggers broadcast |
-| 7.2 | Item reallocation | `shopkeeper.controller.ts:348` | `reallocateMissingItems` | Nearest-first, 4 km cap |
+| 6.1 | Allocation planner | `allocationPlanner.ts` | `planAllocation` | Fewest stores (one store with everything wins), then shortest distance |
+| 6.2 | Placement | `database.service.ts` | `placeCheckoutOrder` | Plans over the whole 4 km ring; fails before any write if an item has no store |
+| 7.1 | Accept / reject allocation | `shopkeeper.controller.ts` | `acceptAllocation` / `rejectAllocation` | Own items only; status-guarded; unticked items → waiting for a store |
+| 7.2 | Item reallocation | `shopkeeper.controller.ts` + `reallocate_items_to_store()` | `reallocateMissingItems` | Master-product match, 8 km, atomic per store; write-off → refund flag / COD bill cut; auto-cancel if nothing accepted |
+| 7.3 | Server sweep | `shopkeeper.controller.ts` / `server.ts` | `sweepStuckOrders` | Every 60 s: 5-min stale allocations, orphaned waiting items |
 | 8.1 | Dispatch to online driver | `shopkeeper.controller.ts:426` | `dispatchReadyOrdersToDriver` | 10 km radius |
 | 8.2 | Broadcast to drivers | `shopkeeper.controller.ts:488` | `broadcastToNearbyDrivers` | Online+active within 10 km |
 | 8.3 | Atomic offer acceptance | `deliveryPartner.controller.ts:639` | `acceptOffer` | `SELECT FOR UPDATE SKIP LOCKED` |
