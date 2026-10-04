@@ -1,0 +1,107 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getCustomerSavedAddressesResolved > searches the same phone variants, merges the same ids in the same order, returns the same rows 1`] = `
+"[
+ {
+  "table": "app_users",
+  "columns": "id",
+  "filters": [
+   [
+    "in",
+    "phone",
+    [
+     "98765-43210",
+     "9876543210",
+     "919876543210",
+     "+919876543210",
+     "+91 98765 43210",
+     "9876543211",
+     "919876543211",
+     "+919876543211"
+    ]
+   ],
+   [
+    "eq",
+    "role",
+    "customer"
+   ]
+  ]
+ },
+ {
+  "table": "app_users",
+  "columns": "phone",
+  "filters": [
+   [
+    "eq",
+    "id",
+    "u1"
+   ]
+  ]
+ },
+ {
+  "table": "customer_saved_addresses",
+  "columns": "*",
+  "filters": [
+   [
+    "in",
+    "customer_id",
+    [
+     "u1",
+     "u-dup",
+     "u-dup2"
+    ]
+   ],
+   [
+    "eq",
+    "is_active",
+    true
+   ],
+   [
+    "order",
+    "is_default",
+    {
+     "ascending": false
+    }
+   ],
+   [
+    "order",
+    "created_at",
+    {
+     "ascending": false
+    }
+   ]
+  ]
+ },
+ {
+  "table": "customers",
+  "columns": "phone",
+  "filters": [
+   [
+    "eq",
+    "user_id",
+    "u1"
+   ]
+  ]
+ },
+ {
+  "table": "customers",
+  "columns": "user_id",
+  "filters": [
+   [
+    "in",
+    "phone",
+    [
+     "98765-43210",
+     "9876543210",
+     "919876543210",
+     "+919876543210",
+     "+91 98765 43210",
+     "9876543211",
+     "919876543211",
+     "+919876543211"
+    ]
+   ]
+  ]
+ }
+]"
+`;

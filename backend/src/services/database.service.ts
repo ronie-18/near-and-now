@@ -629,19 +629,23 @@ export class DatabaseService {
       if (p?.trim()) seeds.add(p.trim());
     }
 
-    const { data: me } = await supabaseAdmin
-      .from('app_users')
-      .select('phone')
-      .eq('id', userId)
-      .maybeSingle();
+    // The two phone reads are independent, so they go out together; their
+    // results are applied in the original order, so the seed set (and every
+    // list derived from it below) is unchanged.
+    const [{ data: me }, { data: myCustomer }] = await Promise.all([
+      supabaseAdmin
+        .from('app_users')
+        .select('phone')
+        .eq('id', userId)
+        .maybeSingle(),
+      // Profile row often has phone when app_users.phone is null / out of sync
+      supabaseAdmin
+        .from('customers')
+        .select('phone')
+        .eq('user_id', userId)
+        .maybeSingle(),
+    ]);
     if (me?.phone) seeds.add(String(me.phone).trim());
-
-    // Profile row often has phone when app_users.phone is null / out of sync
-    const { data: myCustomer } = await supabaseAdmin
-      .from('customers')
-      .select('phone')
-      .eq('user_id', userId)
-      .maybeSingle();
     if (myCustomer?.phone) seeds.add(String(myCustomer.phone).trim());
 
     const allVariants = new Set<string>();
@@ -668,20 +672,23 @@ export class DatabaseService {
     // accounts for the *same* real person). Found 2026-10-01 (bug_fixes doc,
     // item 6).
     if (list.length > 0) {
-      const { data: usersByPhone } = await supabaseAdmin
-        .from('app_users')
-        .select('id')
-        .in('phone', list)
-        .eq('role', 'customer');
+      // Independent of each other: issued together, merged in the original
+      // order (app_users first) so the id list is unchanged.
+      const [{ data: usersByPhone }, { data: custRows }] = await Promise.all([
+        supabaseAdmin
+          .from('app_users')
+          .select('id')
+          .in('phone', list)
+          .eq('role', 'customer'),
+        supabaseAdmin
+          .from('customers')
+          .select('user_id')
+          .in('phone', list),
+      ]);
 
       for (const row of usersByPhone || []) {
         if (row.id) customerIds.add(row.id);
       }
-
-      const { data: custRows } = await supabaseAdmin
-        .from('customers')
-        .select('user_id')
-        .in('phone', list);
 
       for (const row of custRows || []) {
         if (row.user_id) customerIds.add(row.user_id);
