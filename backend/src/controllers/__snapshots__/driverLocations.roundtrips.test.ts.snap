@@ -1,0 +1,16 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getDriverLocationsForOrder > returns the same payload to the owner of an in-flight order 1`] = `
+"{
+ "r1": {
+  "latitude": 22.5512,
+  "longitude": 88.3521,
+  "updated_at": "2026-10-05T10:30:00Z"
+ },
+ "r2": {
+  "latitude": 22.56,
+  "longitude": 88.36,
+  "updated_at": "2026-10-05T10:30:05Z"
+ }
+}"
+`;

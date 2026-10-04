@@ -2657,22 +2657,30 @@ export class DatabaseService {
 
   /** Returns null if `orderId` doesn't belong to `customerId` — distinct from `{}`, which means "owned, but no driver assigned yet". */
   async getDriverLocationsForOrder(orderId: string, customerId: string): Promise<Record<string, { latitude: number; longitude: number; updated_at: string }> | null> {
-    if (!(await this.isOrderOwnedByCustomer(orderId, customerId))) return null;
+    // One read answers both "is this the customer's order?" (customer_id
+    // filter) and "is it still in flight?", where there used to be two reads
+    // of the same row; the store_orders read runs alongside it. Nothing from
+    // store_orders is used, and driver locations are not read at all, unless
+    // the order belongs to this customer and is still in flight.
+    const [{ data: orderRow }, { data: storeOrders }] = await Promise.all([
+      supabaseAdmin
+        .from('customer_orders')
+        .select('status')
+        .eq('id', orderId)
+        .eq('customer_id', customerId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('store_orders')
+        .select('delivery_partner_id')
+        .eq('customer_order_id', orderId)
+        .not('delivery_partner_id', 'is', null),
+    ]);
+    if (!orderRow) return null;
     // Previously had no status check at all — a customer could keep polling a
     // rider's live GPS position indefinitely after their own order was
     // delivered or cancelled, with no ongoing legitimate reason to see it.
     // Found 2026-10-01 (bug_fixes doc, item 9).
-    const { data: orderRow } = await supabaseAdmin
-      .from('customer_orders')
-      .select('status')
-      .eq('id', orderId)
-      .maybeSingle();
-    if (orderRow?.status === 'order_delivered' || orderRow?.status === 'order_cancelled') return {};
-    const { data: storeOrders } = await supabaseAdmin
-      .from('store_orders')
-      .select('delivery_partner_id')
-      .eq('customer_order_id', orderId)
-      .not('delivery_partner_id', 'is', null);
+    if (orderRow.status === 'order_delivered' || orderRow.status === 'order_cancelled') return {};
     const partnerIds = [...new Set((storeOrders || []).map((r: { delivery_partner_id: string }) => r.delivery_partner_id).filter(Boolean))];
     if (partnerIds.length === 0) return {};
     const { data: locations } = await supabaseAdmin
