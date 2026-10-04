@@ -89,6 +89,7 @@ npm run dev
 - Order monitoring
 - Analytics and reporting
 - Multi-admin support with RBAC
+- Admin console design system and component library: see `admin/docs/redesign-2026-10-04/`
 
 ### Delivery Partner Features
 - Real-time order assignments
