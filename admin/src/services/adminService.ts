@@ -1478,55 +1478,52 @@ export async function setCustomerSuspended(id: string, suspended: boolean): Prom
 // Dashboard Statistics
 export async function getDashboardStats() {
   try {
-    // totalProducts: a plain count instead of a paginated fetch of the whole
-    // 44k+-row master_products table (previously 45 sequential requests just
-    // to derive products.length — wasteful enough to intermittently fail as
-    // "Failed to fetch" outright, especially stacked with the same pattern
-    // below and in fetchDashboardData's now-removed getAdminProducts() call).
-    const { count: totalProducts, error: totalProductsError } = await getAdminClient()
-      .from('master_products')
-      .select('id', { count: 'exact', head: true });
+    // Seven independent reads, issued together instead of one after another
+    // (they used to cost seven sequential round trips on the most-viewed admin
+    // screen). Errors are still checked in the original order below, so the
+    // error thrown when several fail is the same one as before.
+    const client = getAdminClient();
+    const [
+      { count: totalProducts, error: totalProductsError },
+      { count: totalCategories, error: totalCategoriesError },
+      { count: totalStores, error: totalStoresError },
+      { count: approvedStores, error: approvedStoresError },
+      { count: totalDeliveryPartners, error: totalDeliveryPartnersError },
+      { count: activeDeliveryPartners, error: activeDeliveryPartnersError },
+      { data: orderStatsRows, error: orderStatsError },
+    ] = await Promise.all([
+      // totalProducts: a plain count instead of a paginated fetch of the whole
+      // 44k+-row master_products table (previously 45 sequential requests just
+      // to derive products.length — wasteful enough to intermittently fail as
+      // "Failed to fetch" outright, especially stacked with the same pattern
+      // below and in fetchDashboardData's now-removed getAdminProducts() call).
+      client.from('master_products').select('id', { count: 'exact', head: true }),
+      // totalCategories = every row in `categories`, the same number CategoriesPage
+      // shows (it lists all categories, including ones with no products yet).
+      // Previously derived from getProductCountsByCategory(), which only knows
+      // categories that have at least one product, so the two pages disagreed.
+      client.from('categories').select('id', { count: 'exact', head: true }),
+      // Store + delivery partner counts (head:true — count only, no rows fetched)
+      client.from('stores').select('id', { count: 'exact', head: true }),
+      client.from('stores').select('id', { count: 'exact', head: true }).eq('is_approved', true),
+      client.from('delivery_partners').select('user_id', { count: 'exact', head: true }),
+      client.from('delivery_partners').select('user_id', { count: 'exact', head: true }).eq('status', 'active'),
+      // Order counts/sums computed server-side by get_admin_dashboard_order_stats()
+      // (migration 20260930380000) instead of fetching every row in
+      // customer_orders to the client just to .filter()/.reduce() them here —
+      // this was the single biggest unbounded fetch on the most-viewed admin
+      // screen, and it grew every time a new order was placed. The revenue
+      // filter (exclude cancelled; online payments must be actually paid,
+      // matching shopkeeper.controller.ts's getIncomingOrders gate) now lives
+      // in the SQL function instead of client-side .filter().
+      client.rpc('get_admin_dashboard_order_stats'),
+    ]);
     if (totalProductsError) throw totalProductsError;
-
-    // totalCategories = every row in `categories`, the same number CategoriesPage
-    // shows (it lists all categories, including ones with no products yet).
-    // Previously derived from getProductCountsByCategory(), which only knows
-    // categories that have at least one product, so the two pages disagreed.
-    const { count: totalCategories, error: totalCategoriesError } = await getAdminClient()
-      .from('categories')
-      .select('id', { count: 'exact', head: true });
     if (totalCategoriesError) throw totalCategoriesError;
-
-    // Store + delivery partner counts (head:true — count only, no rows fetched)
-    const { count: totalStores, error: totalStoresError } = await getAdminClient()
-      .from('stores')
-      .select('id', { count: 'exact', head: true });
     if (totalStoresError) throw totalStoresError;
-    const { count: approvedStores, error: approvedStoresError } = await getAdminClient()
-      .from('stores')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_approved', true);
     if (approvedStoresError) throw approvedStoresError;
-    const { count: totalDeliveryPartners, error: totalDeliveryPartnersError } = await getAdminClient()
-      .from('delivery_partners')
-      .select('user_id', { count: 'exact', head: true });
     if (totalDeliveryPartnersError) throw totalDeliveryPartnersError;
-    const { count: activeDeliveryPartners, error: activeDeliveryPartnersError } = await getAdminClient()
-      .from('delivery_partners')
-      .select('user_id', { count: 'exact', head: true })
-      .eq('status', 'active');
     if (activeDeliveryPartnersError) throw activeDeliveryPartnersError;
-
-    // Order counts/sums computed server-side by get_admin_dashboard_order_stats()
-    // (migration 20260930380000) instead of fetching every row in
-    // customer_orders to the client just to .filter()/.reduce() them here —
-    // this was the single biggest unbounded fetch on the most-viewed admin
-    // screen, and it grew every time a new order was placed. The revenue
-    // filter (exclude cancelled; online payments must be actually paid,
-    // matching shopkeeper.controller.ts's getIncomingOrders gate) now lives
-    // in the SQL function instead of client-side .filter().
-    const { data: orderStatsRows, error: orderStatsError } = await getAdminClient()
-      .rpc('get_admin_dashboard_order_stats');
     if (orderStatsError) throw orderStatsError;
     const orderStats = orderStatsRows?.[0] ?? {
       total_orders: 0, total_customers: 0, total_sales: 0,

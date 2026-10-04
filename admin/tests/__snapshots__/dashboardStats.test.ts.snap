@@ -1,0 +1,37 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getDashboardStats > falls back to zeros when the order-stats function returns no row 1`] = `
+"{
+ "totalProducts": 44123,
+ "totalOrders": 0,
+ "totalCustomers": 0,
+ "totalSales": 0,
+ "totalCategories": 31,
+ "totalStores": 29,
+ "approvedStores": 17,
+ "totalDeliveryPartners": 12,
+ "activeDeliveryPartners": 9,
+ "processingOrders": 0,
+ "shippedOrders": 0,
+ "deliveredOrders": 0,
+ "cancelledOrders": 0
+}"
+`;
+
+exports[`getDashboardStats > returns the same numbers 1`] = `
+"{
+ "totalProducts": 44123,
+ "totalOrders": 480,
+ "totalCustomers": 133,
+ "totalSales": 98765,
+ "totalCategories": 31,
+ "totalStores": 29,
+ "approvedStores": 17,
+ "totalDeliveryPartners": 12,
+ "activeDeliveryPartners": 9,
+ "processingOrders": 7,
+ "shippedOrders": 5,
+ "deliveredOrders": 440,
+ "cancelledOrders": 28
+}"
+`;
