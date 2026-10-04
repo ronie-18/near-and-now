@@ -33,6 +33,9 @@ function responder(opts: { noStoreOrders?: boolean; noOrders?: boolean } = {}) {
         const statusFilter = c.filters.find(([m, col]) => m === 'in' && col === 'status');
         const rows = statusFilter ? ORDERS.filter((o) => (statusFilter[2] as string[]).includes(o.status)) : ORDERS;
         const embed = (c.columns ?? '').includes('store_orders');
+        // store_orders!inner: an order only comes back if the rider has a
+        // (non-cancelled) store row on it, so no store rows means no orders.
+        if (embed && opts.noStoreOrders) return ok([]);
         return ok(rows.map((o) => (embed ? { ...o, store_orders: [{ store_id: o.id === 'o1' ? 's1' : 's2' }] } : { ...o })));
       }
       case 'stores':
@@ -79,13 +82,45 @@ describe('GET /delivery-partner/orders', () => {
     expect((await call({ status: 'active' }, { noOrders: true })).res.body).toEqual({ success: true, orders: [] });
   });
 
-  it('active: 3 sequential DB round trips', async () => {
+  it('active: 2 sequential DB round trips', async () => {
     const { fake } = await call({ status: 'active' }, {}, 15);
-    expect(fake.roundTrips()).toBe(3);
+    expect(fake.roundTrips()).toBe(2);
   });
 
-  it('completed: 3 sequential DB round trips', async () => {
+  it('completed: 2 sequential DB round trips', async () => {
     const { fake } = await call({ status: 'completed' }, {}, 15);
-    expect(fake.roundTrips()).toBe(3);
+    expect(fake.roundTrips()).toBe(2);
+  });
+
+  it('B7: never sends the rider\'s order ids in the URL; the database filters by rider', async () => {
+    const { fake } = await call({ status: 'active' });
+    expect(fake.on('store_orders')).toHaveLength(0);
+    const [ordersQuery] = fake.on('customer_orders');
+    expect(ordersQuery.filters.some(([m, col]) => m === 'in' && col === 'id')).toBe(false);
+    expect(ordersQuery.columns).toContain('store_orders!inner(store_id)');
+    expect(ordersQuery.filters).toEqual(expect.arrayContaining([
+      ['eq', 'store_orders.delivery_partner_id', 'r1'],
+      ['neq', 'store_orders.status', 'order_cancelled'],
+    ]));
+  });
+});
+
+describe('GET /delivery-partner/orders: a multi-store order shows its last store row (as before)', () => {
+  it('picks the same store', async () => {
+    const multi = { id: 'o3', order_code: 'NN3', status: 'in_transit', total_amount: 500, delivery_address: '3 C Road', delivery_latitude: 22.5, delivery_longitude: 88.3, placed_at: '2026-10-05T12:00:00Z', notes: null };
+    installFakeSupabase(supabaseAdmin, (c: Call) => {
+      if (c.table === 'store_orders') return ok([{ customer_order_id: 'o3', store_id: 'sA' }, { customer_order_id: 'o3', store_id: 'sB' }]);
+      if (c.table === 'customer_orders') {
+        const embed = (c.columns ?? '').includes('store_orders');
+        return ok([embed ? { ...multi, store_orders: [{ store_id: 'sA' }, { store_id: 'sB' }] } : { ...multi }]);
+      }
+      if (c.table === 'stores') return ok([{ id: 'sA', name: 'Store A', address: 'a', latitude: 1, longitude: 1, phone: '1' }, { id: 'sB', name: 'Store B', address: 'b', latitude: 2, longitude: 2, phone: '2' }]);
+      return ok([]);
+    });
+    const res = mockRes();
+    await new DeliveryPartnerController().getOrders({ riderId: 'r1', query: { status: 'active' } } as unknown as Request, res as never);
+    const body = res.body as { orders: Array<{ stores: { name: string }; store_orders?: unknown }> };
+    expect(body.orders[0].stores.name).toBe('Store B');
+    expect(body.orders[0]).not.toHaveProperty('store_orders');
   });
 });

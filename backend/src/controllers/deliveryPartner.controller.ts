@@ -697,22 +697,6 @@ export class DeliveryPartnerController {
         : null;
       const offset = Math.max(0, Number(req.query.offset) || 0);
 
-      // Get all store_orders for this rider (a store that declined its part
-      // has its row closed as 'order_cancelled' and is not a stop).
-      const { data: storeOrders } = await supabaseAdmin
-        .from('store_orders')
-        .select('customer_order_id, store_id')
-        .eq('delivery_partner_id', req.riderId!)
-        .neq('status', 'order_cancelled');
-
-      if (!storeOrders?.length) {
-        return res.json({ success: true, orders: [] });
-      }
-
-      const orderIds = storeOrders.map((so: any) => so.customer_order_id);
-      const storeIdMap: Record<string, string> = {};
-      storeOrders.forEach((so: any) => { storeIdMap[so.customer_order_id] = so.store_id; });
-
       // Filter by status bucket
       let dbStatuses: string[];
       if (statusParam === 'completed') {
@@ -721,10 +705,18 @@ export class DeliveryPartnerController {
         dbStatuses = ACTIVE_DB_STATUSES;
       }
 
+      // This rider's orders: those with at least one of their store_orders
+      // rows that is not 'order_cancelled' (a store that declined its part
+      // has its row closed as 'order_cancelled' and is not a stop). The
+      // database does that match through the store_orders!inner join. It
+      // used to be a separate read of every store_orders row this rider ever
+      // had, whose order ids then all went into this query's URL: a growing
+      // list that eventually exceeds the URL limit, plus one extra round trip.
       let ordersQuery = supabaseAdmin
         .from('customer_orders')
-        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, notes')
-        .in('id', orderIds)
+        .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, notes, store_orders!inner(store_id)')
+        .eq('store_orders.delivery_partner_id', req.riderId!)
+        .neq('store_orders.status', 'order_cancelled')
         .in('status', dbStatuses)
         .order('placed_at', { ascending: false })
         // Tie-breaker: orders placed at the same instant had no defined order,
@@ -732,11 +724,20 @@ export class DeliveryPartnerController {
         // skipping another at a page boundary. (Rider "Past" paging, 2026-10-02.)
         .order('id', { ascending: false });
       if (limit != null) ordersQuery = ordersQuery.range(offset, offset + limit - 1);
-      const { data: orders } = await ordersQuery;
+      const { data: rows } = await ordersQuery;
 
-      if (!orders?.length) {
+      if (!rows?.length) {
         return res.json({ success: true, orders: [] });
       }
+
+      // The joined store rows only pick the store shown for each order; they
+      // are not part of the response. As before, when several of this
+      // rider's store rows belong to one order, the last one wins.
+      const storeIdMap: Record<string, string> = {};
+      const orders = (rows as any[]).map(({ store_orders: riderStoreOrders, ...order }) => {
+        for (const so of (riderStoreOrders || []) as Array<{ store_id: string }>) storeIdMap[order.id] = so.store_id;
+        return order;
+      });
 
       // Stores, items and (for completed orders) payouts each depend only on
       // the orders above, so they are read together rather than one after
