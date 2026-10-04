@@ -904,7 +904,7 @@ async function reallocateMissingItemsLocked(orderId: string, itemIds: string[]) 
     .is('assigned_store_id', null)
     .neq('item_status', 'unavailable');
   if (itemsErr) throw itemsErr;
-  const waiting = (waitingRows || []) as Array<{ id: string; product_id: string }>;
+  const waiting = (waitingRows || []) as Array<{ id: string; product_id: string | null }>;
   if (!waiting.length) {
     await settleOrderAfterReallocation(orderId);
     return;
@@ -912,10 +912,12 @@ async function reallocateMissingItemsLocked(orderId: string, itemIds: string[]) 
 
   // order_items.product_id is the (old) store's products row; resolve each to
   // its master product, which is what other stores are matched on.
-  const { data: productRows, error: productsErr } = await supabaseAdmin
-    .from('products')
-    .select('id, master_product_id')
-    .in('id', [...new Set(waiting.map((i) => i.product_id))]);
+  // product_id is NULL once the product was deleted from the catalogue;
+  // such an item can't be matched anywhere and is written off below.
+  const waitingProductIds = [...new Set(waiting.map((i) => i.product_id).filter((id): id is string => !!id))];
+  const { data: productRows, error: productsErr } = waitingProductIds.length
+    ? await supabaseAdmin.from('products').select('id, master_product_id').in('id', waitingProductIds)
+    : { data: [], error: null };
   if (productsErr) throw productsErr;
   const masterByProduct = new Map<string, string>(
     ((productRows || []) as Array<{ id: string; master_product_id: string }>).map((p) => [p.id, p.master_product_id])
@@ -924,7 +926,7 @@ async function reallocateMissingItemsLocked(orderId: string, itemIds: string[]) 
   const planItems: Array<{ key: string; masterProductId: string }> = [];
   const unresolvable: string[] = [];
   for (const it of waiting) {
-    const master = masterByProduct.get(it.product_id);
+    const master = it.product_id ? masterByProduct.get(it.product_id) : undefined;
     if (master) planItems.push({ key: it.id, masterProductId: master });
     else unresolvable.push(it.id); // product row gone — nothing to match on
   }

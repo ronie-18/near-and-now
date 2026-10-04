@@ -140,8 +140,8 @@ export interface Category {
 export interface OrderItem {
   /** order_items.id — stable key for rendering line items. */
   id?: string;
-  /** public.products(id), the store inventory row — NOT master_products(id). */
-  product_id: string;
+  /** public.products(id), the store inventory row — NOT master_products(id). NULL once that product was deleted. */
+  product_id: string | null;
   name: string;
   price: number;
   quantity: number;
@@ -497,59 +497,40 @@ export async function updateProduct(id: string, updates: ProductUpdate): Promise
 }
 
 /**
- * 'deleted'  — the row is gone.
- * 'archived' — the product could not be removed because other rows still
- *              reference it, so it was deactivated instead (see deleteProduct).
- */
-export type DeleteProductResult = 'deleted' | 'archived';
-
-/**
- * Removes a master product, falling back to archiving it.
+ * Permanently deletes a master product.
  *
- * products.master_product_id references master_products(id) ON DELETE
- * RESTRICT (and product_submissions references it too), so any product a
- * store has ever listed can never be hard-deleted — order_items point at
- * those store rows, and order history must survive. Every such delete used to
- * fail with a bare "Failed to delete product" toast, for every admin role
- * including super_admin. On a foreign-key violation (23503) the product is
- * set inactive instead: the storefront, the customer app and checkout all
- * already treat an inactive master product as unavailable.
+ * Product-owner decision (2026-10-05): a delete removes the product
+ * entirely — never archives it — even if stores stock it and customers have
+ * ordered it. Migration 20261005000000 makes the database allow that: every
+ * store's listing is deleted with it (CASCADE), past orders keep their own
+ * copy of the line (name, unit, price, image, and the tax data for invoices)
+ * with product_id set to NULL, and its wishlist entries and reviews go too.
  *
- * Throws (with the database's reason) on any other failure, including a
- * delete/update that RLS silently filtered to zero rows.
+ * Throws with the database's reason on failure, including a delete that RLS
+ * silently filtered to zero rows. A foreign-key error (23503) means that
+ * migration isn't applied yet, or some other table still references the
+ * product; its message names the constraint.
  */
-export async function deleteProduct(id: string): Promise<DeleteProductResult> {
+export async function deleteProduct(id: string): Promise<void> {
   const { data: deleted, error } = await getAdminClient()
     .from('master_products')
     .delete()
     .eq('id', id)
     .select('id');
 
-  if (!error) {
-    if (!deleted || deleted.length === 0) {
-      throw new Error('The product was not deleted (no admin session or insufficient permissions).');
-    }
-    return 'deleted';
-  }
-
-  if (error.code !== '23503') {
+  if (error) {
     console.error('Error deleting product:', error);
+    if (error.code === '23503') {
+      throw new Error(
+        `The database still blocks deleting this product because other records reference it (${error.message}). ` +
+          'Apply migration 20261005000000_master_products_hard_delete.sql, or report this constraint.'
+      );
+    }
     throw error;
   }
-
-  const { data: archived, error: archiveError } = await getAdminClient()
-    .from('master_products')
-    .update({ is_active: false, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select('id');
-  if (archiveError) {
-    console.error('Error archiving product after a blocked delete:', archiveError);
-    throw archiveError;
+  if (!deleted || deleted.length === 0) {
+    throw new Error('The product was not deleted (no admin session or insufficient permissions).');
   }
-  if (!archived || archived.length === 0) {
-    throw new Error('The product could not be archived (no admin session or insufficient permissions).');
-  }
-  return 'archived';
 }
 
 // Categories Management

@@ -706,8 +706,8 @@ const ProductsPage = () => {
         <>
           This permanently removes{" "}
           <span className="font-medium text-gray-900">{productName}</span> from the master
-          catalog. This action cannot be undone. If stores already stock it (or it has order
-          history), it is archived instead: hidden from customers, history kept.
+          catalog and from every store&apos;s inventory. Past orders keep their line items
+          (name, price, tax details). This action cannot be undone.
         </>
       ),
       confirmLabel: "Delete",
@@ -717,21 +717,7 @@ const ProductsPage = () => {
 
     try {
       setDeleteLoading(id);
-      const outcome = await deleteProduct(id);
-
-      if (outcome === "archived") {
-        // Referenced by store listings / order history, so it can't be
-        // removed — deleteProduct deactivated it instead.
-        setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, in_stock: false } : p)));
-        void fetchStats();
-        await notifyAdminAction('archived product', productName, { product_id: id, product_name: productName });
-        showToast(
-          `"${productName}" is stocked by stores or has order history, so it was archived (hidden from customers) instead of deleted.`,
-          "info",
-          7000
-        );
-        return;
-      }
+      await deleteProduct(id);
 
       const wasOnlyRowOnPage = products.length === 1;
       setProducts((prev) => prev.filter((p) => p.id !== id));

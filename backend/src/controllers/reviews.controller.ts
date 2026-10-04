@@ -8,7 +8,7 @@ import { sendError } from '../utils/httpError.js';
 // through supabaseAdmin; no client ever talks to this table directly.
 
 interface OrderItemRow {
-  product_id: string; // per-store products.id, not master_product_id
+  product_id: string | null; // per-store products.id, not master_product_id; NULL once the product was deleted
   product_name: string;
   image_url: string | null;
 }
@@ -65,7 +65,10 @@ async function getPurchasedMasterProducts(
   const items = (itemRows ?? []) as OrderItemRow[];
   if (items.length === 0) return [];
 
-  const storeProductIds = [...new Set(items.map((it) => it.product_id))];
+  // product_id is NULL on a line whose product was since deleted from the
+  // catalogue — nothing left to review there.
+  const storeProductIds = [...new Set(items.map((it) => it.product_id).filter((id): id is string => !!id))];
+  if (storeProductIds.length === 0) return [];
   const { data: productRows } = await supabaseAdmin
     .from('products')
     .select('id, store_id, master_product_id')
@@ -80,7 +83,7 @@ async function getPurchasedMasterProducts(
   const seen = new Set<string>();
   const result: PurchasedProduct[] = [];
   for (const item of items) {
-    const product = productById.get(item.product_id);
+    const product = item.product_id ? productById.get(item.product_id) : undefined;
     if (!product || seen.has(product.master_product_id)) continue;
     seen.add(product.master_product_id);
     result.push({

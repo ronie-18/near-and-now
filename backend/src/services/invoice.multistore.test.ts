@@ -32,7 +32,7 @@ function chain(result: any) {
   return c;
 }
 
-function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmount: number; order?: Record<string, unknown> }) {
+function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmount: number; order?: Record<string, unknown>; transformItems?: (items: any[]) => any[] }) {
   const orderRow = {
     id: 'order-abc-123', order_code: 'NN20260826-0099', customer_id: 'cust-1',
     status: 'order_delivered', payment_status: 'paid', payment_method: 'razorpay',
@@ -59,8 +59,10 @@ function setupMocks(opts: { storeCount: 1 | 2; itemsPerStore: number; totalAmoun
     }
   }
 
-  const products = items.map((it) => ({ id: it.product_id, master_product_id: `mp-${it.product_id}` }));
-  const masterProducts = items.map((it) => ({ id: `mp-${it.product_id}`, gst_rate: 5, is_loose: false, hsn_code: '21069099' }));
+  if (opts.transformItems) items.splice(0, items.length, ...opts.transformItems(items));
+  // Lines whose product was deleted from the catalogue have no products/master rows.
+  const products = items.filter((it) => it.product_id).map((it) => ({ id: it.product_id, master_product_id: `mp-${it.product_id}` }));
+  const masterProducts = items.filter((it) => it.product_id).map((it) => ({ id: `mp-${it.product_id}`, gst_rate: 5, is_loose: false, hsn_code: '21069099' }));
   const stores = storeOrders.map((so, i) => ({ id: so.store_id, name: `Test Store ${i + 1}`, phone: '9999999999', address: `${i + 1} Store Street, Kolkata` }));
 
   const tables: Record<string, any> = {
@@ -168,6 +170,32 @@ describe('invoice generation — multi-store pages, HSN, fee breakdown', () => {
       expect(row.hsn_code).toBe('21069099');
       expect(row.hsn_code).not.toBe('2106'); // the old hardcoded default
     }
+  });
+
+  it('a line whose product was deleted from the catalogue keeps its HSN and GST rate from the snapshot (2026-10-05)', async () => {
+    const { getInsertedItemRows } = setupMocks({
+      storeCount: 1, itemsPerStore: 2, totalAmount: 500,
+      // Second line: product deleted → product_id NULL, tax data copied onto the line.
+      transformItems: (items) => items.map((it, i) =>
+        i === 1 ? { ...it, product_id: null, product_hsn_code: '04012000', product_gst_rate: 12, product_is_loose: false } : it
+      ),
+    });
+    await invoiceService.generateForOrder('order-abc-123');
+    const rows = getInsertedItemRows();
+    expect(rows).toHaveLength(2);
+    const live = rows.find((r: any) => r.product_name === 'Test Product 1');
+    const deleted = rows.find((r: any) => r.product_name === 'Test Product 2');
+    expect(live).toMatchObject({ hsn_code: '21069099', gst_percent: 5 });
+    expect(deleted).toMatchObject({ product_id: null, hsn_code: '04012000', gst_percent: 12 });
+  });
+
+  it('a deleted loose product is still billed at 0% GST', async () => {
+    const { getInsertedItemRows } = setupMocks({
+      storeCount: 1, itemsPerStore: 1, totalAmount: 200,
+      transformItems: (items) => items.map((it) => ({ ...it, product_id: null, product_hsn_code: '07019000', product_gst_rate: 5, product_is_loose: true })),
+    });
+    await invoiceService.generateForOrder('order-abc-123');
+    expect(getInsertedItemRows()[0]).toMatchObject({ hsn_code: '07019000', gst_percent: 0 });
   });
 
   it('grand_total reconciles to order.total_amount, not an independently re-derived (and inflated) figure', async () => {

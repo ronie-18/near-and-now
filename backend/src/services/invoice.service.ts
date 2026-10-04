@@ -284,10 +284,23 @@ async function fetchOrderData(orderId: string) {
   if (!storeOrders?.length) throw new Error('No store orders found for this order');
 
   const storeOrderIds = storeOrders.map((s: any) => s.id);
-  const { data: oi } = await supabaseAdmin
+  // product_hsn_code / product_gst_rate / product_is_loose are the tax data
+  // copied onto a line when its product was deleted from the catalogue
+  // (migration 20261005000000) — its product_id is NULL from then on. Read
+  // without them if that migration isn't applied yet (42703 / PGRST204).
+  const ITEM_COLUMNS = 'id, store_order_id, product_id, product_name, unit, unit_price, quantity, item_status';
+  const withSnapshot = await supabaseAdmin
     .from('order_items')
-    .select('id, store_order_id, product_id, product_name, unit, unit_price, quantity, item_status')
+    .select(`${ITEM_COLUMNS}, product_hsn_code, product_gst_rate, product_is_loose`)
     .in('store_order_id', storeOrderIds);
+  let oi: any[] | null = withSnapshot.data;
+  if (withSnapshot.error && ['42703', 'PGRST204'].includes(String((withSnapshot.error as { code?: string }).code))) {
+    const { data } = await supabaseAdmin
+      .from('order_items')
+      .select(ITEM_COLUMNS)
+      .in('store_order_id', storeOrderIds);
+    oi = data;
+  }
   // Items the shopkeeper marked unavailable were never fulfilled/charged —
   // excluding them here keeps every total consistent by construction.
   const allItems: any[] = (oi || []).filter((it: any) => it.item_status !== 'unavailable');
@@ -325,8 +338,18 @@ async function fetchOrderData(orderId: string) {
   }
 
   for (const it of allItems) {
-    const masterId = masterIdByProduct.get(it.product_id);
-    const info = masterId ? masterInfoById.get(masterId) : undefined;
+    const masterId = it.product_id ? masterIdByProduct.get(it.product_id) : undefined;
+    // A product deleted from the catalogue has no master row any more; its
+    // tax data was copied onto the line at deletion time.
+    const info = (masterId ? masterInfoById.get(masterId) : undefined) ?? (
+      it.product_gst_rate != null || it.product_hsn_code != null || it.product_is_loose != null
+        ? {
+            gst_rate: Number(it.product_gst_rate) || 0,
+            is_loose: Boolean(it.product_is_loose),
+            hsn_code: String(it.product_hsn_code || '').trim(),
+          }
+        : undefined
+    );
     // Loose products carry no per-item GST (matches checkout pricing rule).
     it.gst_rate = info?.is_loose ? 0 : (info?.gst_rate ?? 0);
     it.hsn_code = info?.hsn_code || '';

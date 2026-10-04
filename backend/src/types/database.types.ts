@@ -187,7 +187,8 @@ export interface StoreOrder {
 export interface OrderItem {
   id: string;
   store_order_id: string;
-  product_id: string;
+  /** NULL once the product was deleted from the catalogue (the line keeps its own name/price). */
+  product_id: string | null;
   product_name: string;
   unit: string | null;
   image_url: string | null;

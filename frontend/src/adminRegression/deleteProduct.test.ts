@@ -1,8 +1,7 @@
 /**
- * Admin panel regression (2026-10-04): deleting a master product that any
- * store stocks used to fail for every admin, super_admin included —
- * products.master_product_id is ON DELETE RESTRICT — with a generic toast.
- * deleteProduct now archives (is_active = false) on that foreign-key error.
+ * Admin panel regression (2026-10-05): deleting a master product must remove
+ * it entirely — even one stores stock and customers ordered (the database
+ * side is migration 20261005000000) — and must never quietly archive it.
  * Lives here because the admin app has no test runner; the admin module's
  * own dependencies are mocked by path.
  */
@@ -42,35 +41,29 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-describe('admin deleteProduct', () => {
-  it('hard-deletes a product nothing references', async () => {
+describe('admin deleteProduct (hard delete only — never archives)', () => {
+  it('permanently deletes the product', async () => {
     respond = (op) => (op === 'delete' ? { data: [{ id: 'm1' }], error: null } : { data: null, error: null });
-    await expect(deleteProduct('m1')).resolves.toBe('deleted');
+    await expect(deleteProduct('m1')).resolves.toBeUndefined();
     expect(calls.map((c) => c.op)).toEqual(['delete']);
+    expect(calls[0].filters).toContainEqual(['eq', 'id', 'm1']);
   });
 
-  it('archives instead when stores stock it (foreign-key violation 23503)', async () => {
-    respond = (op) =>
-      op === 'delete'
-        ? { data: null, error: { code: '23503', message: 'update or delete on table "master_products" violates foreign key constraint' } }
-        : { data: [{ id: 'm1' }], error: null };
-    await expect(deleteProduct('m1')).resolves.toBe('archived');
-    expect(calls.map((c) => c.op)).toEqual(['delete', 'update']);
-    expect(calls[1].payload).toMatchObject({ is_active: false });
-    expect(calls[1].filters).toContainEqual(['eq', 'id', 'm1']);
+  it('never falls back to archiving: a foreign-key block is an error that names the constraint', async () => {
+    respond = () => ({
+      data: null,
+      error: { code: '23503', message: 'update or delete on table "master_products" violates foreign key constraint "products_master_product_id_fkey"' },
+    });
+    await expect(deleteProduct('m1')).rejects.toThrow(/products_master_product_id_fkey/);
+    expect(calls.map((c) => c.op)).toEqual(['delete']); // no is_active update
   });
 
-  it('a delete that RLS filtered to zero rows is an error, not a silent "deleted"', async () => {
+  it('a delete that RLS filtered to zero rows is an error, not a silent success', async () => {
     respond = () => ({ data: [], error: null });
     await expect(deleteProduct('m1')).rejects.toThrow(/not deleted/);
   });
 
-  it('an archive that RLS filtered to zero rows is an error too', async () => {
-    respond = (op) => (op === 'delete' ? { data: null, error: { code: '23503', message: 'fk' } } : { data: [], error: null });
-    await expect(deleteProduct('m1')).rejects.toThrow(/could not be archived/);
-  });
-
-  it('any other database error is thrown with its reason (no archive attempted)', async () => {
+  it('any other database error is thrown with its reason', async () => {
     const err = { code: '42501', message: 'permission denied for table master_products' };
     respond = () => ({ data: null, error: err });
     await expect(deleteProduct('m1')).rejects.toBe(err);
