@@ -1,0 +1,157 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getPickupSequence > returns the same payload for a cash-on-delivery order 1`] = `
+"{
+ "success": true,
+ "order": {
+  "id": "o1",
+  "order_code": "NN20261005-0002",
+  "status": "picking_up",
+  "total_amount": 640,
+  "amount_to_collect": 550,
+  "customer_address": "5 Lake Road",
+  "customer_lat": 22.51,
+  "customer_lng": 88.35,
+  "total_stores": 2,
+  "all_picked_up": false,
+  "receiver_name": null,
+  "receiver_phone": null,
+  "receiver_address": null,
+  "delivery_otp_verified": false
+ },
+ "stops": [
+  {
+   "allocation_id": "a1",
+   "sequence_number": 1,
+   "status": "picked_up",
+   "picked_up": true,
+   "pickup_code_required": false,
+   "picked_up_at": "2026-10-05T10:15:00Z",
+   "store": {
+    "id": "s1",
+    "name": "Fresh Mart",
+    "address": "12 Park Street",
+    "latitude": 22.55,
+    "longitude": 88.35,
+    "phone": "9000000001"
+   },
+   "items": [
+    {
+     "id": "i1",
+     "product_name": "Milk",
+     "quantity": 2,
+     "unit": "pack",
+     "unit_price": 30,
+     "assigned_store_id": "s1",
+     "item_status": "confirmed"
+    }
+   ]
+  },
+  {
+   "allocation_id": "a2",
+   "sequence_number": 2,
+   "status": "accepted",
+   "picked_up": false,
+   "pickup_code_required": true,
+   "picked_up_at": null,
+   "store": {
+    "id": "s2",
+    "name": "Daily Needs",
+    "address": "3 Elgin Road",
+    "latitude": 22.54,
+    "longitude": 88.36,
+    "phone": "9000000003"
+   },
+   "items": [
+    {
+     "id": "i3",
+     "product_name": "Eggs",
+     "quantity": 12,
+     "unit": "piece",
+     "unit_price": 7,
+     "assigned_store_id": "s2",
+     "item_status": "confirmed"
+    }
+   ]
+  }
+ ]
+}"
+`;
+
+exports[`getPickupSequence > returns the same payload for a prepaid order 1`] = `
+"{
+ "success": true,
+ "order": {
+  "id": "o1",
+  "order_code": "NN20261005-0002",
+  "status": "picking_up",
+  "total_amount": 640,
+  "amount_to_collect": 100,
+  "customer_address": "5 Lake Road",
+  "customer_lat": 22.51,
+  "customer_lng": 88.35,
+  "total_stores": 2,
+  "all_picked_up": false,
+  "receiver_name": null,
+  "receiver_phone": null,
+  "receiver_address": null,
+  "delivery_otp_verified": false
+ },
+ "stops": [
+  {
+   "allocation_id": "a1",
+   "sequence_number": 1,
+   "status": "picked_up",
+   "picked_up": true,
+   "pickup_code_required": false,
+   "picked_up_at": "2026-10-05T10:15:00Z",
+   "store": {
+    "id": "s1",
+    "name": "Fresh Mart",
+    "address": "12 Park Street",
+    "latitude": 22.55,
+    "longitude": 88.35,
+    "phone": "9000000001"
+   },
+   "items": [
+    {
+     "id": "i1",
+     "product_name": "Milk",
+     "quantity": 2,
+     "unit": "pack",
+     "unit_price": 30,
+     "assigned_store_id": "s1",
+     "item_status": "confirmed"
+    }
+   ]
+  },
+  {
+   "allocation_id": "a2",
+   "sequence_number": 2,
+   "status": "accepted",
+   "picked_up": false,
+   "pickup_code_required": true,
+   "picked_up_at": null,
+   "store": {
+    "id": "s2",
+    "name": "Daily Needs",
+    "address": "3 Elgin Road",
+    "latitude": 22.54,
+    "longitude": 88.36,
+    "phone": "9000000003"
+   },
+   "items": [
+    {
+     "id": "i3",
+     "product_name": "Eggs",
+     "quantity": 12,
+     "unit": "piece",
+     "unit_price": 7,
+     "assigned_store_id": "s2",
+     "item_status": "confirmed"
+    }
+   ]
+  }
+ ]
+}"
+`;

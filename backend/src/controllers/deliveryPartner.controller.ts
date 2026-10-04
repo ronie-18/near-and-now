@@ -2164,37 +2164,45 @@ export class DeliveryPartnerController {
     try {
       const { orderId } = req.params;
 
-      const { data: order } = await supabaseAdmin
-        .from('customer_orders')
-        .select('id, order_code, status, total_amount, payment_method, notes, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address, delivery_otp_verified_at')
-        .eq('id', orderId)
-        .eq('assigned_driver_id', req.riderId!)
-        .maybeSingle();
+      // The allocation read needs only orderId, so it runs alongside the
+      // assigned-rider check instead of one round trip after it (this screen
+      // polls every 10 s). Its rows, pickup codes included, are only used
+      // once that check has found the order assigned to this rider.
+      const [{ data: order }, { data: allocations }] = await Promise.all([
+        supabaseAdmin
+          .from('customer_orders')
+          .select('id, order_code, status, total_amount, payment_method, notes, delivery_address, delivery_latitude, delivery_longitude, assigned_driver_id, receiver_name, receiver_phone, receiver_address, delivery_otp_verified_at')
+          .eq('id', orderId)
+          .eq('assigned_driver_id', req.riderId!)
+          .maybeSingle(),
+        // Excludes 'rejected'/'cancelled' — those rows are left behind
+        // permanently once a store rejects and reallocateMissingItems creates a
+        // fresh allocation for the reassigned store. Without this filter they'd
+        // show up as a phantom stop in the driver's route (with a store name/
+        // address but no pickup code) and would keep `all_picked_up` below from
+        // ever becoming true, since it can never be marked picked_up. Same root
+        // cause as verifyPickupCode's `remaining` query above.
+        supabaseAdmin
+          .from('order_store_allocations')
+          .select('id, store_id, sequence_number, status, pickup_code, accepted_item_ids, accepted_at, picked_up_at')
+          .eq('order_id', orderId)
+          .not('status', 'in', '(rejected,cancelled)')
+          .order('sequence_number', { ascending: true }),
+      ]);
 
       if (!order) return res.status(404).json({ error: 'Order not found or not assigned to you' });
 
-      // Excludes 'rejected'/'cancelled' — those rows are left behind
-      // permanently once a store rejects and reallocateMissingItems creates a
-      // fresh allocation for the reassigned store. Without this filter they'd
-      // show up as a phantom stop in the driver's route (with a store name/
-      // address but no pickup code) and would keep `all_picked_up` below from
-      // ever becoming true, since it can never be marked picked_up. Same root
-      // cause as verifyPickupCode's `remaining` query above.
-      const { data: allocations } = await supabaseAdmin
-        .from('order_store_allocations')
-        .select('id, store_id, sequence_number, status, pickup_code, accepted_item_ids, accepted_at, picked_up_at')
-        .eq('order_id', orderId)
-        .not('status', 'in', '(rejected,cancelled)')
-        .order('sequence_number', { ascending: true });
-
+      // Stores, items and the cash-to-collect lookup only depend on the two
+      // reads above, so they run together.
       const storeIds = (allocations || []).map((a: any) => a.store_id);
-      const [{ data: stores }, { data: items }] = await Promise.all([
+      const [{ data: stores }, { data: items }, amount_to_collect] = await Promise.all([
         storeIds.length
           ? supabaseAdmin.from('stores').select('id, name, address, latitude, longitude, phone').in('id', storeIds)
           : Promise.resolve({ data: [] }),
         supabaseAdmin.from('order_items')
           .select('id, product_name, quantity, unit, unit_price, assigned_store_id, item_status')
           .eq('customer_order_id', orderId),
+        cashToCollect(order as any),
       ]);
 
       const storeMap: Record<string, any> = {};
@@ -2230,7 +2238,6 @@ export class DeliveryPartnerController {
       }));
 
       const all_picked_up = stops.every((s: any) => s.picked_up);
-      const amount_to_collect = await cashToCollect(o);
 
       res.json({
         success: true,
