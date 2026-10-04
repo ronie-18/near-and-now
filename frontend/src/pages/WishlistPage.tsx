@@ -124,7 +124,7 @@ const WishlistPage = () => {
       ) : loadError ? (
         <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
           <WifiOff className="w-10 h-10 text-amber-500" />
-          <p className="font-bold text-gray-800">Couldn't load your wishlist</p>
+          <p className="font-bold text-gray-800">Couldn&apos;t load your wishlist</p>
           <button type="button" onClick={load} className="bg-primary text-white rounded-xl px-5 py-2.5 text-sm font-bold">
             Try again
           </button>

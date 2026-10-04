@@ -497,7 +497,7 @@ const ProfilePage = () => {
                 </div>
                 <div>
                   <div className="pp-nav-item-label">My Wishlist</div>
-                  <div className="pp-nav-item-sub">Products you've saved</div>
+                  <div className="pp-nav-item-sub">Products you&apos;ve saved</div>
                 </div>
                 <svg className="pp-nav-item-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M9 18l6-6-6-6" />

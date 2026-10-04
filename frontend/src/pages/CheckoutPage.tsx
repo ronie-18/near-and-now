@@ -906,7 +906,7 @@ const CheckoutPage = () => {
               <div className="flex-1">
                 <p className="font-semibold text-amber-900">Payment was cancelled</p>
                 <p className="text-sm text-amber-700 mt-0.5">
-                  Your order was not placed and nothing was charged. Review your details below and try again whenever you're ready.
+                  Your order was not placed and nothing was charged. Review your details below and try again whenever you&apos;re ready.
                 </p>
               </div>
               <button
