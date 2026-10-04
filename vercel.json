@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "regions": ["bom1"],
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "outputDirectory": "frontend/dist",
