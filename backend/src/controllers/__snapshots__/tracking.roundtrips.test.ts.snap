@@ -1,0 +1,89 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getOrderTracking (GET /api/tracking/orders/:id) > returns the same payload to the owner and 404s anyone else 1`] = `
+"{
+ "id": "o1",
+ "customer_id": "c1",
+ "order_code": "NN20261005-0001",
+ "status": "in_transit",
+ "total_amount": 412.5,
+ "store_orders": [
+  {
+   "id": "so1",
+   "store_id": "s1",
+   "status": "in_transit",
+   "delivery_partner_id": "r1",
+   "order_items": [
+    {
+     "id": "i1",
+     "product_name": "Milk",
+     "quantity": 2
+    }
+   ]
+  }
+ ]
+}"
+`;
+
+exports[`getOrderTrackingFull (GET /api/tracking/orders/:id/full) > returns the same payload to the owner 1`] = `
+"{
+ "order": {
+  "id": "o1",
+  "customer_id": "c1",
+  "order_code": "NN20261005-0001",
+  "status": "in_transit",
+  "total_amount": 412.5,
+  "store_orders": [
+   {
+    "id": "so1",
+    "store_id": "s1",
+    "status": "in_transit",
+    "delivery_partner_id": "r1",
+    "order_items": [
+     {
+      "id": "i1",
+      "product_name": "Milk",
+      "quantity": 2
+     }
+    ]
+   }
+  ]
+ },
+ "statusHistory": [
+  {
+   "status": "pending_at_store",
+   "notes": null,
+   "created_at": "2026-10-05T10:00:00Z"
+  },
+  {
+   "status": "in_transit",
+   "notes": null,
+   "created_at": "2026-10-05T10:20:00Z"
+  }
+ ],
+ "storeLocations": [
+  {
+   "lat": 22.57,
+   "lng": 88.36,
+   "label": "Fresh Mart",
+   "address": "12 Park Street, Kolkata",
+   "phone": "9000000001",
+   "store_id": "s1"
+  }
+ ],
+ "deliveryAgent": {
+  "id": "r1",
+  "name": "Ravi",
+  "phone": "9000000002",
+  "vehicle_number": "WB01AB1234"
+ },
+ "deliveryAgents": {
+  "r1": {
+   "id": "r1",
+   "name": "Ravi",
+   "phone": "9000000002",
+   "vehicle_number": "WB01AB1234"
+  }
+ }
+}"
+`;

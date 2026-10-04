@@ -2306,24 +2306,42 @@ export class DatabaseService {
    * just by knowing/observing its id.
    */
   async getOrderTracking(orderId: string, customerId: string) {
-    const { data, error } = await supabaseAdmin
-      .from('customer_orders')
-      .select(`
+    // The allocation lookup below only needs orderId, so it runs alongside the
+    // order read instead of one round trip after it (this is on the 5-10 s
+    // tracking poll). Ownership is unchanged: the order read is filtered by
+    // customer_id, and nothing from the allocation rows is used, let alone
+    // returned, unless that read came back with this customer's order.
+    // The allocation result is captured rather than allowed to reject, so a
+    // failure there surfaces exactly as before: only when it is needed.
+    const [{ data, error }, allocations] = await Promise.all([
+      supabaseAdmin
+        .from('customer_orders')
+        .select(`
         *,
         store_orders (
           *,
           order_items (*)
         )
       `)
-      .eq('id', orderId)
-      .eq('customer_id', customerId)
-      .maybeSingle();
+        .eq('id', orderId)
+        .eq('customer_id', customerId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('order_store_allocations')
+        .select('store_id, status')
+        .eq('order_id', orderId)
+        .then(
+          (result) => ({ result, thrown: undefined as unknown }),
+          (thrown: unknown) => ({ result: undefined, thrown })
+        ),
+    ]);
     if (error) {
       console.error('Error fetching order tracking:', error);
       return null;
     }
     if (data?.store_orders?.length) {
-      data.store_orders = await this.filterOutRejectedStoreOrders(orderId, data.store_orders);
+      if (allocations.result === undefined) throw allocations.thrown;
+      data.store_orders = this.filterOutRejectedStoreOrders(data.store_orders, allocations.result);
     }
     return data;
   }
@@ -2360,14 +2378,10 @@ export class DatabaseService {
    * row with items still attached closes it, at the cost of occasionally
    * showing a rejected store's box for the few seconds until its items move.
    */
-  private async filterOutRejectedStoreOrders<T extends { store_id: string; order_items?: unknown[] | null }>(
-    orderId: string,
-    storeOrders: T[]
-  ): Promise<T[]> {
-    const { data: allocations, error } = await supabaseAdmin
-      .from('order_store_allocations')
-      .select('store_id, status')
-      .eq('order_id', orderId);
+  private filterOutRejectedStoreOrders<T extends { store_id: string; order_items?: unknown[] | null }>(
+    storeOrders: T[],
+    { data: allocations, error }: { data: Array<{ store_id: string; status: string }> | null; error: unknown }
+  ): T[] {
     if (error || !allocations) return storeOrders; // fail open — don't hide real stores on a lookup blip
 
     const rejectedStoreIds = new Set(
