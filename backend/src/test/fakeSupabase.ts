@@ -30,8 +30,34 @@ const FILTER_METHODS = [
   'match', 'contains', 'order', 'limit', 'range',
 ] as const;
 
-export function installFakeSupabase(client: unknown, responder: Responder = () => undefined) {
+export interface FakeOptions {
+  /**
+   * Opt-in simulated round trip. When set, every query/rpc resolves after this
+   * many ms (real timers) instead of immediately, and `roundTrips()` reports
+   * the longest chain of calls that had to wait for one another — i.e. how
+   * many sequential database round trips the code under test makes. Calls
+   * started together (Promise.all) share a level; a call started after
+   * another one finished is one level deeper. Default: immediate, no tracking.
+   */
+  latencyMs?: number;
+}
+
+export function installFakeSupabase(client: unknown, responder: Responder = () => undefined, options: FakeOptions = {}) {
   const calls: Call[] = [];
+  // Round-trip depth tracking (only meaningful with options.latencyMs).
+  let deepestFinished = 0;
+  let deepest = 0;
+  const settle = (result: Result): Promise<Result> => {
+    if (!options.latencyMs) return Promise.resolve(result);
+    const depth = deepestFinished + 1;
+    deepest = Math.max(deepest, depth);
+    return new Promise((resolve) =>
+      setTimeout(() => {
+        deepestFinished = Math.max(deepestFinished, depth);
+        resolve(result);
+      }, options.latencyMs)
+    );
+  };
 
   const from = (table: string) => {
     const call: Call = { table, op: 'select', filters: [], terminal: null };
@@ -44,14 +70,14 @@ export function installFakeSupabase(client: unknown, responder: Responder = () =
       // "maybeSingle() errored on 2 rows and the error was ignored".
       if (call.terminal && Array.isArray(result.data) && !result.error) {
         const rows = result.data;
-        if (rows.length === 1) return Promise.resolve({ data: rows[0], error: null });
-        if (rows.length === 0 && call.terminal === 'maybeSingle') return Promise.resolve({ data: null, error: null });
-        return Promise.resolve({
+        if (rows.length === 1) return settle({ data: rows[0], error: null });
+        if (rows.length === 0 && call.terminal === 'maybeSingle') return settle({ data: null, error: null });
+        return settle({
           data: null,
           error: { code: 'PGRST116', message: `JSON object requested, multiple (or no) rows returned (${rows.length})` },
         });
       }
-      return Promise.resolve(result);
+      return settle(result);
     };
     const builder: Record<string, unknown> = {};
     builder.select = (columns?: string) => {
@@ -85,7 +111,7 @@ export function installFakeSupabase(client: unknown, responder: Responder = () =
     const call: Call = { table: `rpc:${fn}`, op: 'select', payload: args, filters: [], terminal: null };
     const run = (): Promise<Result> => {
       calls.push(call);
-      return Promise.resolve(responder(call) ?? { data: null, error: null });
+      return settle(responder(call) ?? { data: null, error: null });
     };
     return { then: (f: (r: Result) => unknown, r?: (e: unknown) => unknown) => run().then(f, r) };
   };
@@ -96,6 +122,8 @@ export function installFakeSupabase(client: unknown, responder: Responder = () =
 
   return {
     calls,
+    /** Sequential round trips so far (needs options.latencyMs). */
+    roundTrips: () => deepest,
     /** All recorded calls against `table`, optionally narrowed to one operation. */
     on(table: string, op?: Op) {
       return calls.filter((c) => c.table === table && (!op || c.op === op));
