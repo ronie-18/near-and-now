@@ -317,7 +317,13 @@ export class DatabaseService {
     return data as OrderItem[];
   }
 
-  async getCustomerOrders(customerId: string) {
+  /**
+   * `activeOnly` (GET /api/orders/customer/:id?active=true, 2026-10-05): same
+   * rows, order and limit, minus delivered/cancelled orders, filtered in the
+   * database. The customer app's 20 s active-order poll uses it instead of
+   * re-downloading the whole history with every item.
+   */
+  async getCustomerOrders(customerId: string, opts: { activeOnly?: boolean } = {}) {
     // Bounded to the most recent 200 orders — this had no limit at all
     // (`getUserOrders` in the customer app's own orderService.ts renders
     // every row returned into a FlashList with no client-side pagination
@@ -326,7 +332,7 @@ export class DatabaseService {
     // realistic "recent order history" need; matches the same tradeoff
     // already made for the store-owner app's previous-orders screen. Found
     // 2026-09-01 during a cross-app audit.
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('customer_orders')
       .select(`
         *,
@@ -335,7 +341,9 @@ export class DatabaseService {
           order_items (*)
         )
       `)
-      .eq('customer_id', customerId)
+      .eq('customer_id', customerId);
+    if (opts.activeOnly) query = query.not('status', 'in', '(order_delivered,order_cancelled)');
+    const { data, error } = await query
       .order('placed_at', { ascending: false })
       .limit(200);
 
