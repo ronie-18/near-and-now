@@ -9,6 +9,7 @@ import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import { sendError } from '../utils/httpError.js';
 import { runInBackground } from '../utils/background.js';
+import { selectInChunks } from '../utils/selectInChunks.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -749,22 +750,27 @@ export class DeliveryPartnerController {
           .from('stores')
           .select('id, name, address, latitude, longitude, phone')
           .in('id', uniqueStoreIds),
-        supabaseAdmin
-          .from('order_items')
-          .select('customer_order_id, product_name, quantity, unit')
-          .in('customer_order_id', orderIdsOnPage)
-          .neq('item_status', 'unavailable'), // dropped items are not picked up
+        // Chunked: with no ?limit (earnings) the page is every order the
+        // rider ever delivered, and a single .in() list that long overflows
+        // the URL. Up to 100 ids it is the same single query as before.
+        selectInChunks(orderIdsOnPage, (ids) =>
+          supabaseAdmin
+            .from('order_items')
+            .select('customer_order_id, product_name, quantity, unit')
+            .in('customer_order_id', ids)
+            .neq('item_status', 'unavailable')), // dropped items are not picked up
         // This rider's real payout row per completed order — the earnings
         // screen used to compute 15% of total_amount client-side with nothing
         // server-side backing it. payRiderForDeliveredOrder (see markDelivered)
         // writes one row per order once delivered; orders delivered before that
         // existed have no payout row (payout_amount null).
         statusParam === 'completed'
-          ? supabaseAdmin
-              .from('delivery_partners_payouts')
-              .select('customer_order_id, amount, created_at')
-              .eq('partner_user_id', req.riderId!)
-              .in('customer_order_id', orderIdsOnPage)
+          ? selectInChunks(orderIdsOnPage, (ids) =>
+              supabaseAdmin
+                .from('delivery_partners_payouts')
+                .select('customer_order_id, amount, created_at')
+                .eq('partner_user_id', req.riderId!)
+                .in('customer_order_id', ids))
           : Promise.resolve({ data: null }),
       ]);
 
