@@ -8,6 +8,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabaseNoSession } from '../services/supabase';
 import { fetchOrderTrackingFull, fetchDriverLocations } from '../services/trackingApi';
 
+/** An order_items row as the tracking API returns it (fields the pages read). */
+export interface TrackingOrderItem {
+  id?: string;
+  product_name: string;
+  quantity: number;
+  unit?: string | null;
+  unit_price: number;
+  image_url?: string | null;
+  item_status?: string | null;
+}
+
 export interface Order {
   id: string;
   order_number: string;
@@ -17,7 +28,7 @@ export interface Order {
   total_amount: number;
   payment_method: string;
   payment_status?: string;
-  items: any[];
+  items: TrackingOrderItem[];
   delivery_agent?: {
     id: string;
     name: string;
@@ -125,7 +136,7 @@ export function useOrderTrackingRealtime(
       estimated_delivery: co.estimated_delivery_time,
       delivery_latitude: co.delivery_latitude,
       delivery_longitude: co.delivery_longitude,
-      items: storeOrders.flatMap((so: any) => so.order_items || []),
+      items: storeOrders.flatMap((so: { order_items?: TrackingOrderItem[] | null }) => so.order_items || []),
       store_locations: storeLocations.length > 0 ? storeLocations : order.store_locations,
       store_orders: storeOrders,
     };
@@ -133,7 +144,7 @@ export function useOrderTrackingRealtime(
     setOrder(updatedOrder);
     setTrackingHistory(build(updatedOrder, statusHistory));
     if (setEtaMinutes && computeEtaMinutes) {
-      setEtaMinutes(computeEtaMinutes(updatedOrder.status, (co as any).eta_minutes));
+      setEtaMinutes(computeEtaMinutes(updatedOrder.status, (co as { eta_minutes?: number | null }).eta_minutes));
     }
   };
 
@@ -216,6 +227,7 @@ export function useOrderTrackingRealtime(
       supabaseNoSession.removeChannel(channel);
       setIsRealtimeConnected(false);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- subscribes once per order (and once it has loaded); listing `order` would re-create the realtime channel on every refresh.
   }, [orderId, !!order]);
 
   // driver_locations is already in the supabase_realtime publication (added
@@ -322,6 +334,7 @@ export function useOrderTrackingRealtime(
       stopPolling();
       if (channel) supabaseNoSession.removeChannel(channel);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- driverIdsKey is the joined driver ids, so the channel re-subscribes only when the set of drivers changes; the setter is stable.
   }, [orderId, driverIdsKey]);
 
   return { isRealtimeConnected };

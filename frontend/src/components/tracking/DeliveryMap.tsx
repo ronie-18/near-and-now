@@ -257,6 +257,7 @@ export default function DeliveryMap({
     };
     run();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- depKey is a string built from every value this effect reads, so it re-runs only when they change, not on every render.
   }, [depKey]);
 
   // Fit bounds to full visible route at all times (Swiggy/Zomato style): route path + driver + destination

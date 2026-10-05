@@ -254,6 +254,7 @@ const ProductDetailPage = () => {
     return () => {
       cancelled = true;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- showNotification only reports errors; the fetch should re-run only for a different product.
   }, [productId]);
 
   useEffect(() => {

@@ -367,7 +367,9 @@ export class OrdersController {
       if (customerId !== req.customerId) {
         return res.status(403).json({ error: 'Not authorized to view these orders' });
       }
-      const orders = await databaseService.getCustomerOrders(customerId);
+      // ?active=true: only orders that are not delivered/cancelled (same row shape).
+      const activeOnly = req.query.active === 'true';
+      const orders = await databaseService.getCustomerOrders(customerId, { activeOnly });
       res.json(orders);
     } catch (error) {
       return sendError(res, 'OrdersController.getCustomerOrders', 'Could not load the orders', error);

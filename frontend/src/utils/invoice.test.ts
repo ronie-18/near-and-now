@@ -19,7 +19,7 @@ describe('invoice downloads', () => {
       } as unknown as HTMLAnchorElement;
     });
 
-    const appendSpy = vi.spyOn(document.body, 'appendChild').mockImplementation((node: any) => node);
+    const appendSpy = vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(node: T) => node);
     const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:invoice-url');
 
@@ -56,7 +56,7 @@ describe('invoice downloads', () => {
       } as unknown as HTMLAnchorElement;
     });
 
-    vi.spyOn(document.body, 'appendChild').mockImplementation((node: any) => node);
+    vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(node: T) => node);
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:invoice-url');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
 

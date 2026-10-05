@@ -116,11 +116,11 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
       setStep(2);
       setResendTimer(30);
       showNotification('OTP sent to your phone', 'success');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error sending OTP:', error);
       const message =
-        error?.message && typeof error.message === 'string'
-          ? error.message
+        (error as Error | undefined)?.message && typeof (error as Error).message === 'string'
+          ? (error as Error).message
           : 'Failed to send OTP. Please try again.';
       showNotification(message, 'error');
     } finally {
@@ -180,8 +180,8 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
       await verifyEmailCode(emailCode.trim());
       showNotification('Email verified!', 'success');
       onClose();
-    } catch (error: any) {
-      showNotification(error?.message || 'Invalid or expired code', 'error');
+    } catch (error) {
+      showNotification((error as Error | undefined)?.message || 'Invalid or expired code', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -192,7 +192,7 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
       setIsSubmitting(true);
       await resendEmailCode();
       showNotification('Verification code resent', 'success');
-    } catch (error: any) {
+    } catch (error) {
       showNotification(describeError('AuthModal.handleResendEmailCode', 'Could not resend code', error), 'error');
     } finally {
       setIsSubmitting(false);
@@ -208,11 +208,11 @@ const AuthModal = ({ isOpen, onClose, mode = 'login' }: AuthModalProps) => {
       await sendOTPCode('+91' + phone);
       setResendTimer(30);
       showNotification('OTP resent to your phone', 'success');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error resending OTP:', error);
       const message =
-        error?.message && typeof error.message === 'string'
-          ? error.message
+        (error as Error | undefined)?.message && typeof (error as Error).message === 'string'
+          ? (error as Error).message
           : 'Failed to resend OTP. Please try again.';
       showNotification(message, 'error');
     } finally {

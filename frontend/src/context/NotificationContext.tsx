@@ -19,6 +19,7 @@ interface NotificationContextType {
 }
 
 // Create context (exported for testing)
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
 // Notification provider props
@@ -79,6 +80,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
 }
 
 // Custom hook to use notification context
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export function useNotification() {
   const context = useContext(NotificationContext);
   if (context === undefined) {

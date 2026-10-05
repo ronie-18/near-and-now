@@ -25,7 +25,7 @@ interface AuthContextType {
     delivery_instructions: string;
   }) => Promise<{ isNewUser: boolean }>;
   logoutUser: () => Promise<void>;
-  updateUserProfile: (data: any) => Promise<void>;
+  updateUserProfile: (data: Parameters<typeof updateCustomerProfile>[1] & { email?: string }) => Promise<void>;
   changeEmail: (email: string) => Promise<void>;
   verifyEmailCode: (code: string) => Promise<void>;
   resendEmailCode: () => Promise<void>;
@@ -189,7 +189,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   // Update user profile
-  const updateUserProfile = useCallback(async (data: any) => {
+  const updateUserProfile = useCallback(async (data: Parameters<typeof updateCustomerProfile>[1] & { email?: string }) => {
     try {
       setIsLoading(true);
 
@@ -269,6 +269,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 }
 
 // Custom hook to use auth context
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {

@@ -11,8 +11,8 @@ export interface AuditLogEntry {
   action: string;
   resource_type: string;
   resource_id?: string;
-  old_values?: any;
-  new_values?: any;
+  old_values?: unknown;
+  new_values?: unknown;
   ip_address?: string;
   user_agent?: string;
   status?: 'success' | 'failure';
@@ -51,7 +51,7 @@ export async function logSecurityEvent(
   eventType: string,
   severity: 'low' | 'medium' | 'high' | 'critical',
   description: string,
-  metadata?: any
+  metadata?: unknown
 ): Promise<void> {
   try {
     await supabaseNoSession.from('security_events').insert({
@@ -111,7 +111,7 @@ export async function getAuditLogs(
   resourceType?: string,
   resourceId?: string,
   limit: number = 100
-): Promise<any[]> {
+): Promise<Record<string, unknown>[]> {
   try {
     let query = supabaseNoSession
       .from('audit_logs')
@@ -147,7 +147,7 @@ export async function getAuditLogs(
 export async function getSecurityEvents(
   severity?: 'low' | 'medium' | 'high' | 'critical',
   limit: number = 100
-): Promise<any[]> {
+): Promise<Record<string, unknown>[]> {
   try {
     let query = supabaseNoSession
       .from('security_events')
@@ -198,11 +198,11 @@ export async function withAuditLog<T>(
     });
     
     return result;
-  } catch (error: any) {
+  } catch (error) {
     await logAdminAction({
       ...auditEntry,
       status: 'failure',
-      error_message: error.message || 'Unknown error'
+      error_message: (error as Error).message || 'Unknown error'
     });
     
     throw error;

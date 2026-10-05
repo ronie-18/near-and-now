@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
+import { runWithDbStats, recordRiderRequest, type DbStats } from '../utils/requestMetrics.js';
 
 declare module 'express' {
   interface Request {
@@ -37,6 +38,7 @@ export function requestContext(req: Request, res: Response, next: NextFunction):
   req.requestId = id;
   req.startedAt = performance.now();
   res.setHeader('X-Request-Id', id);
+  const db: DbStats = { calls: 0, ms: 0 };
 
   res.on('finish', () => {
     const durationMs = Math.round(performance.now() - (req.startedAt ?? performance.now()));
@@ -49,12 +51,17 @@ export function requestContext(req: Request, res: Response, next: NextFunction):
       route: routePath,
       url: req.originalUrl,
       status: res.statusCode,
-      durationMs
+      durationMs,
+      // Database calls this request made and their total time (utils/requestMetrics.ts).
+      dbCalls: db.calls,
+      dbMs: Math.round(db.ms)
     });
     if (level === 'error') console.error(line);
     else if (level === 'warn') console.warn(line);
     else if (process.env.LOG_REQUESTS !== 'false') console.log(line);
+    // requireRider sets riderId; feeds the per-rider request-rate alert.
+    if (req.riderId) recordRiderRequest(req.riderId);
   });
 
-  next();
+  runWithDbStats(db, next);
 }

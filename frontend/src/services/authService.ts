@@ -91,7 +91,7 @@ export async function sendOTP(phone: string): Promise<void> {
           typeof data.error === 'string' ? data.error : data.message || 'Failed to send OTP'
         );
       }
-    } catch (e: any) {
+    } catch (e) {
       if (e instanceof SyntaxError) {
         throw new Error('Invalid response from server when sending OTP');
       }
@@ -99,7 +99,7 @@ export async function sendOTP(phone: string): Promise<void> {
     }
 
     console.log('✅ OTP sent successfully');
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error sending OTP:', error);
     throw error;
   }
@@ -133,7 +133,7 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
         'Login API is not reachable at this URL (got a web page instead of JSON). Set VITE_API_URL to your Vercel API origin or fix custom domain routing for /api.'
       );
     }
-    let data: any;
+    let data: Partial<AuthResponse>;
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
@@ -156,7 +156,7 @@ export async function verifyOTP(phone: string, otp: string, userData?: {
       token: data.token,
       isNewUser: Boolean(data.isNewUser)
     };
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in verifyOTP:', error);
     throw error;
   }
@@ -224,14 +224,14 @@ export async function updateCustomerProfile(_userId: string, updates: {
   }
 }
 
-async function postJson(path: string, body?: Record<string, unknown>): Promise<any> {
+async function postJson<T = Record<string, unknown>>(path: string, body?: Record<string, unknown>): Promise<T> {
   const response = await authedFetch(apiUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(body || {})
   });
   const text = await response.text();
-  let data: any;
+  let data: { error?: string; message?: string } & Record<string, unknown>;
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
@@ -240,7 +240,7 @@ async function postJson(path: string, body?: Record<string, unknown>): Promise<a
   if (!response.ok) {
     throw new Error(data?.error || data?.message || 'Request failed');
   }
-  return data;
+  return data as T;
 }
 
 /** Sets (first time) or stages a change of (subsequent times) the customer's email. Sends a 4-digit code. */
@@ -250,7 +250,7 @@ export async function changeCustomerEmail(email: string): Promise<void> {
 
 /** Confirms the 4-digit code emailed by changeCustomerEmail/resendEmailVerificationCode. */
 export async function verifyCustomerEmailCode(code: string): Promise<{ email: string }> {
-  const data = await postJson('/api/customers/email/verify', { code });
+  const data = await postJson<{ email: string }>('/api/customers/email/verify', { code });
   return { email: data.email };
 }
 

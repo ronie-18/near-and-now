@@ -110,7 +110,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to send OTP');
       setStep('otp');
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -127,7 +127,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
       if (!r.ok) throw new Error(d.error || 'Invalid OTP');
       if (!d.token) throw new Error('No token received');
       onLogin(d.token);
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -225,7 +225,7 @@ function OfferCard({ offer, token, onAccepted, onIgnored }: {
       if (!r.ok && d.result !== 'already_taken') throw new Error(d.error || 'Failed');
       if (d.result === 'already_taken') { setError('Another rider accepted first'); return; }
       onAccepted(offer.order_id);
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -314,6 +314,7 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
       }
     } catch { /* non-critical */ }
     finally { setLoadingSeq(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` every render; `token` is the real dependency.
   }, [orderId, token]);
 
   useEffect(() => {
@@ -339,8 +340,8 @@ function ActiveOrderView({ orderId, token, onDelivered }: {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Wrong code');
       fetchSequence();
-    } catch (e: any) {
-      setCodeErrors((p) => ({ ...p, [stop.allocation_id]: e.message }));
+    } catch (e) {
+      setCodeErrors((p) => ({ ...p, [stop.allocation_id]: (e as Error).message }));
     } finally {
       setVerifying((p) => ({ ...p, [stop.allocation_id]: false }));
     }
@@ -551,6 +552,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
       method: 'POST', headers,
       body: JSON.stringify({ latitude, longitude }),
     }).catch((err) => console.error(err));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` every render; `token` is the real dependency.
   }, [token]);
 
   // Start/stop GPS heartbeat based on online state
@@ -629,6 +631,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
       })
       .catch((err) => console.error(err))
       .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` and `onLogout` comes from the parent each render; this should run only when the token changes.
   }, [token]);
 
   // Poll for offers
@@ -643,6 +646,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
     poll();
     const t = setInterval(poll, 5000);
     return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` every render; `token` is the real dependency.
   }, [isOnline, token]);
 
   // Poll for active and past orders
@@ -655,7 +659,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
 
       if (activeRes?.ok) {
         const d = await activeRes.json();
-        const active = (d.orders || []).find((o: any) =>
+        const active = (d.orders || []).find((o: { status: string }) =>
           // mapDbStatusToRider (backend) emits rider_assigned / picking_up / picked_up — never en_route_delivery.
           ['rider_assigned', 'picking_up', 'en_route_delivery', 'picked_up'].includes(o.status)
         );
@@ -672,6 +676,7 @@ function DriverDashboard({ token, onLogout }: { token: string; onLogout: () => v
     poll();
     const t = setInterval(poll, 6000);
     return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` every render; `token` is the real dependency.
   }, [token, delivered]);
 
   const visibleOffers = offers.filter((o) => !ignoredIds.has(o.offer_id));

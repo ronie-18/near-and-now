@@ -6,10 +6,11 @@ import HomePage from './HomePage';
 import { NotificationContext } from '../context/NotificationContext';
 import { LocationContext } from '../context/LocationContext';
 
-const getAllProductsMock = vi.fn().mockResolvedValue([]);
+const getHomeCategoryRailsMock = vi.fn().mockResolvedValue({ byCategory: {}, totals: {} });
 
 vi.mock('../services/supabase', () => ({
-  getAllProducts: (...args: unknown[]) => getAllProductsMock(...args),
+  getHomeCategoryRails: (...args: unknown[]) => getHomeCategoryRailsMock(...args),
+  HOME_RAIL_SIZE: 6,
 }));
 
 vi.mock('../services/adminService', () => ({
@@ -51,7 +52,7 @@ function LocationHarness({ children }: { children: React.ReactNode }) {
 
 describe('HomePage', () => {
   beforeEach(() => {
-    getAllProductsMock.mockClear();
+    getHomeCategoryRailsMock.mockClear();
   });
 
   it('re-fetches products when the delivery location changes', async () => {
@@ -66,12 +67,12 @@ describe('HomePage', () => {
     );
 
     // Initial fetch on mount, before any location is known.
-    await waitFor(() => expect(getAllProductsMock).toHaveBeenCalledTimes(1));
-    expect(getAllProductsMock).toHaveBeenNthCalledWith(1, undefined);
+    await waitFor(() => expect(getHomeCategoryRailsMock).toHaveBeenCalledTimes(1));
+    expect(getHomeCategoryRailsMock).toHaveBeenNthCalledWith(1, undefined);
 
     // Once the location harness sets a location, HomePage must re-fetch
     // with it — previously this never happened (empty effect deps).
-    await waitFor(() => expect(getAllProductsMock).toHaveBeenCalledTimes(2));
-    expect(getAllProductsMock).toHaveBeenNthCalledWith(2, { lat: 12.9, lng: 77.6 });
+    await waitFor(() => expect(getHomeCategoryRailsMock).toHaveBeenCalledTimes(2));
+    expect(getHomeCategoryRailsMock).toHaveBeenNthCalledWith(2, { lat: 12.9, lng: 77.6 });
   });
 });

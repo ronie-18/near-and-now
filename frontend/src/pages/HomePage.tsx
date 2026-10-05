@@ -1,7 +1,6 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getAllProducts } from '../services/supabase';
-import { Product } from '../services/supabase';
+import { getHomeCategoryRails, HOME_RAIL_SIZE, type HomeCategoryRails } from '../services/supabase';
 import { getCategories, Category } from '../services/adminService';
 import { useNotification } from '../context/NotificationContext';
 import { useLocation } from '../context/LocationContext';
@@ -15,7 +14,7 @@ import { describeError } from '../utils/apiErrors';
 ───────────────────────────────────────────────────────── */
 
 const HomePage = () => {
-  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [rails, setRails] = useState<HomeCategoryRails>({ byCategory: {}, totals: {} });
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
@@ -40,15 +39,15 @@ const HomePage = () => {
       setFetchError(false);
 
       const opts = lat != null && lng != null ? { lat, lng } : undefined;
-      const [products, categoriesData] = await Promise.all([
-        getAllProducts(opts),
+      const [homeRails, categoriesData] = await Promise.all([
+        getHomeCategoryRails(opts),
         getCategories()
       ]);
       if (seq !== fetchSeqRef.current) return;
 
-      setAllProducts(products);
+      setRails(homeRails);
 
-      const productCategories = new Set(products.map(p => p.category).filter(Boolean));
+      const productCategories = new Set(Object.keys(homeRails.totals));
 
       const uniqueCategories = categoriesData.filter((category, index, self) => {
         const isUnique = index === self.findIndex(c =>
@@ -264,11 +263,11 @@ const HomePage = () => {
             /* ── Category sections ── */
             <div className="space-y-5">
               {categories.map((category, sectionIdx) => {
-                const categoryProducts = allProducts.filter(p => p.category === category.name);
-                if (categoryProducts.length === 0) return null;
+                const categoryTotal = rails.totals[category.name] ?? 0;
+                if (categoryTotal === 0) return null;
 
-                const displayProducts = categoryProducts.slice(0, 6);
-                const hasMore = categoryProducts.length > 6;
+                const displayProducts = rails.byCategory[category.name] ?? [];
+                const hasMore = categoryTotal > HOME_RAIL_SIZE;
 
                 return (
                   <div

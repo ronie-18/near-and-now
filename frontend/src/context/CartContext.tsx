@@ -21,14 +21,17 @@ export interface CartItem {
   isLoose?: boolean;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export const getDistanceBasedDeliveryFee = (distanceKm?: number, cartSubtotal = 0): number => {
   const breakdown = calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartSubtotal);
   return breakdown.deliveryFee;
 };
 
 /** Fixed delivery fee of Rs 30 for all orders */
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export const getDeliveryFeeForSubtotal = (_cartSubtotal: number): number => 30;
 
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export const getCompleteFeeBreakdown = (distanceKm?: number, cartSubtotal = 0): DeliveryFeeBreakdown => {
   return calculateFeeBreakdown(distanceKm ?? DEFAULT_QUOTE_DISTANCE_KM, cartSubtotal);
 };
@@ -53,6 +56,7 @@ interface CartContextType {
 }
 
 // Create context (exported for testing)
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export const CartContext = createContext<CartContextType | undefined>(undefined);
 
 // Cart provider props
@@ -269,6 +273,7 @@ export function CartProvider({ children }: CartProviderProps) {
 }
 
 // Custom hook to use cart context
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export function useCart() {
   const context = useContext(CartContext);
   if (context === undefined) {
@@ -283,6 +288,7 @@ export function useCart() {
 // should look up against this Map instead (O(1)) to keep each still-
 // necessary re-render (a genuine cart change re-renders every card that
 // reads cartItems, by React Context's own design) as cheap as possible.
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export function useCartItemMap(): Map<string, CartItem> {
   const { cartItems } = useCart();
   return useMemo(() => {

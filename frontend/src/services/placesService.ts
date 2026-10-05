@@ -91,7 +91,7 @@ export async function searchPlaces(query: string): Promise<PlaceSuggestion[]> {
 
   if (data.status === 'OK') {
     const predictions = data.predictions || [];
-    return predictions.slice(0, 5).map((p: any) => ({
+    return predictions.slice(0, 5).map((p: { place_id: string; description: string; structured_formatting?: { main_text?: string; secondary_text?: string } }) => ({
       placeId: p.place_id,
       description: p.description,
       mainText: p.structured_formatting?.main_text ?? p.description,

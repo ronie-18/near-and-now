@@ -257,6 +257,7 @@ const CheckoutPage = () => {
       }
     };
     if (user?.id) fetchAddresses();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- prefill runs once per signed-in user; re-running on later changes would overwrite what the customer has typed.
   }, [user?.id]);
 
   const handleLocationPicked = (location: LocationData) => {
@@ -710,9 +711,9 @@ const CheckoutPage = () => {
       clearCart();
       lastCreatedAddressRef.current = null;
       navigate(`/track/${createdOrder.id}`);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error placing order:', error);
-      const message = error?.message || 'Failed to place order. Please try again.';
+      const message = (error as Error | undefined)?.message || 'Failed to place order. Please try again.';
       showNotification(message, 'error');
       if (String(message).toLowerCase().includes('verify your email')) {
         navigate('/profile');
@@ -810,9 +811,9 @@ const CheckoutPage = () => {
       }
       setAppliedCoupon(data as AppliedCoupon);
       showNotification(`Coupon "${data.code}" applied!`, 'success');
-    } catch (err: any) {
+    } catch (err) {
       setAppliedCoupon(null);
-      setCouponError(err.message || 'Invalid coupon code');
+      setCouponError((err as Error).message || 'Invalid coupon code');
     } finally {
       setCouponLoading(false);
     }

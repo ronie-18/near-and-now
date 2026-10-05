@@ -6,7 +6,7 @@ import {
   RotateCcw, FileText, HeadphonesIcon, Navigation,
 } from 'lucide-react';
 import { supabaseNoSession } from '../services/supabase';
-import { useOrderTrackingRealtime, type Order, type OrderStatus } from '../hooks/useOrderTrackingRealtime';
+import { useOrderTrackingRealtime, type Order, type OrderStatus, type TrackingOrderItem } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
 import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
 import { geocodeAddress } from '../services/placesService';
@@ -193,7 +193,7 @@ const OrderTrackingPage = () => {
         total_amount: orderData.total_amount || 0,
         payment_method: orderData.payment_method || 'COD',
         payment_status: orderData.payment_status,
-        items: orderData.store_orders?.flatMap((so: any) => so.order_items || []) || [],
+        items: orderData.store_orders?.flatMap((so: { order_items?: TrackingOrderItem[] | null }) => so.order_items || []) || [],
         estimated_delivery: orderData.estimated_delivery_time,
         delivery_latitude: orderData.delivery_latitude,
         delivery_longitude: orderData.delivery_longitude,
@@ -205,13 +205,14 @@ const OrderTrackingPage = () => {
       setOrder(transformed);
       setTrackingHistory(buildTrackingHistory(transformed, statusHistory || []));
 
-      setEtaMinutes(computeEtaMinutes(transformed.status, (orderData as any).eta_minutes));
+      setEtaMinutes(computeEtaMinutes(transformed.status, (orderData as { eta_minutes?: number | null }).eta_minutes));
     } catch (err) {
       setFetchError(true);
       setFetchErrorMessage(describeError('OrderTrackingPage.fetchTracking', `Could not load tracking for order ${orderId}`, err));
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- buildTrackingHistory is a pure helper recreated each render; the loader only needs to change with the order id.
   }, [orderId]);
 
   useEffect(() => { fetchTracking(); }, [fetchTracking]);
@@ -674,7 +675,7 @@ const OrderTrackingPage = () => {
           {showItems && (
             <div className="border-t border-gray-100">
               <div className="divide-y divide-gray-100">
-                {order.items.map((item: any, idx: number) => {
+                {order.items.map((item: TrackingOrderItem, idx: number) => {
                   // A store could not supply it and no nearby store had it:
                   // the backend marks it 'unavailable' (and, for cash on
                   // delivery, already took it off total_amount).
@@ -699,7 +700,7 @@ const OrderTrackingPage = () => {
                   );
                 })}
               </div>
-              {order.items.some((item: any) => item.item_status === 'unavailable') && order.payment_method?.toLowerCase() !== 'cod' && (
+              {order.items.some((item: TrackingOrderItem) => item.item_status === 'unavailable') && order.payment_method?.toLowerCase() !== 'cod' && (
                 <p className="px-5 py-2 text-xs text-gray-500 bg-amber-50 border-t border-amber-100">
                   Unavailable items are refunded to your original payment method; the total below still shows what you paid.
                 </p>

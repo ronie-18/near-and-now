@@ -130,7 +130,7 @@ const ThankYouPage = () => {
           navigate('/orders');
         }, 2000);
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error cancelling order:', error);
       setCancelError(describeError('ThankYouPage.handleCancelOrder', 'Could not cancel the order', error));
     } finally {
