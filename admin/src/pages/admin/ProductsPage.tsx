@@ -14,6 +14,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Pencil,
 } from "lucide-react";
 import IdCell from "../../components/admin/IdCell";
 import {
@@ -25,7 +26,10 @@ import {
   getCategories,
   Category,
   notifyAdminAction,
+  type ProductStatusFilter,
 } from "../../services/adminService";
+import { getCurrentAdmin } from "../../services/secureAdminAuth";
+import { hasRole } from "../../services/adminAuthService";
 import { Product } from "../../services/supabase";
 import {
   PageHeader,
@@ -66,10 +70,16 @@ import {
 import { useToast } from "../../context/ToastContext";
 import { cn } from "../../utils/cn";
 import { formatCurrency, formatNumber } from "../../utils/format";
+import {
+  validatePriceEdit,
+  describePriceSaveError,
+  type PriceField,
+  type PriceFieldErrors,
+} from "../../utils/productPrice";
 
 // Constants
 const PAGE_SIZE_OPTIONS: number[] = [10, 25, 50, 100];
-const TABLE_COLUMNS = 6;
+const TABLE_COLUMNS = 7;
 
 type SortField = "name" | "price" | "category" | "in_stock" | "created_at";
 type SortDirection = "asc" | "desc";
@@ -392,6 +402,182 @@ const QuickAddModal = ({
   );
 };
 
+// Change price: discounted price (master_products.discounted_price) and MRP
+// (base_price) for super admins and admins. Both fields are always shown
+// because each limits the other (the MRP must be at least the discounted
+// price); the one whose button was clicked gets focus. The change applies in
+// every store, like the full edit form.
+type PriceEditTarget = { product: Product; field: PriceField };
+
+const PriceEditModal = ({
+  target,
+  onClose,
+  onSaved,
+}: {
+  target: PriceEditTarget | null;
+  onClose: () => void;
+  onSaved: (updated: Product, before: Product) => void;
+}) => {
+  const [price, setPrice] = useState("");
+  const [mrp, setMrp] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<PriceFieldErrors>({});
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const priceRef = useRef<HTMLInputElement>(null);
+  const mrpRef = useRef<HTMLInputElement>(null);
+  const formId = useId();
+  const product = target?.product ?? null;
+
+  // Start from the product's current prices every time the editor opens.
+  useEffect(() => {
+    if (!product) return;
+    setPrice(product.price != null ? String(product.price) : "");
+    setMrp(product.original_price != null ? String(product.original_price) : "");
+    setFieldErrors({});
+    setError(null);
+  }, [product]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!product || saving) return;
+    setError(null);
+
+    const result = validatePriceEdit({ price, mrp });
+    if (!result.ok) {
+      setFieldErrors(result.errors);
+      return;
+    }
+    setFieldErrors({});
+    // Nothing changed: close without writing or notifying anyone.
+    if (result.price === product.price && result.mrp === (product.original_price ?? product.price)) {
+      onClose();
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const updated = await updateProduct(product.id, { price: result.price, original_price: result.mrp });
+      if (!updated) {
+        setError(describePriceSaveError(null));
+        return;
+      }
+      onSaved(updated, product);
+      onClose();
+    } catch (err) {
+      console.error("Error updating product price:", err);
+      setError(describePriceSaveError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={target !== null}
+      onClose={onClose}
+      title="Change price"
+      description={product ? `${product.name}. The new price applies in every store.` : undefined}
+      initialFocusRef={target?.field === "mrp" ? mrpRef : priceRef}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} loading={saving}>
+            Save price
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit} className="space-y-5" noValidate>
+        {error && (
+          <Alert tone="danger" onDismiss={() => setError(null)}>
+            {error}
+          </Alert>
+        )}
+        <div className="grid gap-5 sm:grid-cols-2">
+          <FormField
+            label="Discounted price (₹)"
+            htmlFor={`${formId}-price`}
+            required
+            error={fieldErrors.price}
+            hint={product ? `Now ${priceLabel(product.price)}` : undefined}
+          >
+            <Input
+              ref={priceRef}
+              id={`${formId}-price`}
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min="0"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              invalid={Boolean(fieldErrors.price)}
+              disabled={saving}
+              className="tabular-nums"
+            />
+          </FormField>
+          <FormField
+            label="MRP (₹)"
+            htmlFor={`${formId}-mrp`}
+            error={fieldErrors.mrp}
+            hint="Leave blank if there is no discount."
+          >
+            <Input
+              ref={mrpRef}
+              id={`${formId}-mrp`}
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min="0"
+              value={mrp}
+              onChange={(e) => setMrp(e.target.value)}
+              invalid={Boolean(fieldErrors.mrp)}
+              disabled={saving}
+              className="tabular-nums"
+            />
+          </FormField>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+// A price with, for super admins and admins, a button that opens the price
+// editor on that field.
+const EditablePrice = ({
+  product,
+  field,
+  canEdit,
+  onEdit,
+}: {
+  product: Product;
+  field: PriceField;
+  canEdit: boolean;
+  onEdit: (target: PriceEditTarget) => void;
+}) => {
+  const value = field === "price" ? product.price : product.original_price ?? product.price;
+  const name = field === "price" ? "discounted price" : "MRP";
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <span className="tabular-nums">{priceLabel(value)}</span>
+      {canEdit && (
+        <Tooltip content={field === "price" ? "Change discounted price" : "Change MRP"}>
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label={`Change ${name} of ${product.name}`}
+            onClick={() => onEdit({ product, field })}
+            className="h-7 w-7 text-gray-500 hover:text-gray-900"
+          >
+            <Pencil />
+          </IconButton>
+        </Tooltip>
+      )}
+    </span>
+  );
+};
+
 // Shared props for the list row and grid card
 interface ProductItemProps {
   product: Product;
@@ -399,6 +585,8 @@ interface ProductItemProps {
   onToggleStock: (id: string, currentStatus: boolean) => void;
   deleteLoading: string | null;
   toggleLoading: string | null;
+  canEditPrices: boolean;
+  onEditPrice: (target: PriceEditTarget) => void;
 }
 
 // Row actions are always visible (no hover-only reveal) so they work with a
@@ -435,10 +623,11 @@ const ProductActions = ({ product, onDelete, deleteLoading }: Pick<ProductItemPr
 );
 
 // Product Row Component
-const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading }: ProductItemProps) => (
+const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading, canEditPrices, onEditPrice }: ProductItemProps) => (
   <Tr>
-    <Td nowrap>
-      <IdCell id={product.id} />
+    {/* The ID wraps onto two lines to leave room for the two price columns. */}
+    <Td>
+      <IdCell id={product.id} wrap />
     </Td>
     <Td>
       <div className="flex items-center gap-3">
@@ -459,8 +648,11 @@ const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoa
     <Td nowrap>
       <Badge tone="neutral">{product.category}</Badge>
     </Td>
-    <Td align="right" nowrap className="font-medium text-gray-900 tabular-nums">
-      {priceLabel(product.price)}
+    <Td align="right" nowrap className="font-medium text-gray-900">
+      <EditablePrice product={product} field="price" canEdit={canEditPrices} onEdit={onEditPrice} />
+    </Td>
+    <Td align="right" nowrap className="text-gray-600">
+      <EditablePrice product={product} field="mrp" canEdit={canEditPrices} onEdit={onEditPrice} />
     </Td>
     <Td nowrap>
       {/* One column for the single underlying flag (master_products.is_active,
@@ -484,7 +676,7 @@ const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoa
 );
 
 // Product Card for Grid View
-const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading }: ProductItemProps) => (
+const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading, canEditPrices, onEditPrice }: ProductItemProps) => (
   <Card className="flex flex-col">
     <div className="flex items-center justify-center border-b border-gray-200 bg-gray-50 p-6">
       <ProductImage imageUrl={product.image} productName={product.name} size="lg" />
@@ -492,7 +684,7 @@ const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLo
 
     <div className="flex flex-1 flex-col gap-3 p-4">
       <div className="flex items-start justify-between gap-2">
-        <IdCell id={product.id} />
+        <IdCell id={product.id} wrap />
         <StatusBadge kind="generic" value={product.in_stock ? "active" : "inactive"} />
       </div>
 
@@ -508,8 +700,21 @@ const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLo
         </p>
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold text-gray-900 tabular-nums">{priceLabel(product.price)}</span>
+      <div className="flex items-start justify-between gap-2">
+        <dl className="space-y-0.5">
+          <div className="flex items-center gap-2">
+            <dt className="w-16 text-xs text-gray-500">Discounted</dt>
+            <dd className="font-semibold text-gray-900">
+              <EditablePrice product={product} field="price" canEdit={canEditPrices} onEdit={onEditPrice} />
+            </dd>
+          </div>
+          <div className="flex items-center gap-2">
+            <dt className="w-16 text-xs text-gray-500">MRP</dt>
+            <dd className="text-sm text-gray-600">
+              <EditablePrice product={product} field="mrp" canEdit={canEditPrices} onEdit={onEditPrice} />
+            </dd>
+          </div>
+        </dl>
         <Badge tone="neutral">{product.category}</Badge>
       </div>
 
@@ -574,6 +779,15 @@ const ProductsPage = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(PAGE_SIZE_OPTIONS[0]);
   const [selectedCategory, setSelectedCategory] = useState("All");
+  // Set by the Total / Active / Inactive stat cards.
+  const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>("all");
+  const [priceTarget, setPriceTarget] = useState<PriceEditTarget | null>(null);
+  // Prices can be changed by super admins and admins, the same roles the full
+  // edit form allows. getCurrentAdmin parses localStorage; read it once.
+  const canEditPrices = useMemo(() => {
+    const admin = getCurrentAdmin();
+    return Boolean(admin && hasRole(admin, ["super_admin", "admin"]));
+  }, []);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [toggleLoading, setToggleLoading] = useState<string | null>(null);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
@@ -610,6 +824,7 @@ const ProductsPage = () => {
           pageSize: itemsPerPage,
           search: debouncedSearch,
           category: selectedCategory,
+          status: statusFilter,
           sortField,
           sortDirection,
         });
@@ -628,7 +843,7 @@ const ProductsPage = () => {
         }
       }
     },
-    [currentPage, itemsPerPage, debouncedSearch, selectedCategory, sortField, sortDirection]
+    [currentPage, itemsPerPage, debouncedSearch, selectedCategory, statusFilter, sortField, sortDirection]
   );
 
   const fetchStats = useCallback(async () => {
@@ -765,6 +980,9 @@ const ProductsPage = () => {
 
         const newStatus = currentStatus ? "Inactive" : "Active";
         void fetchStats();
+        // Under the Active or Inactive card the row no longer belongs in the
+        // list; refetch so the list stays exactly the products the card counts.
+        if (statusFilter !== "all") void fetchData("refresh");
         await notifyAdminAction(`set "${newStatus}"`, productName, { product_id: id, product_name: productName });
 
         showToast(`"${productName}" is now ${newStatus.toLowerCase()}.`, "success");
@@ -777,6 +995,41 @@ const ProductsPage = () => {
     } finally {
       setToggleLoading(null);
     }
+  };
+
+  const handlePriceSaved = async (updated: Product, before: Product) => {
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === updated.id ? { ...p, price: updated.price, original_price: updated.original_price } : p
+      )
+    );
+    // The row's place in a price-sorted list may have changed.
+    if (sortField === "price") void fetchData("refresh");
+    const newPrice = priceLabel(updated.price);
+    const newMrp = priceLabel(updated.original_price ?? updated.price);
+    await notifyAdminAction(
+      "changed the price of",
+      `${before.name}: ${priceLabel(before.price)} (MRP ${priceLabel(before.original_price ?? before.price)}) to ${newPrice} (MRP ${newMrp})`,
+      {
+        product_id: before.id,
+        product_name: before.name,
+        old_price: before.price,
+        new_price: updated.price,
+        old_mrp: before.original_price ?? before.price,
+        new_mrp: updated.original_price ?? updated.price,
+      }
+    );
+    showToast(`"${before.name}" now sells at ${newPrice} (MRP ${newMrp}).`, "success");
+  };
+
+  // A stat card shows exactly the products it counts, so it also clears the
+  // search and category (the counts are for the whole catalog).
+  const showStatus = (next: ProductStatusFilter) => {
+    setStatusFilter(next);
+    setSearchTerm("");
+    setDebouncedSearch("");
+    setSelectedCategory("All");
+    setCurrentPage(1);
   };
 
   // `products` already holds only the current page's rows, already filtered
@@ -795,10 +1048,11 @@ const ProductsPage = () => {
     [categories]
   );
 
-  const hasFilters = searchTerm.trim() !== "" || selectedCategory !== "All";
+  const hasFilters = searchTerm.trim() !== "" || selectedCategory !== "All" || statusFilter !== "all";
   const clearFilters = () => {
     setSearchTerm("");
     setSelectedCategory("All");
+    setStatusFilter("all");
     setCurrentPage(1);
   };
 
@@ -813,7 +1067,7 @@ const ProductsPage = () => {
       title="No products found"
       description={
         hasFilters
-          ? "Try adjusting your search or category filter."
+          ? "Try adjusting your search, category or status filter."
           : "Get started by adding your first product to the catalog."
       }
       action={
@@ -848,7 +1102,8 @@ const ProductsPage = () => {
       />
 
       <div className="space-y-6">
-        {/* Stats — catalog-wide counts of master_products.is_active */}
+        {/* Stats — catalog-wide counts of master_products.is_active. Each card
+            filters the list to exactly the products it counts. */}
         <StatGrid columns={3}>
           <StatCard
             label="Total products"
@@ -856,6 +1111,8 @@ const ProductsPage = () => {
             hint={statsError ? "Couldn't load counts" : undefined}
             icon={Package}
             loading={statsLoading}
+            active={statusFilter === "all"}
+            onClick={() => showStatus("all")}
           />
           <StatCard
             label="Active"
@@ -867,12 +1124,16 @@ const ProductsPage = () => {
             }
             icon={CheckCircle2}
             loading={statsLoading}
+            active={statusFilter === "active"}
+            onClick={() => showStatus("active")}
           />
           <StatCard
             label="Inactive"
             value={statsError ? "—" : formatNumber(stats.outOfStock)}
             icon={XCircle}
             loading={statsLoading}
+            active={statusFilter === "inactive"}
+            onClick={() => showStatus("inactive")}
           />
         </StatGrid>
 
@@ -996,13 +1257,14 @@ const ProductsPage = () => {
                         onSort={handleSort}
                       />
                       <SortableHeader
-                        label="Price"
+                        label="Discounted price"
                         field="price"
                         align="right"
                         currentSort={sortField}
                         direction={sortDirection}
                         onSort={handleSort}
                       />
+                      <Th align="right">MRP</Th>
                       <SortableHeader
                         label="Status"
                         field="in_stock"
@@ -1027,6 +1289,8 @@ const ProductsPage = () => {
                           onToggleStock={handleToggleStock}
                           deleteLoading={deleteLoading}
                           toggleLoading={toggleLoading}
+                          canEditPrices={canEditPrices}
+                          onEditPrice={setPriceTarget}
                         />
                       ))
                     )}
@@ -1055,6 +1319,8 @@ const ProductsPage = () => {
                         onToggleStock={handleToggleStock}
                         deleteLoading={deleteLoading}
                         toggleLoading={toggleLoading}
+                        canEditPrices={canEditPrices}
+                        onEditPrice={setPriceTarget}
                       />
                     ))}
                   </div>
@@ -1077,6 +1343,12 @@ const ProductsPage = () => {
           </CardBody>
         </Card>
       </div>
+
+      <PriceEditModal
+        target={priceTarget}
+        onClose={() => setPriceTarget(null)}
+        onSaved={(updated, before) => void handlePriceSaved(updated, before)}
+      />
 
       {/* Quick Add Modal */}
       <QuickAddModal

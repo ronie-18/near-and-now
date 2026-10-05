@@ -291,15 +291,24 @@ const PRODUCT_SORT_COLUMN: Record<string, string> = {
 // category index (idx_master_products_category_active) already exist
 // specifically to support server-side search — this is the first thing to
 // actually use them.
+/**
+ * Which products the list shows by master_products.is_active — the same split
+ * as getProductStats(): "inactive" is everything that is not active (`is not
+ * true`, so a NULL would count there too), so each stat card's number matches
+ * the list it opens.
+ */
+export type ProductStatusFilter = 'all' | 'active' | 'inactive';
+
 export async function getAdminProductsPaginated(options: {
   page: number;
   pageSize: number;
   search?: string;
   category?: string;
+  status?: ProductStatusFilter;
   sortField: string;
   sortDirection: 'asc' | 'desc';
 }): Promise<{ products: Product[]; total: number }> {
-  const { page, pageSize, search, category, sortField, sortDirection } = options;
+  const { page, pageSize, search, category, status, sortField, sortDirection } = options;
   try {
     let query = getAdminClient()
       .from('master_products')
@@ -307,6 +316,11 @@ export async function getAdminProductsPaginated(options: {
 
     if (category && category !== 'All') {
       query = query.eq('category', category);
+    }
+    if (status === 'active') {
+      query = query.eq('is_active', true);
+    } else if (status === 'inactive') {
+      query = query.not('is_active', 'is', true);
     }
     if (search?.trim()) {
       const term = search.trim();
