@@ -6,6 +6,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
+// App's imports create the real Supabase client at load time. A fresh
+// checkout has no .env, so give it placeholder settings; these tests render
+// only mocked pages and make no requests.
+vi.hoisted(() => {
+  vi.stubEnv('VITE_SUPABASE_URL', 'http://localhost:54321');
+  vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'test-anon-key');
+});
+
 vi.mock('./pages/DriverApp', () => ({ default: () => <h1>driver app</h1> }));
 vi.mock('./pages/ShopkeeperApp', () => ({ default: () => <h1>shopkeeper app</h1> }));
 vi.mock('./components/layout/Layout', () => ({ default: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
