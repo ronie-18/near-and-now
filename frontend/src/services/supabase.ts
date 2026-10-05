@@ -152,7 +152,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 // Row from products table joined with master_products (Supabase returns nested master_products)
-interface ProductRow {
+export interface ProductRow {
   id: string;
   store_id: string;
   master_product_id: string;
@@ -330,7 +330,7 @@ async function resolveStoreIds(options?: ProductFetchOptions): Promise<string[] 
 }
 
 // Dedupe product rows by master_product_id and transform to Product[]
-function productRowsToProducts(rows: ProductRow[]): Product[] {
+export function productRowsToProducts(rows: ProductRow[]): Product[] {
   const byMaster = new Map<string, ProductRow>();
   for (const row of rows) {
     const mp = row.master_products;
@@ -383,6 +383,74 @@ export async function getAllProducts(options?: ProductFetchOptions): Promise<Pro
   const storeIds = await resolveStoreIds(options);
   const rows = await fetchProductRowsCached(storeIds);
   return productRowsToProducts(rows);
+}
+
+/** Products shown per category on the home page. */
+export const HOME_RAIL_SIZE = 6;
+
+/** The home page's category rails. */
+export interface HomeCategoryRails {
+  /** Up to HOME_RAIL_SIZE products per category, in catalogue order. */
+  byCategory: Record<string, Product[]>;
+  /** How many products each category has (decides "See all"). */
+  totals: Record<string, number>;
+}
+
+/** Rails from the full product list — the home page's previous computation, and the fallback. */
+export function homeRailsFromProducts(products: Product[]): HomeCategoryRails {
+  const byCategory: Record<string, Product[]> = {};
+  const totals: Record<string, number> = {};
+  for (const p of products) {
+    if (!p.category) continue;
+    totals[p.category] = (totals[p.category] ?? 0) + 1;
+    const list = (byCategory[p.category] ??= []);
+    if (list.length < HOME_RAIL_SIZE) list.push(p);
+  }
+  return { byCategory, totals };
+}
+
+/** Rails from get_home_category_rails(): rows come in catalogue order, already capped per category. */
+export function homeRailsFromServer(rows: ProductRow[], totals: Record<string, number | string>): HomeCategoryRails {
+  const byCategory: Record<string, Product[]> = {};
+  for (const row of rows) {
+    if (!row.master_products || !row.master_products.is_active) continue;
+    const p = transformProductRowToProduct(row);
+    if (!p.category) continue;
+    (byCategory[p.category] ??= []).push(p);
+  }
+  return {
+    byCategory,
+    totals: Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Number(v) || 0])),
+  };
+}
+
+/**
+ * Home page rails (2026-10-05): the first HOME_RAIL_SIZE products of each
+ * category plus each category's total, computed by get_home_category_rails()
+ * instead of downloading every nearby product row. Same store resolution,
+ * catalogue order and product mapping as getAllProducts(); falls back to it
+ * when the function is unavailable.
+ */
+export async function getHomeCategoryRails(options?: ProductFetchOptions): Promise<HomeCategoryRails> {
+  const storeIds = await resolveStoreIds(options);
+  const storeKey = storeIds == null ? 'all' : storeIds.length > 0 ? [...storeIds].sort().join(',') : 'none';
+  return cached(
+    `home-rails:${storeKey}`,
+    async () => {
+      const eligibleStoreIds = storeIds != null ? storeIds : await getApprovedActiveStoreIds();
+      if (eligibleStoreIds.length === 0) return { byCategory: {}, totals: {} };
+      const { data, error } = await supabaseNoSession.rpc('get_home_category_rails', {
+        p_store_ids: eligibleStoreIds,
+        p_per_category: HOME_RAIL_SIZE,
+      });
+      const result = data as { rows?: ProductRow[]; totals?: Record<string, number | string> } | null;
+      if (error || !result || !Array.isArray(result.rows)) {
+        return homeRailsFromProducts(await getAllProducts(options));
+      }
+      return homeRailsFromServer(result.rows, result.totals ?? {});
+    },
+    CATALOGUE_TTL_MS
+  );
 }
 
 // Get one product by master product id: one indexed query instead of the whole catalogue.
