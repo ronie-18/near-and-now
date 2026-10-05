@@ -951,7 +951,26 @@ export class DatabaseService {
       geocoded = g;
     }
 
-    const orderCode = await this.generateNextOrderNumber();
+    // The reads below depend only on the request, so they go out together
+    // (2026-10-05): order number; nearby stores, then their stock; catalogue
+    // prices; the coupon row. Every result is still checked in the original
+    // order, so the same error wins when several fail, and nothing past an
+    // invalid item list is read. `settled` holds a failure until its turn
+    // instead of letting it escape as an unhandled rejection; `take` rethrows
+    // it at that point.
+    type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+    const settled = <T>(p: PromiseLike<T>): Promise<Settled<T>> =>
+      Promise.resolve(p).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error })
+      );
+    const take = async <T>(p: Promise<Settled<T>>): Promise<T> => {
+      const r = await p;
+      if (!r.ok) throw r.error;
+      return r.value;
+    };
+
+    const orderCodeP = settled(this.generateNextOrderNumber());
 
     const masterProductIds = [
       ...new Set(
@@ -960,13 +979,14 @@ export class DatabaseService {
           .filter((id): id is string => id != null && id !== '')
       )
     ];
-    if (masterProductIds.length === 0) throw new Error('No valid products in order');
     // A non-UUID product reference would make the products query itself fail
     // (a 500 for what is a client mistake) — refuse it as "not available",
     // which the controller already maps to a 400. (2026-10-04 audit)
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const malformed = items.filter((it) => !UUID_RE.test(String(it.product_id || it.id || '')));
-    if (malformed.length) {
+    if (masterProductIds.length === 0 || malformed.length) {
+      await take(orderCodeP); // an order-number failure was reported first
+      if (masterProductIds.length === 0) throw new Error('No valid products in order');
       throw new Error(`Product(s) not available: ${malformed.map((it) => it.name).join(', ')}`);
     }
 
@@ -976,11 +996,30 @@ export class DatabaseService {
     // expanded 1→2→3→4 km and stopped at the FIRST ring containing any store,
     // so a 0.8 km store with one of four items hid a 1.5 km store that had
     // all four and the order failed as "not available". (2026-10-04)
-    const candidateStores = await fetchCandidateStores(geocoded.lat, geocoded.lng, 0, PLACEMENT_RADIUS_KM);
+    const storesP = settled(fetchCandidateStores(geocoded.lat, geocoded.lng, 0, PLACEMENT_RADIUS_KM));
+    const stockP = storesP.then((r) =>
+      r.ok && r.value.length ? settled(fetchStoreStock(r.value.map((s) => s.id), masterProductIds)) : null
+    );
+    // SECURITY-010 price lookup (see the comment where the rows are used).
+    const pricesP = settled(
+      supabaseAdmin
+        .from('master_products')
+        .select('id, discounted_price, gst_rate, is_loose, min_quantity, max_quantity, is_active')
+        .in('id', masterProductIds)
+    );
+    const couponRowP = orderData.coupon_id
+      ? settled(supabaseAdmin.from('coupons').select('code').eq('id', orderData.coupon_id).maybeSingle())
+      : null;
+
+    const orderCode = await take(orderCodeP);
+
+    const candidateStores = await take(storesP);
     if (!candidateStores.length) {
       throw new Error('No store available for your delivery address. Please contact support.');
     }
-    const storeStock = await fetchStoreStock(candidateStores.map((s) => s.id), masterProductIds);
+    const stockResult = (await stockP)!; // non-null: stores were found
+    if (!stockResult.ok) throw stockResult.error;
+    const storeStock = stockResult.value;
 
     // SECURITY-010: never trust item.price from the request body — a client can set
     // an arbitrary/near-zero price per line item. Overwrite with the real catalog
@@ -992,10 +1031,7 @@ export class DatabaseService {
     // stacks with — the flat 5% GST added on the whole bill at checkout
     // (checkoutCalculations.ts / the trustedFloor multiplier below), which is a
     // GoI-mandated business-level tax, not a per-product one.
-    const { data: masterPriceRows, error: masterPriceError } = await supabaseAdmin
-      .from('master_products')
-      .select('id, discounted_price, gst_rate, is_loose, min_quantity, max_quantity, is_active')
-      .in('id', masterProductIds);
+    const { data: masterPriceRows, error: masterPriceError } = await take(pricesP);
 
     if (masterPriceError) {
       throw new Error('Failed to verify product prices');
@@ -1099,14 +1135,32 @@ export class DatabaseService {
     // the last redemption), fail the whole checkout rather than silently
     // dropping the discount — the customer should never be charged more than
     // what they saw and agreed to.
+    // The idempotency read further down needs only values known by now, so
+    // it runs alongside the coupon validation instead of after it; its result
+    // is still only used at its original point.
+    const dedupeWindowStart = new Date(Date.now() - 30_000).toISOString();
+    // Never hand back a cancelled order as the "duplicate": a customer who
+    // cancelled (or whose abandoned online payment was auto-cancelled) and
+    // immediately re-orders the same cart would otherwise get the dead
+    // order's id back and nothing new would be placed. (2026-10-04 audit)
+    const recentDuplicateP = settled(
+      supabaseAdmin
+        .from('customer_orders')
+        .select('*')
+        .eq('customer_id', orderData.user_id)
+        .eq('total_amount', orderData.order_total)
+        .eq('subtotal_amount', trustedSubtotal)
+        .neq('status', 'order_cancelled')
+        .gte('created_at', dedupeWindowStart)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    );
+
     let trustedDiscountAmount = 0;
     let appliedCouponId: string | null = null;
     if (orderData.coupon_id) {
-      const { data: couponRow } = await supabaseAdmin
-        .from('coupons')
-        .select('code')
-        .eq('id', orderData.coupon_id)
-        .maybeSingle();
+      const { data: couponRow } = await take(couponRowP!);
       if (couponRow?.code) {
         const coupon = await this.validateCoupon(couponRow.code, orderData.user_id, trustedSubtotal);
         trustedDiscountAmount = this.computeCouponDiscount(coupon, trustedSubtotal);
@@ -1154,22 +1208,8 @@ export class DatabaseService {
     // No idempotency key is sent by any client today, so this checks for an
     // equivalent order (same customer, same total, same item count) placed in
     // the last 30 seconds and returns that instead of inserting a new one.
-    const dedupeWindowStart = new Date(Date.now() - 30_000).toISOString();
-    // Never hand back a cancelled order as the "duplicate": a customer who
-    // cancelled (or whose abandoned online payment was auto-cancelled) and
-    // immediately re-orders the same cart would otherwise get the dead
-    // order's id back and nothing new would be placed. (2026-10-04 audit)
-    const { data: recentDuplicate } = await supabaseAdmin
-      .from('customer_orders')
-      .select('*')
-      .eq('customer_id', orderData.user_id)
-      .eq('total_amount', orderData.order_total)
-      .eq('subtotal_amount', trustedSubtotal)
-      .neq('status', 'order_cancelled')
-      .gte('created_at', dedupeWindowStart)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // (read issued above, alongside the coupon validation)
+    const { data: recentDuplicate } = await take(recentDuplicateP);
     if (recentDuplicate) {
       return {
         id: recentDuplicate.id,
