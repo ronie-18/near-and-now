@@ -15,6 +15,10 @@ import ScrollToTop from './components/ScrollToTop';
 // route-level React.lazy() split this replaced (2026-08-13 optimization
 // pass) was found and removed 2026-08-26 per an explicit product decision
 // to have no lazy-loaded pages anywhere in the app.
+// One owner-approved exception (2026-10-05): the two legacy standalone pages
+// below (/driver, /shopkeeper — web versions of what now lives in the rider
+// and shopkeeper mobile apps) load on demand, so customers stop downloading
+// them. Every customer page is still a static import.
 import HomePage from './pages/HomePage';
 import ShopPage from './pages/ShopPage';
 import CategoryPage from './pages/CategoryPage';
@@ -43,20 +47,28 @@ import PrivacyPolicyPage from './pages/policies/PrivacyPolicyPage';
 import RefundPolicyPage from './pages/policies/RefundPolicyPage';
 import PaymentOptionsPage from './pages/policies/PaymentOptionsPage';
 
-// Standalone app pages (no main Layout)
-import DriverApp from './pages/DriverApp';
-import ShopkeeperApp from './pages/ShopkeeperApp';
+// Standalone app pages (no main Layout) — loaded on demand (see the note above).
+const DriverApp = React.lazy(() => import('./pages/DriverApp'));
+const ShopkeeperApp = React.lazy(() => import('./pages/ShopkeeperApp'));
+
+function StandalonePageLoading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center text-sm text-gray-500" role="status">
+      Loading…
+    </div>
+  );
+}
 
 
 // AppContent component to access context values
-const AppContent: React.FC = () => {
+export const AppContent: React.FC = () => {
   const { notifications, removeNotification } = useNotification();
 
   return (
     <Routes>
       {/* Standalone Apps - No Layout wrapper */}
-      <Route path="/driver" element={<DriverApp />} />
-      <Route path="/shopkeeper" element={<ShopkeeperApp />} />
+      <Route path="/driver" element={<React.Suspense fallback={<StandalonePageLoading />}><DriverApp /></React.Suspense>} />
+      <Route path="/shopkeeper" element={<React.Suspense fallback={<StandalonePageLoading />}><ShopkeeperApp /></React.Suspense>} />
 
       {/* Frontend Routes - With Layout */}
       <Route path="/*" element={
