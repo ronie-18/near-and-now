@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { instrumentedFetch } from '../utils/requestMetrics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load env before reading keys. This module is imported during server startup *before* server.ts runs
@@ -56,7 +57,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// global.fetch: per-request DB call count/time for the request log line
+// (utils/requestMetrics.ts). Plain fetch outside a request.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, { global: { fetch: instrumentedFetch } });
 
 /**
  * Used to silently alias to the anon `supabase` client when the service-role
@@ -87,7 +90,8 @@ function createMisconfiguredAdminClient(): SupabaseClient {
 // Admin client for user creation (bypasses RLS) - service role key only on server
 export const supabaseAdmin: SupabaseClient = supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { autoRefreshToken: false, persistSession: false }
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { fetch: instrumentedFetch }
     })
   : createMisconfiguredAdminClient();
 
@@ -120,7 +124,8 @@ export const supabaseAdmin: SupabaseClient = supabaseServiceKey
 export function createServiceRoleClient(): SupabaseClient {
   if (!supabaseServiceKey) return createMisconfiguredAdminClient();
   return createClient(supabaseUrl!, supabaseServiceKey, {
-    auth: { autoRefreshToken: false, persistSession: false }
+    auth: { autoRefreshToken: false, persistSession: false },
+    global: { fetch: instrumentedFetch }
   });
 }
 
