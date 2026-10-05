@@ -2,6 +2,7 @@ import { getAdminClient } from './supabase';
 import { getAdminToken } from './adminSession';
 import { Product } from './supabase';
 import { getCurrentAdmin } from './secureAdminAuth';
+import type { DailyTotal, TopProduct } from '../utils/dashboardSales';
 
 // Image Upload Constants
 const STORAGE_BUCKET = 'product-images';
@@ -921,10 +922,16 @@ export async function getOrders(): Promise<Order[]> {
 // (top 5, newest first), and its top-products tile (derived from the same
 // window). Fetch time now stays roughly constant as total order history
 // grows, instead of scaling with it.
+/** Start of an "orders in the last N days" window (shared by the dashboard reads). */
+export function ordersSinceCutoff(days: number): Date {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return cutoff;
+}
+
 export async function getOrdersSince(days: number): Promise<Order[]> {
   try {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
+    const cutoff = ordersSinceCutoff(days);
 
     const { data: customerOrders, error } = await getAdminClient()
       .from('customer_orders')
@@ -940,6 +947,48 @@ export async function getOrdersSince(days: number): Promise<Order[]> {
   } catch (error) {
     console.error('Error in getOrdersSince:', error);
     throw error;
+  }
+}
+
+/**
+ * What the admin dashboard needs from the last `days` of orders
+ * (2026-10-05). Normally the 5 most recent orders plus the database-side
+ * summary from get_admin_dashboard_sales() — per-day totals and the top 5
+ * products — instead of every order with every item. If the summary can't
+ * be used (function missing, unknown time zone, any error), falls back to the
+ * previous full 90-day list, which the page summarises itself.
+ */
+export type DashboardOrdersData =
+  | { kind: 'summary'; recent: Order[]; daily: DailyTotal[]; topProducts: TopProduct[] }
+  | { kind: 'orders'; orders: Order[] };
+
+export async function getDashboardOrdersData(days: number): Promise<DashboardOrdersData> {
+  const cutoff = ordersSinceCutoff(days);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  try {
+    if (!timeZone) throw new Error('No browser time zone');
+    const [recentRes, summaryRes] = await Promise.all([
+      getAdminClient()
+        .from('customer_orders')
+        .select(ORDER_SELECT)
+        .gte('placed_at', cutoff.toISOString())
+        .order('placed_at', { ascending: false })
+        .limit(5),
+      getAdminClient().rpc('get_admin_dashboard_sales', { p_since: cutoff.toISOString(), p_tz: timeZone }),
+    ]);
+    if (recentRes.error) throw recentRes.error;
+    if (summaryRes.error) throw summaryRes.error;
+    const summary = summaryRes.data as { daily?: DailyTotal[]; top_products?: Array<TopProduct & { sold: number | string; revenue: number | string }> } | null;
+    if (!summary || !Array.isArray(summary.daily) || !Array.isArray(summary.top_products)) throw new Error('Unexpected dashboard summary shape');
+    return {
+      kind: 'summary',
+      recent: await transformCustomerOrderRows((recentRes.data ?? []) as unknown as CustomerOrderRow[]),
+      daily: summary.daily.map((d) => ({ day: d.day, sales: Number(d.sales) || 0, orders: Number(d.orders) || 0 })),
+      topProducts: summary.top_products.map((t) => ({ name: t.name, image: t.image ?? null, sold: Number(t.sold) || 0, revenue: Number(t.revenue) || 0 })),
+    };
+  } catch (err) {
+    console.warn('Dashboard summary unavailable; loading the full order list instead:', err);
+    return { kind: 'orders', orders: await getOrdersSince(days) };
   }
 }
 
