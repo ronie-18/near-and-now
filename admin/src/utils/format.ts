@@ -46,6 +46,22 @@ export function formatNumber(value: unknown): string {
   return number.format(toNumber(value));
 }
 
+/**
+ * `part` as a share of `total`, to two decimals without trailing zeros
+ * ("44.95%", "50%", "12.5%"). Never rounds to a misleading 0% or 100%: a share
+ * that is not exactly 0 or 100 but rounds to it shows as "<0.01%" / ">99.99%".
+ * Empty string when there is no total.
+ */
+export function formatShare(part: number, total: number): string {
+  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return '';
+  if (part <= 0) return '0%';
+  if (part >= total) return '100%';
+  const pct = (part / total) * 100;
+  if (pct < 0.01) return '<0.01%';
+  if (pct > 99.99) return '>99.99%';
+  return `${Number(pct.toFixed(2))}%`;
+}
+
 function toDate(value: string | number | Date | null | undefined): Date | null {
   if (value === null || value === undefined || value === '') return null;
   const d = value instanceof Date ? value : new Date(value);

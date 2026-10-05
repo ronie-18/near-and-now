@@ -30,6 +30,7 @@ vi.mock('../src/services/adminService', () => ({
   updateProduct: vi.fn(),
   getCategories: vi.fn(),
   notifyAdminAction: vi.fn(),
+  activateInactiveProducts: vi.fn(),
 }));
 
 import * as svc from '../src/services/adminService';
@@ -136,6 +137,7 @@ beforeEach(() => {
   ] as never);
   mocked.updateProduct.mockReset();
   mocked.notifyAdminAction.mockReset().mockResolvedValue(undefined);
+  mocked.activateInactiveProducts.mockReset().mockResolvedValue({ activated: 2, error: null });
 });
 
 afterEach(() => {
@@ -476,6 +478,142 @@ describe('category editor', () => {
     await click(byLabel(`Change category of ${DAL.name}`));
     expect(selectEl().value).toBe('Old Stuff');
     expect([...selectEl().options].map((o) => o.value)).toEqual(['Old Stuff', 'Dairy', 'Staples', 'Snacks']);
+  });
+});
+
+describe('stat card shares', () => {
+  it('show the exact share of the catalog on Active and Inactive', async () => {
+    mocked.getProductStats.mockResolvedValue({ total: 43224, inStock: 19464, outOfStock: 23760 });
+    await renderPage();
+    expect(card('Active').textContent).toContain('45.03% of 43,224 products');
+    expect(card('Inactive').textContent).toContain('54.97% of 43,224 products');
+    expect(card('Total products').textContent).not.toContain('%');
+  });
+});
+
+describe('make all inactive products active', () => {
+  const strip = () => [...document.querySelectorAll('p[aria-live="polite"]')].find((p) => /inactive|Making/.test(p.textContent ?? ''));
+  const activateButton = () => [...document.querySelectorAll('button')].find((b) => /^Make (all [\d,]+|it) active$/.test(b.textContent ?? ''));
+  const confirmDialog = () => [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].find((d) => d.textContent?.includes('active?'));
+  const confirmButton = () => [...confirmDialog()!.querySelectorAll('button')].find((b) => b.textContent === 'Make active')!;
+  const cancelButton = () => [...confirmDialog()!.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!;
+
+  it('is not offered under Total or Active', async () => {
+    await renderPage();
+    expect(activateButton()).toBeUndefined();
+    await click(card('Active'));
+    expect(activateButton()).toBeUndefined();
+  });
+
+  for (const role of ['super_admin', 'admin']) {
+    it(`${role} gets it under Inactive, with the list's count`, async () => {
+      h.role = role;
+      await renderPage();
+      await click(card('Inactive'));
+      expect(activateButton()!.textContent).toBe('Make all 2 active');
+      expect(strip()!.textContent).toBe('2 products in this list are inactive.');
+    });
+  }
+
+  for (const role of ['manager', 'viewer']) {
+    it(`${role} does not get it`, async () => {
+      h.role = role;
+      await renderPage();
+      await click(card('Inactive'));
+      expect(activateButton()).toBeUndefined();
+    });
+  }
+
+  it('is hidden when the Inactive list is empty', async () => {
+    await renderPage();
+    mocked.getAdminProductsPaginated.mockResolvedValue({ products: [] as never, total: 0 });
+    await click(card('Inactive'));
+    expect(activateButton()).toBeUndefined();
+  });
+
+  it('asks first, then activates exactly the listed products and refreshes', async () => {
+    await renderPage();
+    await click(card('Inactive'));
+    const statsBefore = mocked.getProductStats.mock.calls.length;
+    const listBefore = mocked.getAdminProductsPaginated.mock.calls.length;
+    await click(activateButton()!);
+    expect(confirmDialog()!.textContent).toContain('Make 2 products active?');
+    expect(mocked.activateInactiveProducts).not.toHaveBeenCalled();
+    await click(confirmButton());
+    expect(mocked.activateInactiveProducts).toHaveBeenCalledTimes(1);
+    expect(mocked.activateInactiveProducts.mock.calls[0][0]).toEqual({ search: '', category: 'All' });
+    expect(mocked.getProductStats.mock.calls.length).toBe(statsBefore + 1);
+    expect(mocked.getAdminProductsPaginated.mock.calls.length).toBe(listBefore + 1);
+    expect(lastListCall()).toMatchObject({ status: 'inactive' });
+    expect(mocked.notifyAdminAction).toHaveBeenCalledWith('made products active', '2 products', { count: 2, category: null, search: null });
+    expect(toastTexts()).toEqual(['2 products are now active.']);
+  });
+
+  it('cancel changes nothing', async () => {
+    await renderPage();
+    await click(card('Inactive'));
+    await click(activateButton()!);
+    await click(cancelButton());
+    expect(mocked.activateInactiveProducts).not.toHaveBeenCalled();
+    expect(mocked.notifyAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('passes a category picked under Inactive and names it in the question', async () => {
+    await renderPage();
+    await click(card('Inactive'));
+    const filter = q<HTMLSelectElement>('select[aria-label="Filter by category"]')!;
+    await act(async () => {
+      filter.value = 'Staples';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flush();
+    await click(activateButton()!);
+    expect(confirmDialog()!.textContent).toContain('All 2 inactive products in Staples become active');
+    await click(confirmButton());
+    expect(mocked.activateInactiveProducts.mock.calls[0][0]).toEqual({ search: '', category: 'Staples' });
+    expect(mocked.notifyAdminAction).toHaveBeenCalledWith('made products active', '2 products in Staples', { count: 2, category: 'Staples', search: null });
+  });
+
+  it('shows progress while the batches run', async () => {
+    let finish!: () => void;
+    mocked.activateInactiveProducts.mockImplementation(async (_f, onProgress) => {
+      onProgress?.(500);
+      await new Promise<void>((r) => (finish = r));
+      return { activated: 2, error: null };
+    });
+    await renderPage();
+    await click(card('Inactive'));
+    await click(activateButton()!);
+    await click(confirmButton());
+    expect(strip()!.textContent).toBe('Making products active: 500 of 2 done.');
+    expect(activateButton()!.disabled).toBe(true);
+    await act(async () => finish());
+    await flush();
+    expect(toastTexts()).toEqual(['2 products are now active.']);
+  });
+
+  it('a failure part-way says how many were done and refreshes anyway', async () => {
+    mocked.activateInactiveProducts.mockResolvedValue({ activated: 1, error: { message: 'canceling statement due to statement timeout' } });
+    await renderPage();
+    await click(card('Inactive'));
+    const statsBefore = mocked.getProductStats.mock.calls.length;
+    await click(activateButton()!);
+    await click(confirmButton());
+    expect(mocked.getProductStats.mock.calls.length).toBe(statsBefore + 1);
+    expect(toastTexts()).toEqual([
+      'Made 1 of 2 products active, then it stopped (canceling statement due to statement timeout). Try again to activate the rest.',
+    ]);
+    expect(mocked.notifyAdminAction).toHaveBeenCalledWith('made products active', '1 product', { count: 1, category: null, search: null });
+  });
+
+  it('nothing activated and an error: no notification', async () => {
+    mocked.activateInactiveProducts.mockResolvedValue({ activated: 0, error: { message: 'permission denied' } });
+    await renderPage();
+    await click(card('Inactive'));
+    await click(activateButton()!);
+    await click(confirmButton());
+    expect(mocked.notifyAdminAction).not.toHaveBeenCalled();
+    expect(toastTexts()[0]).toMatch(/^Made 0 of 2 products active, then it stopped \(permission denied\)/);
   });
 });
 

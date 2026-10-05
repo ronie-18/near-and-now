@@ -299,6 +299,49 @@ const PRODUCT_SORT_COLUMN: Record<string, string> = {
  */
 export type ProductStatusFilter = 'all' | 'active' | 'inactive';
 
+interface ProductListFilters {
+  search?: string;
+  category?: string;
+  status?: ProductStatusFilter;
+}
+
+// The minimum of the supabase-js filter builder the list filters use, so the
+// same filters apply to a select (the list) and an update (bulk activate).
+interface FilterableQuery {
+  eq(column: string, value: unknown): FilterableQuery;
+  not(column: string, operator: string, value: unknown): FilterableQuery;
+  or(filters: string): FilterableQuery;
+}
+
+/**
+ * The products list's search / category / status filters. Shared by the list
+ * and bulk activation so "make these active" changes exactly the rows listed.
+ */
+function applyProductListFilters<Q>(query: Q, { search, category, status }: ProductListFilters): Q {
+  let q = query as unknown as FilterableQuery;
+  if (category && category !== 'All') {
+    q = q.eq('category', category);
+  }
+  if (status === 'active') {
+    q = q.eq('is_active', true);
+  } else if (status === 'inactive') {
+    q = q.not('is_active', 'is', true);
+  }
+  if (search?.trim()) {
+    const term = search.trim();
+    // Covers the two fields the previous client-side filter actually
+    // matched most usefully (name, description) — id-substring matching
+    // is dropped: `id` is a uuid column, and ILIKE-ing it server-side
+    // would need a text cast Postgrest's filter syntax doesn't expose
+    // cleanly, for a search pattern (searching by partial product id) an
+    // admin would rarely use in practice. A full UUID pasted from elsewhere
+    // in the admin is matched exactly (`eq` is valid on uuid columns).
+    const idFilter = UUID_RE.test(term) ? `,id.eq.${term}` : '';
+    q = q.or(`name.ilike.%${term}%,description.ilike.%${term}%${idFilter}`);
+  }
+  return q as unknown as Q;
+}
+
 export async function getAdminProductsPaginated(options: {
   page: number;
   pageSize: number;
@@ -314,26 +357,7 @@ export async function getAdminProductsPaginated(options: {
       .from('master_products')
       .select('*', { count: 'exact' });
 
-    if (category && category !== 'All') {
-      query = query.eq('category', category);
-    }
-    if (status === 'active') {
-      query = query.eq('is_active', true);
-    } else if (status === 'inactive') {
-      query = query.not('is_active', 'is', true);
-    }
-    if (search?.trim()) {
-      const term = search.trim();
-      // Covers the two fields the previous client-side filter actually
-      // matched most usefully (name, description) — id-substring matching
-      // is dropped: `id` is a uuid column, and ILIKE-ing it server-side
-      // would need a text cast Postgrest's filter syntax doesn't expose
-      // cleanly, for a search pattern (searching by partial product id) an
-      // admin would rarely use in practice. A full UUID pasted from elsewhere
-      // in the admin is matched exactly (`eq` is valid on uuid columns).
-      const idFilter = UUID_RE.test(term) ? `,id.eq.${term}` : '';
-      query = query.or(`name.ilike.%${term}%,description.ilike.%${term}%${idFilter}`);
-    }
+    query = applyProductListFilters(query, { search, category, status });
 
     const sortColumn = PRODUCT_SORT_COLUMN[sortField] ?? 'name';
     query = query
@@ -357,6 +381,64 @@ export async function getAdminProductsPaginated(options: {
     console.error('Error in getAdminProductsPaginated:', error);
     throw error;
   }
+}
+
+/** Rows per bulk-activation request; halved automatically after a timeout. */
+export const ACTIVATE_BATCH_SIZE = 500;
+const MIN_ACTIVATE_BATCH_SIZE = 50;
+
+export interface ActivateInactiveResult {
+  /** Products made active (across every batch that succeeded). */
+  activated: number;
+  /** Set when a batch failed; the batches before it stay applied. */
+  error: unknown | null;
+}
+
+/**
+ * Makes every inactive product that matches the list's search and category
+ * active. One update of ~24,000 rows takes 12–20 s in production, far past the
+ * admin client's 3 s statement timeout (anon role), so it runs as repeated
+ * updates of at most `batchSize` rows (PostgREST limited update: order by id +
+ * limit). Each batch returns the ids it changed and the next one starts after
+ * the highest of them, so every batch is a short index range scan — restarting
+ * from the first id each time made the last batches scan past ~40,000 rows
+ * (3.1 s measured). The loop ends when a batch changes fewer rows than its
+ * size. A statement timeout halves the batch and retries; any other error
+ * stops and is returned with the count so far. Only ever sets
+ * is_active = true, and only on rows that are not active.
+ */
+export async function activateInactiveProducts(
+  filters: { search?: string; category?: string },
+  onProgress?: (activated: number) => void,
+  batchSize: number = ACTIVATE_BATCH_SIZE,
+): Promise<ActivateInactiveResult> {
+  let activated = 0;
+  let size = batchSize;
+  let afterId: string | null = null;
+  // Far more batches than any real catalog needs; a safety stop only.
+  for (let batch = 0; batch < 2000; batch++) {
+    let query = applyProductListFilters(
+      getAdminClient().from('master_products').update({ is_active: true }),
+      { ...filters, status: 'inactive' },
+    );
+    if (afterId) query = query.gt('id', afterId);
+    const { data, error } = await query.order('id', { ascending: true }).limit(size).select('id');
+    if (error) {
+      if ((error as { code?: string }).code === '57014' && size > MIN_ACTIVATE_BATCH_SIZE) {
+        size = Math.max(MIN_ACTIVATE_BATCH_SIZE, Math.floor(size / 2));
+        continue;
+      }
+      console.error('Error activating inactive products:', error);
+      return { activated, error };
+    }
+    const ids = ((data ?? []) as { id: string }[]).map((row) => row.id);
+    activated += ids.length;
+    onProgress?.(activated);
+    if (ids.length < size) break;
+    // Lower-case uuid strings sort the same way as Postgres uuids.
+    afterId = ids.reduce((max, id) => (id > max ? id : max), ids[0]);
+  }
+  return { activated, error: null };
 }
 
 // Lightweight counts for ProductsPage's stats bar — head:true count queries

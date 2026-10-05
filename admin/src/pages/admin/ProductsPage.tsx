@@ -20,6 +20,7 @@ import IdCell from "../../components/admin/IdCell";
 import {
   getAdminProductsPaginated,
   getProductStats,
+  activateInactiveProducts,
   deleteProduct,
   createProduct,
   updateProduct,
@@ -69,7 +70,7 @@ import {
 } from "../../components/ui";
 import { useToast } from "../../context/ToastContext";
 import { cn } from "../../utils/cn";
-import { formatCurrency, formatNumber } from "../../utils/format";
+import { formatCurrency, formatNumber, formatShare } from "../../utils/format";
 import { categoryOptions, describeCategorySaveError } from "../../utils/productCategory";
 import {
   validatePriceEdit,
@@ -104,6 +105,8 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "created_at:desc", label: "Newest first" },
   { value: "created_at:asc", label: "Oldest first" },
 ];
+
+const productsLabel = (n: number) => `${formatNumber(n)} product${n === 1 ? "" : "s"}`;
 
 // Quick Add accepts paise (step 0.01); only show them when the price has any.
 const priceLabel = (price: number) =>
@@ -920,6 +923,8 @@ const ProductsPage = () => {
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>("all");
   const [priceTarget, setPriceTarget] = useState<PriceEditTarget | null>(null);
   const [categoryTarget, setCategoryTarget] = useState<Product | null>(null);
+  // Progress of "Make all active" (Inactive view); null when not running.
+  const [activating, setActivating] = useState<{ done: number; total: number } | null>(null);
   // Prices and categories can be changed here by super admins and admins, the
   // same roles the full edit form allows. getCurrentAdmin parses localStorage;
   // read it once.
@@ -1179,6 +1184,59 @@ const ProductsPage = () => {
     showToast(`"${before.name}" now sells at ${newPrice} (MRP ${newMrp}).`, "success");
   };
 
+  // Inactive view only: make every product the list shows (all inactive
+  // products, narrowed by any search or category) active, in batches.
+  const handleActivateAll = async () => {
+    if (activating || totalProducts === 0) return;
+    const count = totalProducts;
+    const term = debouncedSearch.trim();
+    const scope = [
+      selectedCategory !== "All" ? `in ${selectedCategory}` : "",
+      term ? `matching "${term}"` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const confirmed = await confirm({
+      title: `Make ${productsLabel(count)} active?`,
+      message: (
+        <>
+          {count === 1 ? "The inactive product" : `All ${formatNumber(count)} inactive products`}
+          {scope ? ` ${scope}` : ""} become active, so customers can see them again in every store that stocks
+          them. Large lists are updated in batches and can take up to a minute; keep this page open.
+        </>
+      ),
+      confirmLabel: "Make active",
+    });
+    if (!confirmed) return;
+
+    setActivating({ done: 0, total: count });
+    const { activated, error } = await activateInactiveProducts(
+      { search: debouncedSearch, category: selectedCategory },
+      (done) => setActivating({ done, total: count })
+    );
+    setActivating(null);
+    void fetchStats();
+    void fetchData("refresh");
+    if (activated > 0) {
+      await notifyAdminAction("made products active", `${productsLabel(activated)}${scope ? ` ${scope}` : ""}`, {
+        count: activated,
+        category: selectedCategory !== "All" ? selectedCategory : null,
+        search: term || null,
+      });
+    }
+    if (error) {
+      const message = (error as { message?: unknown } | null)?.message;
+      const reason = typeof message === "string" && message ? ` (${message})` : "";
+      showToast(
+        `Made ${formatNumber(activated)} of ${productsLabel(count)} active, then it stopped${reason}. Try again to activate the rest.`,
+        "error",
+        9000
+      );
+    } else {
+      showToast(`${productsLabel(activated)} ${activated === 1 ? "is" : "are"} now active.`, "success");
+    }
+  };
+
   // A stat card shows exactly the products it counts, so it also clears the
   // search and category (the counts are for the whole catalog).
   const showStatus = (next: ProductStatusFilter) => {
@@ -1276,7 +1334,7 @@ const ProductsPage = () => {
             value={statsError ? "—" : formatNumber(stats.inStock)}
             hint={
               !statsError && stats.total > 0
-                ? `${Math.round((stats.inStock / stats.total) * 100)}% of catalog`
+                ? `${formatShare(stats.inStock, stats.total)} of ${productsLabel(stats.total)}`
                 : undefined
             }
             icon={CheckCircle2}
@@ -1287,6 +1345,11 @@ const ProductsPage = () => {
           <StatCard
             label="Inactive"
             value={statsError ? "—" : formatNumber(stats.outOfStock)}
+            hint={
+              !statsError && stats.total > 0
+                ? `${formatShare(stats.outOfStock, stats.total)} of ${productsLabel(stats.total)}`
+                : undefined
+            }
             icon={XCircle}
             loading={statsLoading}
             active={statusFilter === "inactive"}
@@ -1370,6 +1433,28 @@ const ProductsPage = () => {
                 ))}
               </Select>
             </FilterBar>
+
+            {/* Inactive view only: one action to make everything listed active. */}
+            {statusFilter === "inactive" &&
+              canEditProducts &&
+              !fetchFailed &&
+              (activating !== null || (!loading && totalProducts > 0)) && (
+                <div className="flex flex-col gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-gray-700" aria-live="polite">
+                    {activating
+                      ? `Making products active: ${formatNumber(activating.done)} of ${formatNumber(activating.total)} done.`
+                      : `${productsLabel(totalProducts)} in this list ${totalProducts === 1 ? "is" : "are"} inactive.`}
+                  </p>
+                  <Button
+                    size="sm"
+                    leftIcon={<CheckCircle2 />}
+                    loading={activating !== null}
+                    onClick={() => void handleActivateAll()}
+                  >
+                    {totalProducts === 1 ? "Make it active" : `Make all ${formatNumber(totalProducts)} active`}
+                  </Button>
+                </div>
+              )}
 
             {error && (
               <div className="border-b border-gray-200 p-4">
