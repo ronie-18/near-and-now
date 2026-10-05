@@ -19,6 +19,7 @@ interface LocationContextType {
 }
 
 // Create context (exported for testing)
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export const LocationContext = createContext<LocationContextType | undefined>(undefined);
 
 interface LocationProviderProps {
@@ -97,6 +98,7 @@ export function LocationProvider({ children }: LocationProviderProps) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export function useLocation() {
   const context = useContext(LocationContext);
   if (context === undefined) {

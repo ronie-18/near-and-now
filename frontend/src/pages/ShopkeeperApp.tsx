@@ -77,7 +77,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to send OTP');
       setStep('otp');
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -94,7 +94,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
       if (!r.ok) throw new Error(d.error || 'Invalid OTP');
       if (!d.token) throw new Error('No token received');
       onLogin(d.token);
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -222,7 +222,7 @@ function IncomingOrderModal({
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to accept');
       setPickupCode(d.pickup_code || null);
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setSubmitting(false); }
   };
 
@@ -237,7 +237,7 @@ function IncomingOrderModal({
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to reject');
       onDone();
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError((e as Error).message); }
     finally { setSubmitting(false); }
   };
 
@@ -573,6 +573,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
       }
     } catch { /* non-critical */ }
     finally { setLoading(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` every render; `token` is the real dependency.
   }, [token, onLogout, modalOrder]);
 
   const fetchProfile = useCallback(async () => {
@@ -581,6 +582,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
       const d = await r.json();
       if (d.success) setProfile(d);
     } catch { /* non-critical */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `headers` is rebuilt from `token` every render; `token` is the real dependency.
   }, [token]);
 
   useEffect(() => {

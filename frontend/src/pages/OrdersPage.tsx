@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { formatPrice } from '../utils/formatters';
-import { Order } from '../services/supabase';
+import { Order, OrderItem } from '../services/supabase';
 import { fetchCustomerOrders } from '../services/orderService';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
@@ -255,12 +255,13 @@ const OrdersPage = () => {
       setLoading(true); setError(null);
       const userOrders = await fetchCustomerOrders(user.id);
       setOrders(userOrders);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching orders:', err);
       setError(describeError('OrdersPage.fetchOrders', 'Could not load orders', err));
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- user.phone / user.email are listed on purpose so the list reloads when the signed-in contact details change.
   }, [isAuthenticated, user?.id, user?.phone, user?.email]);
 
   useEffect(() => {
@@ -450,7 +451,7 @@ const OrdersPage = () => {
                         {order.items && order.items.length > 0 ? (
                           <>
                             <div>
-                              {order.items.map((item: any, i: number) => (
+                              {order.items.map((item: OrderItem, i: number) => (
                                 <div key={item.id || i} className="op-item-row">
                                   <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                                     <div style={{

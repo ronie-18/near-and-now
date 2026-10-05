@@ -205,7 +205,7 @@ const ProfilePage = () => {
       await changeEmail(emailInput.trim());
       setShowEmailCodeStep(true);
       showNotification('Verification code sent to your email', 'success');
-    } catch (error: any) {
+    } catch (error) {
       showNotification(describeError('ProfilePage.handleSendEmailCode', 'Could not send verification code', error), 'error');
     } finally {
       setIsEmailSubmitting(false);
@@ -224,8 +224,8 @@ const ProfilePage = () => {
       setShowEmailCodeStep(false);
       setEmailCode('');
       showNotification('Email verified!', 'success');
-    } catch (error: any) {
-      showNotification(error?.message || 'Invalid or expired code', 'error');
+    } catch (error) {
+      showNotification((error as Error | undefined)?.message || 'Invalid or expired code', 'error');
     } finally {
       setIsEmailSubmitting(false);
     }
@@ -236,7 +236,7 @@ const ProfilePage = () => {
       setIsEmailSubmitting(true);
       await resendEmailCode();
       showNotification('Verification code resent', 'success');
-    } catch (error: any) {
+    } catch (error) {
       showNotification(describeError('ProfilePage.handleResendEmailCode', 'Could not resend code', error), 'error');
     } finally {
       setIsEmailSubmitting(false);

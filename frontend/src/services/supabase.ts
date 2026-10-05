@@ -1025,7 +1025,7 @@ export async function subscribeToNewsletter(email: string): Promise<NewsletterSu
 
     console.log('✅ Successfully subscribed to newsletter');
     return data;
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in subscribeToNewsletter:', error);
     throw error;
   }
@@ -1199,7 +1199,7 @@ export async function getUserAddresses(
 
     console.log(`✅ Fetched ${data?.length || 0} addresses`);
     return (data || []).map(mapRowToAddress);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in getUserAddresses:', error);
     throw error;
   }
@@ -1272,7 +1272,7 @@ export async function createAddress(addressData: CreateAddressData): Promise<Add
 
     console.log('✅ Address created successfully');
     return mapRowToAddress(data);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in createAddress:', error);
     throw error;
   }
@@ -1305,7 +1305,7 @@ export async function updateAddress(addressId: string, _userId: string, updateDa
     });
     if (!res.ok) throw new Error(await readApiErrorMessage(res));
     return mapRowToAddress((await res.json()) as Record<string, unknown>);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in updateAddress:', error);
     throw error;
   }
@@ -1319,7 +1319,7 @@ export async function deleteAddress(addressId: string, _userId: string): Promise
       headers: getAuthHeaders(),
     });
     if (!res.ok) throw new Error(await readApiErrorMessage(res));
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in deleteAddress:', error);
     throw error;
   }
@@ -1335,7 +1335,7 @@ export async function setDefaultAddress(addressId: string, _userId: string): Pro
     });
     if (!res.ok) throw new Error(await readApiErrorMessage(res));
     return mapRowToAddress((await res.json()) as Record<string, unknown>);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in setDefaultAddress:', error);
     throw error;
   }

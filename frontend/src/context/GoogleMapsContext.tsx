@@ -57,6 +57,7 @@ export function GoogleMapsProvider({ children }: { children: React.ReactNode }) 
 }
 
 /** For map components: asks for the Maps script on first use, then reports its status. */
+// eslint-disable-next-line react-refresh/only-export-components -- context module also exports its hook/context; only affects dev fast refresh.
 export function useGoogleMaps() {
   const { isLoaded, loadError, requestLoad } = React.useContext(GoogleMapsContext);
   React.useEffect(() => {

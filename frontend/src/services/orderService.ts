@@ -1,4 +1,4 @@
-import { Order } from './supabase';
+import { Order, OrderItem } from './supabase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 import { apiUrl } from '../utils/apiBase';
 
@@ -54,7 +54,7 @@ export async function fetchCustomerOrders(customerId: string): Promise<Order[]> 
     console.log(`✅ Fetched ${data.length} orders from backend`);
 
     const orders: Order[] = data.map((co) => {
-      const allItems: any[] = [];
+      const allItems: OrderItem[] = [];
       let itemsCount = 0;
       
       (co.store_orders || []).forEach((so) => {
@@ -127,7 +127,7 @@ export async function fetchOrderById(orderId: string): Promise<CustomerOrderResp
   }
 }
 
-export async function cancelOrder(orderId: string): Promise<{ success: boolean; message: string; order?: any }> {
+export async function cancelOrder(orderId: string): Promise<{ success: boolean; message: string; order?: unknown }> {
   try {
     const url = apiUrl(`/api/orders/${orderId}/cancel`);
     
@@ -146,7 +146,7 @@ export async function cancelOrder(orderId: string): Promise<{ success: boolean; 
 
     const data = await response.json();
     return data;
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error cancelling order:', error);
     throw error;
   }

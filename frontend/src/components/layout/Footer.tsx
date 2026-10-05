@@ -63,12 +63,12 @@ const Footer = () => {
         setSubscribeStatus('idle');
         timeoutRef.current = null;
       }, 3000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error subscribing to newsletter:', error);
       setSubscribeStatus('error');
 
       // Show user-friendly error message
-      const errorMessage = error?.message || 'Failed to subscribe. Please try again.';
+      const errorMessage = (error as Error | undefined)?.message || 'Failed to subscribe. Please try again.';
       showNotification(errorMessage, 'error');
 
       // Clear any existing timeout
