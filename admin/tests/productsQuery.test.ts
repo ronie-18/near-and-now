@@ -111,6 +111,12 @@ describe('updateProduct', () => {
     expect(JSON.stringify({ calls: fake.calls, updated }, null, 1)).toMatchSnapshot();
   });
 
+  it('a category-only change writes only the category column', async () => {
+    const fake = installFakeSupabase(client, () => ({ data: [{ ...ROW, category: 'Dairy' }], error: null }));
+    const updated = await updateProduct(ROW.id, { category: 'Dairy' });
+    expect(JSON.stringify({ calls: fake.calls, updated }, null, 1)).toMatchSnapshot();
+  });
+
   it('the active toggle still writes only is_active', async () => {
     const fake = installFakeSupabase(client, () => ({ data: [{ ...ROW, is_active: false }], error: null }));
     await updateProduct(ROW.id, { in_stock: false });

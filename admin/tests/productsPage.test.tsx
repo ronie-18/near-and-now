@@ -111,12 +111,14 @@ const typeInto = async (input: HTMLInputElement, value: string) => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
 };
-// Visible cell text: a price cell's tooltip label ("Change MRP") is in the DOM
-// too, so price cells read only the amount.
+// Visible cell text: tooltip labels ("Change MRP") are in the DOM too, so
+// they are left out.
 const rowCells = (i: number) =>
-  [...document.querySelectorAll('tbody tr')[i].querySelectorAll('td')].map(
-    (td) => (td.querySelector('.tabular-nums') ?? td).textContent?.trim(),
-  );
+  [...document.querySelectorAll('tbody tr')[i].querySelectorAll('td')].map((td) => {
+    const copy = td.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll('[role="tooltip"]').forEach((t) => t.remove());
+    return copy.textContent?.trim();
+  });
 const lastListCall = () => mocked.getAdminProductsPaginated.mock.calls.at(-1)![0];
 const dialog = () => q<HTMLElement>('[role="dialog"]');
 const dialogInputs = () => [...dialog()!.querySelectorAll<HTMLInputElement>('input')];
@@ -127,7 +129,11 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   mocked.getAdminProductsPaginated.mockReset().mockResolvedValue({ products: [DAL, SOAP] as never, total: 2 });
   mocked.getProductStats.mockReset().mockResolvedValue({ total: 43476, inStock: 43000, outOfStock: 476 });
-  mocked.getCategories.mockReset().mockResolvedValue([{ id: 'c1', name: 'Staples' }] as never);
+  mocked.getCategories.mockReset().mockResolvedValue([
+    { id: 'c0', name: 'Dairy' },
+    { id: 'c1', name: 'Staples' },
+    { id: 'c2', name: 'Snacks' },
+  ] as never);
   mocked.updateProduct.mockReset();
   mocked.notifyAdminAction.mockReset().mockResolvedValue(undefined);
 });
@@ -330,6 +336,146 @@ describe('price editor', () => {
     await typeInto(dialogInputs()[0], '150');
     await click(saveButton());
     expect(mocked.getAdminProductsPaginated.mock.calls.length).toBe(before + 1);
+  });
+});
+
+describe('category editor', () => {
+  const selectEl = () => dialog()!.querySelector<HTMLSelectElement>('select')!;
+  const choose = async (value: string) => {
+    await act(async () => {
+      selectEl().value = value;
+      selectEl().dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+  const saveCategory = () => [...dialog()!.querySelectorAll('button')].find((b) => b.textContent === 'Save category')!;
+
+  for (const role of ['super_admin', 'admin']) {
+    it(`${role} gets a change button on the category`, async () => {
+      h.role = role;
+      await renderPage();
+      expect(byLabel(`Change category of ${DAL.name}`)).toBeTruthy();
+    });
+  }
+  for (const role of ['manager', 'viewer', null]) {
+    it(`${role ?? 'no session'} sees the category but no change button`, async () => {
+      h.role = role;
+      await renderPage();
+      expect(rowCells(0)[2]).toBe('Staples');
+      expect(document.querySelector('[aria-label^="Change category"]')).toBeNull();
+    });
+  }
+
+  it('the grid view has the same change buttons', async () => {
+    await renderPage();
+    const grid = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Grid')!;
+    await click(grid);
+    expect(document.querySelector('table')).toBeNull();
+    expect(byLabel(`Change category of ${DAL.name}`)).toBeTruthy();
+    expect(byLabel(`Change discounted price of ${DAL.name}`)).toBeTruthy();
+    expect(byLabel(`Change MRP of ${DAL.name}`)).toBeTruthy();
+  });
+
+  it('opens on the current category with every existing category to pick from', async () => {
+    await renderPage();
+    await click(byLabel(`Change category of ${DAL.name}`));
+    expect(dialog()!.textContent).toContain('Change category');
+    expect(dialog()!.textContent).toContain(`${DAL.name}. The product moves to the new category in every store.`);
+    expect(selectEl().value).toBe('Staples');
+    expect([...selectEl().options].map((o) => o.value)).toEqual(['Dairy', 'Staples', 'Snacks']);
+    expect(document.activeElement).toBe(selectEl());
+  });
+
+  it('moves the product, updates the row and notifies admins', async () => {
+    mocked.updateProduct.mockResolvedValue({ ...DAL, category: 'Dairy' } as never);
+    await renderPage();
+    const before = mocked.getAdminProductsPaginated.mock.calls.length;
+    await click(byLabel(`Change category of ${DAL.name}`));
+    await choose('Dairy');
+    await click(saveCategory());
+    expect(mocked.updateProduct).toHaveBeenCalledTimes(1);
+    expect(mocked.updateProduct).toHaveBeenCalledWith(DAL.id, { category: 'Dairy' });
+    expect(dialog()).toBeNull();
+    expect(rowCells(0)[2]).toBe('Dairy');
+    expect(rowCells(1)[2]).toBe('Staples');
+    // Unfiltered, name-sorted list: updated in place, no reload.
+    expect(mocked.getAdminProductsPaginated.mock.calls.length).toBe(before);
+    expect(mocked.notifyAdminAction).toHaveBeenCalledWith('changed the category of', 'Toor Dal 1 kg: Staples to Dairy', {
+      product_id: DAL.id,
+      product_name: DAL.name,
+      old_category: 'Staples',
+      new_category: 'Dairy',
+    });
+    expect(toastTexts()).toEqual(['"Toor Dal 1 kg" moved to Dairy.']);
+  });
+
+  it('under a category filter the list reloads so the product leaves it', async () => {
+    mocked.updateProduct.mockResolvedValue({ ...DAL, category: 'Dairy' } as never);
+    await renderPage();
+    const filter = q<HTMLSelectElement>('select[aria-label="Filter by category"]')!;
+    await act(async () => {
+      filter.value = 'Staples';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flush();
+    const before = mocked.getAdminProductsPaginated.mock.calls.length;
+    await click(byLabel(`Change category of ${DAL.name}`));
+    await choose('Dairy');
+    await click(saveCategory());
+    expect(mocked.getAdminProductsPaginated.mock.calls.length).toBe(before + 1);
+    expect(lastListCall()).toMatchObject({ category: 'Staples' });
+  });
+
+  it('a category-sorted list reloads after a change', async () => {
+    mocked.updateProduct.mockResolvedValue({ ...DAL, category: 'Snacks' } as never);
+    await renderPage();
+    const sort = q<HTMLSelectElement>('select[aria-label="Sort by"]')!;
+    await act(async () => {
+      sort.value = 'category:asc';
+      sort.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flush();
+    const before = mocked.getAdminProductsPaginated.mock.calls.length;
+    await click(byLabel(`Change category of ${DAL.name}`));
+    await choose('Snacks');
+    await click(saveCategory());
+    expect(mocked.getAdminProductsPaginated.mock.calls.length).toBe(before + 1);
+  });
+
+  it('closes without writing when the category is unchanged', async () => {
+    await renderPage();
+    await click(byLabel(`Change category of ${DAL.name}`));
+    await click(saveCategory());
+    expect(mocked.updateProduct).not.toHaveBeenCalled();
+    expect(mocked.notifyAdminAction).not.toHaveBeenCalled();
+    expect(dialog()).toBeNull();
+  });
+
+  it('keeps the editor open with a readable reason when the category is gone', async () => {
+    mocked.updateProduct.mockRejectedValue({ code: '23503', message: 'violates foreign key constraint "master_products_category_fkey"' });
+    await renderPage();
+    await click(byLabel(`Change category of ${DAL.name}`));
+    await choose('Snacks');
+    await click(saveCategory());
+    expect(dialog()!.textContent).toContain('That category no longer exists. Refresh the page and pick another one.');
+    expect(rowCells(0)[2]).toBe('Staples');
+    expect(mocked.notifyAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('cannot save when the category list did not load', async () => {
+    mocked.getCategories.mockRejectedValue(new Error('down'));
+    await renderPage();
+    await click(byLabel(`Change category of ${DAL.name}`));
+    expect(dialog()!.textContent).toContain('The category list did not load.');
+    expect(saveCategory().disabled).toBe(true);
+    expect([...selectEl().options].map((o) => o.value)).toEqual(['Staples']);
+  });
+
+  it('a product whose category is missing from the list keeps it selected', async () => {
+    mocked.getAdminProductsPaginated.mockResolvedValue({ products: [{ ...DAL, category: 'Old Stuff' }] as never, total: 1 });
+    await renderPage();
+    await click(byLabel(`Change category of ${DAL.name}`));
+    expect(selectEl().value).toBe('Old Stuff');
+    expect([...selectEl().options].map((o) => o.value)).toEqual(['Old Stuff', 'Dairy', 'Staples', 'Snacks']);
   });
 });
 

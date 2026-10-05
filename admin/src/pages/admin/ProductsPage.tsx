@@ -70,6 +70,7 @@ import {
 import { useToast } from "../../context/ToastContext";
 import { cn } from "../../utils/cn";
 import { formatCurrency, formatNumber } from "../../utils/format";
+import { categoryOptions, describeCategorySaveError } from "../../utils/productCategory";
 import {
   validatePriceEdit,
   describePriceSaveError,
@@ -578,6 +579,141 @@ const EditablePrice = ({
   );
 };
 
+// Change category: moves a product to another existing category
+// (master_products.category, a foreign key to categories.name) for super
+// admins and admins. The change applies in every store.
+const CategoryEditModal = ({
+  product,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  product: Product | null;
+  categories: Category[];
+  onClose: () => void;
+  onSaved: (updated: Product, before: Product) => void;
+}) => {
+  const [category, setCategory] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const formId = useId();
+  const options = useMemo(
+    () => (product ? categoryOptions(categories.map((c) => c.name), product.category) : []),
+    [categories, product]
+  );
+  // Only the product's own category is on offer when the list did not load.
+  const noOtherCategories = options.length <= 1;
+
+  // Start from the product's current category every time the editor opens.
+  useEffect(() => {
+    if (!product) return;
+    setCategory(product.category);
+    setError(null);
+  }, [product]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!product || saving) return;
+    setError(null);
+    // Nothing changed: close without writing or notifying anyone.
+    if (category === product.category) {
+      onClose();
+      return;
+    }
+    try {
+      setSaving(true);
+      const updated = await updateProduct(product.id, { category });
+      if (!updated) {
+        setError(describeCategorySaveError(null));
+        return;
+      }
+      onSaved(updated, product);
+      onClose();
+    } catch (err) {
+      console.error("Error updating product category:", err);
+      setError(describeCategorySaveError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={product !== null}
+      onClose={onClose}
+      title="Change category"
+      description={product ? `${product.name}. The product moves to the new category in every store.` : undefined}
+      initialFocusRef={selectRef}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} loading={saving} disabled={noOtherCategories}>
+            Save category
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit} className="space-y-5" noValidate>
+        {error && (
+          <Alert tone="danger" onDismiss={() => setError(null)}>
+            {error}
+          </Alert>
+        )}
+        {noOtherCategories && (
+          <Alert tone="warning">The category list did not load. Close this, use Retry on the categories warning, then try again.</Alert>
+        )}
+        <FormField label="Category" htmlFor={`${formId}-category`} hint={product ? `Now ${product.category}` : undefined}>
+          <Select
+            ref={selectRef}
+            id={`${formId}-category`}
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            disabled={saving || noOtherCategories}
+          >
+            {options.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+      </form>
+    </Modal>
+  );
+};
+
+// The category badge with, for super admins and admins, a button that opens
+// the category editor.
+const EditableCategory = ({
+  product,
+  canEdit,
+  onEdit,
+}: {
+  product: Product;
+  canEdit: boolean;
+  onEdit: (product: Product) => void;
+}) => (
+  <span className="inline-flex items-center gap-0.5">
+    <Badge tone="neutral">{product.category}</Badge>
+    {canEdit && (
+      <Tooltip content="Change category">
+        <IconButton
+          variant="ghost"
+          size="sm"
+          aria-label={`Change category of ${product.name}`}
+          onClick={() => onEdit(product)}
+          className="h-7 w-7 text-gray-500 hover:text-gray-900"
+        >
+          <Pencil />
+        </IconButton>
+      </Tooltip>
+    )}
+  </span>
+);
+
 // Shared props for the list row and grid card
 interface ProductItemProps {
   product: Product;
@@ -585,8 +721,9 @@ interface ProductItemProps {
   onToggleStock: (id: string, currentStatus: boolean) => void;
   deleteLoading: string | null;
   toggleLoading: string | null;
-  canEditPrices: boolean;
+  canEditProducts: boolean;
   onEditPrice: (target: PriceEditTarget) => void;
+  onEditCategory: (product: Product) => void;
 }
 
 // Row actions are always visible (no hover-only reveal) so they work with a
@@ -623,7 +760,7 @@ const ProductActions = ({ product, onDelete, deleteLoading }: Pick<ProductItemPr
 );
 
 // Product Row Component
-const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading, canEditPrices, onEditPrice }: ProductItemProps) => (
+const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading, canEditProducts, onEditPrice, onEditCategory }: ProductItemProps) => (
   <Tr>
     {/* The ID wraps onto two lines to leave room for the two price columns. */}
     <Td>
@@ -646,13 +783,13 @@ const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoa
       </div>
     </Td>
     <Td nowrap>
-      <Badge tone="neutral">{product.category}</Badge>
+      <EditableCategory product={product} canEdit={canEditProducts} onEdit={onEditCategory} />
     </Td>
     <Td align="right" nowrap className="font-medium text-gray-900">
-      <EditablePrice product={product} field="price" canEdit={canEditPrices} onEdit={onEditPrice} />
+      <EditablePrice product={product} field="price" canEdit={canEditProducts} onEdit={onEditPrice} />
     </Td>
     <Td align="right" nowrap className="text-gray-600">
-      <EditablePrice product={product} field="mrp" canEdit={canEditPrices} onEdit={onEditPrice} />
+      <EditablePrice product={product} field="mrp" canEdit={canEditProducts} onEdit={onEditPrice} />
     </Td>
     <Td nowrap>
       {/* One column for the single underlying flag (master_products.is_active,
@@ -676,7 +813,7 @@ const ProductRow = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoa
 );
 
 // Product Card for Grid View
-const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading, canEditPrices, onEditPrice }: ProductItemProps) => (
+const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLoading, canEditProducts, onEditPrice, onEditCategory }: ProductItemProps) => (
   <Card className="flex flex-col">
     <div className="flex items-center justify-center border-b border-gray-200 bg-gray-50 p-6">
       <ProductImage imageUrl={product.image} productName={product.name} size="lg" />
@@ -705,17 +842,17 @@ const ProductCard = ({ product, onDelete, onToggleStock, deleteLoading, toggleLo
           <div className="flex items-center gap-2">
             <dt className="w-16 text-xs text-gray-500">Discounted</dt>
             <dd className="font-semibold text-gray-900">
-              <EditablePrice product={product} field="price" canEdit={canEditPrices} onEdit={onEditPrice} />
+              <EditablePrice product={product} field="price" canEdit={canEditProducts} onEdit={onEditPrice} />
             </dd>
           </div>
           <div className="flex items-center gap-2">
             <dt className="w-16 text-xs text-gray-500">MRP</dt>
             <dd className="text-sm text-gray-600">
-              <EditablePrice product={product} field="mrp" canEdit={canEditPrices} onEdit={onEditPrice} />
+              <EditablePrice product={product} field="mrp" canEdit={canEditProducts} onEdit={onEditPrice} />
             </dd>
           </div>
         </dl>
-        <Badge tone="neutral">{product.category}</Badge>
+        <EditableCategory product={product} canEdit={canEditProducts} onEdit={onEditCategory} />
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2 border-t border-gray-200 pt-3">
@@ -782,9 +919,11 @@ const ProductsPage = () => {
   // Set by the Total / Active / Inactive stat cards.
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>("all");
   const [priceTarget, setPriceTarget] = useState<PriceEditTarget | null>(null);
-  // Prices can be changed by super admins and admins, the same roles the full
-  // edit form allows. getCurrentAdmin parses localStorage; read it once.
-  const canEditPrices = useMemo(() => {
+  const [categoryTarget, setCategoryTarget] = useState<Product | null>(null);
+  // Prices and categories can be changed here by super admins and admins, the
+  // same roles the full edit form allows. getCurrentAdmin parses localStorage;
+  // read it once.
+  const canEditProducts = useMemo(() => {
     const admin = getCurrentAdmin();
     return Boolean(admin && hasRole(admin, ["super_admin", "admin"]));
   }, []);
@@ -995,6 +1134,24 @@ const ProductsPage = () => {
     } finally {
       setToggleLoading(null);
     }
+  };
+
+  const handleCategorySaved = async (updated: Product, before: Product) => {
+    setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, category: updated.category } : p)));
+    // Under a category filter the row now belongs to another list, and in a
+    // category-sorted list its place may have changed: reload either way.
+    if (selectedCategory !== "All" || sortField === "category") void fetchData("refresh");
+    await notifyAdminAction(
+      "changed the category of",
+      `${before.name}: ${before.category} to ${updated.category}`,
+      {
+        product_id: before.id,
+        product_name: before.name,
+        old_category: before.category,
+        new_category: updated.category,
+      }
+    );
+    showToast(`"${before.name}" moved to ${updated.category}.`, "success");
   };
 
   const handlePriceSaved = async (updated: Product, before: Product) => {
@@ -1289,8 +1446,9 @@ const ProductsPage = () => {
                           onToggleStock={handleToggleStock}
                           deleteLoading={deleteLoading}
                           toggleLoading={toggleLoading}
-                          canEditPrices={canEditPrices}
+                          canEditProducts={canEditProducts}
                           onEditPrice={setPriceTarget}
+                          onEditCategory={setCategoryTarget}
                         />
                       ))
                     )}
@@ -1319,8 +1477,9 @@ const ProductsPage = () => {
                         onToggleStock={handleToggleStock}
                         deleteLoading={deleteLoading}
                         toggleLoading={toggleLoading}
-                        canEditPrices={canEditPrices}
+                        canEditProducts={canEditProducts}
                         onEditPrice={setPriceTarget}
+                        onEditCategory={setCategoryTarget}
                       />
                     ))}
                   </div>
@@ -1348,6 +1507,13 @@ const ProductsPage = () => {
         target={priceTarget}
         onClose={() => setPriceTarget(null)}
         onSaved={(updated, before) => void handlePriceSaved(updated, before)}
+      />
+
+      <CategoryEditModal
+        product={categoryTarget}
+        categories={categories}
+        onClose={() => setCategoryTarget(null)}
+        onSaved={(updated, before) => void handleCategorySaved(updated, before)}
       />
 
       {/* Quick Add Modal */}

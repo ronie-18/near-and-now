@@ -423,6 +423,43 @@ exports[`getProductStats > same counts and queries 1`] = `
 }"
 `;
 
+exports[`updateProduct > a category-only change writes only the category column 1`] = `
+"{
+ "calls": [
+  {
+   "table": "master_products",
+   "op": "update",
+   "filters": [
+    [
+     "eq",
+     "id",
+     "000200d2-4f81-418e-8654-d7e59dc6b9be"
+    ]
+   ],
+   "terminal": "single",
+   "payload": {
+    "category": "Dairy"
+   }
+  }
+ ],
+ "updated": {
+  "id": "000200d2-4f81-418e-8654-d7e59dc6b9be",
+  "name": "Toor Dal 1 kg",
+  "category": "Dairy",
+  "discounted_price": 152,
+  "base_price": 160,
+  "is_active": true,
+  "image_url": null,
+  "is_loose": false,
+  "unit": "kg",
+  "price": 152,
+  "original_price": 160,
+  "in_stock": true,
+  "isLoose": false
+ }
+}"
+`;
+
 exports[`updateProduct > a price-only change writes only the two price columns 1`] = `
 "{
  "calls": [
