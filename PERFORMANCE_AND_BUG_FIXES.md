@@ -1888,3 +1888,44 @@ Scope: the store-allocation algorithm, shopkeeper accept/reject/reallocation, th
 - Backend: `npx tsc --noEmit` clean; `vitest` 17 files / 264 tests (new: `allocationPlanner.test.ts`, `storeAllocation.flow.test.ts`, `orderFlow.hardening.test.ts`). `src/test/setup.ts` now uses a JWT-shaped service-role placeholder so the fake-Supabase tests run on a machine without `backend/.env`.
 - Frontend (`frontend/`): `tsc` clean, 64 tests.
 - Audit: 7 finder lenses, 76 distinct findings, 2 adversarial verifiers each (159 agents in total); 34 confirmed, 18 contested, 18 refuted (most refutations observed the fixes already in the working tree), 19 low-severity unverified. Every confirmed and contested finding is either fixed above or listed in 20.5.
+
+---
+
+## 21. 2026-10-12 — shopkeeper app review after the 2026-10-06/08 push
+
+Scope: the only new commits across the four apps since 2026-10-06 were on the shopkeeper app's `main` (`TiasMondal1/near-now-store_owner`): Aditya's `54cb771` (R8 optimised resource shrinking, dev tools hidden by default, product availability switches no longer locked while the store is offline, `.easignore`), his merge `e48ccf9`, and ronie-18's `9753777` (versionCode 28). The org remote `nearandnowofficial2025-boop/shopkeeper-app` is still at `9c30f88`. The website, customer app and rider app have nothing new, upstream included. After the push was reviewed, the rest of the shopkeeper app was reviewed for bugs.
+
+### 21.1 The push itself: no bugs
+
+- The merge is clean: `e48ccf9` is `9c30f88` plus exactly Aditya's nine files, so the 2026-10-05/06 order-alert fixes are all still there.
+- Offline availability switch: the direct Supabase write is refused by RLS (`shopkeeper_owns_approved_store()` requires `stores.is_active`), and the app then falls back to `PATCH /store-owner/products/:id`, which needs approval only. So the switch works offline, at the cost of one failed request per tap. Going online or offline never touches `products`.
+- Dev tools: hidden until the Version row in Settings is tapped 7 times, and only in dev and preview builds.
+- R8 optimised resource shrinking: checked on the EAS preview APK built from `e48ccf9` with `aapt2`. `raw/order_chime`, `drawable/notification_icon`, `drawable/assets_brand_near_now_shopkeeper_384` and the `node_modules_*` images are all present with real files. Everything the app looks up by name (Notifee and expo-notifications sound and icon, `require()`d assets) is on the keep list.
+- versionCode 28 matches the EAS remote counter: the last production build was 27 from `9c30f88`, and Aditya's builds from `e48ccf9` were preview APKs.
+- On a clean `npm ci`: `tsc` clean, 132 tests pass, `eslint` clean.
+
+### 21.2 Bugs found in the wider app (fixed)
+
+| # | Symptom | Root cause | Fix |
+| --- | --- | --- | --- |
+| 1 | Tapping any order in **Orders → Previous** or any **Payouts** row showed **"Order not found"** (high). | The invoice screen read `store_orders` / `order_items` straight from Supabase. `20260930070000` scoped those tables' only policies to `service_role`, so the read always came back empty. Its "verified safe" note missed this app. The fallback, `GET /api/orders/:id`, is `requireCustomer` (role `customer`), so it always answered 401. | New `GET /shopkeeper/store-orders/:storeOrderId` (`requireShopkeeperAuth`, any store the shopkeeper owns, like the `get_orders_for_store` history RPC; malformed id → 404 with no query). It returns the raw store order, customer order and items, and the app maps them exactly as before (`lib/orders-db.ts` `getStoreOrderById` / `buildStoreOrder`). Items written off as `unavailable` keep the first store's `store_order_id`, so the endpoint leaves them out (same rule as `recompute_store_order_subtotals()`). Otherwise a partial accept whose unticked items no store could take would have inflated the invoice. The dead customer-only fallback was removed. |
+| 2 | Some new orders never got the full-screen popup, the ring or the lock-screen alert, only the push banner (medium-high). | The "only ring for new orders" window (10 min, `pickNewAlerts`) ran from `placed_at`, the customer's order time. An unanswered allocation moves to the next store after 5 min, so the **third store** in a reallocation always got it 10+ min after placement. An online-payment order paid late (it stays hidden until paid; abandoned after 15 min) could miss even the first store. | `getIncomingOrders` sends `offered_at` on pending allocations: the later of the allocation's `created_at` and, for non-COD orders, the payment time (`customer_payments.paid_at`, else `customer_orders.updated_at`). That is the same rule the 5-minute watchdog uses (`allocationOfferedAt`). The app's window runs from `offered_at` and falls back to `placed_at` on an older backend. The payments lookup is made only when something is pending and joins the existing parallel batch, so the poll is still 2 sequential database round trips. |
+| 3 | After an automatic logout, the **"<Store> is online · Listening for new orders"** notification stayed up with nothing behind it (medium). | Only the Settings logout (`notificationService.unregister()`) stopped the foreground service. A 401 in `lib/api-client.ts` only called `clearSession()`. Every login overwrites `app_users.session_token`, so logging in on a second phone does this to the first phone. | `clearSession()` now also stops the listener and cancels any ringing lock-screen alert. Both are no-ops when nothing is running, and a failure there never blocks the logout. This also covers the wrong-account path on landing and an expired session on cold start. |
+| 4 | Items added to an order while its popup was open appeared **unticked**. Accepting without noticing sent them to another store as unavailable (low). | Ticks were reset only when a *different* order was shown. | Items that appear while the same order is on screen start ticked, and the shopkeeper's own unticks are kept. Accept sends only items still in the order. |
+
+### 21.3 Found, not changed
+
+- **Cancellation and items-added pushes play the new-order chime.** Every push from `notification.service.ts` goes on channel `orders_v2`, whose sound is `order_chime.wav`. On Android 8+ the channel's sound wins over the payload's `sound: 'default'`. The same applies to the rider app (and to customer-app status pushes). The fix is a two-step rollout: (1) the apps create a second channel, e.g. `order_updates` with the default sound; (2) once most installs have it, the backend sends non-new-order pushes there. Expo drops a push whose `channelId` doesn't exist on the device, so step 2 must not go first.
+- **Order-list RPC price key.** `get_orders_for_store` returns each item's price as `price`, and `orders-db` reads `unit_price`, so prices from that RPC are always undefined. That is harmless today: Payouts falls back to the store's server-computed total. It also hides a trap: the RPC returns written-off items with no `item_status`, so switching the key alone would make Payouts overcount. A comment at the mapper records this. A proper fix filters `item_status <> 'unavailable'` inside the RPC first.
+
+### 21.4 Deploying
+
+- No database migration.
+- Backend and app can ship in either order. An older app ignores `offered_at` and never calls the new route. A new app on an older backend gets a 404 for the invoice (the same "Order not found" as today) and falls back to `placed_at` for the ring window. Both bugs 1 and 2 need both sides deployed. Bugs 3 and 4 are app-only.
+
+### 21.5 Verification
+
+- Backend: `tsc` clean. `vitest` 40 files / **397** tests (382 before; new `shopkeeper.invoiceAndAlerts.test.ts`: ownership filter, written-off items excluded, malformed id never queried, DB error → 500, `offered_at` for COD / late-paid / reallocated / accepted, no payments query when nothing is pending, round trips pinned at 2 for both endpoints).
+- Shopkeeper app (clean `npm ci` in a scratch copy): `tsc` clean, `eslint` 0 errors, jest 19 suites / **147** tests (132 before; new: invoice data mapping / 404 / 500 / foreign store / id escaping, ring window from `offered_at` with `placed_at` fallback, `clearSession` stops the listener and survives a native failure, popup checklist cases). Each regression test for bugs 2–4 was run against the original code and fails there.
+- Production JS bundle (`expo export`, Android, Hermes) builds: 6,107,229 → 6,107,932 bytes (+703 B).
+- Not done: no device run and no AAB build (on request), and no production database read. Before release, open a past order from Previous and from Payouts on a phone, and log in on a second phone to confirm the first one drops the "store online" notification.

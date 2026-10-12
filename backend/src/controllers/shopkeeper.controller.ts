@@ -26,6 +26,29 @@ function randomFourDigit(): string {
   return String((randomBytes(2).readUInt16BE(0) % 9000) + 1000);
 }
 
+/**
+ * When a store could first see an allocation: when it was created or, for an
+ * online-payment order (hidden from shopkeepers until it is paid), when it
+ * was paid if that is later — the same rule expireStaleAllocationsForOrder
+ * starts its 5-minute clock from. ISO string, or null if no time parses.
+ */
+export function allocationOfferedAt(
+  allocCreatedAt: string | null | undefined,
+  order: { payment_method?: string | null; updated_at?: string | null } | null | undefined,
+  paidAt: string | null | undefined
+): string | null {
+  const created = allocCreatedAt ? Date.parse(allocCreatedAt) : NaN;
+  let paid = NaN;
+  if (order && order.payment_method !== 'cod') {
+    const raw = paidAt ?? order.updated_at ?? null;
+    paid = raw ? Date.parse(raw) : NaN;
+  }
+  const times = [created, paid].filter(Number.isFinite);
+  return times.length ? new Date(Math.max(...times)).toISOString() : null;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -171,10 +194,15 @@ export class ShopkeeperController {
       if (!allocations?.length) return res.json({ success: true, orders: [] });
 
       const orderIds = [...new Set(allocations.map((a: any) => a.order_id))];
+      // Payment times are only needed for offered_at on pending allocations,
+      // so the usual poll (nothing waiting) costs no extra query.
+      const pendingOrderIds = [...new Set(
+        allocations.filter((a: any) => a.status === 'pending_acceptance').map((a: any) => a.order_id)
+      )];
 
-      const [{ data: orders }, { data: items }, { data: storeRows }] = await Promise.all([
+      const [{ data: orders }, { data: items }, { data: storeRows }, { data: payments }] = await Promise.all([
         supabaseAdmin.from('customer_orders')
-          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, receiver_name, receiver_phone, receiver_address, payment_status, payment_method')
+          .select('id, order_code, status, total_amount, delivery_address, delivery_latitude, delivery_longitude, placed_at, receiver_name, receiver_phone, receiver_address, payment_status, payment_method, updated_at')
           .in('id', orderIds),
         supabaseAdmin.from('order_items')
           .select('id, customer_order_id, product_name, quantity, unit, unit_price, image_url, item_status, assigned_store_id')
@@ -183,10 +211,17 @@ export class ShopkeeperController {
         supabaseAdmin.from('stores')
           .select('id, name, latitude, longitude')
           .in('id', storeIds),
+        pendingOrderIds.length
+          ? supabaseAdmin.from('customer_payments')
+            .select('customer_order_id, paid_at')
+            .in('customer_order_id', pendingOrderIds)
+          : Promise.resolve({ data: [] as any[] }),
       ]);
 
       const orderMap: Record<string, any> = {};
       (orders || []).forEach((o: any) => { orderMap[o.id] = o; });
+      const paidAtByOrder: Record<string, string | null> = {};
+      (payments || []).forEach((p: any) => { paidAtByOrder[p.customer_order_id] = p.paid_at ?? null; });
 
       // Items keyed by order+store so each allocation only sees its own items
       const itemsByOrderAndStore: Record<string, any[]> = {};
@@ -230,6 +265,14 @@ export class ShopkeeperController {
           customer_area: order.delivery_address,
           customer_distance: distance,
           placed_at: order.placed_at,
+          // When this store could first see the request (pending only). The
+          // app's ring-for-new-orders window runs from this, not placed_at: a
+          // reallocated or late-paid order reaches its store minutes after
+          // the customer placed it, and timing it from placed_at meant the
+          // third store in a reallocation never got the popup. (2026-10-12)
+          offered_at: alloc.status === 'pending_acceptance'
+            ? allocationOfferedAt(alloc.created_at, order, paidAtByOrder[alloc.order_id])
+            : null,
           receiver_name: order.receiver_name || null,
           receiver_phone: order.receiver_phone || null,
           receiver_address: order.receiver_address || null,
@@ -241,6 +284,54 @@ export class ShopkeeperController {
       res.json({ success: true, orders: result });
     } catch (err) {
       return sendError(res, 'ShopkeeperController.getIncomingOrders', 'Could not load the orders', err);
+    }
+  }
+
+  // GET /shopkeeper/store-orders/:storeOrderId
+  // One of this shopkeeper's store orders with its items — the app's invoice
+  // screen. It used to read store_orders / order_items straight from
+  // Supabase, but 20260930070000 limited those tables to service_role, so
+  // every invoice showed "Order not found". Raw rows, so the app keeps its
+  // own status / total mapping. Any store the shopkeeper owns, approved or
+  // not (same as the get_orders_for_store history RPC). Items written off as
+  // 'unavailable' keep this store_order_id but the store never supplied them;
+  // they are left out, as in recompute_store_order_subtotals(). (2026-10-12)
+  async getStoreOrder(req: Request, res: Response) {
+    try {
+      const { storeOrderId } = req.params;
+      const storeIds = req.shopkeeperStoreIds ?? [];
+      if (!UUID_RE.test(String(storeOrderId)) || !storeIds.length) {
+        return res.status(404).json({ success: false, error: 'Order not found' });
+      }
+
+      const { data: storeOrder, error: soErr } = await supabaseAdmin
+        .from('store_orders')
+        .select('id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at')
+        .eq('id', storeOrderId)
+        .in('store_id', storeIds)
+        .maybeSingle();
+      if (soErr) throw soErr;
+      if (!storeOrder) return res.status(404).json({ success: false, error: 'Order not found' });
+
+      const so = storeOrder as any;
+      const [{ data: customerOrder, error: coErr }, { data: items, error: itemsErr }] = await Promise.all([
+        so.customer_order_id
+          ? supabaseAdmin.from('customer_orders')
+            .select('id, order_code, status, total_amount, placed_at, delivered_at, cancelled_at')
+            .eq('id', so.customer_order_id)
+            .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        supabaseAdmin.from('order_items')
+          .select('id, store_order_id, product_name, unit, image_url, unit_price, quantity')
+          .eq('store_order_id', so.id)
+          .neq('item_status', 'unavailable'),
+      ]);
+      if (coErr) throw coErr;
+      if (itemsErr) throw itemsErr;
+
+      res.json({ success: true, store_order: so, customer_order: customerOrder ?? null, items: items ?? [] });
+    } catch (err) {
+      return sendError(res, 'ShopkeeperController.getStoreOrder', 'Could not load the order', err);
     }
   }
 

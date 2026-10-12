@@ -12,6 +12,9 @@ const ctrl = new ShopkeeperController();
 // the full requireShopkeeper gate.
 router.get('/profile',                               requireShopkeeperAuth, ctrl.getProfile.bind(ctrl));
 router.get('/orders',                                requireShopkeeper, ctrl.getIncomingOrders.bind(ctrl));
+// Invoice screen: read-only order history, so ownership is enough (the
+// get_orders_for_store RPC behind the same list doesn't require approval).
+router.get('/store-orders/:storeOrderId',            requireShopkeeperAuth, ctrl.getStoreOrder.bind(ctrl));
 router.post('/allocations/:allocationId/accept',     requireShopkeeper, ctrl.acceptAllocation.bind(ctrl));
 router.post('/allocations/:allocationId/reject',     requireShopkeeper, ctrl.rejectAllocation.bind(ctrl));
 
