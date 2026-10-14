@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { MulterError } from 'multer';
 import { requestContext } from './middleware/requestContext.js';
+import { mountJsonBodyParsers } from './middleware/jsonBody.js';
 import { AppError, errorReason, inferStatus } from './utils/httpError.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -143,13 +144,10 @@ if (process.env.VERCEL) {
 // already-parsed object produces different bytes and always fails HMAC verification.
 app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
 
-// Explicit cap instead of Express's implicit default — an oversized JSON body
-// (e.g. against /api/places/* or checkout, both public/low-friction routes)
-// would otherwise be parsed in full before any of our own validation runs.
-// 1mb is generous for every real payload this API accepts (largest is a
-// checkout cart with many line items — a few KB); document/image uploads go
-// through multer as multipart, not JSON, so they're unaffected by this.
-app.use(express.json({ limit: '1mb' }));
+// JSON body caps: 1mb everywhere, 4mb for the two product-submission routes
+// that carry an inline base64 product photo. Limits and the reasoning live in
+// middleware/jsonBody.ts; the raw webhook parser above must stay before this.
+mountJsonBodyParsers(app);
 
 app.use('/api/auth', authRoutes);
 app.use('/store-owner', storeOwnerRoutes);
@@ -226,7 +224,8 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
     message = `The request body sent to ${req.method} ${req.path} is not valid JSON.`;
   } else if (bodyParserType === 'entity.too.large') {
     // express.json({ limit }) throws this (via body-parser) when a request body
-    // exceeds the cap set above — a client/attacker error, not a server bug.
+    // exceeds its route's cap (middleware/jsonBody.ts: 1mb, or 4mb on the
+    // product-submission routes) — a client/attacker error, not a server bug.
     status = 413;
     message = `The request body sent to ${req.method} ${req.path} is larger than this route allows.`;
   } else if (status >= 500) {
