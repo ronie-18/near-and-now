@@ -8,8 +8,8 @@ import { Alert, Badge, Button, Checkbox, FormField, IconButton, Input } from '..
 import {
   allowedDomainsHint,
   emailPlaceholder,
-  isAllowedAdminEmail,
   parseAllowedDomains,
+  validateAdminLogin,
 } from '../../utils/adminDomains';
 // Was the repo-root near_now_image.png (781KB, 1315x1196px) displayed at
 // 64x64px — a properly-sized/compressed copy (9KB) is used instead. Found
@@ -51,6 +51,7 @@ const AdminLoginPage = () => {
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -86,16 +87,16 @@ const AdminLoginPage = () => {
     e.preventDefault();
     setError('');
     setEmailError('');
+    setPasswordError('');
 
-    // Organisation-account gate. Checked before the network call so a
-    // personal or mistyped address never counts against the server-side
-    // rate limit (10 attempts per email per 15 minutes).
-    if (!isAllowedAdminEmail(email.trim(), ALLOWED_DOMAINS)) {
-      setEmailError(
-        ALLOWED_DOMAINS.length === 1
-          ? `Sign-in is limited to organisation accounts on ${ALLOWED_DOMAINS[0]}.`
-          : `Sign-in is limited to organisation accounts on ${ALLOWED_DOMAINS.join(', ')}.`,
-      );
+    // Empty / malformed fields and the organisation-account gate. Checked
+    // before the network call so none of them counts against the server-side
+    // rate limit (10 attempts per email — or per IP when the email is blank —
+    // per 15 minutes).
+    const fieldErrors = validateAdminLogin(email, password, ALLOWED_DOMAINS);
+    if (fieldErrors.email || fieldErrors.password) {
+      setEmailError(fieldErrors.email ?? '');
+      setPasswordError(fieldErrors.password ?? '');
       return;
     }
 
@@ -212,14 +213,18 @@ const AdminLoginPage = () => {
                 {/* Show/hide follows the APG toggle-button pattern: a fixed name
                     plus aria-pressed. A name that flips with the state would read
                     as "Hide password, pressed", which contradicts itself. */}
-                <FormField label="Password" htmlFor="password">
+                <FormField label="Password" htmlFor="password" error={passwordError || undefined}>
                   <Input
                     id="password"
                     name="password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (passwordError) setPasswordError('');
+                    }}
                     required
+                    invalid={Boolean(passwordError)}
                     autoComplete="current-password"
                     placeholder="••••••••"
                     className="pr-11"

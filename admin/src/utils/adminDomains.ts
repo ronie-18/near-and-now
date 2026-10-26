@@ -53,3 +53,29 @@ export function allowedDomainsHint(allowed: string[]): string {
 export function emailPlaceholder(allowed: string[]): string {
   return allowed.length > 0 ? `firstname.lastname@${allowed[0]}` : 'firstname.lastname@yourcompany.com';
 }
+
+/**
+ * Inline field errors for the sign-in form, or {} when it may be submitted.
+ * The form is `noValidate` (errors render inline, not as browser bubbles), so
+ * this stands in for the `required` / `type="email"` checks the browser no
+ * longer runs: without it an empty or malformed submit went to POST
+ * /api/admin/login and spent one of the IP's 10 rate-limited attempts. The
+ * email shape matches the browser's own (no dot required after the @).
+ */
+export function validateAdminLogin(
+  email: string,
+  password: string,
+  allowed: string[],
+): { email?: string; password?: string } {
+  const errors: { email?: string; password?: string } = {};
+  const trimmed = email.trim();
+  if (!trimmed) {
+    errors.email = 'Enter your work email.';
+  } else if (!/^[^\s@]+@[^\s@]+$/.test(trimmed)) {
+    errors.email = 'Enter a valid email address.';
+  } else if (!isAllowedAdminEmail(trimmed, allowed)) {
+    errors.email = `Sign-in is limited to organisation accounts on ${allowed.join(', ')}.`;
+  }
+  if (!password) errors.password = 'Enter your password.';
+  return errors;
+}

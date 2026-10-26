@@ -10,6 +10,7 @@ import {
   isAllowedAdminEmail,
   allowedDomainsHint,
   emailPlaceholder,
+  validateAdminLogin,
 } from '../src/utils/adminDomains';
 
 describe('parseAllowedDomains', () => {
@@ -80,5 +81,36 @@ describe('copy helpers', () => {
   it('builds the placeholder from the primary domain', () => {
     expect(emailPlaceholder(['nearandnow.in', 'other.in'])).toBe('firstname.lastname@nearandnow.in');
     expect(emailPlaceholder([])).toBe('firstname.lastname@yourcompany.com');
+  });
+});
+
+// 2026-10-26: the form became noValidate in 5c628fd, so the browser stopped
+// blocking empty / malformed submits and each one spent a rate-limited attempt.
+describe('validateAdminLogin', () => {
+  it('passes a complete sign-in', () => {
+    expect(validateAdminLogin('admin@gmail.com', 'secret', [])).toEqual({});
+    expect(validateAdminLogin('  ops@nearandnow.in ', 'secret', ['nearandnow.in'])).toEqual({});
+  });
+
+  it('asks for both fields when they are empty', () => {
+    expect(validateAdminLogin('', '', [])).toEqual({ email: 'Enter your work email.', password: 'Enter your password.' });
+    expect(validateAdminLogin('   ', 'x', ['nearandnow.in'])).toEqual({ email: 'Enter your work email.' });
+  });
+
+  it('rejects a malformed address before the domain rule', () => {
+    expect(validateAdminLogin('admin', 'x', [])).toEqual({ email: 'Enter a valid email address.' });
+    expect(validateAdminLogin('ad min@gmail.com', 'x', ['nearandnow.in'])).toEqual({ email: 'Enter a valid email address.' });
+    // Same shape the browser's type="email" accepted: no dot needed after the @.
+    expect(validateAdminLogin('admin@localhost', 'x', [])).toEqual({});
+  });
+
+  it('keeps the organisation-domain message', () => {
+    expect(validateAdminLogin('me@gmail.com', 'x', ['nearandnow.in'])).toEqual({
+      email: 'Sign-in is limited to organisation accounts on nearandnow.in.',
+    });
+    expect(validateAdminLogin('me@gmail.com', '', ['a.in', 'b.in'])).toEqual({
+      email: 'Sign-in is limited to organisation accounts on a.in, b.in.',
+      password: 'Enter your password.',
+    });
   });
 });
