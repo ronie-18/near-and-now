@@ -21,8 +21,13 @@ import express, { type Express } from 'express';
  * hard-capped at 4.5 MB by the platform, before Express sees the request. A
  * larger Express limit would only change which layer rejects the body, and
  * the platform's rejection is not our JSON error shape. Payloads that still
- * exceed this have to shrink client-side (the app downscales photos before
- * encoding them), not grow the cap here.
+ * exceed this have to shrink client-side, not grow the cap here: app builds
+ * from 2026-10-26 on downscale the photo to 1024 px first (~100–250 KB, see
+ * near-now-store_owner lib/productPhoto.ts); older builds send the full-size
+ * photo, which is why the cap stays at 4 MB.
+ *
+ * Either way the photo is not stored inline: services/productImageStorage.ts
+ * moves it to the product-images bucket and keeps only the URL.
  */
 export const JSON_BODY_LIMIT = '1mb';
 export const PRODUCT_SUBMISSION_JSON_BODY_LIMIT = '4mb';

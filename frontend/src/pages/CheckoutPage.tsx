@@ -543,7 +543,10 @@ const CheckoutPage = () => {
         name: item.name,
         price: item.price,
         quantity: item.quantity,
-        image: item.image
+        // An inline data: image (a custom product approved before those moved
+        // to Storage, still in a saved cart) can be MBs — enough to push this
+        // request past the API's 1 MB cap. The server drops it anyway.
+        image: item.image?.startsWith('data:') ? undefined : item.image
       }));
 
       const deliveryFeeAmount = getFeeBreakdown().deliveryFee;

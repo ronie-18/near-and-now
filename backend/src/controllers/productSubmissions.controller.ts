@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
+import { isInlineImage, storeInlineProductImage } from '../services/productImageStorage.js';
 import { sendError } from '../utils/httpError.js';
 
 type SubmitBody = {
@@ -110,12 +111,17 @@ export async function submitProductSubmission(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: validated.error });
     }
 
+    // An inline photo goes to Storage; only its URL is stored (see
+    // services/productImageStorage.ts for what the raw string broke).
+    const imageUrl = await storeInlineProductImage(validated.fields.image_url);
+
     const { data, error } = await supabaseAdmin
       .from('product_submissions')
       .insert({
         store_id: storeId,
         submitted_by: shopkeeperId,
         ...validated.fields,
+        image_url: imageUrl,
       })
       .select()
       .single();
@@ -243,9 +249,13 @@ export async function editProductSubmission(req: Request, res: Response) {
     // Same `stores(name)` embed + store_name mapping as listProductSubmissions,
     // so the returned row is shaped like a list row and the page can replace
     // its card with it (it used to come back bare and show "Unknown store").
+    // The console re-sends whatever image_url the row has, which is still an
+    // inline photo on rows submitted before those moved to Storage.
+    const imageUrl = await storeInlineProductImage(validated.fields.image_url);
+
     const { data, error } = await supabaseAdmin
       .from('product_submissions')
-      .update({ ...validated.fields, ...taxFields })
+      .update({ ...validated.fields, image_url: imageUrl, ...taxFields })
       .eq('id', id)
       .eq('status', 'pending')
       .select('*, stores(name)')
@@ -308,6 +318,27 @@ export async function reviewProductSubmission(req: Request, res: Response) {
     }
     if (status === 'approved' && gst_rate !== undefined && gst_rate !== null && !Number.isFinite(Number(gst_rate))) {
       return res.status(400).json({ success: false, error: 'GST rate must be a valid number' });
+    }
+
+    // review_product_submission copies image_url into master_products as-is.
+    // A row submitted before inline photos moved to Storage still holds one;
+    // move it now so the catalogue (and every checkout) gets a URL instead.
+    if (status === 'approved') {
+      const { data: pending } = await supabaseAdmin
+        .from('product_submissions')
+        .select('image_url')
+        .eq('id', id)
+        .eq('status', 'pending')
+        .maybeSingle();
+      if (pending && isInlineImage(pending.image_url)) {
+        const imageUrl = await storeInlineProductImage(pending.image_url);
+        const { error: imageErr } = await supabaseAdmin
+          .from('product_submissions')
+          .update({ image_url: imageUrl })
+          .eq('id', id)
+          .eq('status', 'pending');
+        if (imageErr) throw imageErr;
+      }
     }
 
     const hasGstRate = gst_rate !== undefined && gst_rate !== null;

@@ -149,6 +149,24 @@ describe('placeCheckoutOrder', () => {
     expect(JSON.stringify(outcomes, null, 1)).toMatchSnapshot('errors');
   });
 
+  it('never copies an inline data: image into order_items (2026-10-26); links are kept', async () => {
+    const inline = `data:image/jpeg;base64,${'A'.repeat(4000)}`;
+    const { fake, error } = await place([], {
+      ...ORDER,
+      items: [
+        { product_id: U(1), name: 'Milk', price: 1, quantity: 2, image: inline },
+        { product_id: U(2), name: 'Rice (loose)', price: 1, quantity: 3, image: 'https://cdn.example.com/rice.jpg' },
+        { product_id: U(3), name: 'Ghee', price: 1, quantity: 1 },
+      ],
+    });
+    expect(error).toBeNull();
+    const payload = fake.on('rpc:place_multi_store_order')[0].payload as {
+      p_store_chunks: Array<{ items: Array<{ product_name: string; image_url: string | null }> }>;
+    };
+    const images = Object.fromEntries(payload.p_store_chunks.flatMap((c) => c.items).map((i) => [i.product_name, i.image_url]));
+    expect(images).toEqual({ Milk: null, 'Rice (loose)': 'https://cdn.example.com/rice.jpg', Ghee: null });
+  });
+
   it('reads nothing past an invalid item list (as before)', async () => {
     const { fake } = await place([], { ...ORDER, items: [{ product_id: 'not-a-uuid', name: 'Junk', price: 1, quantity: 1 }] });
     expect(fake.calls.map((c) => c.table)).toEqual(['rpc:generate_next_order_number']);

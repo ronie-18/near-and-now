@@ -7,6 +7,7 @@ import { validateQuantity } from '../utils/quantity.js';
 import { notificationService } from './notification.service.js';
 import { AppError } from '../utils/httpError.js';
 import { runInBackground } from '../utils/background.js';
+import { isInlineImage } from './productImageStorage.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -1288,7 +1289,10 @@ export class DatabaseService {
           product_id: productId,
           product_name: item.name,
           unit: item.unit || null,
-          image_url: item.image || null,
+          // The cart echoes the product's image_url. An inline data: image
+          // (custom products approved before those moved to Storage) would
+          // copy up to 1 MB into this row and into every order poll.
+          image_url: isInlineImage(item.image) ? null : item.image || null,
           unit_price: item.price,
           quantity: item.quantity,
         };
