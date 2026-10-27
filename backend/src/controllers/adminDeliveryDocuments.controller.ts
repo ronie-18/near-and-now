@@ -10,6 +10,7 @@ import {
 } from '../utils/deliveryPartnerVerificationDocuments.js';
 import { suspendRiderIfApprovedAndGetName } from './deliveryPartner.controller.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 /**
  * List a delivery partner's verification documents for admin review, each
@@ -204,8 +205,8 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
       riderName = rider?.name;
     }
 
-    notificationService
-      .notifyAdminsOfReviewAction({
+    runInBackground('notifyAdminsOfReviewAction', () =>
+      notificationService.notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'rider_verification_doc',
         action: status,
@@ -214,7 +215,7 @@ export async function reviewDeliveryPartnerVerificationDocument(req: Request, re
           : `${docType} — ${riderName ?? 'Unknown rider'}`,
         rejectionReason: status === 'rejected' ? reason : null,
       })
-      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+    );
 
     res.json({ success: true, document: data, riderSuspended });
   } catch (error) {

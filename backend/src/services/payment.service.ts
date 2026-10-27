@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { supabaseAdmin } from '../config/database.js';
 import { databaseService } from './database.service.js';
 import { fetchJsonWithTimeout, UPSTREAM_TIMEOUTS_MS } from '../utils/fetchWithTimeout.js';
+import { runInBackground } from '../utils/background.js';
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
@@ -617,12 +618,10 @@ export class PaymentService {
         await databaseService.updateOrderPaymentStatus(internalOrderId, 'paid', payment.id, payment.order_id);
         console.log('[WEBHOOK] Payment captured processed', { eventId, paymentId: payment.id, internalOrderId });
 
-        // Fire-and-forget invoice generation (idempotent)
-        import('../services/invoice.service.js').then(({ invoiceService }) => {
-          invoiceService.generateForOrder(internalOrderId).catch((err: unknown) => {
-            console.error('[INVOICE] Webhook invoice generation failed', { internalOrderId, err });
-          });
-        }).catch(() => {/* ignore dynamic import failure */});
+        // Invoice generation (idempotent) after the response, kept alive on Vercel.
+        runInBackground(`[INVOICE] webhook generate for order ${internalOrderId}`, () =>
+          import('../services/invoice.service.js').then(({ invoiceService }) => invoiceService.generateForOrder(internalOrderId))
+        );
       }
     } else if (eventType === 'payment.failed') {
       const payment = event.payload?.payment?.entity;

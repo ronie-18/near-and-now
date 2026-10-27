@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { isInlineImage, storeInlineProductImage } from '../services/productImageStorage.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 type SubmitBody = {
   name?: string;
@@ -370,19 +371,19 @@ export async function reviewProductSubmission(req: Request, res: Response) {
       return res.status(404).json({ success: false, error: 'Submission not found' });
     }
 
-    notificationService
-      .notifyProductSubmissionReviewed(updated.store_id, status === 'approved', updated.name, status === 'rejected' ? reason : null)
-      .catch((err) => console.error('notifyProductSubmissionReviewed failed:', err));
+    runInBackground('notifyProductSubmissionReviewed', () =>
+      notificationService.notifyProductSubmissionReviewed(updated.store_id, status === 'approved', updated.name, status === 'rejected' ? reason : null)
+    );
 
-    notificationService
-      .notifyAdminsOfReviewAction({
+    runInBackground('notifyAdminsOfReviewAction', () =>
+      notificationService.notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'product_submission',
         action: status,
         entityLabel: updated.name,
         rejectionReason: status === 'rejected' ? reason : null,
       })
-      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+    );
 
     res.json({ success: true, submission: updated });
   } catch (error) {

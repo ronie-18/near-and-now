@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../config/database.js';
 import { notificationService } from '../services/notification.service.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 /**
  * delivery_partners_payouts rows were written on every delivery
@@ -101,14 +102,14 @@ export async function markRiderPayoutPaid(req: Request, res: Response) {
       supabaseAdmin.from('delivery_partners').select('name').eq('user_id', data.partner_user_id).maybeSingle(),
       supabaseAdmin.from('customer_orders').select('order_code').eq('id', data.customer_order_id).maybeSingle(),
     ]);
-    notificationService
-      .notifyAdminsOfReviewAction({
+    runInBackground('notifyAdminsOfReviewAction', () =>
+      notificationService.notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'rider_payout',
         action: 'paid',
         entityLabel: `${partner?.name ?? 'Unknown rider'} — Order ${order?.order_code ?? data.customer_order_id} (₹${data.amount})`,
       })
-      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+    );
 
     res.json({ success: true, payout: data });
   } catch (error) {

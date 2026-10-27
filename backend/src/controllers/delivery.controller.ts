@@ -5,6 +5,7 @@ import { notificationService } from '../services/notification.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { haversineKm, boundingBox } from '../utils/geo.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 export class DeliveryController {
   /** Start mock delivery simulation (driver follows road routes). Runs in background. */
@@ -232,23 +233,23 @@ export class DeliveryController {
         return res.status(404).json({ success: false, error: 'Change request not found' });
       }
 
-      notificationService
-        .notifyRiderProfileChangeReviewed(updated.rider_id, status === 'approved', status === 'rejected' ? reason : null)
-        .catch((err) => console.error('notifyRiderProfileChangeReviewed failed:', err));
+      runInBackground('notifyRiderProfileChangeReviewed', () =>
+        notificationService.notifyRiderProfileChangeReviewed(updated.rider_id, status === 'approved', status === 'rejected' ? reason : null)
+      );
 
       const [{ data: rider }, { data: reviewer }] = await Promise.all([
         supabaseAdmin.from('app_users').select('name').eq('id', updated.rider_id).maybeSingle(),
         supabaseAdmin.from('admins').select('full_name, role').eq('id', req.adminId).maybeSingle(),
       ]);
-      notificationService
-        .notifyAdminsOfReviewAction({
+      runInBackground('notifyAdminsOfReviewAction', () =>
+        notificationService.notifyAdminsOfReviewAction({
           actorAdminId: req.adminId!,
           category: 'rider_profile_change',
           action: status,
           entityLabel: rider?.name ?? 'Unknown rider',
           rejectionReason: status === 'rejected' ? reason : null,
         })
-        .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+      );
 
       // Shaped like a list row (rider_name + reviewer name/role) so the client
       // can use the returned row verbatim instead of patching it from the session.
@@ -421,14 +422,14 @@ export class DeliveryController {
 
       const partnersWithTokens = (partners as any[]).filter((p) => p.expo_push_token);
       if (partnersWithTokens.length) {
-        notificationService
-          .sendExpoPushBatchToDrivers(
+        runInBackground('sendExpoPushBatchToDrivers', () =>
+          notificationService.sendExpoPushBatchToDrivers(
             partnersWithTokens,
             '🛵 New Delivery Request',
             'New order available — tap to accept!',
             { orderId, type: 'new_order_offer' }
           )
-          .catch((err) => console.error('sendExpoPushBatchToDrivers failed:', err));
+        );
       }
 
       res.json({ success: true, broadcast_count: (partners as any[]).length });

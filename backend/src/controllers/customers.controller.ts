@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { databaseService } from '../services/database.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -214,9 +215,11 @@ export class CustomersController {
       }
 
       const { code } = await databaseService.setOrChangeCustomerEmail(customerId, email.trim());
-      notificationService.sendEmailVerificationCode(email.trim(), code).catch((err) => {
-        console.error('[changeEmail] verification email send failed (non-fatal)', err);
-      });
+      // runInBackground keeps the Vercel function alive until the email is
+      // sent; a bare promise could be frozen as soon as the response goes out.
+      runInBackground('[changeEmail] verification email', () =>
+        notificationService.sendEmailVerificationCode(email.trim(), code)
+      );
 
       res.json({ success: true, message: 'Verification code sent' });
     } catch (error) {
@@ -228,9 +231,9 @@ export class CustomersController {
     try {
       const customerId = req.customerId!;
       const { code, email } = await databaseService.resendCustomerEmailVerification(customerId);
-      notificationService.sendEmailVerificationCode(email, code).catch((err) => {
-        console.error('[resendEmailVerification] send failed (non-fatal)', err);
-      });
+      runInBackground('[resendEmailVerification] verification email', () =>
+        notificationService.sendEmailVerificationCode(email, code)
+      );
       res.json({ success: true, message: 'Verification code sent' });
     } catch (error: any) {
       console.error('Error resending email verification:', error);

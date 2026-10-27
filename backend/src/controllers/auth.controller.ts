@@ -7,6 +7,7 @@ import { notificationService } from '../services/notification.service.js';
 import { createSignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 function extractErrorMessage(err: any, fallback: string): string {
   if (!err) return fallback;
@@ -354,9 +355,10 @@ export class AuthController {
 
         // Fire off the initial verification code (non-fatal — the customer can
         // still complete signup and browse; verification is only enforced at checkout).
-        databaseService.setOrChangeCustomerEmail(appUser.id, trimmedEmail)
-          .then(({ code }) => notificationService.sendEmailVerificationCode(trimmedEmail, code))
-          .catch((err) => console.error('[verifyOTP] initial email verification send failed (non-fatal)', err));
+        runInBackground('[verifyOTP] initial email verification', () =>
+          databaseService.setOrChangeCustomerEmail(appUser.id, trimmedEmail)
+            .then(({ code }) => notificationService.sendEmailVerificationCode(trimmedEmail, code))
+        );
       }
 
       const isNewUser = !existingUser;

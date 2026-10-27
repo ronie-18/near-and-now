@@ -10,6 +10,7 @@ import {
 import { suspendStoreIfApprovedAndGetName } from './storeOwner.controller.js';
 import { sendError } from '../utils/httpError.js';
 import { gstinHint, isValidGstin } from '../utils/gstin.js';
+import { runInBackground } from '../utils/background.js';
 
 /**
  * List a store's verification documents for admin review, each with a
@@ -240,8 +241,8 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
       storeName = store?.name;
     }
 
-    notificationService
-      .notifyAdminsOfReviewAction({
+    runInBackground('notifyAdminsOfReviewAction', () =>
+      notificationService.notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'store_verification_doc',
         action: status,
@@ -250,7 +251,7 @@ export async function reviewStoreVerificationDocument(req: Request, res: Respons
           : `${docType} — ${storeName ?? 'Unknown store'}`,
         rejectionReason: status === 'rejected' ? reason : null,
       })
-      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+    );
 
     res.json({ success: true, document: data, storeSuspended });
   } catch (error) {
@@ -334,15 +335,15 @@ export async function reviewStoreImage(req: Request, res: Response) {
     }
 
     const { data: store } = await supabaseAdmin.from('stores').select('name').eq('id', storeId).maybeSingle();
-    notificationService
-      .notifyAdminsOfReviewAction({
+    runInBackground('notifyAdminsOfReviewAction', () =>
+      notificationService.notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'store_image',
         action: status,
         entityLabel: `Storefront photo — ${store?.name ?? 'Unknown store'}`,
         rejectionReason: status === 'rejected' ? reason : null,
       })
-      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+    );
 
     res.json({ success: true, image: data });
   } catch (error) {
@@ -492,23 +493,23 @@ export async function reviewProfileChangeRequest(req: Request, res: Response) {
       return res.status(404).json({ success: false, error: 'Change request not found' });
     }
 
-    notificationService
-      .notifyProfileChangeReviewed(updated.store_id, status === 'approved', status === 'rejected' ? reason : null)
-      .catch((err) => console.error('notifyProfileChangeReviewed failed:', err));
+    runInBackground('notifyProfileChangeReviewed', () =>
+      notificationService.notifyProfileChangeReviewed(updated.store_id, status === 'approved', status === 'rejected' ? reason : null)
+    );
 
     const [{ data: store }, { data: reviewer }] = await Promise.all([
       supabaseAdmin.from('stores').select('name').eq('id', updated.store_id).maybeSingle(),
       supabaseAdmin.from('admins').select('full_name, role').eq('id', req.adminId).maybeSingle(),
     ]);
-    notificationService
-      .notifyAdminsOfReviewAction({
+    runInBackground('notifyAdminsOfReviewAction', () =>
+      notificationService.notifyAdminsOfReviewAction({
         actorAdminId: req.adminId!,
         category: 'store_profile_change',
         action: status,
         entityLabel: store?.name ?? 'Unknown store',
         rejectionReason: status === 'rejected' ? reason : null,
       })
-      .catch((err) => console.error('notifyAdminsOfReviewAction failed:', err));
+    );
 
     // Shaped like a list row (store_name + reviewer name/role) so the client
     // can use the returned row verbatim instead of patching it from the session.

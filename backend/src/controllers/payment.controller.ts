@@ -4,6 +4,7 @@ import { databaseService } from '../services/database.service.js';
 import { invoiceService } from '../services/invoice.service.js';
 import { supabaseAdmin } from '../config/database.js';
 import { sendError } from '../utils/httpError.js';
+import { runInBackground } from '../utils/background.js';
 
 export class PaymentController {
   // Create payment order (for online payment)
@@ -172,10 +173,10 @@ export class PaymentController {
       );
       console.log('[PAYMENT] Verification end', { internalOrderId, paymentId, razorpayOrderId, status: 'paid' });
 
-      // Fire-and-forget invoice generation (idempotent, non-blocking)
-      invoiceService.generateForOrder(internalOrderId).catch((err) => {
-        console.error('[INVOICE] Background generation failed for order', internalOrderId, err);
-      });
+      // Invoice generation (idempotent) after the response, kept alive on Vercel.
+      runInBackground(`[INVOICE] generate for order ${internalOrderId}`, () =>
+        invoiceService.generateForOrder(internalOrderId)
+      );
 
       res.json({ success: true, message: 'Payment verified successfully' });
     } catch (error) {
