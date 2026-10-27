@@ -45,6 +45,7 @@ router.post('/profile-change-request',                            ctrl.requestPr
 router.patch('/profile-image',                                    ctrl.updateProfileImage.bind(ctrl));
 router.patch('/vehicle-type',                                     ctrl.updateVehicleType.bind(ctrl));
 router.patch('/photo-urls',                                       ctrl.updatePhotoUrls.bind(ctrl));
+router.post('/profile-photo/upload-url',                          ctrl.createProfilePhotoUploadUrl.bind(ctrl));
 router.get('/billing-info',                                       ctrl.getBillingInfo.bind(ctrl));
 router.patch('/billing-info',                                     ctrl.saveBillingInfo.bind(ctrl));
 router.get('/verification-documents',                             ctrl.getVerificationDocuments.bind(ctrl));

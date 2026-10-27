@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import { sendError } from '../utils/httpError.js';
+import { createImageUploadUrl } from '../services/imageUploadUrls.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -909,6 +910,42 @@ export async function getStoreImages(req: Request, res: Response) {
     res.json({ success: true, images: data ?? [] });
   } catch (error) {
     return sendError(res, 'storeOwner.getStoreImages', 'Could not load store images', error, undefined, { success: false });
+  }
+}
+
+/**
+ * POST /store-owner/upload-url
+ *   { kind: 'store_image', store_id, content_type } — a gallery photo for a store
+ *     the caller owns and that is approved (addStoreImage, which records it,
+ *     requires the same);
+ *   { kind: 'owner_photo', content_type } — the owner's own photo (no store
+ *     needed: signup uploads it before the store is approved).
+ * Returns a one-photo upload token for a fresh path in that store's / owner's
+ * folder; the app uploads with uploadToSignedUrl and then records the
+ * public_url as before. Replaces the anon-key uploads the buckets had to
+ * allow (services/imageUploadUrls.ts).
+ */
+export async function getImageUploadUrl(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+
+    const kind = req.body?.kind;
+    if (kind === 'owner_photo') {
+      const upload = await createImageUploadUrl('store-owner-images', userId, req.body?.content_type, 'avatar-');
+      return res.json({ success: true, ...upload });
+    }
+    if (kind === 'store_image') {
+      const storeId = typeof req.body?.store_id === 'string' ? req.body.store_id : '';
+      if (!storeId || !(await assertOwnsApprovedStore(storeId, userId))) {
+        return res.status(403).json({ success: false, error: 'Store not found, not owned by you, or not yet approved' });
+      }
+      const upload = await createImageUploadUrl('store-images', storeId, req.body?.content_type);
+      return res.json({ success: true, ...upload });
+    }
+    return res.status(400).json({ success: false, error: "kind must be 'store_image' or 'owner_photo'" });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getImageUploadUrl', 'Could not prepare the photo upload', error, undefined, { success: false });
   }
 }
 

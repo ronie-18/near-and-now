@@ -8,6 +8,7 @@ import { verifySignupTicket } from '../utils/signupTicket.js';
 import { mintRiderRealtimeSession } from '../services/riderAuthBridge.service.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import { sendError } from '../utils/httpError.js';
+import { createImageUploadUrl } from '../services/imageUploadUrls.js';
 import { runInBackground } from '../utils/background.js';
 import { selectInChunks } from '../utils/selectInChunks.js';
 import {
@@ -1462,6 +1463,22 @@ export class DeliveryPartnerController {
       res.json({ success: true, vehicle_type });
     } catch (err) {
       return sendError(res, 'DeliveryPartnerController.updateVehicleType', 'Could not update the vehicle type', err, undefined, { success: false });
+    }
+  }
+
+  /**
+   * POST /delivery-partner/profile-photo/upload-url { content_type }
+   * A one-photo upload token for a fresh path in this rider's own folder of
+   * delivery_partner_image; the app uploads with uploadToSignedUrl and saves
+   * the public_url through PATCH /photo-urls as before. Replaces the anon-key
+   * upload the bucket had to allow (services/imageUploadUrls.ts).
+   */
+  async createProfilePhotoUploadUrl(req: Request, res: Response) {
+    try {
+      const upload = await createImageUploadUrl('delivery_partner_image', req.riderId!, req.body?.content_type, 'avatar-');
+      res.json({ success: true, ...upload });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.createProfilePhotoUploadUrl', 'Could not prepare the photo upload', err, undefined, { success: false });
     }
   }
 

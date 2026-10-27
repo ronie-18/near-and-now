@@ -4,9 +4,7 @@ import { Product } from './supabase';
 import { getCurrentAdmin } from './secureAdminAuth';
 import type { DailyTotal, TopProduct } from '../utils/dashboardSales';
 
-// Image Upload Constants
-const STORAGE_BUCKET = 'product-images';
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+// Backend base URL (same-origin /api in development, see utils/apiBase.ts).
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 // Full UUID (any version). Decides when a free-text search term may be matched
@@ -47,76 +45,36 @@ export async function notifyAdminAction(
 }
 
 // Image Upload Functions
+
+/**
+ * Uploads a product photo and returns its public URL (null on failure, as the
+ * Add/Edit Product pages expect).
+ *
+ * The backend checks the admin's products.edit permission and hands out a
+ * one-photo upload token for a fresh path (POST
+ * /api/admin/product-images/upload-url); the file then goes straight to
+ * Storage with uploadToSignedUrl, which needs no Storage policy. This used to
+ * upload with the anon key — Storage policies cannot see x-admin-token — so
+ * the bucket let anyone insert, overwrite and delete catalogue photos.
+ * (2026-10-27)
+ */
 export async function uploadProductImage(file: File): Promise<string | null> {
   try {
-    // Generate unique filename
-    const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
-    const filePath = `products/${fileName}`;
-
-    // Upload to Supabase Storage
-    const { data, error } = await getAdminClient().storage
-      .from(STORAGE_BUCKET)
-      .upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: false
-      });
-
+    const upload = await adminApiFetch<{ bucket: string; path: string; token: string; public_url: string }>(
+      '/api/admin/product-images/upload-url',
+      { method: 'POST', body: JSON.stringify({ content_type: file.type }) },
+    );
+    const { error } = await getAdminClient()
+      .storage.from(upload.bucket)
+      .uploadToSignedUrl(upload.path, upload.token, file, { contentType: file.type, cacheControl: '3600' });
     if (error) {
       console.error('Error uploading image:', error);
-      // If bucket doesn't exist, try to create it
-      if (error.message.includes('Bucket not found')) {
-        console.log('Creating storage bucket...');
-        await getAdminClient().storage.createBucket(STORAGE_BUCKET, {
-          public: true,
-          fileSizeLimit: 5242880, // 5MB
-          allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
-        });
-        // Retry upload
-        const { data: retryData, error: retryError } = await getAdminClient().storage
-          .from(STORAGE_BUCKET)
-          .upload(filePath, file, {
-            cacheControl: '3600',
-            upsert: false
-          });
-        if (retryError) {
-          console.error('Retry upload failed:', retryError);
-          return null;
-        }
-        return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${retryData.path}`;
-      }
       return null;
     }
-
-    // Return public URL
-    return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${data.path}`;
+    return upload.public_url;
   } catch (error) {
     console.error('Error in uploadProductImage:', error);
     return null;
-  }
-}
-
-export async function deleteProductImage(imageUrl: string): Promise<boolean> {
-  try {
-    // Extract file path from URL
-    const urlParts = imageUrl.split(`${STORAGE_BUCKET}/`);
-    if (urlParts.length < 2) return false;
-
-    const filePath = urlParts[1];
-
-    const { error } = await getAdminClient().storage
-      .from(STORAGE_BUCKET)
-      .remove([filePath]);
-
-    if (error) {
-      console.error('Error deleting image:', error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Error in deleteProductImage:', error);
-    return false;
   }
 }
 

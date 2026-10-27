@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { signupComplete, getStores, createStore, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, createStore, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth, getImageUploadUrl } from '../controllers/storeOwner.controller.js';
 import { MAX_DOC_SIZE_BYTES } from '../utils/verificationDocuments.js';
 
 const router = Router();
@@ -15,6 +15,8 @@ router.get('/stores/:id/profile-change-request', getProfileChangeRequest);
 router.post('/stores/:id/profile-change-request', requestProfileChange);
 router.get('/stores/:id/images', getStoreImages);
 router.post('/stores/:id/images', addStoreImage);
+// One-photo signed upload for the gallery or the owner photo (no anon Storage writes).
+router.post('/upload-url', getImageUploadUrl);
 router.delete('/stores/:id/images/:imageId', deleteStoreImage);
 router.get('/stores/:id/verification-documents', getVerificationDocuments);
 // requireStoreOwnerAuth runs before docUpload on both of these specifically — auth
