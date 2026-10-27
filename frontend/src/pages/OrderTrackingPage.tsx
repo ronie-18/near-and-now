@@ -5,7 +5,9 @@ import {
   XCircle, Radio, ChevronDown, ChevronUp, Store, Star,
   RotateCcw, FileText, HeadphonesIcon, Navigation,
 } from 'lucide-react';
-import { supabaseNoSession } from '../services/supabase';
+import { fetchCustomerOrders } from '../services/orderService';
+import { lookupOrderByNumber } from '../utils/orderLookup';
+import { useAuth } from '../context/AuthContext';
 import { useOrderTrackingRealtime, type Order, type OrderStatus, type TrackingOrderItem } from '../hooks/useOrderTrackingRealtime';
 import DeliveryMap from '../components/tracking/DeliveryMap';
 import StoreTrackingBox from '../components/tracking/StoreTrackingBox';
@@ -101,7 +103,7 @@ function SkeletonLine({ w = 'w-full', h = 'h-4' }: { w?: string; h?: string }) {
   return <div className={`${w} ${h} bg-gray-200 rounded animate-pulse`} />;
 }
 
-function TrackByNumberForm({ loading, initialNumber }: { loading: boolean; initialNumber: string }) {
+function TrackByNumberForm({ loading, initialNumber, error }: { loading: boolean; initialNumber: string; error?: string | null }) {
   const navigate = useNavigate();
   const [number, setNumber] = useState(initialNumber);
   const handleSubmit = (e: React.FormEvent) => {
@@ -115,9 +117,10 @@ function TrackByNumberForm({ loading, initialNumber }: { loading: boolean; initi
         type="text"
         value={number}
         onChange={(e) => setNumber(e.target.value)}
-        placeholder="Enter order number (e.g. ORD-2024-0001)"
+        placeholder="Enter order number (e.g. NN20261027-0001)"
         className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary"
       />
+      {error ? <p className="text-sm text-red-600" role="alert">{error}</p> : null}
       <button
         type="submit"
         disabled={loading || !number.trim()}
@@ -140,6 +143,7 @@ const OrderTrackingPage = () => {
   const navigate = useNavigate();
   const trackingNumberParam = searchParams.get('number');
   const { showNotification } = useNotification();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -154,20 +158,23 @@ const OrderTrackingPage = () => {
   const [cancelling, setCancelling] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
 
-  // Resolve order_code → orderId
+  // Resolve order_code → orderId among the signed-in customer's own orders
+  // (utils/orderLookup.ts — the anon-key read this replaced always came back empty).
   useEffect(() => {
-    if (orderId || !trackingNumberParam?.trim()) return;
-    const resolve = async () => {
-      try {
-        setLoading(true);
-        const { data, error } = await supabaseNoSession
-          .from('customer_orders').select('id').eq('order_code', trackingNumberParam.trim()).maybeSingle();
-        if (!error && data?.id) navigate(`/track/${data.id}`, { replace: true });
-      } catch { /* fall through */ } finally { setLoading(false); }
-    };
-    resolve();
-  }, [orderId, trackingNumberParam, navigate]);
+    if (orderId || !trackingNumberParam?.trim() || authLoading) return;
+    let cancelled = false;
+    setLoading(true);
+    setLookupError(null);
+    lookupOrderByNumber(trackingNumberParam, user?.id, fetchCustomerOrders).then((result) => {
+      if (cancelled) return;
+      if ('orderId' in result) navigate(`/track/${result.orderId}`, { replace: true });
+      else setLookupError(result.error);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [orderId, trackingNumberParam, navigate, user?.id, authLoading]);
 
   const fetchTracking = useCallback(async () => {
     if (!orderId) return;
@@ -313,7 +320,12 @@ const OrderTrackingPage = () => {
             <h1 className="text-2xl font-bold text-gray-800">Track Your Order</h1>
             <p className="text-gray-500 mt-1">Enter your order number to see live updates</p>
           </div>
-          <TrackByNumberForm loading={loading && !!trackingNumberParam} initialNumber={trackingNumberParam || ''} />
+          <TrackByNumberForm
+            key={trackingNumberParam || ''}
+            loading={loading && !!trackingNumberParam}
+            initialNumber={trackingNumberParam || ''}
+            error={trackingNumberParam ? lookupError : null}
+          />
           <div className="mt-5 text-center">
             <Link to="/orders" className="text-primary hover:text-secondary text-sm font-medium">
               View My Orders →

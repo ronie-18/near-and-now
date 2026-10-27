@@ -11,7 +11,7 @@ import { getWalletBalance, payOrderWithWallet } from '../services/walletService'
 import { cancelOrder } from '../services/orderService';
 import { ShoppingBag, CreditCard, Truck, Shield, CheckCircle, MapPin, Lock, Plus, Home, Briefcase, ChevronRight, Edit2, Trash2, Navigation, Heart, Sparkles, ArrowLeft, Tag, X, Wallet } from 'lucide-react';
 import LocationPicker from '../components/location/LocationPicker';
-import { calculateCheckoutTotals } from '../utils/checkoutCalculations';
+import { calculateCheckoutTotals, isAllCashSplit } from '../utils/checkoutCalculations';
 import { apiUrl } from '../utils/apiBase';
 import { getAuthHeaders, authedFetch } from '../utils/authHeader';
 import { describeError } from '../utils/apiErrors';
@@ -568,10 +568,14 @@ const CheckoutPage = () => {
         shippingLng = pickedLocation.lng;
       }
 
+      // An all-cash split is sent as plain cash on delivery (utils/checkoutCalculations.ts).
+      const splitIsAllCash = isAllCashSplit(splitEnabled, splitUpiAmount);
+      const useSplit = splitEnabled && !splitIsAllCash;
+
       let paymentMethodLabel =
-        formData.paymentMethod === 'cod' ? 'Cash on Delivery' :
+        formData.paymentMethod === 'cod' || splitIsAllCash ? 'Cash on Delivery' :
         formData.paymentMethod === 'wallet' ? 'Wallet' : 'Online Payment';
-      if (splitEnabled) {
+      if (useSplit) {
         const cashAmt = parseFloat(splitCashAmount) || 0;
         const upiAmt = parseFloat(splitUpiAmount) || 0;
         paymentMethodLabel = `Split — Cash ₹${Math.round(cashAmt)} + UPI ₹${Math.round(upiAmt)}`;
@@ -597,7 +601,7 @@ const CheckoutPage = () => {
           pincode: formData.pincode,
           ...(shippingLat != null && shippingLng != null && { latitude: shippingLat, longitude: shippingLng })
         },
-        ...(splitEnabled && {
+        ...(useSplit && {
           split_cash_amount: parseFloat(splitCashAmount) || 0,
           split_upi_amount: parseFloat(splitUpiAmount) || 0
         }),

@@ -147,3 +147,13 @@ export function calculateOrderTotals(cartTotal: number, deliveryFee: number, dis
     orderTotal: totals.grandTotal
   };
 }
+
+/**
+ * A split payment with nothing to pay online. Typing the whole total into the
+ * cash box fills UPI with 0; sent as a split, that order was stored as an
+ * unpaid online order, hidden from stores and cancelled as abandoned. Checkout
+ * sends it as plain cash on delivery instead (the API does the same). (2026-10-27)
+ */
+export function isAllCashSplit(splitEnabled: boolean, upiAmount: string): boolean {
+  return splitEnabled && !((parseFloat(upiAmount) || 0) > 0);
+}
