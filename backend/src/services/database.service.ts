@@ -8,6 +8,7 @@ import { notificationService } from './notification.service.js';
 import { AppError } from '../utils/httpError.js';
 import { runInBackground } from '../utils/background.js';
 import { isInlineImage } from './productImageStorage.js';
+import { istDateString } from '../utils/istDate.js';
 import type {
   CustomerSavedAddress,
   Store,
@@ -854,11 +855,8 @@ export class DatabaseService {
   }
 
   async generateNextOrderNumber(): Promise<string> {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const prefix = `NN${year}${month}${day}`;
+    // Today's date in India: the server's own clock is UTC (utils/istDate.ts).
+    const prefix = `NN${istDateString().replace(/-/g, '')}`;
     const { data, error } = await supabaseAdmin.rpc('generate_next_order_number', {
       prefix_input: prefix
     });
@@ -1112,7 +1110,14 @@ export class DatabaseService {
     // if the debit fails (e.g. insufficient balance) the order would be left
     // looking exactly like an ordinary unpaid COD order, with no "pending
     // online payment, please retry" signal anywhere.
+    // A split with nothing to pay online (the website's cash box set to the
+    // whole total auto-fills UPI with 0) is cash on delivery. Labelled
+    // 'razorpay' by its "Split" label, it waited for a payment that never
+    // comes: hidden from every store, then cancelled as abandoned after 15
+    // minutes while the customer believed they had a cash order. (2026-10-27)
+    const splitIsAllCash = orderData.split_upi_amount != null && !(Number(orderData.split_upi_amount) > 0);
     const paymentMethodEnum =
+      splitIsAllCash ? 'cod' :
       pm.includes('wallet') ? 'wallet' :
       pm.includes('split') || pm.includes('online') || pm.includes('upi') || pm.includes('razorpay') || pm.includes('card') ? 'razorpay' : 'cod';
 
@@ -1337,7 +1342,7 @@ export class DatabaseService {
         // yet). The customer's own delivery note used to be dropped in that
         // case; keep it alongside. Readers that treat `notes` as the delivery
         // note should display `note` from this JSON when present.
-        notes: orderData.split_upi_amount != null
+        notes: orderData.split_upi_amount != null && !splitIsAllCash
           ? JSON.stringify({
               split_upi_amount: orderData.split_upi_amount,
               split_cash_amount: orderData.split_cash_amount ?? 0,

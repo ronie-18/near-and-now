@@ -170,7 +170,10 @@ export async function createAdditionPayment(req: Request, res: Response) {
 
     const { data: order, error: orderErr } = await supabaseAdmin
       .from('customer_orders')
-      .select('id, customer_id, placed_at, status, payment_method, payment_status')
+      // customer_payments is one row per order (UNIQUE customer_order_id), so
+      // the payment time rides along in this read instead of costing a second
+      // round trip — see the add-items window below.
+      .select('id, customer_id, placed_at, status, payment_method, payment_status, customer_payments(paid_at)')
       .eq('id', orderId)
       .maybeSingle();
 
@@ -191,7 +194,19 @@ export async function createAdditionPayment(req: Request, res: Response) {
     }
 
     const placedAt = order.placed_at ? new Date(order.placed_at).getTime() : null;
-    if (!placedAt || Date.now() - placedAt > ADD_ITEMS_WINDOW_MS) {
+    // An online-paid order's row is created before the Razorpay sheet opens,
+    // so a payment that took longer than the window (a UPI app hand-off often
+    // does) reached the confirmation screen with the window already shut. The
+    // window opens when the money lands. Only customer_payments.paid_at counts:
+    // customer_orders.updated_at moves on every status change and would keep
+    // reopening it. (2026-10-27)
+    let windowStart = placedAt;
+    if (placedAt && o.payment_method !== 'cod') {
+      const payment = Array.isArray(o.customer_payments) ? o.customer_payments[0] : o.customer_payments;
+      const paidMs = payment?.paid_at ? new Date(payment.paid_at).getTime() : NaN;
+      if (Number.isFinite(paidMs)) windowStart = Math.max(placedAt, paidMs);
+    }
+    if (!windowStart || Date.now() - windowStart > ADD_ITEMS_WINDOW_MS) {
       return res.status(400).json({ success: false, error: 'The add-items window for this order has closed.' });
     }
 

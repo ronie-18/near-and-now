@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import { supabaseAdmin } from '../config/database.js';
 import { AppError } from '../utils/httpError.js';
 import { isValidGstin, normalizeGstin } from '../utils/gstin.js';
+import { istDateString } from '../utils/istDate.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -564,7 +565,8 @@ function buildInvoiceData(raw: Awaited<ReturnType<typeof fetchOrderData>>): Invo
   return {
     order_id: o.id,
     invoice_number: '', // filled after DB insert
-    invoice_date: new Date(o.placed_at || o.created_at).toISOString().slice(0, 10),
+    // The order's date in India, not UTC (see utils/istDate.ts).
+    invoice_date: istDateString(o.placed_at || o.created_at),
     buyer_name: buyerName,
     buyer_phone: buyerPhone,
     buyer_email: buyerEmail,

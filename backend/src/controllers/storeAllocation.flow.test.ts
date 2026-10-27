@@ -697,6 +697,45 @@ describe('paid add-ons respect the allocation state', () => {
   const req = (body: unknown, extra: Record<string, unknown> = {}) =>
     ({ customerId: 'c1', params: { orderId: 'o1' }, body, ...extra }) as unknown as Request;
 
+  // 2026-10-27: the 30 s (+5 s grace) window ran from placed_at, which for an
+  // online order is before the Razorpay sheet opens — a slow UPI payment shut
+  // it before the confirmation screen appeared. It runs from the payment now.
+  describe('add-more window', () => {
+    const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
+    const windowRun = async (order: Record<string, unknown>) => {
+      const fake = installFakeSupabase(supabaseAdmin, (c) =>
+        c.table === 'customer_orders' ? ok({ id: 'o1', customer_id: 'c1', status: 'pending_at_store', ...order }) : undefined
+      );
+      const res = mockRes();
+      // No items: an open window answers "No items to add.", a closed one says so.
+      await createAdditionPayment(req({ items: [] }), res as never);
+      return { fake, error: (res.body as { error?: string }).error };
+    };
+
+    it('opens when an online payment lands, not when the order row was created', async () => {
+      const { fake, error } = await windowRun({ placed_at: ago(90), payment_method: 'razorpay', payment_status: 'paid', customer_payments: { paid_at: ago(10) } });
+      expect(error).toBe('No items to add.');
+      // The payment time comes embedded in the one order read — no extra round trip.
+      expect(fake.calls.map((c) => c.table)).toEqual(['customer_orders']);
+      expect(fake.on('customer_orders')[0].columns).toContain('customer_payments(paid_at)');
+    });
+
+    it('closes 35 s after the payment', async () => {
+      const { error } = await windowRun({ placed_at: ago(90), payment_method: 'razorpay', payment_status: 'paid', customer_payments: { paid_at: ago(40) } });
+      expect(error).toMatch(/window for this order has closed/);
+    });
+
+    it('falls back to placed_at when no payment time is recorded', async () => {
+      const { error } = await windowRun({ placed_at: ago(90), payment_method: 'razorpay', payment_status: 'paid', customer_payments: null });
+      expect(error).toMatch(/window for this order has closed/);
+    });
+
+    it('still runs from placed_at for cash on delivery', async () => {
+      expect((await windowRun({ placed_at: ago(10), payment_method: 'cod', payment_status: 'pending', customer_payments: null })).error).toBe('No items to add.');
+      expect((await windowRun({ placed_at: ago(40), payment_method: 'cod', payment_status: 'pending', customer_payments: { paid_at: ago(5) } })).error).toMatch(/closed/);
+    });
+  });
+
   it('refuses additions once the order is past the store stage', async () => {
     installFakeSupabase(supabaseAdmin, (c) => {
       if (c.table === 'customer_orders') return ok({ id: 'o1', customer_id: 'c1', placed_at: new Date().toISOString(), status: 'ready_for_pickup' });

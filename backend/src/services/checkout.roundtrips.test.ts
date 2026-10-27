@@ -167,6 +167,48 @@ describe('placeCheckoutOrder', () => {
     expect(images).toEqual({ Milk: null, 'Rice (loose)': 'https://cdn.example.com/rice.jpg', Ghee: null });
   });
 
+  // 2026-10-27: a split whose UPI share is 0 was stored as an unpaid online
+  // order — hidden from stores, then cancelled as abandoned.
+  it('stores an all-cash split as cash on delivery, with the plain delivery note', async () => {
+    const total = ORDER.order_total;
+    const { fake, error } = await place([], {
+      ...ORDER,
+      payment_method: 'Split — Cash ₹279 + UPI ₹0',
+      split_cash_amount: total,
+      split_upi_amount: 0,
+      notes: 'Ring the bell',
+    });
+    expect(error).toBeNull();
+    const co = (fake.on('rpc:place_multi_store_order')[0].payload as { p_customer_order: { payment_method: string; notes: string | null } }).p_customer_order;
+    expect(co.payment_method).toBe('cod');
+    expect(co.notes).toBe('Ring the bell');
+  });
+
+  it('keeps a real split (UPI share > 0) as an online payment with its amounts', async () => {
+    const total = ORDER.order_total;
+    const { fake, error } = await place([], {
+      ...ORDER,
+      payment_method: 'Split — Cash ₹179 + UPI ₹100',
+      split_cash_amount: total - 100,
+      split_upi_amount: 100,
+    });
+    expect(error).toBeNull();
+    const co = (fake.on('rpc:place_multi_store_order')[0].payload as { p_customer_order: { payment_method: string; notes: string } }).p_customer_order;
+    expect(co.payment_method).toBe('razorpay');
+    expect(JSON.parse(co.notes)).toMatchObject({ split_upi_amount: 100 });
+  });
+
+  it("prefixes the order code with today's Indian date (00:30 IST is already the next day)", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-26T19:00:00Z')); // 00:30 IST, 27 Oct
+    try {
+      const { fake } = await place();
+      expect(fake.on('rpc:generate_next_order_number')[0].payload).toEqual({ prefix_input: 'NN20261027' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reads nothing past an invalid item list (as before)', async () => {
     const { fake } = await place([], { ...ORDER, items: [{ product_id: 'not-a-uuid', name: 'Junk', price: 1, quantity: 1 }] });
     expect(fake.calls.map((c) => c.table)).toEqual(['rpc:generate_next_order_number']);

@@ -268,3 +268,30 @@ describe('invoice — buyer GSTIN (B2B)', () => {
     expect(text).not.toContain('Buyer GSTIN');
   });
 });
+
+// 2026-10-27: the invoice date was the UTC day (toISOString), and the API runs
+// in UTC on Vercel — an order placed between 00:00 and 05:29 IST was dated the
+// day before, at a month end in the previous GST period.
+describe('invoice — date is the Indian date the order was placed', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('dates an order placed at 00:30 IST on 1 Nov as 1 Nov, not 31 Oct', async () => {
+    const { uploaded, getInsertedInvoiceRow } = setupMocks({
+      storeCount: 1, itemsPerStore: 1, totalAmount: 106,
+      order: { placed_at: '2026-10-31T19:00:00Z', created_at: '2026-10-31T19:00:00Z' },
+    });
+    await invoiceService.generateForOrder('order-abc-123');
+    expect(getInsertedInvoiceRow()).toMatchObject({ invoice_date: '2026-11-01' });
+    const customerPath = Object.keys(uploaded).find((p) => p.startsWith('customer/'))!;
+    expect(pdfText(uploaded[customerPath])).toMatch(/01[ -]Nov[ -]2026/);
+  });
+
+  it('keeps the same day for an afternoon order', async () => {
+    const { getInsertedInvoiceRow } = setupMocks({
+      storeCount: 1, itemsPerStore: 1, totalAmount: 106,
+      order: { placed_at: '2026-10-31T09:00:00Z', created_at: '2026-10-31T09:00:00Z' },
+    });
+    await invoiceService.generateForOrder('order-abc-123');
+    expect(getInsertedInvoiceRow()).toMatchObject({ invoice_date: '2026-10-31' });
+  });
+});
