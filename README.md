@@ -26,7 +26,7 @@ The platform uses PostgreSQL (Supabase) with PostGIS, RLS, and real-time subscri
 
 ### Setup
 
-1. **Clone and install dependencies**:
+1. **Clone and install dependencies**: -
 ```bash
 # Install backend dependencies
 cd backend
