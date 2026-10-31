@@ -293,38 +293,131 @@ export async function createAdditionPayment(req: Request, res: Response) {
   }
 }
 
-/** Refunds a captured add-on payment whose items could not be applied, and closes the request. */
+type AdditionRequestRow = {
+  id: string;
+  status: string;
+  subtotal_amount: number | string;
+  customer_order_id: string;
+  razorpay_order_id: string | null;
+  razorpay_payment_id: string | null;
+  items: TrustedItem[];
+};
+
+type AdditionSettlement =
+  | { kind: 'applied' }
+  | { kind: 'not_captured'; status: string }
+  | { kind: 'not_found' }
+  | { kind: 'refunded' | 'refund_failed'; amount: number };
+
+const failedAdditionMessage = (refunded: boolean, amount: number) =>
+  refunded
+    ? `The store had already finished with this order, so the extra items could not be added. ₹${amount.toFixed(2)} has been refunded.`
+    : 'The store had already finished with this order, so the extra items could not be added. Our team will refund the payment.';
+
+/**
+ * Refunds a captured add-on payment whose items could not be applied, and
+ * closes the request. Only the call that actually closes the request refunds,
+ * so a verify call and the webhook fallback both landing here refund once.
+ * Returns whether the money is (being) given back.
+ */
 async function refundFailedAddition(
-  res: Response,
-  request: { id: string; subtotal_amount: number | string; customer_order_id: string },
+  request: Pick<AdditionRequestRow, 'id' | 'subtotal_amount' | 'customer_order_id'>,
   razorpayPaymentId: string,
   reasonCode: string
-) {
+): Promise<boolean> {
   const amount = Number(request.subtotal_amount) || 0;
-  const { error: failErr } = await supabaseAdmin
+  const { data: closed, error: failErr } = await supabaseAdmin
     .from('order_addition_requests')
     .update({ status: 'failed', razorpay_payment_id: razorpayPaymentId })
     .eq('id', request.id)
-    .eq('status', 'pending');
-  if (failErr) console.error('[ADD-ITEMS] could not mark request failed:', failErr, { requestId: request.id });
-
-  let refunded = false;
-  if (amount > 0) {
-    try {
-      await paymentService.processRefund({ paymentId: razorpayPaymentId, amount, reason: 'Add-on items could not be added to the order' });
-      refunded = true;
-    } catch (err) {
-      console.error('CRITICAL [ADD-ITEMS] add-on payment captured but refund failed — refund manually:', err, {
-        requestId: request.id, orderId: request.customer_order_id, razorpayPaymentId, amount, reasonCode,
-      });
-    }
+    .eq('status', 'pending')
+    .select('id');
+  if (failErr) {
+    // Refund anyway — the money is captured either way.
+    console.error('[ADD-ITEMS] could not mark request failed:', failErr, { requestId: request.id });
+  } else if (!closed?.length) {
+    console.log('[ADD-ITEMS] request already closed by the other settle path — not refunding twice', { requestId: request.id });
+    return true;
   }
-  return res.status(409).json({
-    success: false,
-    error: refunded
-      ? `The store had already finished with this order, so the extra items could not be added. ₹${amount.toFixed(2)} has been refunded.`
-      : 'The store had already finished with this order, so the extra items could not be added. Our team will refund the payment.',
-  });
+
+  if (amount <= 0) return false;
+  try {
+    await paymentService.processRefund({ paymentId: razorpayPaymentId, amount, reason: 'Add-on items could not be added to the order' });
+    return true;
+  } catch (err) {
+    console.error('CRITICAL [ADD-ITEMS] add-on payment captured but refund failed — refund manually:', err, {
+      requestId: request.id, orderId: request.customer_order_id, razorpayPaymentId, amount, reasonCode,
+    });
+    return false;
+  }
+}
+
+/**
+ * Captures an already-validated add-on payment and applies its items
+ * (apply_order_addition_request is a no-op on a request that is no longer
+ * pending). Shared by verifyAdditionPayment and the webhook fallback.
+ */
+async function captureAndApplyAddition(request: AdditionRequestRow, razorpayPaymentId: string): Promise<AdditionSettlement> {
+  const captureResult = await paymentService.ensurePaymentCaptured(razorpayPaymentId);
+  if (captureResult.status !== 'captured') return { kind: 'not_captured', status: captureResult.status };
+
+  const { data: applied, error: applyErr } = await supabaseAdmin
+    .rpc('apply_order_addition_request', { p_request_id: request.id, p_razorpay_payment_id: razorpayPaymentId });
+  if (applyErr) {
+    const msg = String((applyErr as { message?: string }).message || '');
+    if (msg.includes('ADDITION_ORDER_NOT_OPEN') || msg.includes('ADDITION_STORE_UNAVAILABLE')) {
+      // Between paying and now, the order moved on (dispatched / cancelled)
+      // or the target store dropped out. The money is captured, so refund
+      // it and close the request rather than inserting items nobody will
+      // pick. (2026-10-04 audit)
+      const amount = Number(request.subtotal_amount) || 0;
+      const refunded = await refundFailedAddition(request, razorpayPaymentId, msg);
+      return { kind: refunded ? 'refunded' : 'refund_failed', amount };
+    }
+    throw applyErr;
+  }
+  if (!applied) return { kind: 'not_found' };
+
+  // Tell each store its order grew — an already-accepted store otherwise only
+  // sees the new lines on its next poll, with no signal that anything changed.
+  runInBackground('[ADD-ITEMS] store notification', () =>
+    notifyStoresOfAddedItems(request.customer_order_id, request.items)
+  );
+  return { kind: 'applied' };
+}
+
+/**
+ * Webhook fallback (payment.service.ts processWebhookEvent) for an add-on
+ * payment whose verify call never arrived. The request is found by the
+ * Razorpay order id stored on it at creation — never by the payment's own
+ * notes — and the amount is checked against the stored subtotal.
+ */
+export async function settleAdditionFromWebhook(
+  payment: { id: string; order_id?: string | null; amount?: number },
+  eventId: string
+): Promise<void> {
+  if (!payment.order_id) return;
+  const { data: request, error } = await supabaseAdmin
+    .from('order_addition_requests')
+    .select('*')
+    .eq('razorpay_order_id', payment.order_id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!request) {
+    console.warn('[ADD-ITEMS] webhook: no addition request for this Razorpay order', { eventId, paymentId: payment.id, razorpayOrderId: payment.order_id });
+    return;
+  }
+  const row = request as AdditionRequestRow;
+  if (row.status !== 'pending') {
+    console.log('[ADD-ITEMS] webhook: request already settled', { eventId, requestId: row.id, status: row.status });
+    return;
+  }
+  if (Number(payment.amount) !== Math.round(Number(row.subtotal_amount) * 100)) {
+    console.warn('[ADD-ITEMS] webhook: amount mismatch, skipping', { eventId, requestId: row.id, paymentAmount: payment.amount, subtotal: row.subtotal_amount });
+    return;
+  }
+  const outcome = await captureAndApplyAddition(row, payment.id);
+  console.log('[ADD-ITEMS] webhook settled add-on payment', { eventId, requestId: row.id, paymentId: payment.id, outcome: outcome.kind });
 }
 
 async function notifyStoresOfAddedItems(orderId: string, items: TrustedItem[]) {
@@ -370,7 +463,10 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
     if (fetchErr || !request || (request as any).customer_orders.customer_id !== req.customerId) {
       return res.status(404).json({ success: false, error: 'Addition request not found' });
     }
-    if (request.status !== 'pending') {
+    // The webhook fallback may already have settled this exact payment —
+    // answered below as the outcome it reached, not as a conflict.
+    const settledByWebhook = request.status !== 'pending' && request.razorpay_payment_id === razorpay_payment_id;
+    if (request.status !== 'pending' && !settledByWebhook) {
       return res.status(409).json({ success: false, error: `This addition was already ${request.status}.` });
     }
     if (request.razorpay_order_id !== razorpay_order_id) {
@@ -384,6 +480,10 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
     });
     if (!isValid) {
       return res.status(400).json({ success: false, error: 'Payment verification failed' });
+    }
+    if (settledByWebhook) {
+      if (request.status === 'paid') return res.json({ success: true });
+      return res.status(409).json({ success: false, error: failedAdditionMessage(true, Number(request.subtotal_amount) || 0) });
     }
 
     // Validate amount before capturing — capturing is a one-way action; doing it
@@ -405,35 +505,18 @@ export async function verifyAdditionPayment(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'Payment verification failed' });
     }
 
-    const captureResult = await paymentService.ensurePaymentCaptured(razorpay_payment_id);
-    if (captureResult.status !== 'captured') {
-      return res.status(400).json({ success: false, error: `Payment not captured (status: ${captureResult.status})` });
+    const outcome = await captureAndApplyAddition(request as AdditionRequestRow, razorpay_payment_id);
+    switch (outcome.kind) {
+      case 'not_captured':
+        return res.status(400).json({ success: false, error: `Payment not captured (status: ${outcome.status})` });
+      case 'not_found':
+        return res.status(404).json({ success: false, error: 'Addition request not found' });
+      case 'refunded':
+      case 'refund_failed':
+        return res.status(409).json({ success: false, error: failedAdditionMessage(outcome.kind === 'refunded', outcome.amount) });
+      default:
+        return res.json({ success: true });
     }
-
-    const { data: applied, error: applyErr } = await supabaseAdmin
-      .rpc('apply_order_addition_request', { p_request_id: request_id, p_razorpay_payment_id: razorpay_payment_id });
-    if (applyErr) {
-      const msg = String((applyErr as { message?: string }).message || '');
-      if (msg.includes('ADDITION_ORDER_NOT_OPEN') || msg.includes('ADDITION_STORE_UNAVAILABLE')) {
-        // Between paying and now, the order moved on (dispatched / cancelled)
-        // or the target store dropped out. The money is captured, so refund
-        // it and close the request rather than inserting items nobody will
-        // pick. (2026-10-04 audit)
-        return refundFailedAddition(res, request as any, razorpay_payment_id, msg);
-      }
-      throw applyErr;
-    }
-    if (!applied) {
-      return res.status(404).json({ success: false, error: 'Addition request not found' });
-    }
-
-    // Tell each store its order grew — an already-accepted store otherwise only
-    // sees the new lines on its next poll, with no signal that anything changed.
-    runInBackground('[ADD-ITEMS] store notification', () =>
-      notifyStoresOfAddedItems(orderId, (request as any).items as TrustedItem[])
-    );
-
-    res.json({ success: true });
   } catch (error) {
     return sendError(res, 'orderAdditions.verifyAdditionPayment', 'Could not verify payment', error, undefined, { success: false });
   }

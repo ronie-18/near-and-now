@@ -74,5 +74,9 @@ router.post('/orders/:orderId/accept',                            ctrl.acceptOrd
 router.post('/orders/:orderId/reject',                            ctrl.rejectOrder.bind(ctrl));
 router.post('/orders/:orderId/picked-up',                         ctrl.markPickedUp.bind(ctrl));
 router.post('/orders/:orderId/delivered',                         ctrl.markDelivered.bind(ctrl));
+// Doorstep payment for cash-on-delivery (off unless COD_COLLECTION_ENABLED=true)
+router.get('/orders/:orderId/cod',                                ctrl.getCodCollectionStatus.bind(ctrl));
+router.post('/orders/:orderId/cod/qr',                            ctrl.createCodQr.bind(ctrl));
+router.post('/orders/:orderId/cod/cash',                          ctrl.recordCodCashCollected.bind(ctrl));
 
 export default router;

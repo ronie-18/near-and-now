@@ -422,6 +422,13 @@ export class PaymentService {
     return razorpayRequest('GET', `/payments/${paymentId}`);
   }
 
+  // Fetch a Razorpay order. Its notes are set server-side at creation, so
+  // unlike a payment's notes (which checkout can add to) they can be trusted.
+  async getRazorpayOrder(razorpayOrderId: string) {
+    if (!RAZORPAY_KEY_ID) throw new Error('Razorpay credentials not configured');
+    return razorpayRequest('GET', `/orders/${razorpayOrderId}`);
+  }
+
   async persistGatewayResponse(orderId: string, gatewayResponse: unknown): Promise<void> {
     try {
       await databaseService.updateOrderPaymentGatewayResponse(orderId, gatewayResponse);
@@ -480,10 +487,22 @@ export class PaymentService {
         throw new Error('Invalid authorized amount for capture');
       }
 
-      const captured = (await razorpayRequest('POST', `/payments/${paymentId}/capture`, {
-        amount: Math.round(amountPaise),
-        currency: payment?.currency || 'INR'
-      })) as any;
+      let captured: any;
+      try {
+        captured = await razorpayRequest('POST', `/payments/${paymentId}/capture`, {
+          amount: Math.round(amountPaise),
+          currency: payment?.currency || 'INR'
+        });
+      } catch (error) {
+        // A verify call and the webhook fallback can race to capture the same
+        // payment; the loser gets "already captured" back. That is success.
+        if (!(error instanceof RazorpayApiError)) throw error;
+        const again = (await this.getPaymentDetails(paymentId)) as any;
+        if (String(again?.status || '').toLowerCase() === 'captured') {
+          return { status: 'captured', amount: Number(again?.amount || amountPaise) };
+        }
+        throw error;
+      }
       const capturedStatus = String(captured?.status || 'captured').toLowerCase();
       const capturedAmount = Number(captured?.amount || amountPaise);
       console.log('[CAPTURE] Capture response', { paymentId, attempt, captured });
@@ -514,12 +533,49 @@ export class PaymentService {
     return { id: refund.id, status: refund.status, amount: refund.amount / 100 };
   }
 
+  /**
+   * Single-use, fixed-amount UPI QR (Razorpay QR Codes API) for collecting a
+   * cash-on-delivery amount at the door. Paying it is a normal Razorpay
+   * payment, so the money settles to the company bank account. `notes` are
+   * set here, server-side, and come back on the qr_code.credited webhook.
+   */
+  async createUpiQr(data: { amountPaise: number; closeByUnix: number; description: string; notes: Record<string, string> }) {
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) throw new Error('Razorpay credentials not configured');
+    const qr = await razorpayRequest('POST', '/payments/qr_codes', {
+      type: 'upi_qr',
+      name: 'Near & Now',
+      usage: 'single_use',
+      fixed_amount: true,
+      payment_amount: data.amountPaise,
+      description: data.description,
+      close_by: data.closeByUnix,
+      notes: data.notes
+    }) as any;
+    return {
+      id: String(qr.id),
+      image_url: String(qr.image_url),
+      close_by: Number(qr.close_by || data.closeByUnix),
+      status: String(qr.status || 'active')
+    };
+  }
+
+  // Close a QR so it can no longer be paid. Razorpay refuses an already
+  // closed one; callers treat this as best-effort.
+  async closeQr(qrId: string): Promise<void> {
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) return;
+    await razorpayRequest('POST', `/payments/qr_codes/${qrId}/close`);
+  }
+
   // Verify Razorpay webhook signature.
   // body must be the raw Buffer captured before express.json() parses it
   // (registered via express.raw() on /api/payment/webhook in server.ts).
+  // RazorpayX (store payouts) webhooks are set up in the RazorpayX dashboard
+  // and may carry their own secret (RAZORPAYX_WEBHOOK_SECRET); either secret
+  // signing the exact bytes is accepted.
   async verifyWebhook(headers: Record<string, any>, body: Buffer | string): Promise<boolean> {
-    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || RAZORPAY_WEBHOOK_SECRET;
-    if (!secret) {
+    const secrets = [process.env.RAZORPAY_WEBHOOK_SECRET || RAZORPAY_WEBHOOK_SECRET, process.env.RAZORPAYX_WEBHOOK_SECRET]
+      .filter((s): s is string => !!s);
+    if (!secrets.length) {
       console.error('[WEBHOOK] RAZORPAY_WEBHOOK_SECRET is not set — rejecting all webhooks');
       return false;
     }
@@ -527,15 +583,17 @@ export class PaymentService {
     if (!signature) return false;
     // body is either a Buffer (express.raw) or a string; never re-serialize a parsed object
     const rawBytes = Buffer.isBuffer(body) ? body : Buffer.from(body as string);
-    const expected = crypto
-      .createHmac('sha256', secret)
-      .update(rawBytes)
-      .digest('hex');
-    try {
-      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-    } catch {
-      return false;
-    }
+    return secrets.some((secret) => {
+      const expected = crypto
+        .createHmac('sha256', secret)
+        .update(rawBytes)
+        .digest('hex');
+      try {
+        return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+      } catch {
+        return false;
+      }
+    });
   }
 
   // Handle Razorpay webhook events
@@ -545,6 +603,41 @@ export class PaymentService {
     const paymentEntity = event.payload?.payment?.entity;
     const paymentId = paymentEntity?.id || event.payload?.refund?.entity?.payment_id || null;
     console.log('[WEBHOOK] Received', { eventType, eventId, paymentId });
+
+    // Doorstep UPI QR for a cash-on-delivery amount (codCollection.service.ts).
+    if (eventType === 'qr_code.credited') {
+      const { handleQrCredited } = await import('./codCollection.service.js');
+      await handleQrCredited(event, eventId);
+      return;
+    }
+
+    // RazorpayX store payouts and bank-account checks (storePayouts.service.ts).
+    if (eventType.startsWith('payout.') || eventType.startsWith('fund_account.validation.')) {
+      const { handleRazorpayXWebhook } = await import('./storePayouts.service.js');
+      await handleRazorpayXWebhook(event, eventId);
+      return;
+    }
+
+    // Wallet top-ups and "add more items" payments are settled by their own
+    // verify calls (wallet.controller.ts, orderAdditions.controller.ts). If
+    // the app died between paying and that call, nothing else ever captured
+    // or credited them — with auto-capture on, the money sat captured with no
+    // wallet credit and no added items. Both settle paths are idempotent, so
+    // this racing a late verify call for the same payment is safe. The notes
+    // only route the event; each handler re-checks against server-side state.
+    if ((eventType === 'payment.authorized' || eventType === 'payment.captured') && paymentEntity?.id && !paymentEntity.notes?.internal_order_id) {
+      const notes = paymentEntity.notes || {};
+      if (notes.wallet_topup === true || notes.wallet_topup === 'true') {
+        const { settleTopupFromWebhook } = await import('../controllers/wallet.controller.js');
+        await settleTopupFromWebhook(paymentEntity, eventId);
+        return;
+      }
+      if (notes.addition_request_id) {
+        const { settleAdditionFromWebhook } = await import('../controllers/orderAdditions.controller.js');
+        await settleAdditionFromWebhook(paymentEntity, eventId);
+        return;
+      }
+    }
 
     if (eventType === 'payment.authorized') {
       const payment = event.payload?.payment?.entity;

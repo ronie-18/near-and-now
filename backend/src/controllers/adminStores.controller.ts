@@ -9,6 +9,7 @@ import {
 } from '../utils/verificationDocuments.js';
 import { suspendStoreIfApprovedAndGetName } from './storeOwner.controller.js';
 import { sendError } from '../utils/httpError.js';
+import { selectStoreBillingRow } from '../utils/storeBilling.js';
 import { gstinHint, isValidGstin } from '../utils/gstin.js';
 import { runInBackground } from '../utils/background.js';
 
@@ -75,11 +76,10 @@ export async function getStoreBillingInfo(req: Request, res: Response) {
   try {
     const { id: storeId } = req.params;
 
-    const { data: store, error } = await supabaseAdmin
-      .from('stores')
-      .select('owner_id, owner_image_url, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path')
-      .eq('id', storeId)
-      .maybeSingle();
+    const { data: store, error } = await selectStoreBillingRow(
+      storeId,
+      'owner_id, owner_image_url, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path'
+    );
 
     if (error) {
       console.error('❌ getStoreBillingInfo error:', error);
@@ -136,10 +136,12 @@ export async function getStoreBillingInfo(req: Request, res: Response) {
         bankAccountNumber: store.bank_account_number ?? null,
         bankIfscCode: store.bank_ifsc_code ?? null,
         bankBranchName: store.bank_branch_name ?? null,
+        bankAccountHolderName: store.bank_account_holder_name ?? null,
         passbookUrl,
         pendingBankAccountNumber: pendingChanges.bank_account_number?.new ?? null,
         pendingBankIfscCode: pendingChanges.bank_ifsc_code?.new ?? null,
         pendingBankBranchName: pendingChanges.bank_branch_name?.new ?? null,
+        pendingBankAccountHolderName: pendingChanges.bank_account_holder_name?.new ?? null,
         pendingPassbookUrl,
       },
     });

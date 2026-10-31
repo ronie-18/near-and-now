@@ -26,6 +26,7 @@ import {
   useConfirm,
 } from '../../components/ui';
 import { formatCurrency, formatDate, formatDateTime, formatNumber, shortId } from '../../utils/format';
+import RiderCashInHandCard from '../../components/admin/RiderCashInHandCard';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -415,6 +416,8 @@ const RiderPayoutsPage = () => {
           </div>
         ) : null}
       </Card>
+
+      <RiderCashInHandCard canEdit={canMarkPaid} />
     </div>
   );
 };

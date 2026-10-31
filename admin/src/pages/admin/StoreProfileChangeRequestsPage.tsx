@@ -73,6 +73,7 @@ const FIELD_LABELS: Record<string, string> = {
   bank_account_number: 'Bank account number',
   bank_ifsc_code: 'IFSC code',
   bank_branch_name: 'Bank branch',
+  bank_account_holder_name: 'Account holder name',
   bank_passbook_storage_path: 'Passbook/cheque photo',
 };
 

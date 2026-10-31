@@ -141,11 +141,14 @@ interface StoreBillingInfo {
   bankAccountNumber: string | null;
   bankIfscCode: string | null;
   bankBranchName: string | null;
+  /** Absent from backends older than 2026-10-28. */
+  bankAccountHolderName?: string | null;
   passbookUrl: string | null;
   /** Submitted but not yet approved — sit in store_profile_change_requests until an admin reviews them. */
   pendingBankAccountNumber: string | null;
   pendingBankIfscCode: string | null;
   pendingBankBranchName: string | null;
+  pendingBankAccountHolderName?: string | null;
   pendingPassbookUrl: string | null;
 }
 
@@ -363,13 +366,14 @@ const DocumentReviewModal = ({
   const hasBillingData =
     !!billingInfo && (
       !!billingInfo.bankAccountNumber || !!billingInfo.bankIfscCode || !!billingInfo.passbookUrl ||
+      !!billingInfo.bankAccountHolderName ||
       !!billingInfo.pendingBankAccountNumber || !!billingInfo.pendingBankIfscCode ||
-      !!billingInfo.pendingBankBranchName || !!billingInfo.pendingPassbookUrl
+      !!billingInfo.pendingBankBranchName || !!billingInfo.pendingBankAccountHolderName || !!billingInfo.pendingPassbookUrl
     );
   const hasPendingBilling =
     !!billingInfo && (
       !!billingInfo.pendingBankAccountNumber || !!billingInfo.pendingBankIfscCode ||
-      !!billingInfo.pendingBankBranchName || !!billingInfo.pendingPassbookUrl
+      !!billingInfo.pendingBankBranchName || !!billingInfo.pendingBankAccountHolderName || !!billingInfo.pendingPassbookUrl
     );
 
   return (
@@ -695,6 +699,7 @@ const DocumentReviewModal = ({
                     columns={2}
                     items={[
                       { label: 'Owner name', value: billingInfo.ownerName },
+                      { label: 'Account holder name', value: billingInfo.bankAccountHolderName ?? null },
                       {
                         label: 'Bank account number',
                         value: billingInfo.bankAccountNumber ? (
@@ -731,6 +736,7 @@ const DocumentReviewModal = ({
                     )}
                     {billingInfo.pendingBankIfscCode && <li>IFSC: {billingInfo.pendingBankIfscCode}</li>}
                     {billingInfo.pendingBankBranchName && <li>Branch: {billingInfo.pendingBankBranchName}</li>}
+                    {billingInfo.pendingBankAccountHolderName && <li>Account holder: {billingInfo.pendingBankAccountHolderName}</li>}
                     {billingInfo.pendingPassbookUrl && (
                       <li>
                         <a href={billingInfo.pendingPassbookUrl} target="_blank" rel="noreferrer" className="font-medium underline">

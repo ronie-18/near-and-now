@@ -60,6 +60,7 @@ export const ROUTE_META: RouteMeta[] = [
   // would read "Support messages / Support messages".
   { pattern: '/support-messages/:id', title: 'Support messages' },
   { pattern: '/rider-payouts', title: 'Rider payouts' },
+  { pattern: '/store-payouts', title: 'Store payouts' },
   { pattern: '/admins', title: 'Admin users' },
   { pattern: '/admins/create', title: 'Create admin', parent: '/admins' },
   { pattern: '/admins/edit/:id', title: 'Edit admin', parent: '/admins' },

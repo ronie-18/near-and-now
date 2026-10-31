@@ -11,6 +11,8 @@ import { sendError } from '../utils/httpError.js';
 import { createImageUploadUrl } from '../services/imageUploadUrls.js';
 import { runInBackground } from '../utils/background.js';
 import { selectInChunks } from '../utils/selectInChunks.js';
+import { codCollectionEnabled, getCodCollection, issueCodQr, publicCodCollection, recordCodCash } from '../services/codCollection.service.js';
+import { RazorpayApiError } from '../services/payment.service.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
   DOC_LABELS,
@@ -272,6 +274,51 @@ export async function cashToCollect(order: { id: string; total_amount: number | 
     } catch { /* plain-text delivery note */ }
   }
   return 0;
+}
+
+type CodOrder = { id: string; order_code: string | null; status: string; total_amount: number | string | null; payment_method: string | null; notes: string | null };
+
+/**
+ * The rider's own order plus the trusted cash amount, for the doorstep
+ * collection endpoints. QR/cash need the goods already collected — the rider
+ * is at the customer's door — and something actually left to collect.
+ */
+async function loadRiderCodOrder(
+  orderId: string,
+  riderId: string,
+  opts: { mustBeOutForDelivery?: boolean } = {}
+): Promise<{ order: CodOrder; amountDue: number } | { status: number; error: string }> {
+  const { data: order, error } = await supabaseAdmin
+    .from('customer_orders')
+    .select('id, order_code, status, total_amount, payment_method, notes')
+    .eq('id', orderId)
+    .eq('assigned_driver_id', riderId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) return { status: 404, error: 'Order not found or not assigned to you' };
+  const o = order as CodOrder;
+  if (opts.mustBeOutForDelivery && o.status !== 'order_picked_up') {
+    return { status: 409, error: 'Collect payment once every store has been picked up.' };
+  }
+  const amountDue = await cashToCollect(o);
+  if (amountDue <= 0) return { status: 409, error: 'This order is prepaid — there is nothing to collect.' };
+  return { order: o, amountDue };
+}
+
+/**
+ * Doorstep collection on: an order delivered without a paid UPI QR was paid
+ * in cash, so the rider now holds that cash. Also how older rider-app builds
+ * (no QR/cash step) get their cash recorded. Never throws — markDelivered
+ * has already succeeded by the time this runs.
+ */
+async function recordCashIfUncollected(order: CodOrder, riderId: string): Promise<void> {
+  if (!codCollectionEnabled()) return;
+  try {
+    const amountDue = await cashToCollect(order);
+    if (amountDue > 0) await recordCodCash({ orderId: order.id, riderId, amountDue });
+  } catch (err) {
+    console.error('markDelivered: could not record the doorstep cash payment:', err, { orderId: order.id, riderId });
+  }
 }
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
@@ -1160,18 +1207,92 @@ export class DeliveryPartnerController {
       try {
         const { data: order } = await supabaseAdmin
           .from('customer_orders')
-          .select('customer_id, order_code, tip_amount')
+          .select('id, customer_id, order_code, tip_amount, total_amount, payment_method, notes')
           .eq('id', orderId)
           .single();
         if (order) {
           await notificationService.sendOrderNotification(orderId, 'order_delivered');
           await payRiderForDeliveredOrder(orderId, riderId, order.customer_id, order.tip_amount);
+          await recordCashIfUncollected(order as any, riderId);
         }
       } catch { /* non-critical */ }
 
       res.json({ success: true });
     } catch (err) {
       return sendError(res, 'DeliveryPartnerController.markDelivered', 'Could not update delivery status', err);
+    }
+  }
+
+  // GET /delivery-partner/orders/:orderId/cod — doorstep collection state,
+  // polled by the rider app every 3 s while a UPI QR is on screen, so it is
+  // one round trip: the ownership check and the collection read run together
+  // (the row is only returned once the order is confirmed to be this rider's).
+  async getCodCollectionStatus(req: Request, res: Response) {
+    try {
+      if (!codCollectionEnabled()) return res.status(404).json({ error: 'Doorstep collection is not enabled' });
+      const { orderId } = req.params;
+      const [{ data: order, error }, collection] = await Promise.all([
+        supabaseAdmin.from('customer_orders').select('id').eq('id', orderId).eq('assigned_driver_id', req.riderId!).maybeSingle(),
+        getCodCollection(orderId),
+      ]);
+      if (error) throw error;
+      if (!order) return res.status(404).json({ error: 'Order not found or not assigned to you' });
+      res.json({ success: true, cod_collection: publicCodCollection(collection) });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.getCodCollectionStatus', 'Could not load the payment status', err);
+    }
+  }
+
+  // POST /delivery-partner/orders/:orderId/cod/qr — show the customer a
+  // Razorpay UPI QR for exactly the amount due (reused while still valid).
+  async createCodQr(req: Request, res: Response) {
+    try {
+      if (!codCollectionEnabled()) return res.status(404).json({ error: 'Doorstep collection is not enabled' });
+      const riderId = req.riderId!;
+      if (!(await requireApprovedRider(riderId))) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
+      const loaded = await loadRiderCodOrder(req.params.orderId, riderId, { mustBeOutForDelivery: true });
+      if ('error' in loaded) return res.status(loaded.status).json({ error: loaded.error });
+
+      const collection = await issueCodQr({
+        orderId: loaded.order.id,
+        orderCode: loaded.order.order_code || loaded.order.id,
+        riderId,
+        amountDue: loaded.amountDue,
+      });
+      res.json({ success: true, amount_to_collect: loaded.amountDue, cod_collection: publicCodCollection(collection) });
+    } catch (err) {
+      if (err instanceof RazorpayApiError) {
+        console.error('createCodQr: Razorpay refused the QR:', err.message, { orderId: req.params.orderId });
+        return res.status(502).json({ error: 'Could not create the UPI QR right now — collect cash or try again.' });
+      }
+      return sendError(res, 'DeliveryPartnerController.createCodQr', 'Could not create the UPI QR', err);
+    }
+  }
+
+  // POST /delivery-partner/orders/:orderId/cod/cash — the rider took cash.
+  // Answers 409 if the customer already paid the UPI QR (nothing to collect).
+  async recordCodCashCollected(req: Request, res: Response) {
+    try {
+      if (!codCollectionEnabled()) return res.status(404).json({ error: 'Doorstep collection is not enabled' });
+      const riderId = req.riderId!;
+      if (!(await requireApprovedRider(riderId))) {
+        return res.status(403).json({ error: 'Your account is not yet approved by admin.' });
+      }
+      const loaded = await loadRiderCodOrder(req.params.orderId, riderId, { mustBeOutForDelivery: true });
+      if ('error' in loaded) return res.status(loaded.status).json({ error: loaded.error });
+
+      const { collection, alreadyPaidByUpi } = await recordCodCash({ orderId: loaded.order.id, riderId, amountDue: loaded.amountDue });
+      if (alreadyPaidByUpi) {
+        return res.status(409).json({
+          error: 'The customer already paid by UPI — do not take cash.',
+          cod_collection: publicCodCollection(collection),
+        });
+      }
+      res.json({ success: true, amount_to_collect: loaded.amountDue, cod_collection: publicCodCollection(collection) });
+    } catch (err) {
+      return sendError(res, 'DeliveryPartnerController.recordCodCashCollected', 'Could not record the cash payment', err);
     }
   }
 
@@ -2226,10 +2347,13 @@ export class DeliveryPartnerController {
 
       if (!order) return res.status(404).json({ error: 'Order not found or not assigned to you' });
 
-      // Stores, items and the cash-to-collect lookup only depend on the two
-      // reads above, so they run together.
+      // Stores, items, the cash-to-collect lookup and (when doorstep
+      // collection is on and the order can owe cash) its collection record
+      // only depend on the two reads above, so they run together.
       const storeIds = (allocations || []).map((a: any) => a.store_id);
-      const [{ data: stores }, { data: items }, amount_to_collect] = await Promise.all([
+      const mayOweCash = (order as any).payment_method === 'cod' || String((order as any).notes || '').includes('split_cash_amount');
+      const withCodCollection = codCollectionEnabled() && mayOweCash;
+      const [{ data: stores }, { data: items }, amount_to_collect, codCollection] = await Promise.all([
         storeIds.length
           ? supabaseAdmin.from('stores').select('id, name, address, latitude, longitude, phone').in('id', storeIds)
           : Promise.resolve({ data: [] }),
@@ -2237,6 +2361,11 @@ export class DeliveryPartnerController {
           .select('id, product_name, quantity, unit, unit_price, assigned_store_id, item_status')
           .eq('customer_order_id', orderId),
         cashToCollect(order as any),
+        withCodCollection ? getCodCollection(orderId).catch((err) => {
+          // The screen still works without it — the rider just sees the old "Collect ₹X".
+          console.error('getPickupSequence: could not read COD collection:', err, { orderId });
+          return undefined;
+        }) : Promise.resolve(undefined),
       ]);
 
       const storeMap: Record<string, any> = {};
@@ -2285,6 +2414,11 @@ export class DeliveryPartnerController {
           receiver_phone: o.receiver_phone || null,
           receiver_address: o.receiver_address || null,
           delivery_otp_verified: !!o.delivery_otp_verified_at,
+          // Present only while doorstep collection is on; the rider app shows
+          // its QR / cash step when it sees this field.
+          ...(withCodCollection && amount_to_collect > 0 && codCollection !== undefined
+            ? { cod_collection: publicCodCollection(codCollection) }
+            : {}),
         },
         stops,
       });

@@ -93,4 +93,32 @@ describe('getPickupSequence', () => {
     const { fake } = await call(PREPAID, 'r1', 15);
     expect(fake.roundTrips()).toBe(2);
   });
+
+  // Doorstep collection (2026-10-28) reads its row alongside stores/items, not after them.
+  it('still makes 2 sequential DB round trips with doorstep collection on', async () => {
+    const saved = process.env.COD_COLLECTION_ENABLED;
+    process.env.COD_COLLECTION_ENABLED = 'true';
+    try {
+      const { fake, res } = await call(COD, 'r1', 15);
+      expect(fake.roundTrips()).toBe(2);
+      expect(fake.on('order_cod_collections')).toHaveLength(1);
+      expect((res.body as any).order.cod_collection).toEqual({ status: 'none' });
+    } finally {
+      if (saved === undefined) delete process.env.COD_COLLECTION_ENABLED; else process.env.COD_COLLECTION_ENABLED = saved;
+    }
+  });
+
+  it('the QR status poll is a single round trip', async () => {
+    const saved = process.env.COD_COLLECTION_ENABLED;
+    process.env.COD_COLLECTION_ENABLED = 'true';
+    try {
+      const fake = installFakeSupabase(supabaseAdmin, responder(COD), { latencyMs: 15 });
+      const res = mockRes();
+      await new DeliveryPartnerController().getCodCollectionStatus({ params: { orderId: 'o1' }, riderId: 'r1' } as unknown as Request, res as never);
+      expect(res.statusCode).toBe(200);
+      expect(fake.roundTrips()).toBe(1);
+    } finally {
+      if (saved === undefined) delete process.env.COD_COLLECTION_ENABLED; else process.env.COD_COLLECTION_ENABLED = saved;
+    }
+  });
 });

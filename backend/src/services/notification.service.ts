@@ -556,8 +556,8 @@ export class NotificationService {
    */
   async notifyAdminsOfReviewAction(params: {
     actorAdminId: string;
-    category: 'store_profile_change' | 'rider_profile_change' | 'store_verification_doc' | 'rider_verification_doc' | 'product_submission' | 'store_image' | 'rider_payout';
-    action: 'approved' | 'rejected' | 'paid';
+    category: 'store_profile_change' | 'rider_profile_change' | 'store_verification_doc' | 'rider_verification_doc' | 'product_submission' | 'store_image' | 'rider_payout' | 'rider_cash_deposit' | 'store_payout' | 'store_payout_account';
+    action: 'approved' | 'rejected' | 'paid' | 'received' | 'registered';
     entityLabel: string;
     rejectionReason?: string | null;
   }) {
@@ -580,6 +580,9 @@ export class NotificationService {
       product_submission: 'product submission',
       store_image: 'storefront photo',
       rider_payout: 'rider payout',
+      rider_cash_deposit: 'rider cash deposit',
+      store_payout: 'store payout',
+      store_payout_account: 'store payout bank account',
     };
 
     const title = `${CATEGORY_LABEL[category]} ${action}`;

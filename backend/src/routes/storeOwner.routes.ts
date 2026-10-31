@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { signupComplete, getStores, createStore, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth, getImageUploadUrl } from '../controllers/storeOwner.controller.js';
+import { signupComplete, getStores, createStore, updateStoreStatus, updateProductQuantity, updateProductActiveState, updateStore, deleteStoreProduct, registerPushToken, updateNotificationPreferences, getStoreNotifications, markStoreNotificationRead, markAllStoreNotificationsRead, getVerificationDocuments, saveVerificationDocument, deleteVerificationDocument, getProfileChangeRequest, requestProfileChange, getStoreImages, addStoreImage, deleteStoreImage, getBillingInfo, saveBillingInfo, getStorePayoutHistory, createSupportMessage, getMySupportMessages, requireStoreOwnerAuth, getImageUploadUrl } from '../controllers/storeOwner.controller.js';
 import { MAX_DOC_SIZE_BYTES } from '../utils/verificationDocuments.js';
 
 const router = Router();
@@ -28,6 +28,7 @@ router.post('/stores/:id/verification-documents/:docType', requireStoreOwnerAuth
 router.delete('/stores/:id/verification-documents/:docType', deleteVerificationDocument);
 router.get('/stores/:id/billing-info', getBillingInfo);
 router.post('/stores/:id/billing-info', requireStoreOwnerAuth, docUpload.single('file'), saveBillingInfo);
+router.get('/stores/:id/payouts', getStorePayoutHistory);
 router.patch('/products/:productId/quantity', updateProductQuantity);
 router.patch('/products/:productId', updateProductActiveState);
 router.delete('/products/:productId', deleteStoreProduct);

@@ -11,6 +11,54 @@ function insufficientBalance(error: unknown): boolean {
   return String((error as { message?: string })?.message || '').includes('INSUFFICIENT_BALANCE');
 }
 
+const isTopupMarker = (v: unknown) => v === true || v === 'true';
+
+/**
+ * Captures a genuine top-up payment and credits the wallet with the captured
+ * amount (from Razorpay, never the client). Shared by verifyTopup and the
+ * webhook fallback; credit_wallet is idempotent on the payment id, so both
+ * settling the same payment credits it exactly once.
+ */
+async function captureAndCreditTopup(paymentId: string, userId: string): Promise<{ status: string; balance?: number }> {
+  const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
+  if (captureResult.status !== 'captured') return { status: captureResult.status };
+
+  const { data: newBalance, error: rpcErr } = await supabaseAdmin.rpc('credit_wallet', {
+    p_user_id: userId,
+    p_amount: captureResult.amount / 100,
+    p_reason: 'topup',
+    p_reference_type: null,
+    p_reference_id: null,
+    p_razorpay_payment_id: paymentId,
+  });
+  if (rpcErr) throw rpcErr;
+  return { status: 'captured', balance: Number(newBalance) };
+}
+
+/**
+ * Webhook fallback (payment.service.ts processWebhookEvent) for a top-up whose
+ * verify call never arrived — the app was killed between paying and verifying.
+ * Whose top-up it is comes from the Razorpay order's notes, which
+ * createWalletTopupOrder set server-side, not from the payment's own notes.
+ */
+export async function settleTopupFromWebhook(
+  payment: { id: string; order_id?: string | null; amount?: number },
+  eventId: string
+): Promise<void> {
+  if (!payment.order_id) return;
+  const order = (await paymentService.getRazorpayOrder(payment.order_id)) as any;
+  const notes = order?.notes || {};
+  const userId = typeof notes.user_id === 'string' ? notes.user_id : '';
+  if (!isTopupMarker(notes.wallet_topup) || !userId || Number(order?.amount) !== Number(payment.amount)) {
+    console.warn('[WALLET] webhook: payment is not a genuine wallet top-up, skipping', {
+      eventId, paymentId: payment.id, razorpayOrderId: payment.order_id, orderNotes: notes,
+    });
+    return;
+  }
+  const result = await captureAndCreditTopup(payment.id, userId);
+  console.log('[WALLET] webhook top-up settled', { eventId, paymentId: payment.id, userId, status: result.status });
+}
+
 export class WalletController {
   /** GET /api/wallet — current balance for the authenticated customer. */
   async getBalance(req: Request, res: Response) {
@@ -125,7 +173,7 @@ export class WalletController {
       const notes = prelimPayment?.notes || {};
       const isGenuineTopup =
         prelimPayment?.order_id === razorpayOrderId &&
-        (notes.wallet_topup === true || notes.wallet_topup === 'true') &&
+        isTopupMarker(notes.wallet_topup) &&
         notes.user_id === userId;
       if (!isGenuineTopup) {
         console.warn('[WALLET] verifyTopup: payment is not a genuine wallet top-up for this user', {
@@ -134,27 +182,15 @@ export class WalletController {
         return res.status(400).json({ success: false, error: 'Payment verification failed' });
       }
 
-      const captureResult = await paymentService.ensurePaymentCaptured(paymentId);
-      if (captureResult.status !== 'captured') {
-        return res.status(400).json({ success: false, error: `Payment not captured (status: ${captureResult.status})` });
-      }
-
-      // Trust the captured amount from Razorpay, not the client-supplied one —
+      // Credits the captured amount from Razorpay, not the client-supplied one —
       // same "never trust the client amount" rule as everywhere else in this
       // payment flow.
-      const capturedRupees = captureResult.amount / 100;
+      const result = await captureAndCreditTopup(paymentId, userId!);
+      if (result.status !== 'captured') {
+        return res.status(400).json({ success: false, error: `Payment not captured (status: ${result.status})` });
+      }
 
-      const { data: newBalance, error: rpcErr } = await supabaseAdmin.rpc('credit_wallet', {
-        p_user_id: userId,
-        p_amount: capturedRupees,
-        p_reason: 'topup',
-        p_reference_type: null,
-        p_reference_id: null,
-        p_razorpay_payment_id: paymentId,
-      });
-      if (rpcErr) throw rpcErr;
-
-      res.json({ success: true, balance: Number(newBalance) });
+      res.json({ success: true, balance: result.balance });
     } catch (error) {
       return sendError(res, 'WalletController.verifyTopup', 'Could not verify the top-up', error, undefined, { success: false });
     }
@@ -226,7 +262,7 @@ export class WalletController {
 
       res.json({ success: true, balance: newBalance });
     } catch (error) {
-      return sendError(res, 'WalletController.payOrderWithWallet', 'Could not the pay with wallet', error, undefined, { success: false });
+      return sendError(res, 'WalletController.payOrderWithWallet', 'Could not pay with wallet', error, undefined, { success: false });
     }
   }
 }

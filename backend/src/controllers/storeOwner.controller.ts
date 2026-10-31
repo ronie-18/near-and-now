@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/database.js';
 import { verifySignupTicket } from '../utils/signupTicket.js';
 import { fileMatchesDeclaredExt } from '../utils/fileSignature.js';
 import { sendError } from '../utils/httpError.js';
+import { selectStoreBillingRow } from '../utils/storeBilling.js';
 import { createImageUploadUrl } from '../services/imageUploadUrls.js';
 import {
   ALLOWED_DOC_MIME_TYPES,
@@ -656,7 +657,7 @@ export async function updateStore(req: Request, res: Response) {
 
 const PROFILE_CHANGE_FIELDS = ['name', 'address', 'phone'] as const;
 type ProfileChangeField = typeof PROFILE_CHANGE_FIELDS[number];
-const BILLING_CHANGE_FIELDS = ['bank_account_number', 'bank_ifsc_code', 'bank_branch_name', 'bank_passbook_storage_path'] as const;
+const BILLING_CHANGE_FIELDS = ['bank_account_number', 'bank_ifsc_code', 'bank_branch_name', 'bank_account_holder_name', 'bank_passbook_storage_path'] as const;
 
 type ProfileChangeSubmitResult =
   | { saved: Record<string, unknown>; cancelled: false }
@@ -1496,11 +1497,10 @@ export async function getBillingInfo(req: Request, res: Response) {
     if (!userId) return;
 
     const storeId = req.params.id;
-    const { data: store } = await supabaseAdmin
-      .from('stores')
-      .select('owner_id, owner_image_url, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path')
-      .eq('id', storeId)
-      .maybeSingle();
+    const { data: store } = await selectStoreBillingRow(
+      storeId,
+      'owner_id, owner_image_url, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path'
+    );
 
     if (!store || store.owner_id !== userId) {
       return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
@@ -1528,6 +1528,7 @@ export async function getBillingInfo(req: Request, res: Response) {
         bankAccountNumber: store.bank_account_number ?? null,
         bankIfscCode: store.bank_ifsc_code ?? null,
         bankBranchName: store.bank_branch_name ?? null,
+        bankAccountHolderName: store.bank_account_holder_name ?? null,
         passbookUrl,
       },
     });
@@ -1536,7 +1537,28 @@ export async function getBillingInfo(req: Request, res: Response) {
   }
 }
 
+/**
+ * GET /store-owner/stores/:id/payouts — this store's bank transfers (RazorpayX
+ * store payouts, storePayouts.service.ts): amount, orders covered, paid / in
+ * progress / failed, and the bank UTR once paid.
+ */
+export async function getStorePayoutHistory(req: Request, res: Response) {
+  try {
+    const userId = await resolveShopkeeperFromToken(req, res);
+    if (!userId) return;
+    const storeId = req.params.id;
+    if (!(await assertOwnsStore(storeId, userId))) {
+      return res.status(403).json({ success: false, error: 'Store not found or not owned by you' });
+    }
+    const { listForStore } = await import('../services/storePayouts.service.js');
+    res.json({ success: true, ...(await listForStore(storeId)) });
+  } catch (error) {
+    return sendError(res, 'storeOwner.getStorePayoutHistory', 'Could not load your payouts', error, undefined, { success: false });
+  }
+}
+
 const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_HOLDER_PATTERN = /^[A-Za-z][A-Za-z .'&-]{2,119}$/;
 
 /**
  * Submit a change to the store's bank/payout details for admin review — does
@@ -1564,6 +1586,10 @@ export async function saveBillingInfo(req: Request, res: Response) {
     const bankAccountNumber = typeof req.body?.bank_account_number === 'string' ? req.body.bank_account_number.trim() : undefined;
     const bankIfscCode = typeof req.body?.bank_ifsc_code === 'string' ? req.body.bank_ifsc_code.trim().toUpperCase() : undefined;
     const bankBranchName = typeof req.body?.bank_branch_name === 'string' ? req.body.bank_branch_name.trim() : undefined;
+    // Collapsed whitespace: RazorpayX compares this with the bank's own record.
+    const bankAccountHolderName = typeof req.body?.bank_account_holder_name === 'string'
+      ? req.body.bank_account_holder_name.trim().replace(/\s+/g, ' ')
+      : undefined;
     const file = (req as Request & { file?: UploadedFile }).file;
 
     // Unlike the IFSC check right below (which has a `&& bankIfscCode` truthy
@@ -1577,12 +1603,14 @@ export async function saveBillingInfo(req: Request, res: Response) {
     if (bankIfscCode !== undefined && bankIfscCode && !IFSC_PATTERN.test(bankIfscCode)) {
       return res.status(400).json({ success: false, error: 'Invalid IFSC code — expected format e.g. SBIN0001234' });
     }
+    if (bankAccountHolderName !== undefined && bankAccountHolderName && !ACCOUNT_HOLDER_PATTERN.test(bankAccountHolderName)) {
+      return res.status(400).json({ success: false, error: 'Account holder name must be 3-120 letters, spaces or . \' & -' });
+    }
 
-    const { data: store } = await supabaseAdmin
-      .from('stores')
-      .select('name, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path')
-      .eq('id', storeId)
-      .maybeSingle();
+    const { data: store } = await selectStoreBillingRow(
+      storeId,
+      'name, bank_account_number, bank_ifsc_code, bank_branch_name, bank_passbook_storage_path'
+    );
     if (!store) return res.status(404).json({ success: false, error: 'Store not found' });
 
     const changes: Record<string, { old: string | null; new: string }> = {};
@@ -1594,6 +1622,9 @@ export async function saveBillingInfo(req: Request, res: Response) {
     }
     if (bankBranchName !== undefined && bankBranchName !== (store.bank_branch_name ?? '')) {
       changes.bank_branch_name = { old: store.bank_branch_name ?? null, new: bankBranchName };
+    }
+    if (bankAccountHolderName !== undefined && bankAccountHolderName !== (store.bank_account_holder_name ?? '')) {
+      changes.bank_account_holder_name = { old: store.bank_account_holder_name ?? null, new: bankAccountHolderName };
     }
 
     if (file) {

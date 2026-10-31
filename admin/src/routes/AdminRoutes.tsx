@@ -40,6 +40,7 @@ const ReviewsPage = lazy(() => import('../pages/admin/ReviewsPage'));
 const ActivityLogPage = lazy(() => import('../pages/admin/ActivityLogPage'));
 const SupportMessagesPage = lazy(() => import('../pages/admin/SupportMessagesPage'));
 const RiderPayoutsPage = lazy(() => import('../pages/admin/RiderPayoutsPage'));
+const StorePayoutsPage = lazy(() => import('../pages/admin/StorePayoutsPage'));
 const SecurityLogPage = lazy(() => import('../pages/admin/SecurityLogPage'));
 
 /**
@@ -147,6 +148,7 @@ const AdminRoutes = () => {
         <Route path="/activity-log" element={<ActivityLogPage />} />
         <Route path="/support-messages/:id?" element={<SupportMessagesPage />} />
         <Route path="/rider-payouts" element={<RiderPayoutsPage />} />
+        <Route path="/store-payouts" element={<StorePayoutsPage />} />
         <Route path="/security-log" element={<SecurityLogPage />} />
         {/* Unmatched path (typo, stale bookmark, removed route) — previously
             rendered nothing at all, not even the AdminLayout shell. Redirect
